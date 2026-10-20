@@ -130,4 +130,88 @@ final class PlaybookNodeRunnerTest extends TestCase
         $this->assertSame('approval', $gateEvents[0]['kind']);
         $this->assertSame($result['run_id'], $gateEvents[0]['run_id']);
     }
+
+    public function testUnattendedRunStopsAtFirstGate(): void
+    {
+        $pdo = $this->makeSqlitePdo();
+        $calls = 0;
+        $inner = $this->scriptedLlm([
+            [['name' => 'request_approval', 'arguments' => ['approver' => 'boss', 'question' => 'OK to proceed?']]],
+            [['name' => 'resolve_request', 'arguments' => ['outcome' => 'success', 'summary' => 'done']]],
+        ]);
+        $llm = function (array $m, array $t) use ($inner, &$calls) { $calls++; return $inner($m, $t); };
+
+        $runner = new PlaybookNodeRunner(
+            config: [],
+            llmFactory: fn(array $nodeConfig) => $llm,
+            mcpFactory: fn(PDO $pdo, int $userId) => new FakeMcpExecutor(),
+            bridgeFactory: fn(\Closure $emit) => new FakeNodeRunnerBridge($emit),
+            pdoFactory: fn() => $pdo,
+        );
+
+        $result = $runner->run(1, ['playbook' => $this->simplePlaybook()], 'Please help me.', function (array $e) {}, unattended: true);
+
+        $this->assertSame('handed_off', $result['status']);
+        $this->assertSame('approval', $result['gate']);
+        $this->assertSame(1, $calls);
+    }
+
+    private function runUnattended(array $rounds, PDO $pdo, ?FakeMcpExecutor $mcp = null): array
+    {
+        $llm = $this->scriptedLlm($rounds);
+        $mcp ??= new FakeMcpExecutor();
+        $runner = new PlaybookNodeRunner(
+            config: [],
+            llmFactory: fn(array $nodeConfig) => $llm,
+            mcpFactory: fn(PDO $pdo, int $userId) => $mcp,
+            bridgeFactory: fn(\Closure $emit) => new FakeNodeRunnerBridge($emit),
+            pdoFactory: fn() => $pdo,
+        );
+        return $runner->run(1, ['playbook' => $this->simplePlaybook()], 'Please help me.', function (array $e) {}, unattended: true);
+    }
+
+    public function testUnattendedGateThenResolveInSameTurnStaysHandedOff(): void
+    {
+        $pdo = $this->makeSqlitePdo();
+        $result = $this->runUnattended([
+            [['name' => 'request_approval', 'arguments' => ['approver' => 'boss', 'question' => 'OK to proceed?']],
+             ['name' => 'resolve_request', 'arguments' => ['outcome' => 'success', 'summary' => 'done']]],
+        ], $pdo);
+
+        $this->assertSame('handed_off', $result['status']);
+        $this->assertSame('approval', $result['gate']);
+        $row = $pdo->query('SELECT status, resolved_at FROM playbook_runs WHERE id = ' . $result['run_id'])->fetch(PDO::FETCH_ASSOC);
+        $this->assertSame('handed_off', $row['status']);
+    }
+
+    public function testUnattendedGateSkipsTheRestOfTheTurn(): void
+    {
+        $pdo = $this->makeSqlitePdo();
+        $result = $this->runUnattended([
+            [['name' => 'request_approval', 'arguments' => ['approver' => 'boss', 'question' => 'OK to proceed?']],
+             ['name' => 'leave_internal_note', 'arguments' => ['text' => 'SHOULD-NOT-RUN']],
+             ['name' => 'send_direct_message', 'arguments' => ['text' => 'SHOULD-NOT-SEND']]],
+        ], $pdo);
+
+        $this->assertSame('handed_off', $result['status']);
+        $notes = $pdo->query("SELECT COUNT(*) FROM playbook_run_notes WHERE text LIKE '%SHOULD-NOT-RUN%'")->fetchColumn();
+        $this->assertSame(0, (int)$notes);
+        $msgs = $pdo->query("SELECT COUNT(*) FROM playbook_run_messages WHERE text LIKE '%SHOULD-NOT-SEND%'")->fetchColumn();
+        $this->assertSame(0, (int)$msgs);
+        $this->assertStringNotContainsString('SHOULD-NOT-RUN', $result['output']);
+    }
+
+    public function testUnattendedFirstGateWins(): void
+    {
+        $pdo = $this->makeSqlitePdo();
+        $result = $this->runUnattended([
+            [['name' => 'prompt_handoff', 'arguments' => ['reason' => 'needs a human']],
+             ['name' => 'request_approval', 'arguments' => ['approver' => 'boss', 'question' => 'OK?']]],
+        ], $pdo);
+
+        $this->assertSame('handed_off', $result['status']);
+        $this->assertSame('handoff', $result['gate']);
+        $gates = $pdo->query('SELECT kind FROM playbook_run_gates')->fetchAll(PDO::FETCH_COLUMN);
+        $this->assertSame(['handoff'], $gates);
+    }
 }

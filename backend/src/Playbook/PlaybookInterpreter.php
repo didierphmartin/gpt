@@ -83,10 +83,28 @@ PROMPT;
             $messages[] = $this->buildAssistantMessage($text, $toolCalls);
 
             $terminal = false;
+            $handedOff = false;   // an unattended gate handed the run off: nothing else runs
             $summary = '';   // resolve_request's summary: the run's answer, not the turn's narration
             foreach ($toolCalls as $toolCall) {
                 $name = (string)$toolCall['name'];
                 $args = (array)($toolCall['arguments'] ?? []);
+
+                if ($handedOff) {
+                    // Unattended hand-off: the remaining calls of this turn are never
+                    // executed, but each still gets a tool message so the history
+                    // stays well-formed (every tool_call answered).
+                    $skipped = ['ok' => false, 'error' => 'the run was handed off at a gate'];
+                    $this->transcript->append($runId, [
+                        'type' => 'tool_skipped', 'leg' => $leg, 'round' => $round, 'name' => $name, 'result' => $skipped,
+                    ]);
+                    $messages[] = [
+                        'role' => 'tool',
+                        'tool_call_id' => $toolCall['id'] ?? uniqid('tc_'),
+                        'name' => $name,
+                        'content' => json_encode($skipped, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                    ];
+                    continue;
+                }
 
                 $this->transcript->append($runId, [
                     'type' => 'tool_call', 'leg' => $leg, 'round' => $round, 'name' => $name, 'args' => $args,
@@ -119,6 +137,10 @@ PROMPT;
 
                 if (($result['terminal'] ?? false) === true || ($result['gate_ended_leg'] ?? false) === true) {
                     $terminal = true;
+                }
+                if (($result['unattended'] ?? false) === true) {
+                    $handedOff = true;
+                    continue;
                 }
                 if ($name === 'resolve_request') {
                     $summary = trim((string)($args['summary'] ?? ''));

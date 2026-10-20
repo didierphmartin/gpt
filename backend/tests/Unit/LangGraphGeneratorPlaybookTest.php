@@ -4,7 +4,11 @@ namespace Quantis\AIPortfolioAssistant\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
 use AgentTeam\Models\Workflow;
+use AgentTeam\Services\ADKGenerator;
 use AgentTeam\Services\AgentRepository;
+use AgentTeam\Services\MAFGenerator;
+use AgentTeam\Services\NOOAGenerator;
+use Quantis\AIPortfolioAssistant\Tests\Unit\Playbook\PlaybookStoreTest;
 use AgentTeam\Services\LangGraphGenerator;
 use AgentTeam\Services\WorkflowGraphRepository;
 use AgentTeam\Services\WorkflowRepository;
@@ -54,17 +58,180 @@ TXT;
         return $pdo;
     }
 
-    private function generate(array $graph, ?string $userId = '3'): string
+    private function generate(array $graph, ?string $userId = '3', ?\PDO $pdo = null, string $target = 'langgraph', array $options = []): string
     {
-        $pdo = $this->pdo();
+        $pdo ??= $this->pdo();
         $wfRepo = $this->createMock(WorkflowRepository::class);
         $wfRepo->method('findById')->willReturn(new Workflow(['id' => 44, 'name' => 'Dispatcher demo', 'user_id' => '3']));
         $graphRepo = $this->createMock(WorkflowGraphRepository::class);
         $graphRepo->method('getGraph')->willReturn($graph);
         $agentRepo = $this->createMock(AgentRepository::class);
         $agentRepo->method('findById')->willReturn(null);
+        if ($target !== 'langgraph') {
+            $class = ['adk' => ADKGenerator::class, 'maf' => MAFGenerator::class, 'nooa' => NOOAGenerator::class][$target];
+            return (new $class($pdo, $wfRepo, $graphRepo, $agentRepo))->generate(44, $userId)['code'];
+        }
         $gen = new LangGraphGenerator($pdo, $wfRepo, $graphRepo, $agentRepo);
-        return $gen->generate(44, $userId)['code'];
+        $res = $gen->generate(44, $userId, $options);
+        return $res['code'] ?? implode("\n", array_map(fn($f) => "### {$f['path']}\n" . $f['code'], $res['files']));
+    }
+
+    /** The test pdo plus a robot (users.kind = 'service') owning the published playbook "test", and a draft "draft" of user 3. */
+    private function robotPdo(): \PDO
+    {
+        $pdo = $this->pdo();
+        PlaybookStoreTest::schema($pdo);
+        $pdo->exec("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT)");
+        $pdo->exec("INSERT INTO users (id, kind) VALUES (3, 'user'), (7, 'service')");
+        $ins = $pdo->prepare('INSERT INTO playbooks (user_id, pkey, title, text) VALUES (?, ?, ?, ?)');
+        $ins->execute([7, 'test', 'Time Off & Leave', self::PLAYBOOK]);
+        $ins->execute([3, 'draft', 'Draft only', "Title: Draft only\n\nInstructions:\n1. #Resolve Request.\n"]);
+        return $pdo;
+    }
+
+    /** Start -> Playbook (from input, exits done/failed) -> Done (output_1) / Failed (output_2). */
+    private function fromInputGraph(): array
+    {
+        return [
+            'nodes' => [
+                ['id' => '1', 'node_type' => 'start', 'config' => ['type' => 'start', 'prompt' => '{"playbook":"test"}']],
+                ['id' => '2', 'node_type' => 'playbook', 'config' => [
+                    'type' => 'playbook', 'name' => 'Run job playbook', 'playbook_source' => 'input',
+                    'playbook_input_field' => 'playbook', 'exits' => ['done', 'failed'],
+                    'agent_provider' => 'deepseek', 'model' => 'deepseek-flash', 'writes_enabled' => true,
+                ]],
+                ['id' => '3', 'node_type' => 'output', 'config' => ['type' => 'output']],
+                ['id' => '4', 'node_type' => 'output', 'config' => ['type' => 'output']],
+            ],
+            'edges' => [['from' => '1', 'to' => '2'], ['from' => '2', 'to' => '3', 'from_port' => 'output_1'],
+                        ['from' => '2', 'to' => '4', 'from_port' => 'output_2']],
+        ];
+    }
+
+    private static function pyCompiles(string $code): array
+    {
+        $tmp = tempnam(sys_get_temp_dir(), 'lg') . '.py';
+        file_put_contents($tmp, $code);
+        exec('python3 -m py_compile ' . escapeshellarg($tmp) . ' 2>&1', $out, $rc);
+        @unlink($tmp);
+        return [$rc, implode("\n", $out)];
+    }
+
+    public function testFromInputBakesPublishedPlaybooks(): void
+    {
+        $code = $this->generate($this->fromInputGraph(), '3', $this->robotPdo());
+        $this->assertStringContainsString('PUBLISHED_PLAYBOOKS = {', $code);
+        $this->assertStringContainsString('    "test": {', $code);
+        $this->assertStringNotContainsString('"draft"', $code, 'only the robot\'s published copies are baked');
+        // The published copy is bound against the registry like a fixed playbook.
+        $this->assertStringContainsString('"workday__get_pto_balance"', $code);
+        $this->assertStringContainsString('http://localhost/mockstack/index.php/workday', $code);
+        // The node: from input, its exits and their children.
+        $this->assertStringContainsString('"source": "input",', $code);
+        $this->assertStringContainsString('"input_field": "playbook",', $code);
+        $this->assertStringContainsString('"published": PUBLISHED_PLAYBOOKS,', $code);
+        $this->assertStringContainsString('"exits": ["done","failed"],', $code);
+        $this->assertStringContainsString('"exit_targets": {"done":["3"],"failed":["4"]},', $code);
+        $this->assertLessThan(strpos($code, 'PLAYBOOKS = {' . "\n" . '    # '), strpos($code, 'PUBLISHED_PLAYBOOKS = {'));
+        // A --watch run is unattended (per run, not process-wide) unless PLAYBOOK_GATE_MODE says otherwise.
+        $this->assertStringContainsString('loop_mode=mode != "once", unattended=mode == "watch")', $code);
+        $this->assertStringContainsString('            graph.unattended = unattended', $code);
+        $this->assertStringNotContainsString('os.environ["PLAYBOOK_GATE_MODE"] =', $code);
+        [$rc, $out] = self::pyCompiles($code);
+        $this->assertSame(0, $rc, $out);
+    }
+
+    public function testUnbakeablePublishedPlaybookIsAWarning(): void
+    {
+        $pdo = $this->robotPdo();
+        $pdo->prepare('INSERT INTO playbooks (user_id, pkey, title, text) VALUES (?, ?, ?, ?)')
+            ->execute([7, 'broken', 'Broken', '']);
+        $code = $this->generate($this->fromInputGraph(), '3', $pdo);
+        $this->assertMatchesRegularExpression('~^# WARNING: published playbook "broken" not baked: [^\n]+$~m', $code);
+        $this->assertStringContainsString('    "test": {', $code);
+        [$rc, $out] = self::pyCompiles($code);
+        $this->assertSame(0, $rc, $out);
+    }
+
+    public function testModularListenRunsAreUnattendedPerRun(): void
+    {
+        $code = $this->generate($this->fromInputGraph(), '3', $this->robotPdo(), 'langgraph', ['modular' => true]);
+        $this->assertStringContainsString('run_once = make_run_once(DEFAULT_PROMPT or "Hello", runs, view, recorder, loop_mode=True, unattended=True)', $code);
+        $this->assertStringContainsString('loop_mode=mode != "once", unattended=mode == "watch")', $code);
+        $this->assertStringNotContainsString('os.environ["PLAYBOOK_GATE_MODE"] =', $code);
+    }
+
+    /** A fixed playbook with exits; $failedWired adds an edge leaving its failed port (output_2). */
+    private function fixedExitsGraph(bool $failedWired): array
+    {
+        $g = $this->playbookGraph();
+        $g['nodes'][1]['config']['exits'] = ['done', 'failed'];
+        $g['edges'][1]['from_port'] = 'output_1';
+        if ($failedWired) {
+            $g['nodes'][] = ['id' => '4', 'node_type' => 'output', 'config' => ['type' => 'output']];
+            $g['edges'][] = ['from' => '2', 'to' => '4', 'from_port' => 'output_2'];
+        }
+        return $g;
+    }
+
+    public function testWiredFailedExitRefusedOnOtherTargets(): void
+    {
+        foreach (['adk', 'maf', 'nooa'] as $target) {
+            try {
+                $this->generate($this->fixedExitsGraph(true), '3', null, $target);
+                $this->fail("{$target} compiled a wired failed exit");
+            } catch (\RuntimeException $e) {
+                $this->assertSame('Playbook node "Playbook HR": the "failed" exit is supported by the LangGraph target only.',
+                    $e->getMessage(), $target);
+            }
+            // Only "done" wired: compiles as before.
+            $this->assertNotSame('', $this->generate($this->fixedExitsGraph(false), '3', null, $target), $target);
+        }
+        // LangGraph routes it.
+        $this->assertStringContainsString('"exit_targets": {"done":["3"],"failed":["4"]},', $this->generate($this->fixedExitsGraph(true)));
+    }
+
+    public function testFromInputWithoutRobotBakesAnEmptyDict(): void
+    {
+        $pdo = $this->robotPdo();
+        $pdo->exec("DELETE FROM users WHERE kind = 'service'");
+        $code = $this->generate($this->fromInputGraph(), '3', $pdo);
+        $this->assertStringContainsString('PUBLISHED_PLAYBOOKS = {}', $code);
+        [$rc, $out] = self::pyCompiles($code);
+        $this->assertSame(0, $rc, $out);
+    }
+
+    public function testPublishedPlaybooksOmittedWithoutFromInputNodes(): void
+    {
+        $code = $this->generate($this->playbookGraph());
+        $this->assertStringNotContainsString('PUBLISHED_PLAYBOOKS = ', $code);
+        $this->assertStringNotContainsString('"exit_targets": {', $code);
+    }
+
+    public function testFromInputModularModuleBakesPublishedPlaybooks(): void
+    {
+        $code = $this->generate($this->fromInputGraph(), '3', $this->robotPdo(), 'langgraph', ['modular' => true]);
+        $this->assertMatchesRegularExpression('~PUBLISHED_PLAYBOOKS = \{\n    "test": \{.*?\nNODE = \{.*?"published": PUBLISHED_PLAYBOOKS,~s', $code);
+    }
+
+    public function testFromInputRefusedOnA2A(): void
+    {
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessage('A2A');
+        $this->generate($this->fromInputGraph(), '3', $this->robotPdo(), 'langgraph', ['a2a' => true]);
+    }
+
+    public function testFromInputRefusedOnOtherTargets(): void
+    {
+        foreach (['adk', 'maf', 'nooa'] as $target) {
+            try {
+                $this->generate($this->fromInputGraph(), '3', $this->robotPdo(), $target);
+                $this->fail("{$target} compiled a from-input playbook node");
+            } catch (\RuntimeException $e) {
+                $this->assertSame('Playbook node "Run job playbook": "from input" is supported by the LangGraph target only.',
+                    $e->getMessage(), $target);
+            }
+        }
     }
 
     private function playbookGraph(): array

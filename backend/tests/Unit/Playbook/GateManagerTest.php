@@ -64,6 +64,23 @@ final class GateManagerTest extends PlaybookDbTestCase
         $this->assertSame($answer, json_decode($row['decision'], true));
     }
 
+    public function testUnattendedGateEndsLegWithoutAsking(): void
+    {
+        $id = $this->state->createRun(1, $this->doc(), ['id' => 'req1'], []);
+        $bridge = new FakeGateBridge([]);
+        $gm = new GateManager($this->state, $bridge, unattended: true);
+
+        $result = $gm->execute($id, 0, 'request_approval', ['summary' => 'x']);
+
+        $this->assertTrue($result['gate_ended_leg']);
+        $this->assertSame('approval', $result['kind']);
+        $this->assertSame([], $bridge->calls);
+        $this->assertSame('handed_off', $this->state->getRun($id)['status']);
+        $row = $this->gateRow($this->lastGateId($id));
+        $this->assertNotNull($row['closed_at']);
+        $this->assertSame(['decision' => 'unattended'], json_decode($row['decision'], true));
+    }
+
     public function testApprovalTimeoutReturnsTimeoutGuidanceAndClosesGate(): void
     {
         $id = $this->state->createRun(1, $this->doc(), ['id' => 'req1'], []);

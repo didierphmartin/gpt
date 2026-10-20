@@ -12,7 +12,7 @@ final class GraphWorkflowRunnerUnsupportedNodeTest extends TestCase
         self::assertNull(GraphWorkflowRunner::unsupportedNodeMessage('code'));
         self::assertStringContainsString('CODE_NODES_SERVER_SIDE',
             GraphWorkflowRunner::unsupportedNodeMessage('code', ['code_nodes' => ['server_side' => false]]));
-        self::assertStringContainsString('Playbook', GraphWorkflowRunner::unsupportedNodeMessage('playbook'));
+        self::assertNull(GraphWorkflowRunner::unsupportedNodeMessage('playbook'));
         self::assertNull(GraphWorkflowRunner::unsupportedNodeMessage('agent'));
     }
 }

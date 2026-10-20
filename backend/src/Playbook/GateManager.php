@@ -24,6 +24,7 @@ final class GateManager
         private readonly PlaybookRunState $state,
         private readonly GateBridgeInterface $bridge,
         private readonly int $timeoutMs = 900000,
+        private readonly bool $unattended = false,
     ) {}
 
     public function definitions(): array
@@ -115,6 +116,16 @@ final class GateManager
         }
 
         $gateId = $this->state->gateOpen($runId, $leg, $mapping['kind'], $args, $mapping['asked_of']);
+
+        // Unattended (server-side runner, compiled --watch): never wait and never
+        // auto-approve. Close the gate and hand the run off; the interpreter ends
+        // the leg on gate_ended_leg.
+        if ($this->unattended) {
+            $this->state->gateClose($gateId, ['decision' => 'unattended'], '');
+            $this->state->setStatus($runId, 'handed_off');
+            return ['ok' => false, 'gate_ended_leg' => true, 'unattended' => true, 'kind' => $mapping['kind']];
+        }
+
         $this->state->setStatus($runId, $mapping['status']);
 
         // Human gates can block for minutes; the remote DB drops idle

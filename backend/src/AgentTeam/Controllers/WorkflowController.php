@@ -1061,18 +1061,53 @@ class WorkflowController
 
         $nodeConfig = is_array($body['node_config'] ?? null) ? $body['node_config'] : [];
         $prompt = (string) ($body['prompt'] ?? '');
+        // The first parent's text names the playbook and the job (as on the server engine); the prompt when absent.
+        $parentText = isset($body['parent_text']) && is_string($body['parent_text']) ? $body['parent_text'] : $prompt;
 
         try {
-            // A node linked to the collection sends playbook_id; the text is read here, for its owner.
-            if (isset($nodeConfig['playbook_id'])) {
+            $fromInput = \AgentTeam\Services\PlaybookSource::isFromInput($nodeConfig);
+            $reason = null;
+            $result = [];
+            if ($fromInput) {
+                // The playbook is named by the job in the request text (the robot's published copy).
+                $src = \AgentTeam\Services\PlaybookSource::fromInput($this->db, $userId, $nodeConfig, $parentText);
+                if ($src['ok']) {
+                    $nodeConfig['playbook'] = $src['text'];
+                    unset($nodeConfig['playbook_id']);
+                } else {
+                    $reason = $src['reason'];
+                }
+            } elseif (isset($nodeConfig['playbook_id'])) {
+                // A node linked to the collection sends playbook_id; the text is read here, for its owner.
                 $pb = (new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db))->get($userId, (int) $nodeConfig['playbook_id']);
                 if ($pb === null) {
                     throw new \RuntimeException("Playbook #{$nodeConfig['playbook_id']} not found");
                 }
                 $nodeConfig['playbook'] = $pb['text'];
             }
-            $runner = new \AgentTeam\Services\PlaybookNodeRunner($this->config);
-            $result = $runner->run($userId, $nodeConfig, $prompt, $sseCallback);
+            $hasExits = is_array($nodeConfig['exits'] ?? null) && $nodeConfig['exits'] !== [];
+            $transcript = '';
+            if ($reason === null) {
+                try {
+                    $runner = new \AgentTeam\Services\PlaybookNodeRunner($this->config);
+                    // Attended: gates go to the person at the editor.
+                    $result = $runner->run($userId, $nodeConfig, $prompt, $sseCallback);
+                    $transcript = (string) ($result['output'] ?? '');
+                    $reason = \AgentTeam\Services\PlaybookOutcome::reason((string) ($result['status'] ?? ''), $result['gate'] ?? null);
+                } catch (\Throwable $e) {
+                    if (!$hasExits) {
+                        throw $e;
+                    }
+                    $reason = \AgentTeam\Services\PlaybookOutcome::errorReason($e);
+                }
+            }
+            $res = \AgentTeam\Services\PlaybookOutcome::nodeResult($reason, $transcript,
+                $fromInput ? \AgentTeam\Services\PlaybookSource::jobLine($parentText) : null);
+            $result['exit'] = $res['exit'];
+            // An old one-output node keeps its transcript as it was (no failure line, no exit routing).
+            if ($hasExits || $fromInput) {
+                $result['output'] = $res['text'];
+            }
 
             echo "event: done\n";
             echo "data: " . json_encode($result) . "\n\n";

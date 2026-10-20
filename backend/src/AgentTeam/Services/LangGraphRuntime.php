@@ -195,10 +195,31 @@ class DispatcherNode(Node):
 
 PY;
         $playbook = <<<'PY'
+# A playbook key: PlaybookStore::isValidKey()'s rule (lowercase words joined by single hyphens, at most 64).
+PLAYBOOK_KEY_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_PHP_TRIM = " \t\n\r\0\x0b"   # the characters PHP's trim() strips, so the parent text decodes as on the server
+
+
+def playbook_job(parent_text: str):
+    """The parent's text without its leading "## <name>" header line, decoded as JSON; None when
+    it is not JSON. Twin of PlaybookSource::stripHeader() + json_decode()."""
+    body = re.sub(r"\A## [^\n]*\n", "", parent_text.lstrip(_PHP_TRIM), count=1).strip(_PHP_TRIM)
+    try:
+        return json.loads(body)
+    except ValueError:
+        return None
+
+
 class PlaybookNode(Node):
     """A playbook node: the playbook interpreter over native verbs, human gates and bound #Actions.
 
-    Its output is the Markdown transcript of what the playbook did.
+    Its output is the Markdown transcript of what the playbook did. A node with exits
+    (["done", "failed"]) routes: a run whose final status is "resolved" takes "done", any
+    other outcome "failed", its text then starting "Playbook failed: <reason>" and a blank
+    line (PlaybookOutcome). A "from input" node (cfg "source": "input") runs the playbook its
+    parent's JSON names (cfg "input_field") from the robot's published copies baked into cfg
+    "published" (PUBLISHED_PLAYBOOKS); its text ends with "Job: <the parent's JSON>" whenever
+    that is a JSON object (PlaybookSource::jobLine), for the nodes that complete or hand back the job.
     """
 
     async def run(self, request: str, trace) -> dict:
@@ -206,6 +227,53 @@ class PlaybookNode(Node):
         by the GATE_BRIDGE the surrounding file installed (an input-required task
         update in an A2A agent server)."""
         pb = self.cfg
+        from_input = pb.get("source") == "input"
+        if not from_input and not pb.get("exits"):
+            text, status, _gate = await self._interpret(pb, request, trace)
+            return {"text": text, "route": "", "notes": "", "status": status}
+        first = PLAYBOOK_JOB_TEXT.get() if from_input else None   # WorkflowGraph's (from input is refused in A2A)
+        job = playbook_job(request if first is None else first) if from_input else None
+        transcript, status, reason = "", "failed", None
+        if from_input:
+            pb, reason = self._from_input(pb, job)
+        if reason is None:
+            try:
+                transcript, status, gate = await self._interpret(pb, request, trace)
+                if status != "resolved":
+                    reason = f"gate:{gate}" if gate else f"status:{status}"
+            except Exception as e:
+                reason = "error:" + " ".join(str(e).split())   # one line, like the PHP runner's
+        text = transcript if reason is None else f"Playbook failed: {reason}\n\n{transcript}"
+        if isinstance(job, dict):
+            text += "\n\nJob: " + json.dumps(job, separators=(",", ":"), ensure_ascii=False)
+        if not pb.get("exits"):
+            if reason is not None:
+                raise RuntimeError(f"playbook node failed: {reason}")
+            return {"text": text, "route": "", "notes": "", "status": status}
+        route = "done" if reason is None else "failed"
+        await trace(f"playbook took exit {route}" + (f": {reason}" if reason else ""))
+        return {"text": text, "route": route, "notes": "", "status": status}
+
+    @staticmethod
+    def _from_input(pb: dict, job) -> tuple[dict, str | None]:
+        """(the node's settings with the named published playbook's document, None), or (pb, reason).
+        Only published copies are baked, so a draft-only key is "playbook_not_found" here."""
+        field = pb.get("input_field")
+        field = field if isinstance(field, str) and field else "playbook"
+        key = job.get(field) if isinstance(job, dict) else None
+        if not isinstance(key, str) or len(key) > 64 or not PLAYBOOK_KEY_RE.fullmatch(key):
+            return pb, "bad_input"
+        doc = (pb.get("published") or {}).get(key)
+        if doc is None:
+            return pb, f"playbook_not_found:{key}"
+        policy = dict(doc.get("policy") or {})
+        if pb.get("writes_enabled"):
+            policy["writes_enabled"] = True   # the node's write toggle, as for a fixed playbook (PlaybookEmit::nodeData)
+        return {**pb, **doc, "policy": policy}, None
+
+    async def _interpret(self, pb: dict, request: str, trace) -> tuple[str, str, str | None]:
+        """One interpreter run of playbook `pb` on `request`: (transcript, final status, the kind of
+        the gate that ended an unattended run or None)."""
         run = PlaybookRun(bool(pb.get("writes_enabled")), pb.get("policy") or {}, gate_bridge=GATE_BRIDGE)
         tools = PlaybookToolset(pb, run).build()
         await trace(f"{self.display!r} playbook -- {len(tools)} tools (provider={pb.get('provider', '?')}, "
@@ -223,13 +291,15 @@ class PlaybookNode(Node):
         try:
             result = await agent.ainvoke({"messages": self._messages(system, "REQUEST:\n" + request)},
                                          config={"recursion_limit": 2 * PLAYBOOK_MAX_ROUNDS + 1})
-            text = self._final_text(result)
+            text = "" if run.gate_stop else self._final_text(result)   # a gate's tool result is not an answer
+        except PlaybookHandedOff:
+            pass   # an unattended gate ended the leg: status handed_off, gate_stop its kind
         except Exception as e:
             run.status = "failed"
             run.emit(type="note", text=f"Round budget of {PLAYBOOK_MAX_ROUNDS} exhausted or run failed: {e}")
             await trace(f"⚠ playbook failed: {e}")
         await trace(f"done -- status={run.status} ({len(run.events)} events, {time.monotonic() - t0:.1f}s)")
-        return {"text": run.transcript(pb["title"], run.summary or text), "route": "", "notes": "", "status": run.status}
+        return run.transcript(pb["title"], run.summary or text), run.status, run.gate_stop
 
 
 
@@ -1221,6 +1291,26 @@ PY;
     }
 
     /**
+     * The run's context variables (RUN_GATE_MODE, PLAYBOOK_JOB_TEXT): part of workflowGraphBlock(),
+     * which sets them, and emitted on its own in an A2A agent file, whose PlaybookNode reads them.
+     */
+    public static function runContextBlock(): string
+    {
+        return <<<'PY'
+import contextvars
+
+# Per run, not per process: WorkflowGraph.run() sets them for the run's own task (and the
+# tasks / tool threads it starts), so a listener's unattended runs never leak into an
+# attended run of the same process (api.py --listen, then POST /runs).
+#   RUN_GATE_MODE      "unattended" for a --watch / --listen run (PlaybookRun.gate_mode())
+#   PLAYBOOK_JOB_TEXT  the first parent's text of the playbook node being run: a "from
+#                      input" node reads its job JSON there (PHP's parents[0])
+RUN_GATE_MODE: contextvars.ContextVar = contextvars.ContextVar("RUN_GATE_MODE", default="")
+PLAYBOOK_JOB_TEXT: contextvars.ContextVar = contextvars.ContextVar("PLAYBOOK_JOB_TEXT", default=None)
+PY;
+    }
+
+    /**
      * WorkflowGraph: the workflow as a LangGraph StateGraph, built from the frozen
      * EDGES / ORDER / NODE_TYPES and one node table. Written once for every mode: the
      * single file and orchestrator.py carry it inline, the modular package in common.py.
@@ -1230,7 +1320,7 @@ PY;
      */
     public static function workflowGraphBlock(): string
     {
-        return <<<'PY'
+        return str_replace('{RUN_CONTEXT}', self::runContextBlock() . "\n", <<<'PY'
 # ==============================================================
 # WORKFLOW GRAPH
 # WorkflowGraph builds the LangGraph, wires edges, and executes it.
@@ -1240,6 +1330,7 @@ PY;
 # run here, with no LLM.
 # ==============================================================
 
+{RUN_CONTEXT}
 
 class ErrorExitTaken(Exception):
     """A run in which a code node took its `error` exit (WorkflowGraph.check_error_exits)."""
@@ -1279,6 +1370,7 @@ class WorkflowGraph:
         self.outputs: dict[str, dict] = {}   # the last run's node_outputs (an error exit's output says why)
         self.recorder = recorder or NULL_RECORDER
         self.ran: list[str] = []             # ids of the nodes that ran this run (the quiet rule)
+        self.unattended = False              # a listener's run (--watch, --listen): playbook gates hand the job back
 
     def parents(self, nid: str) -> list[str]:
         """Get direct predecessor node IDs (nodes with edges INTO this node)."""
@@ -1347,26 +1439,38 @@ class WorkflowGraph:
             return "\n\n".join(outs[p]["text"] for p in self.parents(nid) if p in outs) or state.get("user_prompt", "")
         return build_context(state.get("user_prompt", ""), self.parents(nid), outs)
 
+    @staticmethod
+    def _routes_by_exit(entry: dict) -> bool:
+        """A code node, or a playbook node with exits (done / failed): the exit it took picks its children."""
+        return entry.get("kind") == "code" or (entry.get("kind") == "playbook" and bool(entry.get("exits")))
+
     def _module_node(self, nid: str):
         """An agent/playbook node: run it, then turn a dispatcher's choice into the conditional edge's input."""
         async def _run(state):
             ad = self.agents[nid]
             self.recorder.node_start(nid, ad["display"], self.node_types.get(nid, ""))
+            outs = state.get("node_outputs", {})
+            # The job text is the FIRST parent's (PHP CodeNodeStep::parents[0]): a dispatcher stands
+            # for its own parents, and a parent with an empty text is skipped.
+            first = next((outs[p]["text"] for p in self._code_parents(nid) if p in outs and outs[p].get("text")), None)
+            token = PLAYBOOK_JOB_TEXT.set(first if ad.get("kind") == "playbook" else None)
             try:
                 out = await self.run_node(nid, self._request_for(nid, state))
             except Exception as e:
                 self.recorder.node_complete(nid, ad["display"], self.node_types.get(nid, ""), success=False, error=f"{type(e).__name__}: {e}")
                 raise
+            finally:
+                PLAYBOOK_JOB_TEXT.reset(token)
             self.ran.append(nid)
             route_info = None
             if ad.get("dispatch"):
                 chosen = next((t for t in ad["dispatch"] if t["id"] == out.get("route")), None)
                 route_info = {"id": chosen["id"], "name": chosen["name"]} if chosen else None
             self.recorder.node_complete(nid, ad["display"], self.node_types.get(nid, ""), output=out["text"],
-                                        exit=out["route"] if ad.get("kind") == "code" else None, route=route_info)
+                                        exit=out["route"] if self._routes_by_exit(ad) else None, route=route_info)
             result = {"node_outputs": {nid: {"source": ad["display"], "text": out["text"]}}}
-            if ad.get("kind") == "code":
-                # Code node: the exit it took selects its children (conditional edge).
+            if self._routes_by_exit(ad):
+                # Code node, playbook node with exits: the exit it took selects its children (conditional edge).
                 result["routes"] = {nid: out["route"]}
             if ad.get("dispatch"):
                 # Dispatcher: the node chose a child (or none) -> conditional edge input;
@@ -1401,7 +1505,7 @@ class WorkflowGraph:
         return lambda state: state.get("routes", {}).get(nid) or END
 
     def _code_router(self, nid: str):
-        """The conditional-edge function of code node `nid`: the children on the exit it took, or END."""
+        """The conditional-edge function of code node (or playbook node with exits) `nid`: the children on the exit it took, or END."""
         targets = self.agents[nid].get("exit_targets", {})
         return lambda state: targets.get(state.get("routes", {}).get(nid), []) or END
 
@@ -1413,7 +1517,7 @@ class WorkflowGraph:
         sg.add_edge(START, self.order[0])
         for nid in self.order:
             entry = self.agents.get(nid, {})
-            is_code = entry.get("kind") == "code"
+            is_code = self._routes_by_exit(entry)
             menu = set(self.children(nid)) if is_code else {t["id"] for t in entry.get("dispatch", [])}
             for child in self.children(nid):
                 if child in pos and pos[child] > pos[nid] and child not in menu:
@@ -1452,7 +1556,11 @@ class WorkflowGraph:
         graph = self.compile()
         RUN_OUT("[info] Running...")
         self.started = time.monotonic()
-        result = await graph.ainvoke({"user_prompt": prompt, "node_outputs": {}})
+        token = RUN_GATE_MODE.set("unattended" if self.unattended else "")
+        try:
+            result = await graph.ainvoke({"user_prompt": prompt, "node_outputs": {}})
+        finally:
+            RUN_GATE_MODE.reset(token)
         self.routes = result.get("routes", {})
         self.outputs = result.get("node_outputs", {})
         return result.get("final_output", "")
@@ -1467,7 +1575,7 @@ class WorkflowGraph:
             raise ErrorExitTaken(failed)
 
 
-PY;
+PY);
     }
 
     /**
@@ -3497,6 +3605,12 @@ _PB_GATE_FIELDS = {
 GATE_BRIDGE = None
 
 
+class PlaybookHandedOff(Exception):
+    """Raised by the tool wrapper right after an unattended gate: it ends the agent loop at once,
+    whatever the agent factory (langchain create_agent or langgraph create_react_agent) and
+    whatever else the model called in the same turn. PlaybookNode._interpret() catches it."""
+
+
 class PlaybookRun:
     """Per-node run record: event timeline (twin of the run overlay), status, write ledger.
 
@@ -3512,6 +3626,24 @@ class PlaybookRun:
         self.policy = policy
         self.ledger = {}
         self.gate_bridge = gate_bridge   # gate_bridge(run, kind, name, args) answers every gate instead, when set
+        self.gate_stop = None            # the kind of the gate that ended an unattended run (the first one wins)
+        self._stop_lock = threading.Lock()   # parallel tool calls run in threads
+
+    @staticmethod
+    def gate_mode() -> str:
+        """PLAYBOOK_GATE_MODE when set (it always wins); else this run's RUN_GATE_MODE ("unattended"
+        for a --watch / --listen run); else server (a host watches), prompt (a terminal) or auto."""
+        env = os.environ.get("PLAYBOOK_GATE_MODE", "").strip().lower()
+        if env:
+            return env
+        if RUN_GATE_MODE.get():   # WorkflowGraph's (an A2A agent's run has a gate_bridge and never asks)
+            return RUN_GATE_MODE.get()
+        return "server" if EVENTS.active else "prompt" if sys.stdin.isatty() else "auto"
+
+    @property
+    def unattended(self) -> bool:
+        """Nobody answers this run's gates: a gate ends the run as handed_off."""
+        return self.gate_bridge is None and self.gate_mode() == "unattended"
 
     def emit(self, **ev) -> None:
         """The run's own timeline AND, when a host is watching, the live stream."""
@@ -3524,14 +3656,22 @@ class PlaybookRun:
         the question is asked on the console. Otherwise PLAYBOOK_GATE_MODE decides:
         auto (default) approves approvals and acknowledges handoffs, deny denies,
         prompt forces the console. PLAYBOOK_GATE_MODE always wins.
+        unattended (set by a --watch / --listen run) ends the run at once as handed_off:
+        never approved, never waited on (GateManager's unattended mode).
 
         A run given a gate_bridge (an A2A agent server's) hands every gate to it instead."""
         if self.gate_bridge is not None:
             return self.gate_bridge(self, kind, name, args)
-        mode = os.environ.get("PLAYBOOK_GATE_MODE", "").strip().lower() or (
-            "server" if EVENTS.active
-            else "prompt" if sys.stdin.isatty()
-            else "auto")
+        mode = self.gate_mode()
+        if mode == "unattended":
+            with self._stop_lock:
+                if self.gate_stop:   # a gate called in the same turn already handed the run off
+                    return {"ok": False, "error": "the run was handed off at a gate"}
+                self.gate_stop = kind
+                self.status = "handed_off"
+            self.emit(type="gate_request", kind=kind, payload=dict(args))
+            # PlaybookToolset._wrap() records this result, then raises PlaybookHandedOff: the leg ends here.
+            return {"ok": False, "gate_ended_leg": True, "unattended": True, "kind": kind}
         what = args.get("question") or args.get("prompt") or args.get("reason") or ""
         if mode == "server":
             # NOTE: run.emit() already tees a gate_request into the stream, but
@@ -3663,11 +3803,14 @@ class PlaybookToolset:
         return create_model(name + "Args", **{p: (t, Field(... if req else None, description=d))
                                               for p, (t, req, d) in fields.items()})
 
-    def _wrap(self, name, fn, description, args_model) -> StructuredTool:
-        """One tool: prints the call and its result, and records both on the run's timeline."""
+    def _wrap(self, name, fn, description, args_model, return_direct: bool = False) -> StructuredTool:
+        """One tool: prints the call and its result, and records both on the run's timeline.
+        return_direct: the agent loop ends right after this tool (an unattended gate)."""
         run = self.run
 
         def invoke(**kwargs):
+            if run.gate_stop:   # handed off: nothing more runs (a call made in the same turn as the gate)
+                raise PlaybookHandedOff(run.gate_stop)
             run.emit(type="tool_call", name=name, args=kwargs)
             preview = json.dumps(kwargs, default=str, ensure_ascii=False)
             print(f"  [playbook] -> {name}({preview[:200]}{'...' if len(preview) > 200 else ''})", flush=True)
@@ -3676,8 +3819,11 @@ class PlaybookToolset:
             ok = result.get("ok", True) is not False
             detail = str(result.get("error") or result.get("guidance") or result.get("decision") or "")
             print(f"  [playbook] <- {name}: {'✓' if ok else '✗'} {detail[:160]}", flush=True)
+            if result.get("unattended"):
+                raise PlaybookHandedOff(run.gate_stop)
             return json.dumps(result, default=str, ensure_ascii=False)
-        return StructuredTool.from_function(func=invoke, name=name, description=description, args_schema=args_model)
+        return StructuredTool.from_function(func=invoke, name=name, description=description, args_schema=args_model,
+                                            return_direct=return_direct)
 
     def _native_tools(self) -> list:
         """Native verbs: always available, no binding needed."""
@@ -3709,6 +3855,8 @@ class PlaybookToolset:
                                 self._model("SetPriority", {"priority": (str, True, "Priority level"), "reason": (str, True, "Reason for priority")})))
 
         def resolve(**a):
+            if run.gate_stop:
+                return {"ok": False, "error": "the run was handed off at a gate"}
             run.status = "resolved"
             run.summary = str(a.get("summary") or "").strip()   # the run's answer, not the turn's narration
             return {"ok": True, "terminal": True}
@@ -3722,7 +3870,8 @@ class PlaybookToolset:
         for gname, (kind, desc) in _PB_GATES.items():
             def gate_fn(_kind=kind, _name=gname, **a):
                 return self.run.gate(_kind, _name, a)
-            tools.append(self._wrap(gname, gate_fn, desc, self._model(gname, _PB_GATE_FIELDS[gname])))
+            tools.append(self._wrap(gname, gate_fn, desc, self._model(gname, _PB_GATE_FIELDS[gname]),
+                                    return_direct=self.run.unattended))
         return tools
 
     def _action_tool(self, act: dict) -> StructuredTool:

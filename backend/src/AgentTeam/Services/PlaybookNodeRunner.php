@@ -50,9 +50,10 @@ final class PlaybookNodeRunner
     }
 
     /**
-     * @return array{output:string, run_id:int, status:string}
+     * @param bool $unattended no human present: any gate ends the run as handed_off
+     * @return array{output:string, run_id:int, status:string, gate:?string}
      */
-    public function run(int $userId, array $nodeConfig, string $requestText, \Closure $emit): array
+    public function run(int $userId, array $nodeConfig, string $requestText, \Closure $emit, bool $unattended = false): array
     {
         // Playbook legs are long-lived (human gates can block for minutes)
         // and talk to a REMOTE contexts DB. If that connection dies while a
@@ -94,8 +95,13 @@ final class PlaybookNodeRunner
         // not just the interpreter's last sentence.
         $events = [];
         $emitInner = $emit;
-        $emit = function (array $ev) use (&$events, $emitInner): void {
+        $unattendedGate = null;
+        $emit = function (array $ev) use (&$events, $emitInner, &$unattendedGate): void {
             $events[] = $ev;
+            // The first unattended gate wins (the run ends there).
+            if ($unattendedGate === null && ($ev['type'] ?? null) === 'tool_result' && !empty($ev['result']['unattended'])) {
+                $unattendedGate = (string)($ev['result']['kind'] ?? '');
+            }
             $emitInner($ev);
         };
 
@@ -111,7 +117,7 @@ final class PlaybookNodeRunner
         $bridge = $this->bridgeFactory !== null
             ? ($this->bridgeFactory)($emit)
             : new SkillBridgeGateBridge($emit);
-        $gates = new GateManager($state, $bridge);
+        $gates = new GateManager($state, $bridge, unattended: $unattended);
 
         $space = new PlaybookActionSpace($analysis['actions'], $native, $mcp, $state, $doc->policy, $gates);
 
@@ -127,9 +133,17 @@ final class PlaybookNodeRunner
 
         $result = $interpreter->runLeg($runId, 0, $doc, [], $requester, $requestText);
 
-        $output = self::renderTranscript($doc->title, $events, (string)($result['output'] ?? ''), $runId, (string)$result['status']);
+        $status = (string)$result['status'];
+        if ($unattendedGate !== null && $status !== 'handed_off') {
+            // Defence in depth: an unattended gate hands the run off, whatever
+            // happened after it. Nothing may turn a hand-off into a resolve.
+            $status = 'handed_off';
+            $state->setStatus($runId, 'handed_off');
+        }
 
-        return ['output' => $output, 'run_id' => $runId, 'status' => (string)$result['status']];
+        $output = self::renderTranscript($doc->title, $events, (string)($result['output'] ?? ''), $runId, $status);
+
+        return ['output' => $output, 'run_id' => $runId, 'status' => $status, 'gate' => $unattendedGate];
     }
 
     /**

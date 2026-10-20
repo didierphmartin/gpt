@@ -40,6 +40,19 @@ assert.deepStrictEqual(PC.nodeServerNames({ playbook_id: 99 }), []);
 assert.deepStrictEqual(PC.runNodeConfig({ ...nd, playbook: 'x', agent_provider: 'claude' }),
     { playbook_id: 7, agent_provider: 'claude', model: 'm', name: 'Okta', writes_enabled: true });
 
+// nodeData keeps playbook_source, playbook_input_field and exits; an old node (none of them) gains nothing.
+const ex = PC.nodeData({ name: 'Robot', playbook_source: 'input', playbook_input_field: 'pb', exits: ['done', 'failed'] });
+assert.strictEqual(ex.playbook_source, 'input');
+assert.strictEqual(ex.playbook_input_field, 'pb');
+assert.deepStrictEqual(ex.exits, ['done', 'failed']);
+assert.strictEqual(PC.nodeData({ playbook_source: 'input' }).playbook_input_field, 'playbook');
+assert.strictEqual(PC.nodeData({ playbook_source: 'bogus' }).playbook_source, undefined);
+for (const k of ['playbook_source', 'playbook_input_field', 'exits']) assert.ok(!(k in nd), k);
+assert.deepStrictEqual(PC.runNodeConfig(ex), { playbook_id: null, agent_provider: '', model: '', name: 'Robot', writes_enabled: true,
+    playbook_source: 'input', playbook_input_field: 'pb', exits: ['done', 'failed'] });
+assert.strictEqual(PC.nodeSummary(ex).missing, false);
+assert.strictEqual(PC.nodeSummary(ex).text, 'From the job (pb)');
+
 // Ruling 12: an unlinked node (saved before the collection) keeps, shows and runs its text.
 const legacy = PC.nodeData({ name: 'Old', playbook: text, policy: { on_failure: 'stop' }, approvers: ['alice'] });
 assert.strictEqual(legacy.playbook_id, null);
@@ -111,6 +124,18 @@ let arm = PC.armClick(null, 'robot:5');
 assert.deepStrictEqual(arm, { fire: false, armed: 'robot:5' });
 assert.deepStrictEqual(PC.armClick(arm.armed, 'robot:6'), { fire: false, armed: 'robot:6' });
 assert.deepStrictEqual(PC.armClick(arm.armed, 'robot:5'), { fire: true, armed: null });
+
+// The Job line a from-input node keeps on a transport error (twin of PlaybookSource::jobLine).
+assert.strictEqual(PC.jobLine('## Get job\n{ "playbook": "a/b",\n "task": "é" }'), 'Job: {"playbook":"a/b","task":"é"}');
+assert.strictEqual(PC.jobLine('{"task":"x"}'), 'Job: {"task":"x"}');
+assert.strictEqual(PC.jobLine('{}'), 'Job: {}');
+assert.strictEqual(PC.jobLine('{"a":{}}'), 'Job: {"a":{}}');
+assert.strictEqual(PC.jobLine('not json'), null);
+assert.strictEqual(PC.jobLine('[1,2]'), null);
+assert.strictEqual(PC.jobLine('null'), null);
+assert.strictEqual(PC.jobLine('"text"'), null);
+assert.strictEqual(PC.jobLine('## Get job\n'), null);
+assert.strictEqual(PC.jobLine(null), null);
 
 (async () => {
     // A failed load is remembered: a linked id that is not cached is "unloaded", not "not found".
