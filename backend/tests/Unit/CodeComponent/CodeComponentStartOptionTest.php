@@ -185,7 +185,7 @@ final class CodeComponentStartOptionTest extends TestCase
             json_encode(['type' => 'start', 'start_option' => $this->id,
                 'start_args' => ['tag' => 'okta-reset', 'version' => 2, 'hand_back_group' => 'g']])]);
         $b = $this->store->scheduleBody(3, ['workflow_id' => 64, 'trigger_component_id' => (string) $this->id]);
-        $this->assertSame(['args' => ['folder' => 'Inbox'], 'tag' => 'okta-reset'], $b['event_trigger']['args']);
+        $this->assertEquals(['args' => ['folder' => 'Inbox'], 'tag' => 'okta-reset'], $b['event_trigger']['args']);
         // the update path has no workflow_id in its body: the caller names it
         $b = $this->store->scheduleBody(3, ['trigger_component_id' => (string) $this->id], 64);
         $this->assertSame('okta-reset', $b['event_trigger']['args']['tag']);
@@ -224,5 +224,37 @@ final class CodeComponentStartOptionTest extends TestCase
         $this->assertNull($by[65]);
         $this->assertSame('{}', $by[66]);   // another component's schedule
         $this->assertSame('{}', $by[99]);   // another user's schedule
+    }
+
+    private function seedTaggedStart(int $wf, string $tag): void
+    {
+        $this->db->prepare('INSERT INTO workflow_nodes (workflow_id, node_type, config) VALUES (?, ?, ?)')->execute([$wf, 'start',
+            json_encode(['type' => 'start', 'start_option' => $this->id, 'start_args' => ['tag' => $tag]])]);
+    }
+
+    /** Review focus 1: editing the watch must not strip a tagged schedule's tag. */
+    public function testEditingTheWatchKeepsEachSchedulesTag(): void
+    {
+        $this->store->setStartTrigger(3, $this->id, self::TRIGGER);
+        $this->seedTaggedStart(64, 'okta-reset');
+        $this->db->exec("INSERT INTO scheduled_workflows (user_id, workflow_id, repeat_type, event_trigger, trigger_component_id, status)
+            VALUES (3, 64, 'event', '{}', {$this->id}, 'pending'), (3, 65, 'event', '{}', {$this->id}, 'pending')");
+        $t = self::TRIGGER;
+        $t['watch']['args'] = ['args' => ['folder' => 'Archive']];
+        $this->store->setStartTrigger(3, $this->id, $t);
+        $by = array_column($this->db->query('SELECT workflow_id, event_trigger FROM scheduled_workflows')->fetchAll(), 'event_trigger', 'workflow_id');
+        $this->assertEquals(['args' => ['folder' => 'Archive'], 'tag' => 'okta-reset'], json_decode($by[64], true)['args']);
+        $this->assertSame(['args' => ['folder' => 'Archive']], json_decode($by[65], true)['args']);
+    }
+
+    /** The workflow's Start tag beats a default tag in the component's own watch args. */
+    public function testTheStartTagWinsOverTheComponentsOwnTag(): void
+    {
+        $t = self::TRIGGER;
+        $t['watch']['args'] = ['tag' => 'default'];
+        $this->store->setStartTrigger(3, $this->id, $t);
+        $this->seedTaggedStart(64, 'okta-reset');
+        $b = $this->store->scheduleBody(3, ['workflow_id' => 64, 'trigger_component_id' => (string) $this->id]);
+        $this->assertSame('okta-reset', $b['event_trigger']['args']['tag']);
     }
 }

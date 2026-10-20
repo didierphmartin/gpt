@@ -248,10 +248,6 @@ class NodeName(unittest.TestCase):
         self.assertEqual(run(self.SRC)["output_text"], "Inbox/")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ArgsGlobal(unittest.TestCase):
     """ARGS: the node's start/component arguments as a module global; {} when none."""
     SRC = "def run(input, call_tool):\n    return ARGS.get('tag')\n"
@@ -266,3 +262,7 @@ class ArgsGlobal(unittest.TestCase):
         self.assertEqual(run(self.SRC)["output_text"], "null")
         self.assertEqual(run("def run(i, c):\n    return ARGS == {}\n", args=[])["output_text"], "true")
         self.assertEqual(run("def run(i, c):\n    return ARGS == {}\n", args=None, threaded=False)["output_text"], "true")
+
+
+if __name__ == "__main__":
+    unittest.main()

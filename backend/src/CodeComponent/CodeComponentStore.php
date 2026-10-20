@@ -141,8 +141,14 @@ final class CodeComponentStore
             $this->db->prepare('UPDATE code_components SET start_trigger = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?')
                 ->execute([json_encode($t, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), $id, $userId]);
             // the schedules already on this option carry a copy of its watch: an edit reaches them too
-            $this->db->prepare('UPDATE scheduled_workflows SET event_trigger = ? WHERE user_id = ? AND trigger_component_id = ?')
-                ->execute([ScheduledWorkflowService::eventTrigger(json_encode($t['watch'])), $userId, $id]);
+            $watch = json_decode(json_encode($t['watch']), true);   // validateStartTrigger hands back objects
+            $rows = $this->db->prepare('SELECT id, workflow_id FROM scheduled_workflows WHERE user_id = ? AND trigger_component_id = ?');
+            $rows->execute([$userId, $id]);
+            $upd = $this->db->prepare('UPDATE scheduled_workflows SET event_trigger = ? WHERE id = ?');
+            foreach ($rows->fetchAll(PDO::FETCH_ASSOC) as $r) {   // each keeps its own Start tag
+                $upd->execute([ScheduledWorkflowService::eventTrigger(json_encode(
+                    $this->watchWithTag($watch, (int) $r['workflow_id']))), $r['id']]);
+            }
             if ($outer) {
                 $this->db->commit();
             }
@@ -218,13 +224,19 @@ final class CodeComponentStore
             return $body;
         }
         $id = (int) $body['trigger_component_id'];
-        $watch = $this->watchFor($userId, $id);
-        $tag = $this->startTag((int) ($body['workflow_id'] ?? $workflowId ?? 0));
-        if ($tag !== null) {
-            $watch['args'] = (is_array($watch['args'] ?? null) ? $watch['args'] : []) + ['tag' => $tag];
-        }
+        $watch = $this->watchWithTag($this->watchFor($userId, $id), (int) ($body['workflow_id'] ?? $workflowId ?? 0));
         return ['repeat_type' => 'event', 'event_trigger' => $watch, 'cron' => null,
             'trigger_component_id' => $id] + $body;
+    }
+
+    /** The watch plus the workflow's Start tag in its args; the Start's tag wins over one the component set. */
+    private function watchWithTag(array $watch, int $workflowId): array
+    {
+        $tag = $this->startTag($workflowId);
+        if ($tag !== null) {
+            $watch['args'] = ['tag' => $tag] + (is_array($watch['args'] ?? null) ? $watch['args'] : []);
+        }
+        return $watch;
     }
 
     /** The workflow's Start node's start_args.tag, or null. */
@@ -236,6 +248,7 @@ final class CodeComponentStore
         $st = $this->db->prepare("SELECT config FROM workflow_nodes WHERE workflow_id = ? AND node_type = 'start' ORDER BY id LIMIT 1");
         $st->execute([$workflowId]);
         $cfg = json_decode((string) $st->fetchColumn(), true);
+        $st->closeCursor();   // an open read would block the schedule UPDATE that follows in setStartTrigger
         $tag = is_array($cfg) ? ($cfg['start_args']['tag'] ?? null) : null;
         return is_string($tag) && $tag !== '' ? $tag : null;
     }
