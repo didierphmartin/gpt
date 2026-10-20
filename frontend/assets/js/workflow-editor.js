@@ -13161,6 +13161,8 @@ class WorkflowEditor {
             this.currentWorkflowId = workflowData.id;
             this.currentWorkflowName = workflowData.name;
             this.currentWorkflowDescription = workflowData.description || '';
+            // A workflow an automation manages says so: edits here are lost when it is regenerated.
+            this._renderAutomationBanner(workflowData.automation_id);
 
             // Restore runtime mode (batch vs realtime audio) so the right sidebar
             // palette and canvas styling match the loaded workflow type. The
@@ -17520,6 +17522,38 @@ class WorkflowEditor {
      * Clear the workflow canvas
      * @param {boolean} skipConfirm - If true, don't ask for confirmation
      */
+    /**
+     * The "Managed by automation" banner over the canvas for a workflow with automation_id (null hides it). The
+     * automation's title comes from GET /automations; "#id" when it cannot be read.
+     */
+    async _renderAutomationBanner(automationId) {
+        let el = document.getElementById('workflow-automation-banner');
+        const id = Number(automationId) > 0 ? Number(automationId) : null;
+        this._automationBannerFor = id;
+        if (!id) { if (el) el.style.display = 'none'; return; }
+        if (!el && this.container) {
+            el = document.createElement('div');
+            el.id = 'workflow-automation-banner';
+            el.style.cssText = 'position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:11;max-width:60%;'
+                + 'background:#fef3c7;border:1px solid #f59e0b;color:#78350f;border-radius:8px;padding:6px 12px;font-size:12px;'
+                + 'box-shadow:0 2px 8px rgba(0,0,0,0.08);pointer-events:none;';
+            this.container.appendChild(el);
+        }
+        if (!el) return;
+        const show = (title) => {
+            if (this._automationBannerFor !== id) return;   // another workflow was loaded meanwhile
+            el.textContent = `Managed by automation ${title} — edit the automation; changes here are lost when it is regenerated.`;
+            el.style.display = '';
+        };
+        show(`#${id}`);
+        try {
+            const resp = await fetch(`${this.apiBase}/automations`, { headers: this.getAuthHeaders() });
+            const json = await resp.json().catch(() => ({}));
+            const row = (json?.data || []).find(a => Number(a?.id) === id);
+            if (row?.title) show(row.title);
+        } catch (_) { /* keep "#id" */ }
+    }
+
     clearWorkflow(skipConfirm = false, { keepSession = false } = {}) {
         // Check if there are any nodes
         const data = this.editor.export();
@@ -17541,6 +17575,7 @@ class WorkflowEditor {
         // close the conversation the user is in.
         if (!keepSession) this._swarmSessionEnd();
         this.currentWorkflowId = null;
+        this._renderAutomationBanner(null);
         this.currentWorkflowName = '';
         this.currentWorkflowDescription = '';
 

@@ -842,6 +842,38 @@ for _dep in list(_runner_micropip_deps):
     }
 
     /**
+     * The chat client tools (save_workflow, install_automation) read what a skill script wrote under /outputs:
+     * readOutputFile is readOutput behind the lazy load + /outputs mount; listOutputFiles lists a folder's files
+     * recursively as paths relative to it (dot entries and node_modules skipped), [] when it does not exist.
+     */
+    async function readOutputFile(absPath) {
+        await ensureLoaded();
+        await ensureOutputsMounted();
+        return readOutput(absPath);
+    }
+
+    async function listOutputFiles(absDir) {
+        await ensureLoaded();
+        await ensureOutputsMounted();
+        const out = [];
+        const walk = (dir, rel) => {
+            let names;
+            try { names = pyodide.FS.readdir(dir); } catch { return; }
+            for (const n of names) {
+                if (n.startsWith('.') || n === 'node_modules') continue;
+                const abs = `${dir}/${n}`;
+                const r = rel ? `${rel}/${n}` : n;
+                let st;
+                try { st = pyodide.FS.stat(abs); } catch { continue; }
+                if (pyodide.FS.isDir(st.mode)) walk(abs, r);
+                else out.push(r);
+            }
+        };
+        walk(String(absDir).replace(/\/+$/, ''), '');
+        return out;
+    }
+
+    /**
      * The Python harness that runs the script. Captures stdout/stderr at the
      * Python layer (so we don't have to fight the JS-side stdout config),
      * sets sys.argv + cwd, and translates SystemExit / unhandled exceptions
@@ -1274,6 +1306,8 @@ _inline_stderr_str = _inline_stderr.getvalue()
         ensureMounted,    // Phase 2B: cross-skill scripts (run_body_loop, etc.) call this from Python via `from js import window` to mount a sibling skill before reading its files
         reset,
         cleanupPath,
+        readOutputFile,   // save_workflow / install_automation (chat.js, automations-view.js)
+        listOutputFiles,
         // Exposed for the parallel worker-pool path (chat.js): the worker runs
         // off the main thread and cannot read SKILL.md, so the dispatcher
         // resolves these here and passes the results in the worker payload.

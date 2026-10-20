@@ -315,8 +315,9 @@ class ChatController
             if (!is_string($name)
                 || $name === ''
                 // route_to: the workflow dispatcher's branch choice (browser run path);
-                // resolved client-side, so it rides the same per-request channel.
-                || !preg_match('/^(?:webmcp_[a-zA-Z0-9_\-\.]{1,120}|route_to|save_playbook_agent)$/', $name)) {
+                // resolved client-side, so it rides the same per-request channel. save_*/install_automation:
+                // the skills' browser-side save tools (playbook-author, workflow-compile, servicenow-automation-author).
+                || !preg_match('/^(?:webmcp_[a-zA-Z0-9_\-\.]{1,120}|route_to|save_playbook_agent|save_workflow|save_automation|install_automation)$/', $name)) {
                 error_log("[ChatController] client_tools[$i] dropped: invalid name " . var_export($name, true));
                 continue;
             }

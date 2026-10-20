@@ -106,6 +106,8 @@ class ChatApp {
         this.mcpServersView = document.getElementById('mcp-servers-view');
         this.navPlaybooks = document.getElementById('nav-playbooks');
         this.playbooksView = document.getElementById('playbooks-view');
+        this.navAutomations = document.getElementById('nav-automations');
+        this.automationsView = document.getElementById('automations-view');
         this.navCodeLibrary = document.getElementById('nav-code-library');
         this.codeLibraryView = document.getElementById('code-library-view');
 
@@ -329,10 +331,182 @@ class ChatApp {
                     playbook: { type: 'string', description: 'The full playbook text exactly as create.py printed it.' },
                     provider: { type: 'string', description: 'Optional LLM provider key for the node (defaults to the current one).' },
                     pkey: { type: 'string', description: 'Optional collection key (lowercase letters, digits, single hyphens, max 64). Defaults to one derived from the playbook Title.' },
+                    playbook_id: { type: 'integer', description: 'Optional: the id of a playbook to update in place (an automation\'s managed playbook, from save_automation). Its agent is reused.' },
                 },
                 required: ['name', 'playbook'],
             },
         };
+    }
+
+    /** save_workflow: a compiled workflow DSL file under /outputs saved as a SynergyAI workflow. */
+    _workflowSaveToolDef() {
+        return {
+            name: 'save_workflow',
+            description: 'Save a compiled workflow DSL JSON file (written by a skill script under /outputs) as a SynergyAI workflow. Creates it, or updates workflow_id in place (an active workflow is stopped and started again). On unknown references it returns the missing names and saves nothing.',
+            input_schema: {
+                type: 'object',
+                properties: {
+                    path: { type: 'string', description: 'The DSL file, e.g. /outputs/<key>.workflow.json.' },
+                    workflow_id: { type: 'integer', description: 'Optional: the workflow to update in place (from save_automation).' },
+                    automation_id: { type: 'integer', description: 'Optional: the automation this workflow belongs to (from save_automation); the workflow is linked to it.' },
+                },
+                required: ['path'],
+            },
+        };
+    }
+
+    /** save_automation: the automation record (create / bump the version, or link the playbook and workflow), then a drift check. */
+    _automationSaveToolDef() {
+        return {
+            name: 'save_automation',
+            description: 'Save the automation record. With spec only: creates it (version 1) or bumps the version of an existing key; returns id, version, playbook_id, workflow_id and servers. With playbook_id / workflow_id: links them (a spec given too replaces the stored one without a new version). Then checks every ServiceNow server for drift.',
+            input_schema: {
+                type: 'object',
+                properties: {
+                    key: { type: 'string', description: 'The automation key (the spec\'s name).' },
+                    title: { type: 'string', description: 'The automation title.' },
+                    spec: { type: 'object', description: 'The automation spec (as last run).' },
+                    playbook_id: { type: 'integer', description: 'The playbook id from save_playbook_agent.' },
+                    workflow_id: { type: 'integer', description: 'The workflow id from save_workflow.' },
+                },
+                required: ['key', 'title'],
+            },
+        };
+    }
+
+    /** install_automation: the generated ServiceNow app installed on a dev/test server through the connector. */
+    _automationInstallToolDef() {
+        return {
+            name: 'install_automation',
+            description: 'Install the automation\'s ServiceNow app (the files under /outputs/servicenow/<scope>/) on a dev or test ServiceNow server, then check it. A refusal (prod or unknown environment) returns the manual install line instead.',
+            input_schema: {
+                type: 'object',
+                properties: {
+                    automation_id: { type: 'integer', description: 'The automation id from save_automation.' },
+                    server_id: { type: 'integer', description: 'A server from save_automation\'s servers whose environment is dev or test.' },
+                    scope: { type: 'string', description: 'The app scope from the flow: line.' },
+                },
+                required: ['automation_id', 'server_id', 'scope'],
+            },
+        };
+    }
+
+    /** The client tools a skill turn sends (AutomationsView.clientToolNames). */
+    _clientToolDefsFor(dirName) {
+        const defs = {
+            save_playbook_agent: () => this._playbookSaveToolDef(),
+            save_workflow: () => this._workflowSaveToolDef(),
+            save_automation: () => this._automationSaveToolDef(),
+            install_automation: () => this._automationInstallToolDef(),
+        };
+        const names = window.AutomationsView
+            ? window.AutomationsView.clientToolNames(dirName)
+            : (dirName === 'playbook-author' ? ['save_playbook_agent'] : []);
+        return names.map(n => defs[n]());
+    }
+
+    _automationApi() {
+        return new window.AutomationsView.AutomationApi(window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1', () => this.getAuthHeaders());
+    }
+
+    /** fetch + JSON for the save tools: {ok, status, json}. */
+    async _apiJson(method, path, body) {
+        const resp = await fetch(window.apiUrl(path), {
+            method,
+            headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
+            body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        const json = await resp.json().catch(() => ({}));
+        return { ok: resp.ok && json?.success !== false, status: resp.status, json };
+    }
+
+    /**
+     * save_workflow: the DSL file under /outputs -> POST /workflows, or PUT /workflows/{workflow_id}. The active
+     * workflow is stopped before the PUT and started again after it (even when the PUT fails). A 422 hands the
+     * missing names back to the model. With automation_id, the saved workflow is linked to that automation.
+     */
+    async _saveWorkflowTool(input) {
+        const AV = window.AutomationsView;
+        const path = AV.outputsPath(input.path);
+        if (!path) return { success: false, error: 'path must be a file under /outputs/ (e.g. /outputs/<key>.workflow.json).' };
+        const text = await window.pyodideRunner.readOutputFile(path);
+        if (typeof text !== 'string') return { success: false, error: `${path} was not found (run the skill script first).` };
+        let dsl;
+        try { dsl = JSON.parse(text); } catch (_) { return { success: false, error: `${path} is not valid JSON.` }; }
+        if (!dsl || typeof dsl !== 'object' || typeof dsl.name !== 'string' || !Array.isArray(dsl.definition?.nodes)) {
+            return { success: false, error: `${path} is not a workflow DSL (name and definition.nodes expected).` };
+        }
+        const workflowId = Number(input.workflow_id) > 0 ? Number(input.workflow_id) : null;
+        const automationId = Number(input.automation_id) > 0 ? Number(input.automation_id) : null;
+
+        let wasActive = false;
+        if (workflowId) {
+            const active = await this._apiJson('GET', '/workflows/active');
+            wasActive = Number(active.json?.data?.workflow_id) === workflowId;
+            if (wasActive) {
+                const stop = await this._apiJson('DELETE', `/workflows/${workflowId}/activate`);
+                if (!stop.ok) return { success: false, error: `could not stop the active workflow ${workflowId}: ${stop.json?.error || stop.status}` };
+            }
+        }
+        let saved;
+        let restart = null;
+        try {
+            saved = workflowId
+                ? await this._apiJson('PUT', `/workflows/${workflowId}`, dsl)
+                : await this._apiJson('POST', '/workflows', dsl);
+        } finally {
+            if (wasActive) restart = await this._apiJson('POST', `/workflows/${workflowId}/activate`).catch(e => ({ ok: false, json: { error: e?.message } }));
+        }
+        const restarted = wasActive ? { was_active: true, restarted: !!restart?.ok, ...(restart?.ok ? {} : { restart_error: restart?.json?.error || 'activate failed' }) } : {};
+        if (saved.status === 422) {
+            return { success: false, error: 'unknown references', missing: saved.json?.missing || [], ...restarted,
+                hint: 'Nothing was saved. Every missing name must exist first (save the playbook with save_playbook_agent, check component names), then call save_workflow again.' };
+        }
+        const id = saved.json?.data?.id;
+        if (!saved.ok || !id) return { success: false, error: saved.json?.error || `workflows endpoint returned ${saved.status}`, ...restarted };
+        let linked = null;
+        if (automationId) {
+            const link = await this._apiJson('PUT', `/automations/${automationId}`, { workflow_id: Number(id) });
+            linked = link.ok ? true : (link.json?.error || `automations endpoint returned ${link.status}`);
+        }
+        try { await window.workflowEditor?.loadWorkflowsList?.(); } catch (_) {}
+        return { success: true, workflow_id: Number(id), name: saved.json.data.name, [workflowId ? 'updated' : 'created']: true, ...restarted,
+            ...(automationId ? { automation_id: automationId, linked } : {}) };
+    }
+
+    /**
+     * save_automation: POST (spec only: create, or bump an existing key) or PUT by the key's id (link playbook /
+     * workflow; a spec given too replaces the stored one without a bump) -- AutomationsView.saveAutomationPlan --
+     * then a drift check.
+     */
+    async _saveAutomationTool(input) {
+        const AV = window.AutomationsView;
+        const plan = AV.saveAutomationPlan(input);
+        if (plan.error) return { success: false, error: plan.error };
+        const api = this._automationApi();
+        let rec;
+        try {
+            if (plan.method === 'POST') {
+                rec = await api.create(plan.body);
+            } else {
+                const key = String(input.key).trim();
+                const row = (await api.list() || []).find(r => r.key === key);
+                if (!row) return { success: false, error: `no automation with key "${key}": call save_automation with the spec first.` };
+                rec = await api.update(row.id, plan.body);
+            }
+        } catch (e) {
+            return { success: false, error: e.message, code: e.code || null };
+        }
+        let drift = null;
+        try {
+            const c = await api.check(rec.id);
+            drift = AV.driftSummary(AV.withServerNames(c.instances, c.servers));
+            rec.servers = c.servers || rec.servers;
+        } catch (e) {
+            drift = `check failed: ${e.message}`;
+        }
+        try { await window.automationsLibrary?.loadTree?.(); } catch (_) {}
+        return { success: true, automation_id: rec.id, ...rec, drift };
     }
 
     getAuthHeaders() {
@@ -479,6 +653,9 @@ class ChatApp {
         }
         if (this.navPlaybooks) {
             this.navPlaybooks.addEventListener('click', () => this.switchView('playbooks'));
+        }
+        if (this.navAutomations) {
+            this.navAutomations.addEventListener('click', () => this.switchView('automations'));
         }
         if (this.navCodeLibrary) {
             this.navCodeLibrary.addEventListener('click', () => this.switchView('code-library'));
@@ -2013,9 +2190,9 @@ class ChatApp {
                 conversation_history: this.conversationHistory.slice(-10),
                 // View Context: the backend echoes what it actually sent.
                 return_context: true,
-                // playbook-author skill: the browser saves the finished playbook as a
-                // Playbook agent (scripts run sandboxed, without an API session).
-                ...(effectiveSkill?.dir_name === 'playbook-author' ? { client_tools: [this._playbookSaveToolDef()] } : {}),
+                // playbook-author / workflow-compile / servicenow-automation-author: the browser
+                // saves what the skill made (scripts run sandboxed, without an API session).
+                ...(this._clientToolDefsFor(effectiveSkill?.dir_name).length ? { client_tools: this._clientToolDefsFor(effectiveSkill?.dir_name) } : {}),
                 streaming: !turnRunsSkillTransform,
                 user_id: storedUser?.id || 'demo-user',
                 provider: this.currentProvider,
@@ -3531,18 +3708,33 @@ class ChatApp {
                     const PC = window.PlaybookCollection;
                     const api = new PC.PlaybookApi(window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1', () => this.getAuthHeaders());
                     let row = null;
+                    let agentId = null;
+                    const playbookId = Number(input.playbook_id) > 0 ? Number(input.playbook_id) : null;
                     try {
-                        // A retry after a failed agent save reuses the playbook already saved
-                        // with this exact text instead of saving it again.
-                        const saved = (await api.list()).data || [];
-                        row = saved.find(r => r.text === playbook)
-                            || (await api.create({ text: playbook, pkey: String(input.pkey || '').trim() || PC.keyFromTitle(PC.titleOf(playbook) || name) })).data;
+                        if (playbookId) {
+                            // An automation's managed playbook: updated in place, its agent reused.
+                            const pkey = String(input.pkey || '').trim();
+                            row = (await api.update(playbookId, { text: playbook, ...(pkey ? { pkey } : {}) })).data;
+                            const agentsResp = await fetch(window.apiUrl('/agents'), { headers: this.getAuthHeaders() });
+                            const agents = agentsResp.ok ? ((await agentsResp.json().catch(() => ({})))?.data || []) : [];
+                            agentId = agents.find(a => a?.agent_type === 'playbook' && Number(a?.playbook_id) === Number(row.id))?.id ?? null;
+                        } else {
+                            // A retry after a failed agent save reuses the playbook already saved
+                            // with this exact text instead of saving it again.
+                            const saved = (await api.list()).data || [];
+                            row = saved.find(r => r.text === playbook)
+                                || (await api.create({ text: playbook, pkey: String(input.pkey || '').trim() || PC.keyFromTitle(PC.titleOf(playbook) || name) })).data;
+                        }
                     } catch (e) {
                         payload = e?.kind === 'key_taken'
                             ? { success: false, error: e.message, hint: 'Choose another key: call save_playbook_agent again with a distinct pkey.' }
                             : { success: false, error: e?.message || String(e) };
                     }
-                    if (row) {
+                    if (row && agentId) {
+                        PC.cache.put(row);
+                        try { await window.playbooksLibrary?.loadTree?.(); } catch (_) {}
+                        payload = { success: true, agent_id: agentId, playbook_id: row.id, pkey: row.pkey, name, updated: true, category: 'Playbooks' };
+                    } else if (row) {
                         PC.cache.put(row);
                         try { await window.playbooksLibrary?.loadTree?.(); } catch (_) {}
                         const resp = await fetch(window.apiUrl('/agents'), {
@@ -3569,6 +3761,44 @@ class ChatApp {
                 }
             } catch (e) {
                 payload = { success: false, error: `save_playbook_agent failed: ${e?.message || e}` };
+            }
+            return { toolResultPayload: payload, followUpExtras: {} };
+        }
+
+        if (call.name === 'save_workflow') {
+            let payload;
+            try {
+                payload = await this._saveWorkflowTool(call.input || {});
+            } catch (e) {
+                payload = { success: false, error: `save_workflow failed: ${e?.message || e}` };
+            }
+            return { toolResultPayload: payload, followUpExtras: {} };
+        }
+
+        if (call.name === 'save_automation') {
+            let payload;
+            try {
+                payload = await this._saveAutomationTool(call.input || {});
+            } catch (e) {
+                payload = { success: false, error: `save_automation failed: ${e?.message || e}` };
+            }
+            return { toolResultPayload: payload, followUpExtras: {} };
+        }
+
+        if (call.name === 'install_automation') {
+            let payload;
+            try {
+                const input = call.input || {};
+                const automationId = Number(input.automation_id);
+                const serverId = Number(input.server_id);
+                if (!(automationId > 0) || !(serverId > 0)) {
+                    payload = { success: false, error: 'install_automation needs automation_id and server_id (positive integers) and the scope.' };
+                } else {
+                    payload = await window.AutomationsView.installAutomation(this._automationApi(), automationId, serverId, String(input.scope || '').trim());
+                }
+                try { await window.automationsLibrary?.loadTree?.(); } catch (_) {}
+            } catch (e) {
+                payload = { success: false, error: `install_automation failed: ${e?.message || e}` };
             }
             return { toolResultPayload: payload, followUpExtras: {} };
         }
@@ -4891,12 +5121,13 @@ class ChatApp {
             // also covers the FINAL turn after the script ran — where the
             // regular flow drops skill_metadata (no forced run_skill_script)
             // and the model would otherwise have no save tool to call.
+            // Same for the save tools of workflow-compile and servicenow-automation-author.
             const promoted = followUpExtras?.skill_metadata?.dir_name || ctx.activeSkill?.dir_name || ctx.baseRequestBody?.skill_metadata?.dir_name;
-            if (promoted === 'playbook-author') {
+            const saveTools = this._clientToolDefsFor(promoted);
+            if (saveTools.length) {
                 const existing = Array.isArray(followUpBody.client_tools) ? followUpBody.client_tools : [];
-                if (!existing.some(t => t?.name === 'save_playbook_agent')) {
-                    followUpBody.client_tools = [...existing, this._playbookSaveToolDef()];
-                }
+                const missing = saveTools.filter(d => !existing.some(t => t?.name === d.name));
+                if (missing.length) followUpBody.client_tools = [...existing, ...missing];
                 // Keep the skill's instructions (system prompt) on that final
                 // turn too — without skill_metadata, so nothing is forced.
                 if (!followUpBody.skill_content && ctx.activeSkill?.skill_content) {
@@ -10429,6 +10660,7 @@ class ChatApp {
         if (this.agentsView) this.agentsView.classList.add('hidden');
         if (this.mcpServersView) this.mcpServersView.classList.add('hidden');
         if (this.playbooksView) this.playbooksView.classList.add('hidden');
+        if (this.automationsView) this.automationsView.classList.add('hidden');
         if (this.codeLibraryView) this.codeLibraryView.classList.add('hidden');
         if (this.fileStorageView) this.fileStorageView.classList.add('hidden');
         this.navConversations.classList.remove('active');
@@ -10440,6 +10672,7 @@ class ChatApp {
         if (this.navAgents) this.navAgents.classList.remove('active');
         if (this.navMcpServers) this.navMcpServers.classList.remove('active');
         if (this.navPlaybooks) this.navPlaybooks.classList.remove('active');
+        if (this.navAutomations) this.navAutomations.classList.remove('active');
         if (this.navCodeLibrary) this.navCodeLibrary.classList.remove('active');
         if (this.navFileStorage) this.navFileStorage.classList.remove('active');
 
@@ -10595,6 +10828,16 @@ class ChatApp {
                 window.playbooksLibrary.init();
             }
             window.playbooksLibrary?.loadTree();
+            if (window.i18n && window.i18n.updateAllTranslations) window.i18n.updateAllTranslations();
+        } else if (view === 'automations') {
+            if (this.automationsView) this.automationsView.classList.remove('hidden');
+            if (this.navAutomations) this.navAutomations.classList.add('active');
+            // Lazy-init the Automations view on first visit, then reload its list.
+            if (!window.automationsLibrary && window.AutomationsView?.AutomationsLibrary) {
+                window.automationsLibrary = new window.AutomationsView.AutomationsLibrary((k, p) => (window.i18n?.t ? window.i18n.t(k, p) : k));
+                window.automationsLibrary.init();
+            }
+            window.automationsLibrary?.loadTree();
             if (window.i18n && window.i18n.updateAllTranslations) window.i18n.updateAllTranslations();
         } else if (view === 'code-library') {
             if (this.codeLibraryView) this.codeLibraryView.classList.remove('hidden');
