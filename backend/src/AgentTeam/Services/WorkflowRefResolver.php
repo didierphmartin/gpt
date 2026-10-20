@@ -104,7 +104,7 @@ final class WorkflowRefResolver
     /** @return array{id: int, exits: list<string>}|null */
     private function component(int $userId, string $name): ?array
     {
-        $st = $this->db->prepare('SELECT id, exits FROM code_components WHERE user_id = ? AND name = ? LIMIT 1');
+        $st = $this->db->prepare('SELECT id, exits FROM code_components WHERE user_id = ? AND name = ? ORDER BY id LIMIT 1');
         $st->execute([$userId, $name]);
         $row = $st->fetch(PDO::FETCH_ASSOC);
         if (!$row) {

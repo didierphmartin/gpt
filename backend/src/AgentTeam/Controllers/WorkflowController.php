@@ -156,6 +156,18 @@ class WorkflowController
         $hasGraph = !empty($body['definition']['nodes']) || !empty($body['graph']['nodes']);
         $hasSteps = !empty($body['steps']) && \is_array($body['steps']);
 
+        // Names -> ids before anything is inserted: an unknown name must not leave an empty workflow behind.
+        $resolved = null;
+        if ($hasGraph) {
+            $graphData = $body['definition'] ?? $body['graph'] ?? [];
+            try {
+                $resolved = (new \AgentTeam\Services\WorkflowRefResolver($this->db))
+                    ->resolve((int) $userId, $graphData['nodes'] ?? $graphData['steps'] ?? [], $graphData['edges'] ?? []);
+            } catch (\AgentTeam\Services\UnresolvedRefsException $e) {
+                return ['success' => false, 'error' => 'unknown references', 'missing' => $e->missing, 'status_code' => 422];
+            }
+        }
+
         try {
             $workflow = new Workflow();
             $workflow->setUserId($userId)
@@ -203,7 +215,6 @@ class WorkflowController
                 error_log("[WorkflowController] Saving graph with " . count($nodes) . " nodes and " . count($edges) . " edges");
 
                 try {
-                    $resolved = (new \AgentTeam\Services\WorkflowRefResolver($this->db))->resolve($userId, $nodes, $edges);
                     $this->graphRepository->saveGraph($created->getId(), $resolved['nodes'], $resolved['edges']);
                     error_log("[WorkflowController] Graph saved successfully");
                 } catch (\Exception $e) {
