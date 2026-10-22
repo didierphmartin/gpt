@@ -5,6 +5,7 @@ namespace Quantis\AIPortfolioAssistant\CodeComponent;
 use AgentTeam\Services\CodeNodeEmit;
 use AgentTeam\Services\ScheduledWorkflowService;
 use AgentTeam\Services\StartOptionGraph;
+use AgentTeam\Services\StartTriggerFacts;
 use PDO;
 
 /**
@@ -17,6 +18,7 @@ final class CodeComponentStore
     private const NAME_MAX = 191;
     private const COLS = 'id, name, description, code, exits, mcp_servers, timeout_s, start_trigger, updated_at';
     private const LABEL_MAX = 60;
+    private const PASS_ARGS_MAX = 20;
 
     public function __construct(private readonly PDO $db) {}
 
@@ -145,9 +147,9 @@ final class CodeComponentStore
             $rows = $this->db->prepare('SELECT id, workflow_id FROM scheduled_workflows WHERE user_id = ? AND trigger_component_id = ?');
             $rows->execute([$userId, $id]);
             $upd = $this->db->prepare('UPDATE scheduled_workflows SET event_trigger = ? WHERE id = ?');
-            foreach ($rows->fetchAll(PDO::FETCH_ASSOC) as $r) {   // each keeps its own Start tag
+            foreach ($rows->fetchAll(PDO::FETCH_ASSOC) as $r) {   // each keeps its own Start's args
                 $upd->execute([ScheduledWorkflowService::eventTrigger(json_encode(
-                    $this->watchWithTag($watch, (int) $r['workflow_id']))), $r['id']]);
+                    $this->watchWithStartArgs($watch, (int) $r['workflow_id'], $t['pass_args']))), $r['id']]);
             }
             if ($outer) {
                 $this->db->commit();
@@ -215,8 +217,9 @@ final class CodeComponentStore
 
     /**
      * A schedule save naming an option becomes that option's event schedule (spec §3); other bodies pass through.
-     * The watch is the option's, plus the Start node's start_args.tag as an MCP argument (the other start_args are
-     * not MCP arguments). $workflowId: the workflow when the body does not carry it (an update).
+     * The watch is the option's, plus the Start node's start_args.tag and the start_args the option names in
+     * pass_args, as MCP arguments (the other start_args are not). $workflowId: the workflow when the body does
+     * not carry it (an update).
      */
     public function scheduleBody(int $userId, array $body, ?int $workflowId = null): array
     {
@@ -224,33 +227,36 @@ final class CodeComponentStore
             return $body;
         }
         $id = (int) $body['trigger_component_id'];
-        $watch = $this->watchWithTag($this->watchFor($userId, $id), (int) ($body['workflow_id'] ?? $workflowId ?? 0));
+        $watch = $this->watchFor($userId, $id);   // refuses a foreign or non-option component
+        $watch = $this->watchWithStartArgs($watch, (int) ($body['workflow_id'] ?? $workflowId ?? 0),
+            (array) ($this->get($userId, $id)['start_trigger']['pass_args'] ?? []));
         return ['repeat_type' => 'event', 'event_trigger' => $watch, 'cron' => null,
             'trigger_component_id' => $id] + $body;
     }
 
-    /** The watch plus the workflow's Start tag in its args; the Start's tag wins over one the component set. */
-    private function watchWithTag(array $watch, int $workflowId): array
+    /** The watch with the workflow's Start args merged into its args (StartTriggerFacts::watchArgs); the Start's values win. */
+    private function watchWithStartArgs(array $watch, int $workflowId, array $passArgs): array
     {
-        $tag = $this->startTag($workflowId);
-        if ($tag !== null) {
-            $watch['args'] = ['tag' => $tag] + (is_array($watch['args'] ?? null) ? $watch['args'] : []);
+        $args = is_array($watch['args'] ?? null) ? $watch['args'] : [];
+        $merged = StartTriggerFacts::watchArgs($args, $this->startArgs($workflowId), $passArgs);
+        if ($merged !== $args) {
+            $watch['args'] = $merged;
         }
         return $watch;
     }
 
-    /** The workflow's Start node's start_args.tag, or null. */
-    private function startTag(int $workflowId): ?string
+    /** The workflow's Start node's start_args, or []. */
+    private function startArgs(int $workflowId): array
     {
         if ($workflowId <= 0) {
-            return null;
+            return [];
         }
         $st = $this->db->prepare("SELECT config FROM workflow_nodes WHERE workflow_id = ? AND node_type = 'start' ORDER BY id LIMIT 1");
         $st->execute([$workflowId]);
         $cfg = json_decode((string) $st->fetchColumn(), true);
         $st->closeCursor();   // an open read would block the schedule UPDATE that follows in setStartTrigger
-        $tag = is_array($cfg) ? ($cfg['start_args']['tag'] ?? null) : null;
-        return is_string($tag) && $tag !== '' ? $tag : null;
+        $args = is_array($cfg) ? ($cfg['start_args'] ?? null) : null;
+        return is_array($args) ? $args : [];
     }
 
     /** The option's watch, as an event schedule stores it: {server, tool, args}. */
@@ -438,7 +444,10 @@ final class CodeComponentStore
             'exits' => array_values($exits), 'mcp_servers' => array_values($servers), 'timeout_s' => $timeout];
     }
 
-    /** {label, watch: {server, tool, args}, work_exit} against the component; args stay a JSON object. */
+    /**
+     * {label, watch: {server, tool, args}, work_exit, pass_args} against the component; args stay a JSON object.
+     * pass_args: the Start args merged into the watch's args (spec 2026-10-22 §6.1); absent = [].
+     */
     private static function validateStartTrigger(array $c, array $t): array
     {
         $bad = fn(string $why) => throw new CodeComponentError('invalid', $why, 422);
@@ -459,7 +468,16 @@ final class CodeComponentStore
         if (!in_array($exit, $c['exits'], true)) {
             $bad("Exit \"{$exit}\" is not one of this component's exits.");
         }
-        return ['label' => $label, 'watch' => $watch, 'work_exit' => $exit];
+        $pass = $t['pass_args'] ?? [];
+        if (!is_array($pass) || !array_is_list($pass) || count($pass) > self::PASS_ARGS_MAX) {
+            $bad('pass_args must be a list of at most ' . self::PASS_ARGS_MAX . ' argument names.');
+        }
+        foreach ($pass as $p) {
+            if (!is_string($p) || !preg_match('/^[A-Za-z_]\w*$/', $p)) {
+                $bad('pass_args names are letters, digits and _, not starting with a digit (got ' . json_encode($p) . ').');
+            }
+        }
+        return ['label' => $label, 'watch' => $watch, 'work_exit' => $exit, 'pass_args' => $pass];
     }
 
     private function row(array $r): array

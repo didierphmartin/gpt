@@ -257,4 +257,73 @@ final class CodeComponentStartOptionTest extends TestCase
         $b = $this->store->scheduleBody(3, ['workflow_id' => 64, 'trigger_component_id' => (string) $this->id]);
         $this->assertSame('okta-reset', $b['event_trigger']['args']['tag']);
     }
+
+    // ---------- spec 2026-10-22 §6.1: pass_args, named Start args reach the watch ----------
+
+    private function seedStart(int $wf, array $startArgs): void
+    {
+        $this->db->prepare('INSERT INTO workflow_nodes (workflow_id, node_type, config) VALUES (?, ?, ?)')->execute([$wf, 'start',
+            json_encode(['type' => 'start', 'start_option' => $this->id, 'start_args' => $startArgs])]);
+    }
+
+    private function dropTrigger(): array
+    {
+        $t = self::TRIGGER;
+        $t['watch']['args'] = ['poll' => 'poll_new_mail', 'folder' => 'To SharePoint'];
+        return ['pass_args' => ['folder']] + $t;
+    }
+
+    public function testPassArgsReachTheEventRowWatch(): void
+    {
+        $this->store->setStartTrigger(3, $this->id, $this->dropTrigger());
+        $this->assertSame(['folder'], $this->store->get(3, $this->id)['start_trigger']['pass_args']);
+        $this->seedStart(64, ['folder' => 'Mail in', 'sharepoint_folder' => 'D']);
+        $b = $this->store->scheduleBody(3, ['workflow_id' => 64, 'trigger_component_id' => (string) $this->id]);
+        $this->assertSame(['poll' => 'poll_new_mail', 'folder' => 'Mail in'], $b['event_trigger']['args']);
+        // the schedule already on the option gets it too when the option is edited
+        $this->db->exec("INSERT INTO scheduled_workflows (user_id, workflow_id, repeat_type, event_trigger, trigger_component_id, status)
+            VALUES (3, 64, 'event', '{}', {$this->id}, 'pending')");
+        $this->store->setStartTrigger(3, $this->id, $this->dropTrigger());
+        $row = $this->db->query('SELECT event_trigger FROM scheduled_workflows WHERE workflow_id = 64')->fetchColumn();
+        $this->assertSame(['poll' => 'poll_new_mail', 'folder' => 'Mail in'], json_decode($row, true)['args']);
+    }
+
+    public function testUndeclaredStartArgsStayOut(): void
+    {
+        $t = $this->dropTrigger();
+        unset($t['pass_args']);
+        $this->store->setStartTrigger(3, $this->id, $t);
+        $this->assertSame([], $this->store->get(3, $this->id)['start_trigger']['pass_args']);   // absent = []
+        $this->seedStart(64, ['folder' => 'Mail in', 'sharepoint_folder' => 'D']);
+        $b = $this->store->scheduleBody(3, ['workflow_id' => 64, 'trigger_component_id' => (string) $this->id]);
+        $this->assertSame(['poll' => 'poll_new_mail', 'folder' => 'To SharePoint'], $b['event_trigger']['args']);
+    }
+
+    public function testTagStillMergedWithoutPassArgs(): void
+    {
+        $this->store->setStartTrigger(3, $this->id, self::TRIGGER);
+        $this->seedStart(64, ['tag' => 'okta-reset', 'folder' => 'Mail in']);
+        $b = $this->store->scheduleBody(3, ['workflow_id' => 64, 'trigger_component_id' => (string) $this->id]);
+        $this->assertEquals(['args' => ['folder' => 'Inbox'], 'tag' => 'okta-reset'], $b['event_trigger']['args']);
+    }
+
+    /** @dataProvider badPassArgs */
+    public function testPassArgsValidation(mixed $passArgs): void
+    {
+        $e = $this->error(fn() => $this->store->setStartTrigger(3, $this->id, ['pass_args' => $passArgs] + self::TRIGGER));
+        $this->assertSame('invalid', $e->kind);
+        $this->assertSame(422, $e->status);
+        $this->assertStringContainsString('pass_args', $e->getMessage());
+    }
+
+    public static function badPassArgs(): array
+    {
+        return [
+            'starts with a digit' => [['9x']],
+            'not a list' => [['a' => 'folder']],
+            'a string' => ['folder'],
+            'a number in it' => [[1]],
+            'more than 20' => [array_map(fn($i) => "a{$i}", range(1, 21))],
+        ];
+    }
 }

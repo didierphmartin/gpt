@@ -26,6 +26,24 @@ class AdkListenTest extends TestCase
         self::assertSame('1000000001', $f['triggerNodeId']);
     }
 
+    /** spec 2026-10-22 §6.1: the trigger node's args (the Start's start_args) named in pass_args, and the tag, reach the watch. */
+    public function testCompiledWatchMergesPassArgsAndTag(): void
+    {
+        $nodes = self::triggerNodes();
+        $nodes[1]['config']['start_trigger']['pass_args'] = ['folder'];
+        $nodes[1]['config']['args'] = ['folder' => 'Mail in', 'tag' => 't', 'sharepoint_folder' => 'D'];
+        $f = StartTriggerFacts::of(null, 64, $nodes, ['http://x' => 'outlook']);
+        self::assertSame(['folder' => 'Mail in', 'tag' => 't'], $f['defaultWatch']['args']);
+    }
+
+    public function testWatchArgsMergesOnlyTheNamedStartArgs(): void
+    {
+        self::assertSame(['poll' => 'p', 'folder' => 'Mail in'],
+            StartTriggerFacts::watchArgs(['poll' => 'p', 'folder' => 'To SharePoint'], ['folder' => 'Mail in', 'x' => 1], ['folder']));
+        self::assertSame(['folder' => 'To SharePoint'],   // a blank Start value keeps the default; no tag, nothing named
+            StartTriggerFacts::watchArgs(['folder' => 'To SharePoint'], ['folder' => '', 'tag' => '', 'x' => 1], ['folder', 'y']));
+    }
+
     public function testWatchOnAnUnusedServerIsRefused(): void
     {
         $this->expectExceptionMessage('which no node of this workflow uses');

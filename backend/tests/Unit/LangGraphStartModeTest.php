@@ -46,15 +46,16 @@ final class LangGraphStartModeTest extends TestCase
         . "    if r.get('mail') is None:\n        return {'route': 'no_mail', 'output': None}\n    return {'route': 'new_mail', 'output': r['mail']}\n";
 
     /** Start (17) on a Start option, expanded as WorkflowGraphRepository::getGraph does. */
-    private function optionGraph(string $watchServer = 'Outlook'): array
+    private function optionGraph(string $watchServer = 'Outlook', array $startArgs = [], array $passArgs = []): array
     {
+        $start = ['type' => 'start', 'start_option' => 5] + ($startArgs !== [] ? ['start_args' => $startArgs] : []);
         $raw = ['nodes' => [
-                ['id' => '17', 'node_type' => 'start', 'config' => ['type' => 'start', 'start_option' => 5]],
+                ['id' => '17', 'node_type' => 'start', 'config' => $start],
                 ['id' => '18', 'node_type' => 'output', 'config' => ['type' => 'output']],
             ], 'edges' => [['from_node_id' => '17', 'to_node_id' => '18', 'from_port' => 'output_1']]];
         return StartOptionGraph::expand($raw, fn(int $id) => ['name' => 'Outlook: get new email', 'code' => self::POLL,
             'exits' => ['new_mail', 'no_mail'], 'mcp_servers' => ['Outlook'], 'timeout_s' => 30,
-            'start_trigger' => ['label' => 'Outlook: get new email', 'work_exit' => 'new_mail',
+            'start_trigger' => ['label' => 'Outlook: get new email', 'work_exit' => 'new_mail', 'pass_args' => $passArgs,
                 'watch' => ['server' => $watchServer, 'tool' => 'wait_for_new', 'args' => ['folder' => 'Inbox']]]]);
     }
 
@@ -75,6 +76,16 @@ final class LangGraphStartModeTest extends TestCase
         // DEFAULT_WATCH keeps its existing pretty-printed shape; compare with whitespace collapsed.
         self::assertStringContainsString('DEFAULT_WATCH = {"server": "outlook", "tool": "wait_for_new", "args": {"folder": "Inbox"}}',
             preg_replace('/\s*\n\s*/', ' ', preg_replace('/\{\s+/', '{', preg_replace('/\s+\}/', '}', $code))));
+    }
+
+    /** spec 2026-10-22 §6.1: the Start's pass_args values and tag are baked into DEFAULT_WATCH; other Start args are not. */
+    public function testLangGraphDefaultWatchLineHasPassArgs(): void
+    {
+        $code = $this->generate($this->optionGraph('Outlook',
+            ['folder' => 'Mail in', 'sharepoint_folder' => 'D', 'tag' => 't'], ['folder']))['code'];
+        $flat = preg_replace('/\s*\n\s*/', ' ', preg_replace('/\{\s+/', '{', preg_replace('/\s+\}/', '}', $code)));
+        self::assertStringContainsString('DEFAULT_WATCH = {"server": "outlook", "tool": "wait_for_new", "args": {"folder": "Mail in", "tag": "t"}}', $flat);
+        self::assertStringNotContainsString('"sharepoint_folder": "D"', $code);
     }
 
     public function testWatchServerNameIsSlugged(): void   // Review Focus 1
