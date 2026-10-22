@@ -33,4 +33,4 @@ def run(input, call_tool):
                       "it has no pdf rendition", "source": pkg.get("source")}}
     attachments = [a for a in pkg.get("attachments") or [] if isinstance(a, dict)]
     files = [pdf] + [{k: a[k] for k in ("name", "from", "base64") if a.get(k) is not None} for a in attachments]
-    return {"route": "done", "output": {**pkg, "files": files}}
+    return {"route": "converted", "output": {**pkg, "files": files}}

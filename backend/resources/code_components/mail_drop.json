@@ -1,13 +1,13 @@
 {
-  "name": "Mail dropped in a folder",
-  "description": "Start option: takes the next email dragged into an Outlook folder (Start argument folder) and hands on a document package — {document, attachments, not_fetched, source}. document is the email (metadata, body text, and a PDF rendition to fetch); attachments are its files in their original format, to fetch; source.release moves the email to done_folder (default Filed) and is run by the node that finishes the job. Until then the email stays in the folder and is handed on again after 10 minutes (up to 3 attempts). Emails already in the folder when the watch starts are not handed on.",
-  "exits": ["mail", "idle", "error"],
+  "name": "Outlook: get dropped email",
+  "description": "Takes the next email dragged into the Start folder and hands on {document, attachments, source}; the email stays there until a later node releases it.",
+  "exits": ["dropped_mail", "no_mail", "error"],
   "mcp_servers": ["Outlook"],
   "timeout_s": 60,
   "start_trigger": {
-    "label": "Mail dropped in a folder",
+    "label": "Outlook: Get Dropped Email",
     "watch": {"server": "Outlook", "tool": "wait_for_new", "args": {"poll": "poll_new_mail", "mode": "drop", "folder": "Drop"}},
-    "work_exit": "mail",
+    "work_exit": "dropped_mail",
     "pass_args": ["folder"]
   }
 }

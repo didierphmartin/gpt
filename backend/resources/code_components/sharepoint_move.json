@@ -1,7 +1,7 @@
 {
-  "name": "SharePoint — move",
-  "description": "Moves what it receives into a SharePoint folder of the team library: the input is the source, the folder argument the destination. Stores the input's files (in a subfolder named from document.meta when there is one), then runs source.release if the input has one (e.g. the email leaves the Outlook drop folder) — only once every file is stored, so on a failure the source stays where it was. Files are fetched at upload time from their from tool call, so tick that server too (e.g. Outlook). Exits ok {status, folder, files, web_urls, released} / no {status, reason}.",
-  "exits": ["ok", "no"],
+  "name": "SharePoint: move",
+  "description": "Stores the input's files in the folder argument, then releases the source (e.g. moves the email out of the drop folder).",
+  "exits": ["moved", "error"],
   "mcp_servers": ["SharePoint", "Outlook"],
   "timeout_s": 300
 }

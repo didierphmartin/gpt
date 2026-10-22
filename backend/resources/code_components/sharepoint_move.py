@@ -10,8 +10,8 @@
 import json
 
 
-def _no(reason, released=False):
-    return {"route": "no", "output": {"status": "no", "reason": str(reason), "released": released}}
+def _error(reason, released=False):
+    return {"route": "error", "output": {"status": "error", "reason": str(reason), "released": released}}
 
 
 def _subfolder(document):
@@ -43,10 +43,10 @@ def run(input, call_tool):
         except ValueError:
             pkg = None
     if not isinstance(pkg, dict) or not isinstance(pkg.get("files"), list) or not pkg["files"]:
-        return _no("no files in the input: expected {files: [...]}")
+        return _error("no files in the input: expected {files: [...]}")
     destination = str(ARGS.get("folder") or "").strip()
     if not destination:
-        return _no("set folder in this node's arguments (the SharePoint destination)")
+        return _error("set folder in this node's arguments (the SharePoint destination)")
     try:
         folder = call_tool("sharepoint", "ensure_folder", {"path": destination})["path"]
         name = _subfolder(pkg.get("document"))
@@ -59,13 +59,13 @@ def run(input, call_tool):
             stored.append(up["path"].rsplit("/", 1)[-1])   # the stored name: SharePoint renames on a clash
             urls.append(up.get("web_url") or "")
     except Exception as e:  # ToolError from call_tool (the harness class is not importable here), or a bad file
-        return _no(e)
+        return _error(e)
     release = (pkg.get("source") or {}).get("release") if isinstance(pkg.get("source"), dict) else None
     if isinstance(release, dict) and release.get("server") and release.get("tool"):
         try:
             call_tool(release["server"], release["tool"], release.get("args") or {})
         except Exception as e:
             # Stored but not released: the source is handed on again and stored a second time.
-            return _no(f"files stored in {folder}, but the source was not released: {e}")
-    return {"route": "ok", "output": {"status": "ok", "folder": folder, "files": stored, "web_urls": urls,
+            return _error(f"files stored in {folder}, but the source was not released: {e}")
+    return {"route": "moved", "output": {"status": "moved", "folder": folder, "files": stored, "web_urls": urls,
                                       "released": bool(release)}}

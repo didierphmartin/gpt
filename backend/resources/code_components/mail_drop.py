@@ -26,7 +26,7 @@ def run(input, call_tool):
     except Exception as e:  # ToolError from call_tool (the harness class is not importable here)
         return {"route": "error", "output": {"reason": str(e)}}
     if not mail:
-        return {"route": "idle", "output": None}
+        return {"route": "no_mail", "output": None}
     mail_id, attachments, cloud = mail["id"], [], []
     for att in mail.get("attachments") or []:
         if att.get("kind") == "reference":                 # a cloud link: no content to fetch (the email lists it)
@@ -41,5 +41,5 @@ def run(input, call_tool):
     }
     source = {"server": "outlook", "id": mail_id, "folder": folder, "attempt": mail.get("attempt"),
               "release": {"server": "outlook", "tool": "move_mail", "args": {"mail_id": mail_id, "folder": done}}}
-    return {"route": "mail", "output": {"document": document, "attachments": attachments,
+    return {"route": "dropped_mail", "output": {"document": document, "attachments": attachments,
                                        "not_fetched": cloud, "source": source}}

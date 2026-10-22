@@ -75,7 +75,7 @@ class MailDroppedInAFolder(unittest.TestCase):
     def test_packages_document_attachments_and_source(self):
         f = Fake()
         r, out = start(f)
-        self.assertEqual(r["route"], "mail")
+        self.assertEqual(r["route"], "dropped_mail")
         self.assertEqual(f.calls, [("outlook.poll_new_mail", {"folder": "To SharePoint", "mode": "drop"})])
         self.assertEqual(out["document"], {
             "kind": "email", "name": "Email",
@@ -99,7 +99,7 @@ class MailDroppedInAFolder(unittest.TestCase):
         self.assertEqual([a["name"] for a in out["attachments"]], ["scan.pdf"])
 
     def test_idle_error_and_done_folder(self):
-        self.assertEqual(start(Fake(mail=None))[0]["route"], "idle")
+        self.assertEqual(start(Fake(mail=None))[0]["route"], "no_mail")
         r, out = start(Fake(fail="outlook.poll_new_mail"))
         self.assertEqual(r["route"], "error")
         self.assertIn("boom", out["reason"])
@@ -120,7 +120,7 @@ class MailDroppedInAFolder(unittest.TestCase):
 
     def test_meta(self):
         h.check_code(START)
-        self.assertEqual(START_META["start_trigger"]["work_exit"], "mail")
+        self.assertEqual(START_META["start_trigger"]["work_exit"], "dropped_mail")
         self.assertEqual(START_META["start_trigger"]["pass_args"], ["folder"])
 
 
@@ -129,7 +129,7 @@ class DocumentToPdf(unittest.TestCase):
         _, pkg = start()
         f = Fake()
         r, out = run(CONVERT, CONVERT_META, f, pkg)
-        self.assertEqual(r["route"], "done")
+        self.assertEqual(r["route"], "converted")
         self.assertEqual(f.calls, [])                       # references only: the storing node fetches
         self.assertEqual(out["files"], [
             {"name": "Email.pdf", "from": {"server": "outlook", "tool": "mail_to_pdf", "args": {"mail_id": "m1"}}},
@@ -141,7 +141,7 @@ class DocumentToPdf(unittest.TestCase):
         pkg = {"document": {"name": "Letter.pdf", "content_type": "application/pdf", "base64": "UERG"},
                "attachments": [{"name": "Contract.docx", "base64": "RE9D", "content_type": "x"}]}
         r, out = run(CONVERT, CONVERT_META, Fake(), json.dumps(pkg))
-        self.assertEqual(r["route"], "done")
+        self.assertEqual(r["route"], "converted")
         self.assertEqual(out["files"], [{"base64": "UERG", "name": "Letter.pdf"},
                                         {"name": "Contract.docx", "base64": "RE9D"}])
 
@@ -157,7 +157,7 @@ class DocumentToPdf(unittest.TestCase):
 
     def test_meta(self):
         h.check_code(CONVERT)
-        self.assertEqual(CONVERT_META["exits"], ["done", "error"])
+        self.assertEqual(CONVERT_META["exits"], ["converted", "error"])
 
 
 class SharePointMove(unittest.TestCase):
@@ -167,7 +167,7 @@ class SharePointMove(unittest.TestCase):
     def test_stores_then_releases_the_source(self):
         f = Fake()
         r, out = run(MOVE, MOVE_META, f, self.converted(), {"folder": "Didier"})
-        self.assertEqual(r["route"], "ok")
+        self.assertEqual(r["route"], "moved")
         self.assertEqual(f.names(), ["sharepoint.ensure_folder", "sharepoint.create_subfolder", "outlook.mail_to_pdf",
                                      "sharepoint.upload_file", "outlook.get_attachment", "sharepoint.upload_file",
                                      "outlook.move_mail"])
@@ -176,7 +176,7 @@ class SharePointMove(unittest.TestCase):
         sub = "Didier/2026-10-09 0815 - ann@x.com - Invoice 42"
         self.assertEqual({u["folder"] for u in ups}, {sub})
         self.assertEqual(f.calls[-1], ("outlook.move_mail", {"mail_id": "m1", "folder": "Filed"}))
-        self.assertEqual(out, {"status": "ok", "folder": sub, "files": ["Email.pdf", "inv.pdf"],
+        self.assertEqual(out, {"status": "moved", "folder": sub, "files": ["Email.pdf", "inv.pdf"],
                                "web_urls": ["u/Email.pdf", "u/inv.pdf"], "released": True})
 
     def test_any_failure_is_no_and_the_source_stays(self):
@@ -184,20 +184,20 @@ class SharePointMove(unittest.TestCase):
                      "outlook.get_attachment", "sharepoint.upload_file"):
             f = Fake(fail=tool)
             r, out = run(MOVE, MOVE_META, f, self.converted(), {"folder": "Didier"})
-            self.assertEqual(r["route"], "no", tool)
-            self.assertEqual((out["status"], out["released"]), ("no", False))
+            self.assertEqual(r["route"], "error", tool)
+            self.assertEqual((out["status"], out["released"]), ("error", False))
             self.assertIn("boom", out["reason"])
             self.assertNotIn("outlook.move_mail", f.names(), tool)
 
     def test_release_failure_is_no_after_storing(self):
         r, out = run(MOVE, MOVE_META, Fake(fail="outlook.move_mail"), self.converted(), {"folder": "Didier"})
-        self.assertEqual(r["route"], "no")
+        self.assertEqual(r["route"], "error")
         self.assertIn("not released", out["reason"])
 
     def test_without_document_or_source_it_just_stores(self):
         f = Fake()
         r, out = run(MOVE, MOVE_META, f, {"files": [{"name": "a.txt", "base64": "QQ=="}]}, {"folder": "D"})
-        self.assertEqual(r["route"], "ok")
+        self.assertEqual(r["route"], "moved")
         self.assertEqual(f.names(), ["sharepoint.ensure_folder", "sharepoint.upload_file"])
         self.assertEqual((out["folder"], out["released"]), ("Didier", False))
 
@@ -209,28 +209,28 @@ class SharePointMove(unittest.TestCase):
     def test_bad_files_args_and_input(self):
         for files in ([{"name": "a"}], [{"name": "a", "from": {"server": "outlook"}}]):
             r, out = run(MOVE, MOVE_META, Fake(), {"files": files}, {"folder": "D"})
-            self.assertEqual(r["route"], "no")
+            self.assertEqual(r["route"], "error")
             self.assertIn("'a'", out["reason"])
         r, out = run(MOVE, MOVE_META, Fake(), {"files": [{"name": "a", "from": {"server": "outlook",
                                                                                  "tool": "move_mail"}}]}, {"folder": "D"})
         self.assertIn("returned no base64", out["reason"])
         f = Fake()
         r, out = run(MOVE, MOVE_META, f, self.converted(), {"folder": "  "})
-        self.assertEqual((r["route"], f.calls), ("no", []))
+        self.assertEqual((r["route"], f.calls), ("error", []))
         self.assertIn("folder in this node's arguments", out["reason"])
         for bad in ("", {}, {"files": []}, {"files": "x"}):
             f = Fake()
             r, out = run(MOVE, MOVE_META, f, bad, {"folder": "D"})
-            self.assertEqual((r["route"], f.calls), ("no", []), bad)
+            self.assertEqual((r["route"], f.calls), ("error", []), bad)
 
     def test_server_not_ticked_is_no(self):
         r, out = run(MOVE, MOVE_META, Fake(), self.converted(), {"folder": "Didier"}, servers=("sharepoint",))
-        self.assertEqual(r["route"], "no")
+        self.assertEqual(r["route"], "error")
         self.assertIn("outlook", out["reason"])
 
     def test_meta(self):
         h.check_code(MOVE)
-        self.assertEqual(MOVE_META["exits"], ["ok", "no"])
+        self.assertEqual(MOVE_META["exits"], ["moved", "error"])
 
 
 class Chain(unittest.TestCase):
@@ -239,7 +239,7 @@ class Chain(unittest.TestCase):
         r, pkg = start(f)
         r, converted = run(CONVERT, CONVERT_META, f, json.dumps(pkg))
         r, done = run(MOVE, MOVE_META, f, json.dumps(converted), {"folder": "Didier"})
-        self.assertEqual((r["route"], done["files"], done["released"]), ("ok", ["Email.pdf", "inv.pdf"], True))
+        self.assertEqual((r["route"], done["files"], done["released"]), ("moved", ["Email.pdf", "inv.pdf"], True))
         self.assertEqual(f.names()[0], "outlook.poll_new_mail")
         self.assertEqual(f.names()[-1], "outlook.move_mail")
 
