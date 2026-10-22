@@ -1,0 +1,13 @@
+{
+  "name": "Mail dropped in a folder",
+  "description": "Start option: takes the next email dragged into an Outlook folder (the folder Start argument) and hands it to the next node — id, sender, subject, received time, attachment list and the drop folder's name. Emails already in the folder when the watch starts are not handed on. An email the next node does not move out of the folder is handed on again after 10 minutes, up to 3 attempts; dragging it out and back in starts over.",
+  "exits": ["mail", "idle", "error"],
+  "mcp_servers": ["Outlook"],
+  "timeout_s": 60,
+  "start_trigger": {
+    "label": "Mail dropped in a folder",
+    "watch": {"server": "Outlook", "tool": "wait_for_new", "args": {"poll": "poll_new_mail", "mode": "drop", "folder": "Drop"}},
+    "work_exit": "mail",
+    "pass_args": ["folder"]
+  }
+}

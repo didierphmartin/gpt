@@ -1,14 +1,16 @@
-# Mail drop -> SharePoint. Start args: folder (drop folder), sharepoint_folder (required), filed_folder.
-# Files one dropped email into SharePoint (Email.pdf + original attachments in a per-email subfolder), then
-# moves it to the filed folder. Any failure leaves the email in the drop folder, where the lease re-delivers it.
+# File email to SharePoint. Input: an email from "Mail dropped in a folder". Args: sharepoint_folder (required),
+# filed_folder. Files the email into SharePoint (Email.pdf + original attachments in a per-email subfolder), then
+# moves it to the filed folder. Any failure leaves the email where it is, so the drop folder hands it on again.
+import json
+
 
 def _fail(reason, mail_id=None):
     return {"route": "error", "output": {"reason": str(reason), "mail_id": mail_id}}
 
 
 def _arg(key, default=""):
-    # Start args may be absent, empty, or an integer (the dialog stores digits-only values as numbers).
-    return str(ARGS.get(key) or default).strip()
+    # Args may be absent, empty, or an integer (the dialog stores digits-only values as numbers).
+    return str(ARGS.get(key) or "").strip() or default
 
 
 def _same_folder(a, b):
@@ -27,22 +29,24 @@ def _upload(call_tool, folder, name, data):
 
 
 def run(input, call_tool):
-    folder = _arg("folder", "To SharePoint")
+    mail = input
+    if isinstance(mail, str):
+        try:
+            mail = json.loads(mail)
+        except ValueError:
+            mail = None
+    if not isinstance(mail, dict) or not mail.get("id"):
+        return _fail("no email in the input: link this node to the mail exit of \"Mail dropped in a folder\"")
+    mail_id = mail["id"]
     target = _arg("sharepoint_folder")
     filed = _arg("filed_folder", "Filed")
     if not target:
-        return _fail("set sharepoint_folder in the Start arguments")
-    if _same_folder(filed, folder):
-        return _fail(f"filed_folder must not be the drop folder ({folder}): the email would never leave it")
-    mail_id = None
+        return _fail("set sharepoint_folder in this node's arguments", mail_id)
+    if mail.get("folder") and _same_folder(filed, mail["folder"]):
+        return _fail(f"filed_folder must not be the drop folder ({mail['folder']}): the email would never leave it",
+                     mail_id)
     try:
-        # Preflight before any email is claimed: a wrong site/library, a missing permission or an unwritable
-        # folder fails here, so no attempt is spent.
         target = call_tool("sharepoint", "ensure_folder", {"path": target})["path"]
-        mail = call_tool("outlook", "poll_new_mail", {"folder": folder, "mode": "drop"}).get("mail")
-        if not mail:
-            return {"route": "idle", "output": None}
-        mail_id = mail["id"]
         sub = call_tool("sharepoint", "create_subfolder", {"parent": target, "name": _subfolder_name(mail)})["path"]
         pdf = call_tool("outlook", "mail_to_pdf", {"mail_id": mail_id})
         files, skipped = [_upload(call_tool, sub, "Email.pdf", pdf["base64"])], []

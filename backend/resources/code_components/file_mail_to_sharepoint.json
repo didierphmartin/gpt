@@ -1,0 +1,7 @@
+{
+  "name": "File email to SharePoint",
+  "description": "Takes an email from \"Mail dropped in a folder\" and files it into the SharePoint team library: a subfolder per email under sharepoint_folder holding Email.pdf and the attachments in their original format (inline images stay inside Email.pdf, cloud links are skipped and listed), then moves the email to filed_folder (default Filed). Any failure leaves the email where it is, so it is retried. The 300 s timeout covers a whole email, so one with very large or many attachments can exceed it.",
+  "exits": ["filed", "error"],
+  "mcp_servers": ["Outlook", "SharePoint"],
+  "timeout_s": 300
+}
