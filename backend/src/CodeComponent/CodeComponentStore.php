@@ -446,7 +446,7 @@ final class CodeComponentStore
 
     /**
      * {label, watch: {server, tool, args}, work_exit, pass_args} against the component; args stay a JSON object.
-     * pass_args: the Start args merged into the watch's args (spec 2026-10-22 §6.1); absent = [].
+     * pass_args: the Start args merged into the watch's args (spec 2026-10-22 §6.1); absent = the stored list, or [].
      */
     private static function validateStartTrigger(array $c, array $t): array
     {
@@ -468,7 +468,8 @@ final class CodeComponentStore
         if (!in_array($exit, $c['exits'], true)) {
             $bad("Exit \"{$exit}\" is not one of this component's exits.");
         }
-        $pass = $t['pass_args'] ?? [];
+        // a save without the key (the editor's option dialog) keeps the stored list; an explicit one, [] too, replaces it
+        $pass = array_key_exists('pass_args', $t) ? $t['pass_args'] : ($c['start_trigger']['pass_args'] ?? []);
         if (!is_array($pass) || !array_is_list($pass) || count($pass) > self::PASS_ARGS_MAX) {
             $bad('pass_args must be a list of at most ' . self::PASS_ARGS_MAX . ' argument names.');
         }

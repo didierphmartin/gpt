@@ -326,4 +326,23 @@ final class CodeComponentStartOptionTest extends TestCase
             'more than 20' => [array_map(fn($i) => "a{$i}", range(1, 21))],
         ];
     }
+
+    /** The editor's option dialog saves {label, watch, work_exit} only: the stored pass_args stay; an explicit [] clears them. */
+    public function testASaveWithoutPassArgsKeepsTheStoredOnes(): void
+    {
+        $this->store->setStartTrigger(3, $this->id, $this->dropTrigger());
+        $this->seedStart(64, ['folder' => 'Mail in', 'sharepoint_folder' => 'D']);
+        $this->db->exec("INSERT INTO scheduled_workflows (user_id, workflow_id, repeat_type, event_trigger, trigger_component_id, status)
+            VALUES (3, 64, 'event', '{}', {$this->id}, 'pending')");
+        $t = $this->dropTrigger();
+        unset($t['pass_args']);
+        $this->store->setStartTrigger(3, $this->id, ['label' => 'Renamed'] + $t);
+        $this->assertSame(['folder'], $this->store->get(3, $this->id)['start_trigger']['pass_args']);
+        $row = $this->db->query('SELECT event_trigger FROM scheduled_workflows WHERE workflow_id = 64')->fetchColumn();
+        $this->assertSame(['poll' => 'poll_new_mail', 'folder' => 'Mail in'], json_decode($row, true)['args']);
+        $this->store->setStartTrigger(3, $this->id, ['pass_args' => []] + $t);
+        $this->assertSame([], $this->store->get(3, $this->id)['start_trigger']['pass_args']);
+        $row = $this->db->query('SELECT event_trigger FROM scheduled_workflows WHERE workflow_id = 64')->fetchColumn();
+        $this->assertSame(['poll' => 'poll_new_mail', 'folder' => 'To SharePoint'], json_decode($row, true)['args']);
+    }
 }
