@@ -18,10 +18,40 @@ final class FakeMcp implements AutomationMcp
         return $this->describe[$serverName] ?? ['ok' => false, 'error' => 'unreachable'];
     }
 
+    public ?\Closure $duringInstall = null;
+
     public function install(string $url, array $headerLines, array $args, int $timeoutSeconds): array
     {
         $this->installCalls[] = compact('url', 'headerLines', 'args', 'timeoutSeconds');
+        if ($this->duringInstall !== null) {
+            ($this->duringInstall)();
+        }
         return $this->installAnswer;
+    }
+}
+
+/** A connection the server dropped while it sat idle (MySQL error 2006 after a minutes-long install). */
+final class GoneAwayPdo extends PDO
+{
+    public bool $gone = false;
+
+    public function query(string $query, ?int $fetchMode = null, mixed ...$fetchModeArgs): \PDOStatement|false
+    {
+        $this->failIfGone();
+        return $fetchMode === null ? parent::query($query) : parent::query($query, $fetchMode, ...$fetchModeArgs);
+    }
+
+    public function prepare(string $query, array $options = []): \PDOStatement|false
+    {
+        $this->failIfGone();
+        return parent::prepare($query, $options);
+    }
+
+    private function failIfGone(): void
+    {
+        if ($this->gone) {
+            throw new \PDOException('SQLSTATE[HY000]: General error: 2006 MySQL server has gone away');
+        }
     }
 }
 
@@ -60,6 +90,35 @@ final class AutomationsControllerTest extends TestCase
     {
         return ['ok' => true, 'result' => ['structuredContent' => ['environment' => $env,
             'item' => ['sys_id' => 'abc', 'name' => 'Okta', 'version' => $version, 'variables' => $variables]]]];
+    }
+
+    public function testInstallRecordsTheScopeOnAFreshConnectionWhenTheOldOneWentAway(): void
+    {
+        $file = tempnam(sys_get_temp_dir(), 'auto-db-');
+        $open = static function (string $class) use ($file): PDO {
+            $pdo = new $class('sqlite:' . $file);
+            $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+            return $pdo;
+        };
+        try {
+            $old = $open(GoneAwayPdo::class);
+            AutomationStoreTest::schema($old);
+            $old->exec("INSERT INTO mcp_servers (user_id, name, url, headers) VALUES ('3', 'ServiceNow PDI', 'https://h/servicenow/pdi/jobs', NULL)");
+            $reconnects = 0;
+            $ctl = new AutomationsController($old, [], $this->mcp, function () use ($open, &$reconnects): PDO {
+                $reconnects++;
+                return $open(PDO::class);
+            });
+            $ctl->create($this->req('POST', ['key' => 'okta-reset', 'title' => 'Okta', 'spec' => AutomationStoreTest::SPEC]));
+            $this->mcp->duringInstall = function () use ($old): void { $old->gone = true; };
+            $r = $ctl->install($this->req('POST', ['server_id' => 1, 'scope' => 'x_a', 'files' => ['a' => 'b']], ['id' => 1]));
+            $this->assertSame(200, $r['status_code'], json_encode($r));
+            $this->assertSame(1, $reconnects);
+            $this->assertSame('x_a', $open(PDO::class)->query('SELECT sn_scope FROM automations WHERE id = 1')->fetchColumn());
+        } finally {
+            @unlink($file);
+        }
     }
 
     public function testCreateReturnsShapeAndServers(): void
@@ -134,6 +193,19 @@ final class AutomationsControllerTest extends TestCase
         $this->assertSame('cannot check: unreachable', $by[2]['detail']);
     }
 
+    public function testCheckReadsTheLoadersObjectShapedAnswer(): void
+    {
+        $this->create();
+        // LoaderMcpExecutor::callRaw keeps JSON objects as stdClass below the top level
+        $live = json_decode('{"content":[{"type":"text","text":"{\"environment\":\"dev\",\"item\":null}"}],'
+            . '"structuredContent":{"environment":"dev","item":null},"isError":false}');
+        $this->mcp->describe['ServiceNow PDI'] = ['ok' => true, 'result' => get_object_vars($live)];
+        $r = $this->ctl->check($this->req('POST', [], ['id' => 1]));
+        $by = array_column($r['data']['instances'], null, 'mcp_server_id');
+        $this->assertSame('not_installed', $by[1]['status']);
+        $this->assertSame('dev', $by[1]['environment']);
+    }
+
     public function testCheckReadsAGarbledDescribeAnswerAsBadAnswer(): void
     {
         $this->create();
@@ -196,6 +268,11 @@ final class AutomationsControllerTest extends TestCase
         $r = $this->ctl->install($this->req('POST', $body, ['id' => 1]));
         $this->assertSame(409, $r['status_code']);
         $this->assertSame('not_allowed', $r['code']);
+        // the connector's message (for install_failed: the step and its log tail) reaches the caller
+        $this->mcp->installAnswer = ['ok' => true, 'result' => ['isError' => true, 'structuredContent' => ['error' => ['code' => 'install_failed', 'message' => 'exit 1 from npx now-sdk install: 401 Unauthorized']]]];
+        $r = $this->ctl->install($this->req('POST', $body, ['id' => 1]));
+        $this->assertSame('install_failed', $r['code']);
+        $this->assertSame('exit 1 from npx now-sdk install: 401 Unauthorized', $r['message']);
         $this->mcp->installAnswer = ['ok' => false, 'error' => 'unreachable'];
         $this->assertSame(502, $this->ctl->install($this->req('POST', $body, ['id' => 1]))['status_code']);
         // a server of another user, a non-ServiceNow URL, a bad body

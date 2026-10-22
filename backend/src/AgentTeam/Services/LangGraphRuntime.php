@@ -218,8 +218,9 @@ class PlaybookNode(Node):
     other outcome "failed", its text then starting "Playbook failed: <reason>" and a blank
     line (PlaybookOutcome). A "from input" node (cfg "source": "input") runs the playbook its
     parent's JSON names (cfg "input_field") from the robot's published copies baked into cfg
-    "published" (PUBLISHED_PLAYBOOKS); its text ends with "Job: <the parent's JSON>" whenever
-    that is a JSON object (PlaybookSource::jobLine), for the nodes that complete or hand back the job.
+    "published" (PUBLISHED_PLAYBOOKS). A from-input node, or one with exits, ends its text with
+    "Job: <the first parent's JSON>" whenever that is a JSON object (PlaybookSource::jobLine), for
+    the nodes that complete or hand back the job.
     """
 
     async def run(self, request: str, trace) -> dict:
@@ -231,8 +232,8 @@ class PlaybookNode(Node):
         if not from_input and not pb.get("exits"):
             text, status, _gate = await self._interpret(pb, request, trace)
             return {"text": text, "route": "", "notes": "", "status": status}
-        first = PLAYBOOK_JOB_TEXT.get() if from_input else None   # WorkflowGraph's (from input is refused in A2A)
-        job = playbook_job(request if first is None else first) if from_input else None
+        first = PLAYBOOK_JOB_TEXT.get()   # WorkflowGraph's first parent; None in A2A (from input is refused there)
+        job = playbook_job(request if first is None else first)
         transcript, status, reason = "", "failed", None
         if from_input:
             pb, reason = self._from_input(pb, job)

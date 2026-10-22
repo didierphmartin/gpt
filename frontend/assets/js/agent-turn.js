@@ -45,7 +45,18 @@
                 toolResultTurns,
             };
         },
+
+        /**
+         * The turn's rounds so far plus this one (a new array): what a follow-up replays after the user
+         * message, so the model keeps every earlier result of the same turn, not only the last round.
+         */
+        appendRound(turnRounds, results, assistantText, assistantReasoning = '') {
+            const { assistantTurn, toolResultTurns } =
+                AgentTurn.buildToolRoundTurns(results, assistantText, assistantReasoning);
+            return [...(Array.isArray(turnRounds) ? turnRounds : []), assistantTurn, ...toolResultTurns];
+        },
     };
 
-    window.AgentTurn = AgentTurn;
+    if (typeof window !== 'undefined') window.AgentTurn = AgentTurn;
+    if (typeof module === 'object' && module.exports) module.exports = AgentTurn;
 })();

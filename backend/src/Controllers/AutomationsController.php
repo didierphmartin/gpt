@@ -20,11 +20,31 @@ final class AutomationsController
 
     private AutomationStore $store;
     private AutomationMcp $mcp;
+    private \Closure $reconnect;
 
-    public function __construct(PDO $db, array $config, ?AutomationMcp $mcp = null)
+    /** $reconnect: a fresh connection to the same database (default: config contexts_database, like AgentRunner). */
+    public function __construct(private PDO $db, array $config, ?AutomationMcp $mcp = null, ?\Closure $reconnect = null)
     {
         $this->store = new AutomationStore($db);
         $this->mcp = $mcp ?? new LiveAutomationMcp($db);
+        $this->reconnect = $reconnect ?? static function () use ($config): PDO {
+            $c = $config['contexts_database'] ?? $config['database'] ?? [];
+            return new PDO("mysql:host={$c['host']};dbname={$c['database']};charset=" . ($c['charset'] ?? 'utf8mb4'),
+                $c['username'], $c['password'], [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+        };
+    }
+
+    /** After a minutes-long call the server may have closed the idle connection (MySQL 2006): open a fresh one. */
+    private function reconnectIfGone(): void
+    {
+        try {
+            $this->db->query('SELECT 1');
+        } catch (\PDOException $e) {
+            error_log('[AutomationsController] DB connection lost during the install, reconnecting: ' . $e->getMessage());
+            $this->db = ($this->reconnect)();
+            $this->store = new AutomationStore($this->db);
+            $this->mcp = $this->mcp instanceof LiveAutomationMcp ? new LiveAutomationMcp($this->db) : $this->mcp;
+        }
     }
 
     public function index(array $request): array
@@ -102,10 +122,16 @@ final class AutomationsController
                 throw new AutomationError('not a ServiceNow connector server URL (.../jobs)');
             }
             $r = $this->mcp->install($url, self::headerLines($server['headers'] ?? null), ['scope' => $scope, 'files' => $files], self::INSTALL_TIMEOUT_S);
+            $this->reconnectIfGone();
             [$payload, $err] = self::payload($r);
             if ($err !== null) {
                 $status = match ($err) { 'not_allowed' => 409, 'bad_argument' => 400, default => 502 };
-                return ['success' => false, 'error' => $err, 'code' => $err, 'status_code' => $status];
+                // the connector's message (for install_failed: the failing step and its log tail), so the cause is visible
+                $res = json_decode((string) json_encode($r['result'] ?? null), true);
+                $msg = $res['structuredContent']['error']['message'] ?? null;
+                $msg = is_string($msg) && $msg !== '' ? mb_substr($msg, 0, 2000) : null;
+                return ['success' => false, 'error' => $msg !== null ? "$err: $msg" : $err, 'code' => $err, 'message' => $msg,
+                    'status_code' => $status];
             }
             $this->store->setScope($u, $a['id'], $scope);
             return ['success' => true, 'data' => $payload, 'status_code' => 200];
@@ -186,7 +212,9 @@ final class AutomationsController
         if (empty($r['ok'])) {
             return [null, (string) ($r['error'] ?? 'unreachable')];
         }
-        $res = is_array($r['result'] ?? null) ? $r['result'] : [];
+        // callRaw keeps nested JSON objects as stdClass; read every level as arrays
+        $res = json_decode((string) json_encode($r['result'] ?? null), true);
+        $res = is_array($res) ? $res : [];
         $p = is_array($res['structuredContent'] ?? null) ? $res['structuredContent']
             : json_decode((string) ($res['content'][0]['text'] ?? ''), true);
         $p = is_array($p) ? $p : [];

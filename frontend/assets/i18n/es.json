@@ -738,6 +738,8 @@
       "note_replaced": "Solo una opción a la vez: la otra está desactivada.",
       "enterPrompt": "Escribir el prompt",
       "setSchedule": "Programar",
+      "argsIntro": "Argumentos que lee el código de esta opción. Un campo vacío usa el valor por defecto del código.",
+      "noTag": "Sin tag, este flujo toma todas las tareas de SynergyAI, sea cual sea la automatización que las creó.",
       "warnPorts": "Su Start vuelve a tener una sola salida: los enlaces de \"{{exit}}\" se quedan, los de las otras salidas se eliminan.",
       "dropTitle": "¿Quitar enlaces del Start?",
       "dropIntro": "Las salidas del Start cambian. Los enlaces de \"{{exit}}\" se conservan; estos se eliminan:",

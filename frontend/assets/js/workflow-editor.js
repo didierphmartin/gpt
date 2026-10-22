@@ -2800,7 +2800,7 @@ class WorkflowEditor {
                 // How it starts, listed on the node: the links open the form; a checkbox acts on its change event.
                 if (e.target.closest('.node-start-options')) {
                     const open = e.target.closest('[data-start-open]')?.dataset.startOpen;
-                    if (open) this._switchStart(open, { open: true });
+                    if (open) this._switchStart(/^\d+$/.test(open) ? Number(open) : open, { open: true });
                     return;
                 }
                 // On a Start option the workflow starts on the event: there is no prompt to open (spec §10).
@@ -3153,6 +3153,25 @@ class WorkflowEditor {
         }
     }
 
+    /**
+     * The reload after a Save (fresh node ids from the database). Its clear unsets the workflow for a moment, which
+     * stops Monitoring's stream (_refreshMonitoring); a workflow that was being monitored is followed again, into the
+     * same live overlay, its feed kept.
+     */
+    async _reloadAfterSave(savedWorkflowId) {
+        const monitored = this._monitoring != null && String(this._monitoring) === String(savedWorkflowId);
+        const source = this._liveSource;
+        await this.loadWorkflow(savedWorkflowId, { quiet: true });
+        if (!monitored || String(this.currentWorkflowId) !== String(savedWorkflowId)) return;
+        this._liveStop?.();
+        this._liveSource = source || { kind: 'server' };
+        this._monitoring = this.currentWorkflowId;
+        const ctrl = new AbortController();
+        this._liveStop = () => ctrl.abort();
+        this._liveConnect(ctrl.signal, this.currentWorkflowId, this._liveSource).catch(() => {});
+        this._refreshMonitoring();
+    }
+
     /** The Monitoring button: shown for a listening workflow (schedule / option mode), blue while on. */
     _refreshMonitoring() {
         if (this._monitoring && this._monitoring !== this.currentWorkflowId) {
@@ -3297,7 +3316,9 @@ class WorkflowEditor {
         if (df && a.route) this._liveRoute(df, this.dbNodeToDrawflowMap?.[a.route]);
         if (a.error && this._liveActiveNode) this.highlightNode(null, 'error', this._liveActiveNode);
         if (!inFeed) return;
-        if (a.subject) this._pbBubble('you', a.subject, { label: this.t('workflow.live.event') });
+        // A job's JSON (eventSubject indents it) reads as a code block; the bubble renders Markdown, which would fold it.
+        if (a.subject) this._pbBubble('you', a.subject.startsWith('{') ? '```json\n' + a.subject + '\n```' : a.subject,
+            { label: this.t('workflow.live.event') });
         if (a.trace) this._pbAppend(`<div class="pb-live-trace" style="font-size:11px;color:#64748b;">${this.escapeHtml(a.trace)}</div>`);
         if (a.answer) this._pbBubble('agent', a.answer, { label: this.currentWorkflowName || 'Workflow' });
         if (a.error) {
@@ -10174,9 +10195,13 @@ class WorkflowEditor {
                 <span class="start-opt-open" data-start-open="prompt">${esc(t('enterPrompt'))}</span></div>
             <div class="start-opt-row"><input type="radio" name="start-option" data-start="schedule" ${on === 'schedule' ? 'checked' : ''}>
                 <span class="start-opt-open" data-start-open="schedule">${esc(t('setSchedule'))}</span></div>
-            ${options.map((c) => `<label class="start-opt-row" title="${esc(c.name)}">
-                <input type="radio" name="start-option" data-start="${Number(c.id)}" ${on === Number(c.id) ? 'checked' : ''}>
-                <span>${esc(c.start_trigger.label)}</span></label>`).join('')}`;
+            ${options.map((c) => (window.StartOptions.argFields(c.code).length
+                ? `<div class="start-opt-row" title="${esc(c.name)}">
+                    <input type="radio" name="start-option" data-start="${Number(c.id)}" ${on === Number(c.id) ? 'checked' : ''}>
+                    <span class="start-opt-open" data-start-open="${Number(c.id)}">${esc(c.start_trigger.label)}</span></div>`
+                : `<label class="start-opt-row" title="${esc(c.name)}">
+                    <input type="radio" name="start-option" data-start="${Number(c.id)}" ${on === Number(c.id) ? 'checked' : ''}>
+                    <span>${esc(c.start_trigger.label)}</span></label>`)).join('')}`;
         boxes.forEach((box) => { box.innerHTML = html; box.title = options.length ? '' : t('none'); });
     }
 
@@ -10191,12 +10216,14 @@ class WorkflowEditor {
      * Make `key` ('prompt', 'schedule' or an option's component id) how the workflow starts (spec §10, one at a
      * time). An option: Start takes its ports and the event row is saved (in place of a schedule's). Prompt or
      * schedule: Start goes back to one port and the row is deleted; a schedule exists once its form is saved.
-     * Links a switch would remove are confirmed first; a cancel changes nothing. `open`: then open the form.
+     * Links a switch would remove are confirmed first; a cancel changes nothing. `open`: then open the form
+     * (an option: its Start arguments).
      */
     async _switchStart(key, { open = false } = {}) {
         const CC = window.CodeComponents;
         const t = (k, p) => this.t(`workflow.startOptions.${k}`, p);
-        const openForm = () => this.showPromptForm(null, { schedule: key === 'schedule' });
+        const openForm = () => (typeof key === 'number' ? this._openStartArgsDialog(key)
+            : this.showPromptForm(null, { schedule: key === 'schedule' }));
         this.container.querySelectorAll('.node-start-options input[data-start]').forEach((b) => { b.disabled = true; });
         try {
             if (!this.currentWorkflowId) { this.showNotification(this.t('workflow.messages.saveFirst'), 'error'); return false; }
@@ -10221,6 +10248,7 @@ class WorkflowEditor {
                     repeat_type: 'event', scheduled_time: this._localNowStamp(),
                     input_prompt: this.lastUserPrompt || s?.input_prompt || '' });
                 if (ok && was !== 'prompt') this.showNotification(t(was === 'schedule' ? 'note_delayOff' : 'note_replaced'), 'info');
+                if (ok && open) openForm();
                 return ok;
             }
             if (!(await this._setStartTrigger(null))) return false;
@@ -10286,6 +10314,71 @@ class WorkflowEditor {
         this._updateExitTags();
         this._refreshStartHint();
         this._workflowDirty = true;
+    }
+
+    /**
+     * The Start arguments of option `compId` (the names its code reads from ARGS), saved as the Start node's
+     * start_args. The workflow is saved, then the event row again: its watch takes the Start's tag
+     * (CodeComponentStore::scheduleBody). An option that reads a tag warns while the tag is empty.
+     */
+    _openStartArgsDialog(compId) {
+        const SO = window.StartOptions;
+        const comp = window.CodeComponents?.cache.get(compId);
+        const startId = this._startNodeId();
+        const fields = comp ? SO.argFields(comp.code) : [];
+        if (!startId || !fields.length) return;
+        const t = (k, p) => this.t(`workflow.startOptions.${k}`, p);
+        const esc = (v) => this.escapeHtml(String(v ?? ''));
+        const current = this.editor.getNodeFromId(startId).data?.start_args || {};
+        const overlay = document.createElement('div');
+        overlay.className = 'storage-config-overlay';
+        overlay.innerHTML = `
+            <div class="storage-config-modal" style="width:min(460px,95vw);">
+                <div class="storage-config-header"><h3>${esc(comp.start_trigger.label)}</h3>
+                    <button class="storage-config-close" data-act="close">×</button></div>
+                <div class="storage-config-body">
+                    <p style="margin:0 0 10px;font-size:13px;color:#6b7280;">${esc(t('argsIntro'))}</p>
+                    <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:14px;">
+                        ${fields.map((f) => `<label for="start-arg-${esc(f.name)}">${esc(f.name)}</label>
+                            <input id="start-arg-${esc(f.name)}" type="text" data-arg="${esc(f.name)}" placeholder="${esc(f.default)}"
+                                value="${esc(current[f.name])}" style="padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;">`).join('')}
+                    </div>
+                    <p data-role="no-tag" style="display:none;margin:10px 0 0;font-size:13px;color:#b45309;">⚠ ${esc(t('noTag'))}</p>
+                    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
+                        <button data-act="close" class="px-4 py-2 text-sm text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${esc(this.t('common.cancel'))}</button>
+                        <button data-act="ok" class="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded">${esc(t('save'))}</button>
+                    </div>
+                </div>
+            </div>`;
+        document.body.appendChild(overlay);
+        const inputs = [...overlay.querySelectorAll('[data-arg]')];
+        const tag = inputs.find((i) => i.dataset.arg === 'tag');
+        const warn = () => { overlay.querySelector('[data-role="no-tag"]').style.display = tag && !tag.value.trim() ? '' : 'none'; };
+        tag?.addEventListener('input', warn);
+        warn();
+        inputs[0]?.focus();
+        overlay.addEventListener('click', async (ev) => {
+            const act = ev.target?.dataset?.act;
+            if (act === 'close') { overlay.remove(); return; }
+            if (act !== 'ok') return;
+            overlay.remove();
+            const node = this.editor.getNodeFromId(startId);
+            const args = SO.startArgs(node.data?.start_args, fields, Object.fromEntries(inputs.map((i) => [i.dataset.arg, i.value])));
+            if (JSON.stringify(args) === JSON.stringify(node.data?.start_args || {})) return;
+            this.editor.updateNodeDataFromId(startId, { ...node.data, start_args: args });
+            this._workflowDirty = true;
+            try {
+                await this._persistIfDirty();
+                if (this._workflowDirty) throw new Error(this.t('workflow.messages.autoSaveFailed'));
+                await this.loadWorkflowSchedule(this.currentWorkflowId);
+                // the event row's watch carries the tag it read at its last save: save it again
+                if (Number(this.currentSchedule?.trigger_component_id) === Number(compId)) {
+                    await this.saveSchedule({ trigger_component_id: Number(compId) });
+                }
+            } catch (err) {
+                this.showNotification(err?.message || String(err), 'error');
+            }
+        });
     }
 
     /**
@@ -13029,7 +13122,7 @@ class WorkflowEditor {
             // Reload the workflow to get proper node IDs from database
             // This ensures nodes have db_node_id set for document operations.
             // Quiet: no "Loading workflow…" spinner for a reload the user did not ask for.
-            await this.loadWorkflow(savedWorkflowId, { quiet: true });
+            await this._reloadAfterSave(savedWorkflowId);
 
             // Named: a save flushed while opening ANOTHER workflow must not read as that one's.
             this.showToast(
@@ -14770,8 +14863,8 @@ class WorkflowEditor {
             const hasExits = Array.isArray(data.exits) && data.exits.length > 0;
             // A node with exits reports a transport failure in the outcome-rule shape; an old node keeps 'Error: ...'.
             let failedText = hasExits ? `Playbook failed: error:${msg.replace(/\s+/g, ' ').trim()}` : 'Error: ' + msg;
-            // A from-input node keeps the job on both outcomes: the downstream code node hands it back.
-            if (data.playbook_source === 'input') {
+            // A from-input node, or one with exits, keeps the job on both outcomes: the downstream code node hands it back.
+            if (data.playbook_source === 'input' || hasExits) {
                 const job = window.PlaybookCollection.jobLine(parentText);
                 if (job) failedText += '\n\n' + job;
             }
@@ -15309,7 +15402,47 @@ class WorkflowEditor {
         header.addEventListener('pointerup', onPointerUp);
         header.addEventListener('pointercancel', onPointerUp);
 
-        // ---- Resizable ------------------------------------------------------
+        // ---- Resizable from every edge and corner ------------------------------
+        // The native `resize: both` grip is a few pixels in the bottom-right corner, easy to miss (and out of reach
+        // when the window is docked left). A thin strip on each edge and a square on each corner drag that side;
+        // same floor and clamp as everything else here, and the size is remembered like a drag of the grip.
+        if (getComputedStyle(modal).position === 'static') modal.style.position = 'relative';
+        let edge = null;
+        const onEdgeDown = (e) => {
+            edge = { dir: e.currentTarget.dataset.dir, x: e.clientX, y: e.clientY, r: modal.getBoundingClientRect() };
+            userSized = true;
+            try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
+            e.preventDefault();
+            e.stopPropagation();   // not a header drag
+        };
+        const onEdgeMove = (e) => {
+            if (!edge) return;
+            const r = edge.r;
+            apply(clamp(this._pbResizeRect({ left: r.left, top: r.top, width: r.width, height: r.height }, edge.dir,
+                e.clientX - edge.x, e.clientY - edge.y, MIN_W, MIN_H)));
+        };
+        const onEdgeUp = (e) => {
+            if (!edge) return;
+            edge = null;
+            try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) {}
+            persist();
+        };
+        const cursors = { n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize',
+            ne: 'nesw-resize', sw: 'nesw-resize', nw: 'nwse-resize', se: 'nwse-resize' };
+        const edgeEls = Object.entries(cursors).map(([dir, cursor]) => {
+            const h = document.createElement('div');
+            h.className = `pb-ov-resize pb-ov-resize-${dir}`;
+            h.dataset.dir = dir;
+            h.style.cursor = cursor;
+            h.addEventListener('pointerdown', onEdgeDown);
+            h.addEventListener('pointermove', onEdgeMove);
+            h.addEventListener('pointerup', onEdgeUp);
+            h.addEventListener('pointercancel', onEdgeUp);
+            modal.appendChild(h);
+            return h;
+        });
+
+        // ---- Remembered size --------------------------------------------------
         // `resize: both` on .pb-overlay-window .storage-config-modal (CSS)
         // does the gesture itself with no JS; this only remembers whatever
         // size the user settles on.
@@ -15318,7 +15451,7 @@ class WorkflowEditor {
             // Only a resize the user performed. The observer also fires for
             // layout settling and viewport changes, and persisting those is how
             // a transient small measurement became permanent.
-            ro = new ResizeObserver(() => { if (!drag && !fitting && userSized) persist(); });
+            ro = new ResizeObserver(() => { if (!drag && !edge && !fitting && userSized) persist(); });
             ro.observe(modal);
         }
 
@@ -15347,6 +15480,7 @@ class WorkflowEditor {
 
         return () => {
             ro?.disconnect();
+            edgeEls.forEach(h => h.remove());
             window.removeEventListener('resize', onViewportResize);
             modal.removeEventListener('pointerdown', onModalPointerDown, true);
             window.removeEventListener('pointerup', onModalPointerUp, true);
@@ -15355,6 +15489,19 @@ class WorkflowEditor {
             header.removeEventListener('pointerup', onPointerUp);
             header.removeEventListener('pointercancel', onPointerUp);
         };
+    }
+
+    /**
+     * The overlay's rect after dragging edge `dir` (n, s, e, w or a corner: ne, nw, se, sw) by dx, dy: the opposite
+     * edge stays put and the size never goes under minW x minH. The viewport clamp is the caller's.
+     */
+    _pbResizeRect(r, dir, dx, dy, minW, minH) {
+        let { left, top, width, height } = r;
+        if (dir.includes('e')) width = Math.max(minW, r.width + dx);
+        if (dir.includes('w')) { width = Math.max(minW, r.width - dx); left = r.left + r.width - width; }
+        if (dir.includes('s')) height = Math.max(minH, r.height + dy);
+        if (dir.includes('n')) { height = Math.max(minH, r.height - dy); top = r.top + r.height - height; }
+        return { left, top, width, height };
     }
 
     /**
@@ -17524,7 +17671,8 @@ class WorkflowEditor {
      */
     /**
      * The "Managed by automation" banner over the canvas for a workflow with automation_id (null hides it). The
-     * automation's title comes from GET /automations; "#id" when it cannot be read.
+     * automation's title comes from GET /automations; "#id" when it cannot be read. It sits under the top-left
+     * toolbar (Reset/Save/…); its × hides it until a workflow is loaded again.
      */
     async _renderAutomationBanner(automationId) {
         let el = document.getElementById('workflow-automation-banner');
@@ -17534,16 +17682,29 @@ class WorkflowEditor {
         if (!el && this.container) {
             el = document.createElement('div');
             el.id = 'workflow-automation-banner';
-            el.style.cssText = 'position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:11;max-width:60%;'
-                + 'background:#fef3c7;border:1px solid #f59e0b;color:#78350f;border-radius:8px;padding:6px 12px;font-size:12px;'
-                + 'box-shadow:0 2px 8px rgba(0,0,0,0.08);pointer-events:none;';
+            el.style.cssText = 'position:absolute;top:52px;left:12px;z-index:11;max-width:calc(100% - 24px);'
+                + 'align-items:flex-start;gap:8px;'
+                + 'background:#fef3c7;border:1px solid #f59e0b;color:#78350f;border-radius:8px;padding:6px 8px 6px 12px;font-size:12px;'
+                + 'box-shadow:0 2px 8px rgba(0,0,0,0.08);';
+            const text = document.createElement('span');
+            text.dataset.role = 'text';
+            const close = document.createElement('button');
+            close.type = 'button';
+            close.textContent = '×';
+            close.title = 'Close';
+            close.setAttribute('aria-label', 'Close');
+            close.style.cssText = 'border:0;background:none;color:inherit;font-size:16px;line-height:1;cursor:pointer;padding:0 2px;';
+            close.addEventListener('click', () => { el.style.display = 'none'; el.dataset.closed = '1'; });
+            el.append(text, close);
             this.container.appendChild(el);
         }
         if (!el) return;
+        delete el.dataset.closed;
         const show = (title) => {
-            if (this._automationBannerFor !== id) return;   // another workflow was loaded meanwhile
-            el.textContent = `Managed by automation ${title} — edit the automation; changes here are lost when it is regenerated.`;
-            el.style.display = '';
+            if (this._automationBannerFor !== id || el.dataset.closed) return;   // another workflow was loaded, or closed
+            el.querySelector('[data-role="text"]').textContent =
+                `Managed by automation ${title} — edit the automation; changes here are lost when it is regenerated.`;
+            el.style.display = 'flex';
         };
         show(`#${id}`);
         try {

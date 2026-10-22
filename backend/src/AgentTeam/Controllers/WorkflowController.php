@@ -1119,7 +1119,7 @@ class WorkflowController
                 }
             }
             $res = \AgentTeam\Services\PlaybookOutcome::nodeResult($reason, $transcript,
-                $fromInput ? \AgentTeam\Services\PlaybookSource::jobLine($parentText) : null);
+                $fromInput || $hasExits ? \AgentTeam\Services\PlaybookSource::jobLine($parentText) : null);
             $result['exit'] = $res['exit'];
             // An old one-output node keeps its transcript as it was (no failure line, no exit routing).
             if ($hasExits || $fromInput) {

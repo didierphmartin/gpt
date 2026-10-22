@@ -165,6 +165,17 @@ final class GraphWorkflowRunnerPlaybookNodeTest extends TestCase
         self::assertSame('Job: {"playbook":"nope","task":"INC0001","u":"é/x"}', end($lines));
     }
 
+    public function testFixedNodeWithExitsEndsWithTheJobLineWhenItsParentIsAJob(): void
+    {
+        // an automation's workflow: fixed playbook, the job JSON from the get-new-job node, then complete job
+        $this->rounds = [[['name' => 'resolve_request', 'arguments' => ['outcome' => 'success', 'summary' => 'done']]]];
+        [$out, $o] = $this->go(['playbook' => $this->playbookDoc()], '{"task": "T1", "number": "SCTASK1"}');
+        self::assertTrue($out['success'], $out['error'] ?? '');
+        self::assertSame('done', $o[3]['exit']);
+        $lines = explode("\n", rtrim($o[3]['output']));
+        self::assertSame('Job: {"task":"T1","number":"SCTASK1"}', end($lines));
+    }
+
     public function testGateEndsTheRunAsFailedWithGateReason(): void
     {
         $this->rounds = [

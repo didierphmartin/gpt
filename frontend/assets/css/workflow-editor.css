@@ -2778,6 +2778,21 @@ svg.connection.wf-edge-chosen .main-path {
     cursor: pointer;
 }
 
+/* Resize strips on every edge and squares on every corner (_pbInitOverlayWindow): invisible, but each shows its
+   resize cursor on hover. Above the header so the top edge resizes rather than drags. */
+.pb-ov-resize { position: absolute; z-index: 20; touch-action: none; }
+.pb-ov-resize-n, .pb-ov-resize-s { left: 10px; right: 10px; height: 6px; }
+.pb-ov-resize-n { top: 0; }
+.pb-ov-resize-s { bottom: 0; }
+.pb-ov-resize-e, .pb-ov-resize-w { top: 10px; bottom: 10px; width: 6px; }
+.pb-ov-resize-e { right: 0; }
+.pb-ov-resize-w { left: 0; }
+.pb-ov-resize-ne, .pb-ov-resize-nw, .pb-ov-resize-se, .pb-ov-resize-sw { width: 12px; height: 12px; }
+.pb-ov-resize-ne { top: 0; right: 0; }
+.pb-ov-resize-nw { top: 0; left: 0; }
+.pb-ov-resize-se { bottom: 0; right: 0; }
+.pb-ov-resize-sw { bottom: 0; left: 0; }
+
 /* ============================================
    Document viewer window (spec §4)
    ============================================

@@ -160,7 +160,7 @@ assert.deepStrictEqual(LA({ type: 'node_complete', node_id: 2601, drawflow_id: '
 assert.deepStrictEqual(LA({ type: 'node_start', node_id: '1000002597', drawflow_id: null }), { node: '17', state: 'active' });
 assert.deepStrictEqual(LA({ type: 'node_complete', node_id: '1000002597', drawflow_id: null, success: true,
     output: 'From: a@b.com\nSubject: test 23\nReceived: 2026-10-15T14:19:12Z\n\nbody' }),
-    { node: '17', state: 'completed', subject: 'From: a@b.com\nSubject: test 23' });
+    { node: '17', state: 'completed', subject: 'From: a@b.com\nSubject: test 23\nReceived: 2026-10-15T14:19:12Z\n\nbody' });
 assert.deepStrictEqual(LA({ type: 'node_log', message: 'jev did not classify' }), { trace: 'jev did not classify' });
 assert.strictEqual(LA({ type: 'node_log' }), null);
 assert.deepStrictEqual(LA({ type: 'workflow_complete', success: true, output: 'done' }), { answer: 'done' });
@@ -168,10 +168,16 @@ assert.deepStrictEqual(LA({ type: 'workflow_error', error: 'Unconfigured agent t
 assert.deepStrictEqual(LA({ type: 'workflow_complete', success: false }), { error: 'Run failed' });
 assert.strictEqual(LA({ type: 'node_trace' }), null);
 assert.strictEqual(LA(null), null);
-assert.strictEqual(SO.eventSubject('x'.repeat(300)).length, 200);
+assert.strictEqual(SO.eventSubject('x'.repeat(300)).length, 300);
+assert.strictEqual(SO.eventSubject('x'.repeat(5000)).length, 4000);
 assert.strictEqual(SO.eventSubject(''), '');
-// An empty Subject line does not reach across the blank line into the body.
-assert.strictEqual(SO.eventSubject('From: ana@example.com\nSubject:\n\nbody text'), 'From: ana@example.com');
+// A job (JSON object) is shown whole and indented, not cut mid-field; capped at 4000 characters.
+const job = { task: 'a'.repeat(40), number: 'SCTASK0010004', answers: { message: 'Hello from serviceNow', synergyai_automation: 'hello-note@19' } };
+assert.strictEqual(SO.eventSubject(JSON.stringify(job)), JSON.stringify(job, null, 2));
+assert.strictEqual(SO.eventSubject(JSON.stringify({ big: 'x'.repeat(5000) })).length, 4000);
+assert.strictEqual(SO.eventSubject('[1, 2]'), '[1, 2]');
+// An email is shown whole, body included (trimmed).
+assert.strictEqual(SO.eventSubject('\nFrom: ana@example.com\nSubject:\n\nbody text\n'), 'From: ana@example.com\nSubject:\n\nbody text');
 console.log('start-options liveAction: ok');
 
 // A dispatcher's node_complete carries its route (the chosen node's database id): the live view fades the other links.
@@ -190,3 +196,26 @@ assert.strictEqual(SO.liveSourceLabel('server', k => k), 'workflow.live.target')
 // a compiled run's trigger event maps like a server one (drawflow_id null, node_id >= 1e9)
 assert.deepStrictEqual(SO.liveAction({ type: 'node_start', node_id: '1000000017', drawflow_id: null }, '5'), { node: '5', state: 'active' });
 console.log('start-options compiled live: ok');
+
+// argFields: the Start arguments an option's code reads (the ServiceNow get-new-job component), each once, defaults kept
+{
+    const fs = require('fs');
+    const path = require('path');
+    const src = path.resolve(__dirname, '../../../../../servicenow/components/get_new_job.py');
+    if (fs.existsSync(src)) {
+        assert.deepStrictEqual(SO.argFields(fs.readFileSync(src, 'utf8')), [
+            { name: 'tag', default: '' }, { name: 'version', default: '' }, { name: 'hand_back_group', default: 'Service Desk' }]);
+    }
+    assert.deepStrictEqual(SO.argFields('x = ARGS["folder"]\ny = args.get(\'folder\')\nz = args.get("limit", "10")'),
+        [{ name: 'folder', default: '' }, { name: 'limit', default: '10' }]);
+    assert.deepStrictEqual(SO.argFields('globals().get("ARGS")\nkwargs.get("x")'), []);   // not an argument read
+    assert.deepStrictEqual(SO.argFields(null), []);
+
+    // startArgs: digits become an integer, an empty field is dropped, keys the code does not read stay
+    const fields = [{ name: 'tag' }, { name: 'version' }, { name: 'hand_back_group' }];
+    assert.deepStrictEqual(SO.startArgs({ tag: 'old', version: 1, hand_back_group: 'HR', extra: true }, fields,
+        { tag: ' team-transfer ', version: '3', hand_back_group: '' }), { tag: 'team-transfer', version: 3, extra: true });
+    assert.deepStrictEqual(SO.startArgs(null, fields, { tag: 'synergyai:okta-reset' }), { tag: 'synergyai:okta-reset' });
+    assert.deepStrictEqual(SO.startArgs([], fields, {}), {});
+    console.log('start-options argFields/startArgs: ok');
+}

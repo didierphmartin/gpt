@@ -51,6 +51,24 @@ assert.ok(AV.saveAutomationPlan({ key: 'Bad Key', title: 'T', spec: { a: 1 } }).
 assert.ok(AV.saveAutomationPlan({ key: 'k1', title: '', spec: { a: 1 } }).error);
 assert.ok(AV.saveAutomationPlan({ key: 'k1', title: 'T', spec: 'not json' }).error);
 assert.ok(AV.saveAutomationPlan({ key: 'k1', title: 'T', playbook_id: -1 }).error);
+// Only the turn's first spec-only save bumps: once the key was versioned in this turn, a spec alone replaces the
+// stored spec (PUT, no bump), so a model that saves again does not make the files it just generated stale.
+assert.deepStrictEqual(AV.saveAutomationPlan({ key: 'okta-reset', title: 'T', spec: { name: 'okta-reset' } }, { versionedThisTurn: true }),
+    { method: 'PUT', body: { spec: { name: 'okta-reset' } } });
+assert.deepStrictEqual(AV.saveAutomationPlan({ key: 'okta-reset', title: 'T', spec: { a: 1 } }, { versionedThisTurn: false }).method, 'POST');
+
+// saveAutomationNext: the exact calls that follow, with the record's ids, so the model never re-saves to "get" them.
+const nxt = AV.saveAutomationNext({ id: 1, version: 12, playbook_id: 29, workflow_id: 70,
+    servers: [{ id: 125, name: 'ServiceNow', environment: 'dev' }] }, false);
+for (const s of ['--version 12', 'playbook_id: 29', 'workflow_id: 70', 'automation_id: 1', 'server_id: 125', 'never bumps']) {
+    assert.ok(nxt.includes(s), `next hint lacks ${s}: ${nxt}`);
+}
+const linked = AV.saveAutomationNext({ id: 1, version: 12, playbook_id: 29, workflow_id: 70,
+    servers: [{ id: 9, environment: 'prod' }, { id: 125, environment: 'dev' }] }, true);
+assert.ok(linked.includes('install_automation {automation_id: 1, server_id: 125') && !linked.includes('save_playbook_agent'), linked);
+const prodOnly = AV.saveAutomationNext({ id: 1, version: 12, servers: [{ id: 9, environment: 'prod' }] }, true);
+assert.ok(prodOnly.includes('manual install') && !prodOnly.includes('install_automation'), prodOnly);
+assert.ok(AV.saveAutomationNext({ id: 2, version: 1, playbook_id: null, workflow_id: null, servers: [] }, false).includes('playbook_id: <from save_playbook_agent>'));
 
 // outputsPath: save_workflow reads only a file under /outputs/.
 assert.strictEqual(AV.outputsPath('/outputs/okta-reset.workflow.json'), '/outputs/okta-reset.workflow.json');

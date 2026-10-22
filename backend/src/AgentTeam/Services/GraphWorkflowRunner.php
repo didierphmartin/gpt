@@ -1680,7 +1680,8 @@ class GraphWorkflowRunner
      * A playbook node, server-side and unattended (nobody can approve): resolved -> exit 'done', anything else
      * -> exit 'failed' (PlaybookOutcome). With config.exits the node routes like a code node (port output_k ->
      * k-th exit, CodeNodeEmit::exitTargets); without exits it behaves as before: all children run, a failure
-     * fails the run. A from-input node ends its output with "Job: <first parent's JSON>" for the hand-back nodes.
+     * fails the run. A from-input node, or one with exits, ends its output with "Job: <first parent's JSON>" (when that is
+     * a JSON object) for the complete and hand-back nodes.
      */
     private function executePlaybookNode(array $node, int $userId, string $userPrompt, array $edges): array
     {
@@ -1709,10 +1710,11 @@ class GraphWorkflowRunner
                 $reason = PlaybookOutcome::errorReason($e);
             }
         }
-        $res = PlaybookOutcome::nodeResult($reason, $transcript, $fromInput ? PlaybookSource::jobLine($parentText) : null);
+        $hasExits = is_array($cfg['exits'] ?? null) && $cfg['exits'] !== [];
+        $res = PlaybookOutcome::nodeResult($reason, $transcript,
+            $fromInput || $hasExits ? PlaybookSource::jobLine($parentText) : null);
         $exit = $res['exit'];
         $text = $res['text'];
-        $hasExits = is_array($cfg['exits'] ?? null) && $cfg['exits'] !== [];
         if (!$hasExits) {
             if ($reason !== null) {
                 throw new \RuntimeException("playbook node failed: {$reason}");

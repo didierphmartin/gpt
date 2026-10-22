@@ -60,9 +60,11 @@
     /**
      * save_automation's request. A spec without ids creates the record or bumps an existing key's version (POST);
      * with playbook_id / workflow_id it links them (PUT; a spec given too replaces the stored one WITHOUT a bump), so
-     * the skill's last save never bumps the version a second time. {error} when the input cannot be sent.
+     * the skill's last save never bumps the version a second time. Once the key was versioned in this chat turn
+     * (opts.versionedThisTurn), a spec alone is also a PUT: a second "get the version" save must not make the files
+     * the turn already generated stale. {error} when the input cannot be sent.
      */
-    function saveAutomationPlan(input) {
+    function saveAutomationPlan(input, opts = {}) {
         const i = input || {};
         const key = String(i.key || '').trim();
         const title = String(i.title || '').trim();
@@ -84,7 +86,27 @@
         }
         if (Object.keys(ids).length) return { method: 'PUT', body: { ...(spec ? { spec } : {}), ...ids } };
         if (!spec) return { error: 'save_automation needs the spec (first save) or playbook_id / workflow_id (linking)' };
+        if (opts.versionedThisTurn) return { method: 'PUT', body: { spec } };
         return { method: 'POST', body: { key, title, spec } };
+    }
+
+    /**
+     * The calls that follow a save_automation answer, with the record's ids filled in. `linked`: this save linked
+     * the playbook and workflow (step 5), so only the install is left.
+     */
+    function saveAutomationNext(rec, linked) {
+        const r = rec || {};
+        const dev = (Array.isArray(r.servers) ? r.servers : []).find(s => s && ['dev', 'test'].includes(s.environment));
+        const install = dev
+            ? `install_automation {automation_id: ${r.id}, server_id: ${dev.id}, scope: <from the flow: line>}`
+            : 'no dev/test server: manual install (sh build-install.sh), then reply';
+        if (linked) return `Next: ${install}. Do not call save_automation again.`;
+        const pb = r.playbook_id ? r.playbook_id : '<from save_playbook_agent>';
+        const wf = r.workflow_id ? r.workflow_id : '<from save_workflow>';
+        return `Version ${r.version} for this turn: run create.py with --version ${r.version} (skip it if already VALID with that version), `
+            + `then save_playbook_agent {playbook_id: ${r.playbook_id || 'omit'}, automation_id: ${r.id}, …}, `
+            + `then save_workflow {workflow_id: ${r.workflow_id || 'omit'}, automation_id: ${r.id}, path}, `
+            + `then save_automation {key, title, spec, playbook_id: ${pb}, workflow_id: ${wf}} (links them; never bumps), then ${install}.`;
     }
 
     /** An absolute /outputs/ path for a model-given path, or null (anything outside /outputs/, or with ..). */
@@ -328,7 +350,7 @@
         }
     }
 
-    return { deployFileList, driftSummary, clientToolNames, saveAutomationPlan, outputsPath, manualInstallMessage,
+    return { deployFileList, driftSummary, clientToolNames, saveAutomationPlan, saveAutomationNext, outputsPath, manualInstallMessage,
         placeholdersIn, playbookKeyPlan, keyTakenMessage, startOptionOf, startSchedulePlan,
         withServerNames, AutomationApi, collectDeployFiles, installAutomation, AutomationsLibrary };
 });

@@ -130,12 +130,14 @@
         return 'err';
     }
 
-    /** The event a run started on, for the live overlay's turn: From and Subject lines, else the first 200 characters. */
+    /** The event a run started on, for the live overlay's turn, whole: a JSON object (e.g. a ServiceNow job) indented, any
+     * other text (e.g. an email: headers and body) trimmed; at most 4000 characters. */
     function eventSubject(output) {
         const s = String(output ?? '');
-        const lines = ['From', 'Subject'].map((k) => new RegExp(`^${k}:[ \\t]*(.+)$`, 'm').exec(s)).filter(Boolean)
-            .map((m) => m[0].trim());
-        return lines.length ? lines.join('\n') : s.slice(0, 200);
+        let obj = null;
+        try { obj = JSON.parse(s); } catch (_) { /* not JSON */ }
+        if (obj && typeof obj === 'object' && !Array.isArray(obj)) return JSON.stringify(obj, null, 2).slice(0, 4000);
+        return s.trim().slice(0, 4000);
     }
 
     /**
@@ -171,11 +173,39 @@
         return { text: String(c.line ?? ''), tone: c.tone || 'off', listening: !!c.listening };
     }
 
+    // ARGS read by name in a component's code: args.get("x"[, "default"]) or args["x"] (ARGS as well).
+    const ARG_READ_RE = /\b(?:args|ARGS)\s*(?:\.get\(\s*|\[\s*)(["'])([A-Za-z_]\w*)\1(?:\s*,\s*(["'])([^"'\n]*)\3)?/g;
+
+    /** The Start arguments an option's code reads, in order, each once: [{name, default}] ('' when none). */
+    function argFields(code) {
+        const out = new Map();
+        for (const m of String(code || '').matchAll(ARG_READ_RE)) {
+            const prev = out.get(m[2]);
+            if (!prev) out.set(m[2], { name: m[2], default: m[4] ?? '' });
+            else if (!prev.default && m[4]) prev.default = m[4];
+        }
+        return [...out.values()];
+    }
+
+    /**
+     * The Start node's start_args after the arguments dialog: each field's trimmed text, digits as an integer
+     * (the version), an empty field dropped (the code's default applies). Keys the code does not read are kept.
+     */
+    function startArgs(prev, fields, values) {
+        const out = prev && typeof prev === 'object' && !Array.isArray(prev) ? { ...prev } : {};
+        for (const { name } of fields) {
+            const v = String(values[name] ?? '').trim();
+            if (v === '') delete out[name];
+            else out[name] = /^\d{1,9}$/.test(v) ? Number(v) : v;
+        }
+        return out;
+    }
+
     /** The live overlay's target word: the SynergyAI server runner, or the compiled program on this machine. */
     function liveSourceLabel(kind, t) {
         return t(kind === 'compiled' ? 'workflow.live.compiledTarget' : 'workflow.live.target');
     }
 
     return { isStartDrop, sortWaitTools, guessWorkExit, defaultTrigger, active, startMode, startLinks, warning, startView, stateTone,
-        liveAction, eventSubject, compiledLiveState, liveSourceLabel };
+        liveAction, eventSubject, compiledLiveState, liveSourceLabel, argFields, startArgs };
 });

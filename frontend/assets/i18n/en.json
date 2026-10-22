@@ -738,6 +738,8 @@
       "note_replaced": "Only one option at a time: the other one is off.",
       "enterPrompt": "Enter Prompt",
       "setSchedule": "Set Schedule",
+      "argsIntro": "Arguments this option's code reads. An empty field uses the code's default.",
+      "noTag": "With no tag, this workflow takes every SynergyAI task, whatever automation made it.",
       "warnPorts": "Their Start goes back to one port: the links on \"{{exit}}\" stay, the links on its other exits are removed.",
       "dropTitle": "Remove links from Start?",
       "dropIntro": "Start's ports change. The links on \"{{exit}}\" are kept; these are removed:",

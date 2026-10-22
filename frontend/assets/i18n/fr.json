@@ -738,6 +738,8 @@
       "note_replaced": "Une seule option à la fois : l'autre est désactivée.",
       "enterPrompt": "Saisir le prompt",
       "setSchedule": "Planifier",
+      "argsIntro": "Arguments que lit le code de cette option. Un champ vide prend la valeur par défaut du code.",
+      "noTag": "Sans tag, ce workflow prend toutes les tâches SynergyAI, quelle que soit l'automatisation qui les a créées.",
       "warnPorts": "Leur Start revient à une seule sortie : les liens de « {{exit}} » restent, ceux des autres sorties sont supprimés.",
       "dropTitle": "Supprimer des liens du Start ?",
       "dropIntro": "Les sorties du Start changent. Les liens de « {{exit}} » sont conservés ; ceux-ci sont supprimés :",

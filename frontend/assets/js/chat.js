@@ -509,17 +509,20 @@ class ChatApp {
      * workflow; a spec given too replaces the stored one without a bump) -- AutomationsView.saveAutomationPlan --
      * then a drift check.
      */
-    async _saveAutomationTool(input) {
+    async _saveAutomationTool(input, ctx = null) {
         const AV = window.AutomationsView;
-        const plan = AV.saveAutomationPlan(input);
+        // ctx lives for the whole chat turn: only the turn's first spec-only save bumps the version
+        const versioned = ctx ? (ctx._automationKeysVersioned ||= new Set()) : new Set();
+        const key = String(input?.key || '').trim();
+        const plan = AV.saveAutomationPlan(input, { versionedThisTurn: versioned.has(key) });
         if (plan.error) return { success: false, error: plan.error };
         const api = this._automationApi();
         let rec;
         try {
             if (plan.method === 'POST') {
                 rec = await api.create(plan.body);
+                versioned.add(key);
             } else {
-                const key = String(input.key).trim();
                 const row = (await api.list() || []).find(r => r.key === key);
                 if (!row) return { success: false, error: `no automation with key "${key}": call save_automation with the spec first.` };
                 rec = await api.update(row.id, plan.body);
@@ -536,7 +539,8 @@ class ChatApp {
             drift = `check failed: ${e.message}`;
         }
         try { await window.automationsLibrary?.loadTree?.(); } catch (_) {}
-        return { success: true, automation_id: rec.id, ...rec, drift };
+        const linked = plan.body.playbook_id != null || plan.body.workflow_id != null;
+        return { success: true, automation_id: rec.id, ...rec, drift, next: AV.saveAutomationNext(rec, linked) };
     }
 
     getAuthHeaders() {
@@ -3831,7 +3835,7 @@ class ChatApp {
         if (call.name === 'save_automation') {
             let payload;
             try {
-                payload = await this._saveAutomationTool(call.input || {});
+                payload = await this._saveAutomationTool(call.input || {}, ctx);
             } catch (e) {
                 payload = { success: false, error: `save_automation failed: ${e?.message || e}` };
             }
@@ -5119,14 +5123,16 @@ class ChatApp {
         // Provider-correct tool-round turns. Shared with the workflow runner
         // (window.AgentTurn) so the format — incl. Gemini's thought_signature
         // and per-tool function name — lives in ONE place and never drifts.
-        const { assistantTurn, toolResultTurns } =
-            window.AgentTurn.buildToolRoundTurns(results, payload.assistant_text, payload.assistant_reasoning || '');
+        // Every round of this turn, not only the last one (ctx lives for the whole turn): otherwise the model
+        // forgets earlier results, and the backend's "no run_skill_script in history yet" rule forces the
+        // script again after every other client tool.
+        ctx._turnRounds = window.AgentTurn.appendRound(
+            ctx._turnRounds, results, payload.assistant_text, payload.assistant_reasoning || '');
 
         const continuationHistory = [
             ...this.conversationHistory,
             ctx.userMessage,
-            assistantTurn,
-            ...toolResultTurns,
+            ...ctx._turnRounds,
         ];
 
         // Streaming decision: stream when the user can see the response

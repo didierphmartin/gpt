@@ -185,6 +185,13 @@ PY;
         self::assertStringNotContainsString('Job: ', $r['text'], 'a fixed playbook adds no Job line');
     }
 
+    public function testFixedNodeWithExitsEndsWithTheJobLineWhenItsParentIsAJob(): void
+    {
+        $r = $this->py("r = run(node(exits=['done', 'failed']), '{\"task\": \"T1\"}', [RESOLVE])\nprint(json.dumps(r))\n");
+        self::assertSame('done', $r['route']);
+        self::assertStringEndsWith("\n\nJob: {\"task\":\"T1\"}", $r['text']);
+    }
+
     public function testUnresolvedRoutesFailedWithStatus(): void
     {
         $r = $this->py("r = run(node(exits=['done', 'failed']), 'hello', [])\nprint(json.dumps(r))\n");
