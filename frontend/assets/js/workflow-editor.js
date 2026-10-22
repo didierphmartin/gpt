@@ -9655,12 +9655,10 @@ class WorkflowEditor {
         return id;
     }
 
-    /** The library badge only: a node's MCP servers are not listed on the canvas (they would not scale; its name says what it talks to). */
+    /** Only a broken link is shown: most nodes come from a library, and servers would not scale (the name says what it talks to). */
     _codeBadgesHtml(cfg) {
-        if (!cfg.code_component_id) return '';
-        return cfg.code_component_missing
-            ? `<span class="tool-badge" style="background:#fee2e2;color:#b91c1c;" title="${this.escapeHtml(this.t('codeLibrary.missingTitle'))}">📚 ${this.escapeHtml(this.t('codeLibrary.missing'))}</span>`
-            : `<span class="tool-badge" title="${this.escapeHtml(this.t('codeLibrary.linkedTitle'))}">📚 ${this.escapeHtml(this.t('codeLibrary.linked'))}</span>`;
+        if (!cfg.code_component_id || !cfg.code_component_missing) return '';
+        return `<span class="tool-badge" style="background:#fee2e2;color:#b91c1c;" title="${this.escapeHtml(this.t('codeLibrary.missingTitle'))}">📚 ${this.escapeHtml(this.t('codeLibrary.missing'))}</span>`;
     }
 
     _refreshCodeNode(nodeId) {
