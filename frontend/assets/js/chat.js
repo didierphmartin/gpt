@@ -22,6 +22,11 @@ class ChatApp {
     // backend/src/Controllers/ChatAttachmentController::MAX_BYTES, otherwise
     // an upload that passes the client check still 413s server-side.
     static MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
+    /** The views under Libraries and the label the Libraries entry shows for each. */
+    static LIBRARY_LABELS = {
+        prompts: 'sidebar.libPrompts', skills: 'sidebar.libSkills', agents: 'sidebar.libAgents',
+        playbooks: 'sidebar.libPlaybooks', 'code-library': 'sidebar.libCode', 'mcp-servers': 'sidebar.libMcpServers',
+    };
 
     constructor() {
         // DOM Elements (cached for performance)
@@ -110,6 +115,9 @@ class ChatApp {
         this.automationsView = document.getElementById('automations-view');
         this.navCodeLibrary = document.getElementById('nav-code-library');
         this.codeLibraryView = document.getElementById('code-library-view');
+        // Libraries: one sidebar entry whose menu lists the libraries above
+        this.navLibraries = document.getElementById('nav-libraries');
+        this.navLibrariesMenu = document.getElementById('nav-libraries-menu');
 
         // File Storage elements
         this.navFileStorage = document.getElementById('nav-file-storage');
@@ -703,6 +711,10 @@ class ChatApp {
         if (this.navFileStorage) {
             this.navFileStorage.addEventListener('click', () => this.switchView('file-storage'));
         }
+        if (this.navLibraries) {
+            this.navLibraries.addEventListener('click', () => this.toggleLibrariesMenu());
+            window.i18n?.onLanguageChange?.(() => this.syncLibrariesNav(this.currentView));
+        }
 
         // Activity rail (visible when sidebar is collapsed). Each icon expands
         // the sidebar and switches to the matching view; the chevron just
@@ -717,7 +729,9 @@ class ChatApp {
             btn.addEventListener('click', () => {
                 const view = btn.dataset.railTarget;
                 if (this.sidebarCollapsed) this.toggleSidebar();
-                this.switchView(view);
+                // The rail's 📚 opens the sidebar on the list of libraries; picking one switches the view.
+                if (view === 'libraries') this.toggleLibrariesMenu(true);
+                else this.switchView(view);
             });
         });
 
@@ -1711,9 +1725,13 @@ class ChatApp {
                     this.currentProvider = storedProvider;
                     console.log('[Chat] Using LLM provider from localStorage:', storedProvider);
                 } else {
-                    this.currentProvider = data.current_provider;
+                    // The backend has no default provider (current_provider is null),
+                    // so pick the first available one; a null here sends chats without one.
+                    this.currentProvider = data.current_provider || availableProviderNames[0] || null;
                     // Save to localStorage for sharing with Voice app
-                    localStorage.setItem('app-llm-provider', this.currentProvider);
+                    if (this.currentProvider) {
+                        localStorage.setItem('app-llm-provider', this.currentProvider);
+                    }
                 }
 
                 this.functions = data.functions;
@@ -9796,9 +9814,30 @@ class ChatApp {
      */
     syncRailActive() {
         const view = this.currentView || 'conversations';
+        const target = ChatApp.LIBRARY_LABELS[view] ? 'libraries' : view;
         document.querySelectorAll('#sidebar-rail [data-rail-target]').forEach(btn => {
-            btn.classList.toggle('active', btn.dataset.railTarget === view);
+            btn.classList.toggle('active', btn.dataset.railTarget === target);
         });
+    }
+
+    /** Opens or closes the Libraries menu (`open` forces a state). */
+    toggleLibrariesMenu(open) {
+        if (!this.navLibrariesMenu) return;
+        const show = open ?? this.navLibrariesMenu.classList.contains('hidden');
+        this.navLibrariesMenu.classList.toggle('hidden', !show);
+        this.navLibraries.setAttribute('aria-expanded', String(show));
+        const caret = document.getElementById('nav-libraries-caret');
+        if (caret) caret.textContent = show ? '▾' : '▸';
+    }
+
+    /** Libraries stays highlighted and names the open library while one is shown; the menu closes on any switch. */
+    syncLibrariesNav(view) {
+        if (!this.navLibraries) return;
+        const key = ChatApp.LIBRARY_LABELS[view];
+        this.navLibraries.classList.toggle('active', !!key);
+        const current = document.getElementById('nav-libraries-current');
+        if (current) current.textContent = key ? ` · ${window.i18n?.t ? window.i18n.t(key) : ''}` : '';
+        this.toggleLibrariesMenu(false);
     }
 
     /**
@@ -10597,6 +10636,7 @@ class ChatApp {
 
         this.currentView = view;
         this.syncRailActive();
+        this.syncLibrariesNav(view);
 
         // Close settings panel if open
         if (window.settingsPanel?.isActive) {

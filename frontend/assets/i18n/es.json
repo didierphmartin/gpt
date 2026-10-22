@@ -129,6 +129,10 @@
       "title": "🎯 Habilidades",
       "description": "Las habilidades son <strong>escenarios reutilizables</strong> almacenados en una biblioteca. Adjunta una a un prompt para dotar a la conversación de <strong>conocimiento o comportamiento especializado</strong> (p. ej., revisión legal, analista de datos, revisor de código)."
     },
+    "libraries": {
+      "title": "📚 Bibliotecas",
+      "description": "Aquí vive todo lo que reutilizas: <strong>prompts, skills, agentes, playbooks, componentes de código y servidores MCP</strong>. Haz clic para abrir la lista, elige una biblioteca y su contenido aparece debajo."
+    },
     "workflows": {
       "title": "🔀 Workflows",
       "description": "Orquesta agentes de IA en <strong>workflows de varios pasos</strong>, ejecútalos al instante o prográmalos. Las salidas pueden mostrarse en línea <em>o escribirse en una carpeta de tu equipo</em>. Plus: cualquier workflow puede <strong>compilarse en una aplicación Python independiente</strong>."
@@ -231,6 +235,13 @@
     "workflows": "Workflows",
     "fileStorage": "Almacenamiento de Archivos",
     "mcpServers": "Biblioteca de Servidores MCP",
+    "libraries": "Bibliotecas",
+    "libPrompts": "Prompts",
+    "libSkills": "Skills",
+    "libAgents": "Agentes",
+    "libPlaybooks": "Playbooks",
+    "libCode": "Código",
+    "libMcpServers": "Servidores MCP",
     "playbooks": "Biblioteca de playbooks",
     "codeLibrary": "Biblioteca de código",
     "skills": "Biblioteca de Skills",
@@ -740,6 +751,9 @@
       "setSchedule": "Programar",
       "argsIntro": "Argumentos que lee el código de esta opción. Un campo vacío usa el valor por defecto del código.",
       "noTag": "Sin tag, este flujo toma todas las tareas de SynergyAI, sea cual sea la automatización que las creó.",
+      "watches": "Vigila",
+      "watchArgs": "Argumentos de la vigilancia",
+      "noArgs": "El código de esta opción no lee ningún argumento: cada flujo que la usa recibe los mismos eventos.",
       "warnPorts": "Su Start vuelve a tener una sola salida: los enlaces de \"{{exit}}\" se quedan, los de las otras salidas se eliminan.",
       "dropTitle": "¿Quitar enlaces del Start?",
       "dropIntro": "Las salidas del Start cambian. Los enlaces de \"{{exit}}\" se conservan; estos se eliminan:",

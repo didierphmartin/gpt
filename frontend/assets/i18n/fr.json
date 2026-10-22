@@ -129,6 +129,10 @@
       "title": "🎯 Compétences",
       "description": "Les compétences sont des <strong>scénarios réutilisables</strong> stockés dans une bibliothèque. Attachez-en une à un prompt pour donner à la conversation des <strong>connaissances ou un comportement spécialisé</strong> (ex. revue juridique, analyste de données, relecteur de code)."
     },
+    "libraries": {
+      "title": "📚 Bibliothèques",
+      "description": "Tout ce que vous réutilisez est ici : <strong>prompts, skills, agents, playbooks, composants de code et serveurs MCP</strong>. Cliquez pour ouvrir la liste, choisissez une bibliothèque et son contenu s'affiche en dessous."
+    },
     "workflows": {
       "title": "🔀 Workflows",
       "description": "Orchestrez des agents IA en <strong>workflows multi-étapes</strong>, puis exécutez-les à la demande ou planifiez-les. Les sorties peuvent s'afficher directement <em>ou être écrites dans un dossier sur votre ordinateur</em>. Bonus : tout workflow peut être <strong>compilé en application Python autonome</strong>."
@@ -231,6 +235,13 @@
     "workflows": "Workflows",
     "fileStorage": "Stockage de Fichiers",
     "mcpServers": "Bibliothèque de Serveurs MCP",
+    "libraries": "Bibliothèques",
+    "libPrompts": "Prompts",
+    "libSkills": "Skills",
+    "libAgents": "Agents",
+    "libPlaybooks": "Playbooks",
+    "libCode": "Code",
+    "libMcpServers": "Serveurs MCP",
     "playbooks": "Bibliothèque de playbooks",
     "codeLibrary": "Bibliothèque de code",
     "skills": "Bibliothèque de Skills",
@@ -740,6 +751,9 @@
       "setSchedule": "Planifier",
       "argsIntro": "Arguments que lit le code de cette option. Un champ vide prend la valeur par défaut du code.",
       "noTag": "Sans tag, ce workflow prend toutes les tâches SynergyAI, quelle que soit l'automatisation qui les a créées.",
+      "watches": "Surveille",
+      "watchArgs": "Arguments de la surveillance",
+      "noArgs": "Le code de cette option ne lit aucun argument : chaque workflow qui l'utilise reçoit les mêmes événements.",
       "warnPorts": "Leur Start revient à une seule sortie : les liens de « {{exit}} » restent, ceux des autres sorties sont supprimés.",
       "dropTitle": "Supprimer des liens du Start ?",
       "dropIntro": "Les sorties du Start changent. Les liens de « {{exit}} » sont conservés ; ceux-ci sont supprimés :",

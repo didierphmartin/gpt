@@ -435,7 +435,7 @@ class SystemSettingsController
             // legacy key name; a decision key must not land on one of them.
             $reserved = array_merge(
                 array_values(PythonEmitHelpers::PROVIDER_KEY_ENV),
-                array_map(fn (array $p) => $p['legacy_env']['key'], array_values(DecisionProtocols::all()))
+                array_values(array_filter(array_map(fn (array $p) => $p['legacy_env']['key'] ?? null, DecisionProtocols::all())))
             );
             if (in_array("{$stem}_API_KEY", $reserved, true)) {
                 return [

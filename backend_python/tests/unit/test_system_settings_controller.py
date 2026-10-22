@@ -569,7 +569,7 @@ def test_config_fallback_configured_prices_still_win():
 def test_a_router_row_needs_a_registered_protocol():
     db = _admin_db(one=[None])   # existing-format lookup -> new key
     r = c(db).saveLLMProvider(ctx(body={'provider_key': 'acme', 'model': 'm', 'api_format': 'router'}))
-    assert r == {'success': False, 'error': 'Decision provider needs a protocol: one of typesafe', 'status_code': 400}
+    assert r == {'success': False, 'error': 'Decision provider needs a protocol: one of typesafe, openai', 'status_code': 400}
     db = _admin_db(one=[None])
     r = c(db).saveLLMProvider(ctx(body={'provider_key': 'acme', 'model': 'm', 'api_format': 'router', 'protocol': 'bogus'}))
     assert r['status_code'] == 400 and 'needs a protocol' in r['error']

@@ -129,6 +129,10 @@
       "title": "🎯 Skills",
       "description": "Skills are <strong>reusable scenarios</strong> stored in a library. Attach one to a prompt to give the conversation <strong>specialized knowledge or behavior</strong> on the fly (e.g. legal review, data analyst, code reviewer)."
     },
+    "libraries": {
+      "title": "📚 Libraries",
+      "description": "Everything you reuse lives here: <strong>prompts, skills, agents, playbooks, code components and MCP servers</strong>. Click to open the list, pick a library and its content appears below."
+    },
     "workflows": {
       "title": "🔀 Workflows",
       "description": "Orchestrate AI agents into <strong>multi-step workflows</strong>, then run them on demand or on a schedule. Outputs can be shown inline <em>or written to a folder on your computer</em>. Bonus: any workflow can be <strong>compiled into a standalone Python app</strong>."
@@ -231,6 +235,13 @@
     "workflows": "Workflows",
     "fileStorage": "File Storage",
     "mcpServers": "MCP Servers Library",
+    "libraries": "Libraries",
+    "libPrompts": "Prompts",
+    "libSkills": "Skills",
+    "libAgents": "Agents",
+    "libPlaybooks": "Playbooks",
+    "libCode": "Code",
+    "libMcpServers": "MCP Servers",
     "playbooks": "Playbooks Library",
     "codeLibrary": "Code Library",
     "skills": "Skills Library",
@@ -740,6 +751,9 @@
       "setSchedule": "Set Schedule",
       "argsIntro": "Arguments this option's code reads. An empty field uses the code's default.",
       "noTag": "With no tag, this workflow takes every SynergyAI task, whatever automation made it.",
+      "watches": "Watches",
+      "watchArgs": "Watch arguments",
+      "noArgs": "This option's code reads no arguments: every workflow on it gets the same events.",
       "warnPorts": "Their Start goes back to one port: the links on \"{{exit}}\" stay, the links on its other exits are removed.",
       "dropTitle": "Remove links from Start?",
       "dropIntro": "Start's ports change. The links on \"{{exit}}\" are kept; these are removed:",

@@ -256,9 +256,11 @@ final class LangGraphArchitectureDoc
             ['Node', '..>', 'NodeKind', 'make_node'],
             ['DispatcherNode', '-->', 'Dispatcher', ''],
             ['Dispatcher', '-->', 'JevRouter', ''],
+            ['Dispatcher', '-->', 'OpenAIDecisionRouter', ''],
             ['Dispatcher', '..>', 'RouteDecision', 'returns'],
             ['Dispatcher', '..>', 'DecisionResult', 'reads'],
             ['JevRouter', '..>', 'DecisionResult', 'returns'],
+            ['OpenAIDecisionRouter', '..>', 'DecisionResult', 'returns'],
             ['AgentNode', '-->', 'ToolCatalog', ''],
             ['AgentNode', '-->', 'SkillRuntime', ''],
             ['ToolCatalog', '-->', 'McpClient', ''],
@@ -362,6 +364,9 @@ final class LangGraphArchitectureDoc
                 . '`RouteDecision`; no choice means the run stops at the dispatcher.' . $unused,
             'JevRouter' => 'Client for TypeSafe Jev (the `typesafe` decision protocol): asks a closed routing question over '
                 . 'the dispatcher\'s menu (plus an `unclear` option) and returns a `DecisionResult`. It never raises.',
+            'OpenAIDecisionRouter' => 'Client for OpenAI\'s Decisions API, GPT-6 Luna (the `openai` decision protocol): asks '
+                . 'a closed routing question over the dispatcher\'s menu (plus an `unclear` option) and returns a '
+                . '`DecisionResult`. It never raises.',
             'DecisionResult' => 'Frozen record of one decision-model call: its outcome (`routed`, `unclear`, `low_confidence`, '
                 . '`unavailable`, `error`), the chosen target, the confidence and the evidence.',
             'RouteDecision' => 'Frozen record of a dispatcher\'s answer: the text its child receives, the chosen child\'s id '
@@ -444,7 +449,14 @@ final class LangGraphArchitectureDoc
                 $modes[] = "\"{$ad['display']}\": " . ($m === 'llm' ? 'the model'
                     : ($m === '' ? 'the first decision model whose key is set, else the model' : "decision model `{$m}`"));
             }
-            $steps[] = 'A dispatcher node (`DispatcherNode`) asks its `Dispatcher`, which routes with a decision model (`JevRouter`) or '
+            $adapters = [];
+            foreach ($dispatchers as $ad) {
+                foreach ($ad['decision'] ?? [] as $c) {
+                    $adapters['`' . LangGraphRuntime::ADAPTER_CLASSES[$c['protocol']] . '`'] = true;
+                }
+            }
+            $adapterList = $adapters !== [] ? implode(', ', array_keys($adapters)) : '`JevRouter`';
+            $steps[] = 'A dispatcher node (`DispatcherNode`) asks its `Dispatcher`, which routes with a decision model (' . $adapterList . ') or '
                 . 'with one forced `route_to` model call, never both (' . implode('; ', $modes) . '). The chosen '
                 . 'child\'s id comes back as `route` and drives the conditional edge, so only that child runs. When '
                 . 'nothing is chosen (the decision model unclear or below its confidence floor, no key, an error), the run stops there '

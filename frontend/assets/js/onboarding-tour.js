@@ -51,9 +51,8 @@
             step('#nav-conversations',    'conversations', 'right', 'start'),
             step('#nav-verifier',         'verifier',      'right', 'start'),
             step('#nav-compare',          'compare',       'right', 'start'),
-            step('#nav-prompt-library',   'promptLibrary', 'right', 'start'),
-            step('#nav-skills',           'skills',        'right', 'start'),
             step('#nav-agent-teams',      'workflows',     'right', 'start'),
+            step('#nav-libraries',        'libraries',     'right', 'start'),
             step('#nav-file-storage',     'fileStorage',   'right', 'start'),
 
             // Top bar

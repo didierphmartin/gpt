@@ -23,7 +23,7 @@ test('envStem sanitises like PHP', () => {
 
 test('router rows need a registered protocol', () => {
   const base = { providerKey: 'acme', apiFormat: 'router', existingFormat: null, otherDecisionKeys: [] };
-  assert.match(routerRowError({ ...base, protocol: null })!, /needs a protocol: one of typesafe/);
+  assert.match(routerRowError({ ...base, protocol: null })!, /needs a protocol: one of typesafe, openai/);
   assert.equal(routerRowError({ ...base, protocol: 'typesafe' }), null);
 });
 

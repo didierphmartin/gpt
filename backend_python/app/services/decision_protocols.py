@@ -11,6 +11,13 @@ DECISION_PROTOCOLS = {
         'console_url': 'https://console.typesafe.ai/',
         'legacy_env': {'key': 'TYPESAFE_API_KEY', 'url': 'TYPESAFE_BASE_URL'},
     },
+    'openai': {
+        'label': 'OpenAI Decisions (GPT-6 Luna)',
+        'url': 'https://api.openai.com/v1/decisions',
+        'model': 'gpt-6-luna',
+        'console_url': 'https://platform.openai.com/api-keys',
+        'legacy_env': None,
+    },
 }
 
 

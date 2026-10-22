@@ -10190,13 +10190,9 @@ class WorkflowEditor {
                 <span class="start-opt-open" data-start-open="prompt">${esc(t('enterPrompt'))}</span></div>
             <div class="start-opt-row"><input type="radio" name="start-option" data-start="schedule" ${on === 'schedule' ? 'checked' : ''}>
                 <span class="start-opt-open" data-start-open="schedule">${esc(t('setSchedule'))}</span></div>
-            ${options.map((c) => (window.StartOptions.argFields(c.code).length
-                ? `<div class="start-opt-row" title="${esc(c.name)}">
-                    <input type="radio" name="start-option" data-start="${Number(c.id)}" ${on === Number(c.id) ? 'checked' : ''}>
-                    <span class="start-opt-open" data-start-open="${Number(c.id)}">${esc(c.start_trigger.label)}</span></div>`
-                : `<label class="start-opt-row" title="${esc(c.name)}">
-                    <input type="radio" name="start-option" data-start="${Number(c.id)}" ${on === Number(c.id) ? 'checked' : ''}>
-                    <span>${esc(c.start_trigger.label)}</span></label>`)).join('')}`;
+            ${options.map((c) => `<div class="start-opt-row" title="${esc(c.name)}">
+                <input type="radio" name="start-option" data-start="${Number(c.id)}" ${on === Number(c.id) ? 'checked' : ''}>
+                <span class="start-opt-open" data-start-open="${Number(c.id)}">${esc(c.start_trigger.label)}</span></div>`).join('')}`;
         boxes.forEach((box) => { box.innerHTML = html; box.title = options.length ? '' : t('none'); });
     }
 
@@ -10312,19 +10308,24 @@ class WorkflowEditor {
     }
 
     /**
-     * The Start arguments of option `compId` (the names its code reads from ARGS), saved as the Start node's
-     * start_args. The workflow is saved, then the event row again: its watch takes the Start's tag
-     * (CodeComponentStore::scheduleBody). An option that reads a tag warns while the tag is empty.
+     * Option `compId` as this workflow uses it: what it watches, and the Start arguments (the names its code reads
+     * from ARGS), saved as the Start node's start_args. The workflow is saved, then the event row again: its watch
+     * takes the Start's tag (CodeComponentStore::scheduleBody). An option that reads a tag warns while the tag is
+     * empty; one that reads no arguments says so and only closes.
      */
     _openStartArgsDialog(compId) {
         const SO = window.StartOptions;
         const comp = window.CodeComponents?.cache.get(compId);
         const startId = this._startNodeId();
         const fields = comp ? SO.argFields(comp.code) : [];
-        if (!startId || !fields.length) return;
+        if (!startId || !comp?.start_trigger) return;
         const t = (k, p) => this.t(`workflow.startOptions.${k}`, p);
         const esc = (v) => this.escapeHtml(String(v ?? ''));
         const current = this.editor.getNodeFromId(startId).data?.start_args || {};
+        const watch = comp.start_trigger.watch || {};
+        // the watch as this workflow's event row runs it: the Start's tag added (CodeComponentStore::watchWithTag)
+        const watchArgs = { ...(watch.args && !Array.isArray(watch.args) ? watch.args : {}),
+            ...(current.tag ? { tag: current.tag } : {}) };
         const overlay = document.createElement('div');
         overlay.className = 'storage-config-overlay';
         overlay.innerHTML = `
@@ -10332,16 +10333,22 @@ class WorkflowEditor {
                 <div class="storage-config-header"><h3>${esc(comp.start_trigger.label)}</h3>
                     <button class="storage-config-close" data-act="close">×</button></div>
                 <div class="storage-config-body">
-                    <p style="margin:0 0 10px;font-size:13px;color:#6b7280;">${esc(t('argsIntro'))}</p>
-                    <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:14px;">
+                    <div style="display:grid;grid-template-columns:auto 1fr;gap:4px 10px;margin:0 0 12px;font-size:13px;">
+                        <span style="color:#6b7280;">${esc(t('watches'))}</span>
+                        <span>${esc(`${watch.server || ''} · ${watch.tool || ''}`)}</span>
+                        <span style="color:#6b7280;">${esc(t('watchArgs'))}</span>
+                        <code style="font-size:12px;overflow-wrap:anywhere;">${esc(JSON.stringify(watchArgs))}</code>
+                    </div>
+                    <p style="margin:0 0 10px;font-size:13px;color:#6b7280;">${esc(t(fields.length ? 'argsIntro' : 'noArgs'))}</p>
+                    <div style="display:${fields.length ? 'grid' : 'none'};grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:14px;">
                         ${fields.map((f) => `<label for="start-arg-${esc(f.name)}">${esc(f.name)}</label>
                             <input id="start-arg-${esc(f.name)}" type="text" data-arg="${esc(f.name)}" placeholder="${esc(f.default)}"
                                 value="${esc(current[f.name])}" style="padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;">`).join('')}
                     </div>
                     <p data-role="no-tag" style="display:none;margin:10px 0 0;font-size:13px;color:#b45309;">⚠ ${esc(t('noTag'))}</p>
                     <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
-                        <button data-act="close" class="px-4 py-2 text-sm text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${esc(this.t('common.cancel'))}</button>
-                        <button data-act="ok" class="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded">${esc(t('save'))}</button>
+                        <button data-act="close" class="px-4 py-2 text-sm text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${esc(this.t(fields.length ? 'common.cancel' : 'common.close'))}</button>
+                        ${fields.length ? `<button data-act="ok" class="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded">${esc(t('save'))}</button>` : ''}
                     </div>
                 </div>
             </div>`;
