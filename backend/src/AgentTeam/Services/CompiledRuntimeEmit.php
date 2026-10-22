@@ -663,7 +663,7 @@ PY;
         return isset($analyzed['agents'][$cid]) || isset($analyzed['code'][$cid]);
     }
 
-    /** CODE_NODES = {id: {display, exits, mcp_servers, timeout_s, exit_targets, source | source_file}}. */
+    /** CODE_NODES = {id: {display, exits, mcp_servers, timeout_s, exit_targets, args, source | source_file}}. */
     /** Each code node's CODE_NODES entry as a Python dict literal, by node id (agents in separate files). */
     public static function codeNodeLiterals(array $analyzed): array
     {
@@ -674,12 +674,13 @@ PY;
         return $out;
     }
 
-    /** One CODE_NODES entry: display, exits, MCP servers, timeout, exit targets, the code or its file. */
+    /** One CODE_NODES entry: display, exits, MCP servers, timeout, exit targets, arguments, the code or its file. */
     private static function codeNodeEntry(array $analyzed, string $id, array $cd): array
     {
         $entry = ['display' => $cd['display'], 'exits' => $cd['exits'], 'mcp_servers' => $cd['mcp_servers'],
             'timeout_s' => $cd['timeout_s'],
-            'exit_targets' => (object) array_map(fn($ids) => array_map('strval', $ids), $cd['exit_targets'])];
+            'exit_targets' => (object) array_map(fn($ids) => array_map('strval', $ids), $cd['exit_targets']),
+            'args' => (object) ($cd['args'] ?? [])];
         if (!empty($analyzed['package'])) {
             $entry['source_file'] = CompiledPackage::codePath($analyzed, $id);   // code/<file>, read at each run
         } else {

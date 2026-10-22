@@ -80,9 +80,11 @@ final class CodeNodeEmit
             $fail('timeout_s must be 1 to 300 seconds');
         }
         $targets = self::exitTargets($nid, array_values($exits), $rawEdges, $nodeIds);
+        // args: a component's settings, or a Start option's Start args (StartOptionGraph); the code reads them as ARGS.
+        $args = is_array($cfg['args'] ?? null) ? $cfg['args'] : [];
         return ['display' => $display, 'kind' => 'code', 'source' => (string) ($cfg['code'] ?? ''),
             'exits' => array_values($exits), 'mcp_servers' => array_keys($slugs), 'timeout_s' => $timeout,
-            'exit_targets' => $targets, 'servers' => array_keys($servers)];
+            'exit_targets' => $targets, 'servers' => array_keys($servers), 'args' => $args];
     }
 
     /**

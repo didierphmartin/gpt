@@ -6,6 +6,7 @@ use PHPUnit\Framework\TestCase;
 use AgentTeam\Models\Workflow;
 use AgentTeam\Services\AgentRepository;
 use AgentTeam\Services\LangGraphGenerator;
+use AgentTeam\Services\StartOptionGraph;
 use AgentTeam\Services\WorkflowGraphRepository;
 use AgentTeam\Services\WorkflowRepository;
 
@@ -129,5 +130,46 @@ class LangGraphGeneratorCodeNodeTest extends TestCase
         self::assertStringContainsString('"dispatch": [{"id": "2", "name": "Poll ServiceNow", "description": ""}]', $code);
         $byPath = array_column($this->generateWith($g, ['modular' => true])['files'], 'code', 'path');
         self::assertStringContainsString('"dispatch": [{"id":"2","name":"Poll ServiceNow"}]', $byPath['workflow.py']);
+    }
+    /** A code node's arguments (a component's settings) and a Start option's Start args reach the compiled code as ARGS. */
+    public function testArgumentsAreCompiledIn(): void
+    {
+        $g = $this->codeGraph();
+        $g['nodes'][1]['config']['args'] = ['folder' => 'Didier'];
+        $code = $this->generate($g);
+        self::assertStringContainsString('"args": {"folder":"Didier"}', $code);
+
+        $raw = ['nodes' => [
+                ['id' => '17', 'node_type' => 'start', 'config' => ['type' => 'start', 'start_option' => 5,
+                    'start_args' => ['folder' => 'To SharePoint', 'done_folder' => 'Filed']]],
+                ['id' => '18', 'node_type' => 'output', 'config' => ['type' => 'output']],
+            ], 'edges' => [['from_node_id' => '17', 'to_node_id' => '18', 'from_port' => 'output_1']]];
+        $opt = StartOptionGraph::expand($raw, fn(int $id) => ['name' => 'Outlook: get dropped email',
+            'code' => "def run(input, call_tool):\n    return {'route': 'mail', 'output': ARGS}\n",
+            'exits' => ['mail', 'no_mail'], 'mcp_servers' => ['ServiceNow'], 'timeout_s' => 30,
+            'start_trigger' => ['label' => 'Outlook: get dropped email', 'work_exit' => 'mail']]);
+        self::assertStringContainsString('"args": {"folder":"To SharePoint","done_folder":"Filed"}', $this->generate($opt));
+    }
+
+    /** The compiled script hands the arguments to run() (the same ARGS the editor and the server give it). */
+    public function testTheCompiledCodeReadsItsArguments(): void
+    {
+        $venv = '/Users/didierphmartin/Documents/synergyAI/python/.venv/bin/python';
+        if (!is_executable($venv)) {
+            self::markTestSkipped('venv python missing');
+        }
+        $g = $this->codeGraph();
+        $g['nodes'][1]['config'] = ['type' => 'code', 'name' => 'Echo args', 'exits' => ['next'], 'mcp_servers' => [],
+            'timeout_s' => 30, 'args' => ['folder' => 'Didier'],
+            'code' => "def run(input, call_tool):\n    return 'folder=' + str(ARGS.get('folder'))\n"];
+        $g['edges'] = [['from' => '1', 'to' => '2', 'from_port' => 'output_1'], ['from' => '2', 'to' => '3', 'from_port' => 'output_1']];
+        array_pop($g['nodes']);
+        $dir = sys_get_temp_dir() . '/lgargs' . uniqid();
+        mkdir($dir);
+        file_put_contents("$dir/wf.py", $this->generate($g));
+        exec('cd ' . escapeshellarg($dir) . ' && RUNS_DIR=' . escapeshellarg("$dir/runs") . ' ' . escapeshellarg($venv)
+            . ' wf.py --once go 2>&1', $out, $rc);
+        self::assertSame(0, $rc, implode("\n", $out));
+        self::assertStringContainsString('folder=Didier', implode("\n", $out));
     }
 }

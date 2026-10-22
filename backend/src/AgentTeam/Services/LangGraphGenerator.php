@@ -3755,6 +3755,7 @@ TXT;
         $L[] = $indent . '    "mcp_servers": ' . $j($cd['mcp_servers']) . ',';
         $L[] = $indent . '    "timeout_s": ' . (int) $cd['timeout_s'] . ',';
         $L[] = $indent . '    "exit_targets": ' . $j((object) $cd['exit_targets']) . ',';
+        $L[] = $indent . '    "args": ' . $j((object) ($cd['args'] ?? [])) . ',   # the code\'s ARGS';
         // The modular package reads the code from its file at each run (an edit takes effect on the
         // next run); the single file embeds it.
         $L[] = isset($cd['source_file'])
