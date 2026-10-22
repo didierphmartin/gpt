@@ -1480,6 +1480,12 @@ svg.connection.wf-edge-chosen .main-path {
     background: rgba(245, 158, 11, 0.15);
 }
 
+/* Exits: one per line on every code node, never broken inside a name. */
+.workflow-node.code-node .node-config-display {
+    display: block;
+    white-space: pre;
+}
+
 /* Ingestion component node (loader / splitter / vectorstore) */
 .workflow-node.ingestion-node .node-header {
     background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%);
