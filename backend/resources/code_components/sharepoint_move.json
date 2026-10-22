@@ -1,0 +1,7 @@
+{
+  "name": "SharePoint: move",
+  "description": "Stores the input's files in the folder argument, then releases the source (e.g. moves the email out of the drop folder).",
+  "exits": ["moved", "error"],
+  "mcp_servers": ["SharePoint", "Outlook"],
+  "timeout_s": 300
+}

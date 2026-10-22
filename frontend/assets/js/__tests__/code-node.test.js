@@ -181,7 +181,7 @@ assert.deepStrictEqual(CN.exitTags('7', plain), []);
 assert.strictEqual(CN.exitsText(['next']), '');
 assert.strictEqual(CN.exitsText(['job', 'no_job']), 'job, no_job');
 assert.strictEqual(CN.exitsLabel(['next']), '');
-assert.strictEqual(CN.exitsLabel(['job', 'no_job']), '1:job  2:no_job');
+assert.strictEqual(CN.exitsLabel(['job', 'no_job']), '1:job\n2:no_job');
 // the Exits field: empty means no branching, the single default exit
 assert.deepStrictEqual(CN.parseExits(''), ['next']);
 assert.deepStrictEqual(CN.parseExits('  ,  '), ['next']);

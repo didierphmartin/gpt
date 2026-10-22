@@ -1,0 +1,13 @@
+{
+  "name": "Outlook: get dropped email",
+  "description": "Takes the next email dragged into the Start folder and hands on {document, attachments, source}; the email stays there until a later node releases it.",
+  "exits": ["dropped_mail", "no_mail", "error"],
+  "mcp_servers": ["Outlook"],
+  "timeout_s": 60,
+  "start_trigger": {
+    "label": "Outlook: Get Dropped Email",
+    "watch": {"server": "Outlook", "tool": "wait_for_new", "args": {"poll": "poll_new_mail", "mode": "drop", "folder": "Drop"}},
+    "work_exit": "dropped_mail",
+    "pass_args": ["folder"]
+  }
+}

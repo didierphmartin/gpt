@@ -25,11 +25,13 @@ final class StartTriggerFacts
     {
         $triggerNodeId = null;
         $startTrigger = null;
+        $startArgs = [];
         foreach ($orderedNodes as $node) {
             $st = ($node['config'] ?? [])['start_trigger'] ?? null;
             if (WorkflowGraphAnalyzer::typeOf($node) === 'code' && is_array($st)) {
                 $triggerNodeId = (string) $node['id'];
                 $startTrigger = $st;
+                $startArgs = is_array($a = $node['config']['args'] ?? null) ? $a : [];   // the Start's start_args
                 break;
             }
         }
@@ -39,10 +41,41 @@ final class StartTriggerFacts
             'startMode' => $startTrigger !== null ? 'watch' : ($defaultCron !== null ? 'cron' : 'prompt'),
             'defaultCron' => $defaultCron,
             'defaultWatch' => $startTrigger !== null
-                ? self::watchFromTrigger((array) ($startTrigger['watch'] ?? []), $slugs)
+                ? self::optionWatch($startTrigger, $startArgs, $slugs)
                 : self::defaultWatch($db, $workflowId, $slugs),
             'triggerNodeId' => $triggerNodeId,
         ];
+    }
+
+    /**
+     * The watch's args with the Start's values merged in at top level (spec 2026-10-22 §6.1): its tag (a non-empty
+     * string) and each start arg the option names in pass_args (when non-empty). The Start's values win; its other
+     * args stay the code's ARGS only. Used by the event worker's schedule rows and the compiled DEFAULT_WATCH alike.
+     */
+    public static function watchArgs(array $watchArgs, array $startArgs, array $passArgs): array
+    {
+        $tag = $startArgs['tag'] ?? null;
+        if (is_string($tag) && $tag !== '') {
+            $watchArgs['tag'] = $tag;
+        }
+        foreach ($passArgs as $name) {
+            $v = is_string($name) ? ($startArgs[$name] ?? null) : null;
+            if ($v !== null && $v !== '' && $v !== []) {
+                $watchArgs[$name] = $v;
+            }
+        }
+        return $watchArgs;
+    }
+
+    /** A Start option's DEFAULT_WATCH: its trigger's watch with the Start's args merged in (watchArgs). */
+    private static function optionWatch(array $startTrigger, array $startArgs, array $slugs): ?array
+    {
+        $w = self::watchFromTrigger((array) ($startTrigger['watch'] ?? []), $slugs);
+        if ($w !== null) {
+            $pass = $startTrigger['pass_args'] ?? [];
+            $w['args'] = self::watchArgs($w['args'], $startArgs, is_array($pass) ? $pass : []);
+        }
+        return $w;
     }
 
     private static function defaultCron(?PDO $db, int $workflowId): ?string

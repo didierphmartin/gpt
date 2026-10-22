@@ -90,6 +90,23 @@ class DispatchRoutingTest extends TestCase
         $this->assertSame([4], DispatchRouting::skipSet([4], $edges));
     }
 
+    public function testSkipSetKeepsAnUnchosenTargetThatAnotherLiveNodeStillFeeds(): void
+    {
+        // Convert(2) took done → Store(3); its error exit → Output(4), which Store(3) also feeds (ok/no).
+        $edges = [['from_node_id' => 1, 'to_node_id' => 2], ['from_node_id' => 2, 'to_node_id' => 3],
+            ['from_node_id' => 2, 'to_node_id' => 4], ['from_node_id' => 3, 'to_node_id' => 4]];
+        $this->assertSame([], DispatchRouting::skipSet([4], $edges, 2));
+        // Store took ok → Output: nothing left to skip on its side either.
+        $this->assertSame([], DispatchRouting::skipSet([], $edges, 3));
+        // Convert failed → Store and Output skipped... except Output, which is the error target itself: when
+        // Convert's chosen exit is error, Store is the unchosen one and Output stays.
+        $this->assertSame([3], DispatchRouting::skipSet([3], $edges, 2));
+        // A target fed only by the deciding node is skipped, and so is what only it feeds.
+        $edges[] = ['from_node_id' => 2, 'to_node_id' => 5];
+        $edges[] = ['from_node_id' => 5, 'to_node_id' => 6];
+        $this->assertSame([5, 6], DispatchRouting::skipSet([5], $edges, 2));
+    }
+
     public function testDefaultInstructionsNameTheAgentInsteadOfInheritingAPersona(): void
     {
         $p = DispatchRouting::defaultInstructions('Human resources', 'HR desk', 'Dispatcher demo');

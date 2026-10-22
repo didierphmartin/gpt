@@ -1322,11 +1322,13 @@ class LangGraphGenerator
         // The Start option, if any: the hidden code node StartOptionGraph::expand added (spec 2026-10-15 §2).
         $triggerNodeId = null;
         $startTrigger = null;
+        $startArgs = [];
         foreach ($order as $nid) {
             $st = ($byId[$nid]['config'] ?? [])['start_trigger'] ?? null;
             if (self::nodeType($byId[$nid]) === 'code' && is_array($st)) {
                 $triggerNodeId = (string) $nid;
                 $startTrigger = $st;
+                $startArgs = is_array($a = $byId[$nid]['config']['args'] ?? null) ? $a : [];   // the Start's start_args
                 break;
             }
         }
@@ -1335,6 +1337,10 @@ class LangGraphGenerator
         $defaultWatch = $startTrigger !== null
             ? $this->watchFromTrigger((array) ($startTrigger['watch'] ?? []), $serverSlugs)
             : $this->defaultWatch($workflowId, $serverSlugs);
+        if ($startTrigger !== null && $defaultWatch !== null) {   // the Start's tag and pass_args values (spec 2026-10-22 §6.1)
+            $pass = $startTrigger['pass_args'] ?? [];
+            $defaultWatch['args'] = StartTriggerFacts::watchArgs($defaultWatch['args'], $startArgs, is_array($pass) ? $pass : []);
+        }
         $workExit = $startTrigger !== null ? (string) ($startTrigger['work_exit'] ?? '') : null;
         $startOptionLabel = $startTrigger !== null ? (string) ($startTrigger['label'] ?? 'Start option') : null;
         return compact('workflow', 'workflowId', 'userId', 'wfName', 'safeName', 'gdata', 'byId', 'order', 'edges',

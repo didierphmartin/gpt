@@ -220,7 +220,7 @@
 
     /** The node card's exit line ("1:job  2:no_job"): empty in the no-exit state. */
     function exitsLabel(exits) {
-        return isPlain(exits) ? '' : exits.map((e, i) => `${i + 1}:${e}`).join('  ');
+        return isPlain(exits) ? '' : exits.map((e, i) => `${i + 1}:${e}`).join('\n');   // one exit per line on every node
     }
 
     /** One tag per link leaving a code node: the exit its port stands for (a port past the exits has none, the no-exit state none at all). */

@@ -1,0 +1,7 @@
+{
+  "name": "PDF: convert document",
+  "description": "Converts the document of a {document, attachments} package to PDF; attachments keep their format.",
+  "exits": ["converted", "error"],
+  "mcp_servers": [],
+  "timeout_s": 30
+}
