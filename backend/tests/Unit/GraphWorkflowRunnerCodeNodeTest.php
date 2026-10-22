@@ -50,13 +50,15 @@ final class GraphWorkflowRunnerCodeNodeTest extends TestCase
         return $env ?: (is_executable('/usr/local/bin/python3') ? '/usr/local/bin/python3' : 'python3');
     }
 
-    private function run_(string $code, array $exits, array $config = [], array $nodeConfig = [], ?array $edges = null): array
+    private function run_(string $code, array $exits, array $config = [], array $nodeConfig = [], ?array $edges = null,
+        array $extraNodes = []): array
     {
         $nodes = [
             ['id' => 1, 'node_type' => 'start', 'config' => []],
             ['id' => 2, 'node_type' => 'code', 'config' => ['name' => 'Poll', 'code' => $code, 'exits' => $exits,
                 'mcp_servers' => [], 'timeout_s' => 10] + $nodeConfig],
             ['id' => 3, 'node_type' => 'output', 'config' => []],
+            ...$extraNodes,
         ];
         $edges ??= [
             ['from_node_id' => 1, 'to_node_id' => 2, 'from_port' => 'output_1'],
@@ -129,6 +131,40 @@ final class GraphWorkflowRunnerCodeNodeTest extends TestCase
         self::assertArrayHasKey(3, $out['node_outputs'], 'the Output beside the poll ran');
         self::assertFalse($out['quiet']);
         self::assertFalse($out['drain'], 'work beside the poll must not make the scheduler re-run the workflow');
+    }
+
+    public function testOutputTakesANodeOnceAndOnlyThroughTheExitItTook(): void
+    {
+        // Both exits of Code(2) link to Output(3): the Output shows the result once, not once per link.
+        $edges = [
+            ['from_node_id' => 1, 'to_node_id' => 2, 'from_port' => 'output_1'],
+            ['from_node_id' => 2, 'to_node_id' => 3, 'from_port' => 'output_1'],
+            ['from_node_id' => 2, 'to_node_id' => 3, 'from_port' => 'output_2'],
+        ];
+        $out = $this->run_("def run(input, call_tool):\n    return {'route': 'ok', 'output': 'stored'}\n", ['ok', 'no'], [], [], $edges);
+        self::assertTrue($out['success'], $out['error'] ?? '');
+        self::assertSame('stored', $out['output']);
+    }
+
+    public function testOutputIgnoresAnEarlierNodesUntakenErrorExit(): void
+    {
+        // Convert(2): done -> Store(4), error -> Output(3); Store(4): ok -> Output(3). Convert took done, so the
+        // Output is Store's message alone -- not Convert's package next to it.
+        $store = ['id' => 4, 'node_type' => 'code', 'config' => ['name' => 'Store', 'exits' => ['ok', 'no'],
+            'code' => "def run(input, call_tool):\n    return {'route': 'ok', 'output': 'stored'}\n",
+            'mcp_servers' => [], 'timeout_s' => 10]];
+        $edges = [
+            ['from_node_id' => 1, 'to_node_id' => 2, 'from_port' => 'output_1'],
+            ['from_node_id' => 2, 'to_node_id' => 4, 'from_port' => 'output_1'],
+            ['from_node_id' => 2, 'to_node_id' => 3, 'from_port' => 'output_2'],
+            ['from_node_id' => 4, 'to_node_id' => 3, 'from_port' => 'output_1'],
+            ['from_node_id' => 4, 'to_node_id' => 3, 'from_port' => 'output_2'],
+        ];
+        $out = $this->run_("def run(input, call_tool):\n    return {'route': 'done', 'output': 'package'}\n", ['done', 'error'],
+            [], [], $edges, [$store]);
+        self::assertTrue($out['success'], $out['error'] ?? '');
+        self::assertSame('stored', $out['output']);
+        self::assertSame('ok', $out['node_outputs'][4]['exit']);
     }
 
     public function testAnUnwiredErrorExitIsKeptAndNeverQuiet(): void

@@ -46,3 +46,18 @@ assert.deepStrictEqual(sorted(ed._wfSkipSet(['5'], branch, '2')), ['5', '6']);
 assert.deepStrictEqual(sorted(ed._wfSkipSet(['4'], mail)), ['4']);
 
 console.log('skip-set: all assertions passed');
+
+// The Output's answer: a node once, and only through the exit it took (twin of the server's output node).
+const Out = new Function(`return class { ${extract('_wfOutputValue(nodeId, nodes)')} ${extract('_wfUpstreamIds(nodeId, nodes)')} }`)();
+const o = new Out();
+// Store(3) has two exits, both linked to Output(4): one answer, not two.
+const twice = graph([['3', '4'], ['3', '4']]);
+o._wfOutputs = { '3': 'stored' }; o._wfRoutedTo = { '3': ['4'] };
+assert.strictEqual(o._wfOutputValue('4', twice), 'stored');
+// Convert(2) took done → Store(3); its error link to Output(4) carries nothing.
+o._wfOutputs = { '2': 'package', '3': 'stored' }; o._wfRoutedTo = { '2': ['3'], '3': ['4'] };
+assert.strictEqual(o._wfOutputValue('4', mail), 'stored');
+// Plain agents (no route): every parent with output, as before.
+o._wfRoutedTo = {};
+assert.ok(o._wfOutputValue('4', mail).includes('package'));
+console.log('output-value: all assertions passed');

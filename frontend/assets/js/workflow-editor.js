@@ -16299,7 +16299,10 @@ class WorkflowEditor {
      * "---" separator.
      */
     _wfOutputValue(nodeId, nodes) {
-        const ups = this._wfUpstreamIds(nodeId, nodes)
+        // A node counts once, however many of its exits link here, and only through the exit it took.
+        const routed = this._wfRoutedTo || {};
+        const ups = [...new Set(this._wfUpstreamIds(nodeId, nodes))]
+            .filter(u => !routed[u] || routed[u].includes(String(nodeId)))
             .filter(u => { const o = this._wfOutputs?.[u]; return o != null && o !== ''; });
         if (ups.length === 1) return String(this._wfOutputs[ups[0]]);
         return ups.map(u => {
@@ -16688,6 +16691,7 @@ class WorkflowEditor {
 
         const _startedAt = Date.now();
         this._wfOutputs = {};
+        this._wfRoutedTo = {};
 
         // Per-run resets the browser-driven path has to do itself (the SSE path
         // does them on 'workflow_start'). Without these a swarm run shows the
@@ -16940,6 +16944,7 @@ class WorkflowEditor {
         const nodes = this.editor.drawflow.drawflow.Home.data;
         const ids = Object.keys(nodes);
         this._wfOutputs = {};
+        this._wfRoutedTo = {};
         this._wfRoutedBy = {}; // target id → {from, notes} once a dispatcher chose it
         this._wfDecisionList = undefined; // decision providers, read once per run
         const done = new Set();
@@ -16998,6 +17003,7 @@ class WorkflowEditor {
                                 // An unwired exit leaves every link faint: the run ended there.
                                 this._markDispatchCandidates(id);
                                 for (const to of res.chosen) this._markDispatchChosen(id, to);
+                                this._wfRoutedTo[String(id)] = res.chosen.map(String);
                             }
                             for (const s of this._wfSkipSet(res.skip, nodes, id)) {
                                 if (done.has(s) || String(s) === String(id)) continue;
@@ -17030,6 +17036,7 @@ class WorkflowEditor {
                             this._wfOutputs[id] = r.output;
                             this._markDispatchCandidates(id);
                             for (const to of r.chosen) this._markDispatchChosen(id, to);
+                            this._wfRoutedTo[String(id)] = r.chosen.map(String);
                             for (const s of this._wfSkipSet(r.skip, nodes, id)) {
                                 if (done.has(s) || String(s) === String(id)) continue;
                                 this._wfOutputs[s] = '';

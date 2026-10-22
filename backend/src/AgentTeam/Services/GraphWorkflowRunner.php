@@ -30,6 +30,8 @@ class GraphWorkflowRunner
     private ?ParallelAgentExecutor $parallelExecutor = null;
 
     private array $nodeOutputs = [];
+    /** node id => the node ids on the exit it took (code / playbook nodes): its other links carry nothing. */
+    private array $routedTo = [];
     /** Nodes indexed by id for the current run (DispatchRouting needs target names). */
     private array $graphNodes = [];
     private string $workflowName = '';
@@ -257,6 +259,7 @@ class GraphWorkflowRunner
     public function run(Workflow $workflow, int $userId, array $inputVariables = [], array $clientSkills = [], array $inlineDocuments = [], array $scratchFiles = []): array
     {
         $this->nodeOutputs = [];
+        $this->routedTo = [];
         // Phase 0: one run_id correlates all node traces of this workflow run.
         $this->runId = bin2hex(random_bytes(16));
         $this->currentWorkflowId = method_exists($workflow, 'getId') ? $workflow->getId() : null;
@@ -487,6 +490,7 @@ class GraphWorkflowRunner
                     foreach (DispatchRouting::skipSet($output['code_route']['skip'], $edges, (int) $currentNodeId) as $skipId) {
                         if (!in_array($skipId, $executedNodes, true)) $executedNodes[] = $skipId;
                     }
+                    $this->routedTo[(int) $currentNodeId] = array_map('intval', $output['code_route']['chosen']);
                     foreach ($output['code_route']['chosen'] as $nextId) {
                         if (!in_array($nextId, $queue, true) && !in_array($nextId, $executedNodes, true)) $queue[] = $nextId;
                     }
@@ -1740,6 +1744,9 @@ class GraphWorkflowRunner
         foreach ($edges as $edge) {
             if ((int)$edge['to_node_id'] === (int)$node['id']) {
                 $fromNodeId = (int)$edge['from_node_id'];
+                // A node counts once, however many of its exits link here, and only through the exit it took.
+                if (in_array($fromNodeId, array_column($inputs, 'node_id'), true)) continue;
+                if (isset($this->routedTo[$fromNodeId]) && !in_array((int)$node['id'], $this->routedTo[$fromNodeId], true)) continue;
 
                 if (isset($this->nodeOutputs[$fromNodeId])) {
                     $output = $this->nodeOutputs[$fromNodeId]['output'] ?? '';
