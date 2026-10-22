@@ -23,22 +23,29 @@ def ok_result(data):
 
 
 class Fake:
-    def __init__(self, mail=MAIL, fail=None):
-        self.mail, self.fail, self.calls = mail, fail, []
+    """The two servers. upload_file stores under the requested name unless `renamed` maps it to another one
+    (SharePoint's conflictBehavior=rename); get_attachment answers each attachment's own name."""
+
+    def __init__(self, mail=MAIL, fail=None, renamed=None):
+        self.mail, self.fail, self.renamed, self.calls = mail, fail, renamed or {}, []
 
     def __call__(self, server, tool, args):
         self.calls.append((f"{server}.{tool}", args))
         if f"{server}.{tool}" == self.fail:
             return {"isError": True, "content": [{"type": "text", "text": "boom"}]}
+        match f"{server}.{tool}":
+            case "outlook.get_attachment":
+                att = next(a for a in self.mail["attachments"] if a["id"] == args["attachment_id"])
+                return ok_result({"name": att["name"], "content_type": att["content_type"], "size": 3, "base64": "QVRU"})
+            case "sharepoint.upload_file":
+                stored = self.renamed.get(args["name"], args["name"])
+                return ok_result({"path": f"{args['folder']}/{stored}", "id": "3", "web_url": "u", "size": 3})
         return ok_result({
-            "sharepoint.whoami": {"account": "a", "tenant": "t", "connected_at": "now"},
             "outlook.poll_new_mail": {"mail": self.mail},
-            "sharepoint.ensure_folder": {"path": "Didier", "id": "1", "created": False},
+            "sharepoint.ensure_folder": {"path": "Didier", "id": "1", "created": []},
             "sharepoint.create_subfolder": {"path": "Didier/sub", "id": "2"},
             "outlook.mail_to_pdf": {"name": "Email.pdf", "size": 3, "base64": "UERG"},
-            "outlook.get_attachment": {"name": "inv.pdf", "content_type": "application/pdf", "size": 3, "base64": "QVRU"},
-            "sharepoint.upload_file": {"path": "p", "id": "3", "web_url": "u", "size": 3},
-            "outlook.move_mail": {"id": "m1", "folder": "Filed", "created": False},
+            "outlook.move_mail": {"id": "m1", "folder": "Filed", "created": []},
         }[f"{server}.{tool}"])
 
     def names(self):
@@ -59,7 +66,7 @@ class MailDrop(unittest.TestCase):
         f = Fake()
         r, out = go(f)
         self.assertEqual(r["route"], "filed")
-        self.assertEqual(f.names(), ["sharepoint.whoami", "outlook.poll_new_mail", "sharepoint.ensure_folder",
+        self.assertEqual(f.names(), ["sharepoint.ensure_folder", "outlook.poll_new_mail",
                                      "sharepoint.create_subfolder", "outlook.mail_to_pdf", "sharepoint.upload_file",
                                      "outlook.get_attachment", "sharepoint.upload_file", "outlook.move_mail"])
         c = dict((n, a) for n, a in f.calls)
@@ -67,16 +74,16 @@ class MailDrop(unittest.TestCase):
                          {"parent": "Didier", "name": "2026-10-09 0815 - ann@x.com - Invoice 42"})
         self.assertEqual(c["outlook.get_attachment"], {"mail_id": "m1", "attachment_id": "a1", "raw": True})
         self.assertEqual(c["outlook.move_mail"], {"mail_id": "m1", "folder": "Filed"})
-        self.assertEqual(out, {"folder": "Didier/sub", "files": ["Email.pdf", "inv.pdf"]})
+        self.assertEqual(out, {"folder": "Didier/sub", "files": ["Email.pdf", "inv.pdf"], "skipped": []})
 
     def test_idle_when_no_mail(self):
         f = Fake(mail=None)
         r, _ = go(f)
         self.assertEqual(r["route"], "idle")
-        self.assertEqual(f.names(), ["sharepoint.whoami", "outlook.poll_new_mail"])
+        self.assertEqual(f.names(), ["sharepoint.ensure_folder", "outlook.poll_new_mail"])
 
-    def test_preflight_failure_claims_nothing(self):
-        f = Fake(fail="sharepoint.whoami")
+    def test_ensure_folder_failure_is_error_and_claims_nothing(self):
+        f = Fake(fail="sharepoint.ensure_folder")
         r, out = go(f)
         self.assertEqual(r["route"], "error")
         self.assertIsNone(out["mail_id"])
@@ -115,6 +122,68 @@ class MailDrop(unittest.TestCase):
         f = Fake(mail=dict(MAIL, subject="x" * 100, attachments=[]))
         go(f)
         self.assertTrue([a for n, a in f.calls if n == "sharepoint.create_subfolder"][0]["name"].endswith(" - " + "x" * 60))
+
+    def test_target_folder_is_ensured_once_and_its_path_is_the_parent(self):
+        f = Fake()
+        go(f, args={"sharepoint_folder": "didier"})
+        self.assertEqual(f.names().count("sharepoint.ensure_folder"), 1)
+        self.assertEqual([a for n, a in f.calls if n == "sharepoint.ensure_folder"][0], {"path": "didier"})
+        self.assertEqual([a for n, a in f.calls if n == "sharepoint.create_subfolder"][0]["parent"], "Didier")
+
+    def test_inline_image_skipped_but_inline_pdf_uploaded(self):
+        atts = [{"id": "a1", "name": "logo.png", "content_type": "image/png", "size": 3, "is_inline": True},
+                {"id": "a2", "name": "scan.pdf", "content_type": "application/pdf", "size": 3, "is_inline": True},
+                {"id": "a3", "name": "Photo.JPG", "content_type": "IMAGE/JPEG", "size": 3, "is_inline": True}]
+        f = Fake(mail=dict(MAIL, attachments=atts))
+        r, out = go(f)
+        self.assertEqual(r["route"], "filed")
+        self.assertEqual([a["attachment_id"] for n, a in f.calls if n == "outlook.get_attachment"], ["a2"])
+        self.assertEqual(out["files"], ["Email.pdf", "scan.pdf"])
+
+    def test_cloud_link_attachments_are_skipped_and_reported(self):
+        atts = [{"id": "a1", "name": "inv.pdf", "content_type": "application/pdf", "size": 3, "is_inline": False,
+                 "kind": "file"},
+                {"id": "a2", "name": "Budget.xlsx", "content_type": "", "size": 0, "is_inline": False,
+                 "kind": "reference"}]
+        f = Fake(mail=dict(MAIL, attachments=atts))
+        r, out = go(f)
+        self.assertEqual(r["route"], "filed")
+        self.assertEqual([a["attachment_id"] for n, a in f.calls if n == "outlook.get_attachment"], ["a1"])
+        self.assertEqual(out, {"folder": "Didier/sub", "files": ["Email.pdf", "inv.pdf"], "skipped": ["Budget.xlsx"]})
+        self.assertIn("outlook.move_mail", f.names())
+
+    def test_filed_folder_equal_to_drop_folder_is_error_before_any_call(self):
+        for filed in ("to sharepoint", " /To SharePoint/ ", "TO SHAREPOINT"):
+            f = Fake()
+            r, out = go(f, args={"sharepoint_folder": "Didier", "filed_folder": filed})
+            self.assertEqual(r["route"], "error", filed)
+            self.assertIn("filed_folder", out["reason"])
+            self.assertEqual(f.calls, [])
+        f = Fake()
+        r, _ = go(f, args={"sharepoint_folder": "Didier", "folder": "Inbox/Drop", "filed_folder": "/inbox/drop"})
+        self.assertEqual((r["route"], f.calls), ("error", []))
+
+    def test_empty_and_integer_args(self):
+        f = Fake(mail=None)
+        r, _ = go(f, args={"sharepoint_folder": 1234, "folder": "", "filed_folder": ""})
+        self.assertEqual(r["route"], "idle")
+        self.assertEqual([a for n, a in f.calls if n == "sharepoint.ensure_folder"][0], {"path": "1234"})
+        self.assertEqual([a for n, a in f.calls if n == "outlook.poll_new_mail"][0],
+                         {"folder": "To SharePoint", "mode": "drop"})
+        f = Fake()
+        go(f, args={"sharepoint_folder": " Didier ", "filed_folder": ""})
+        self.assertEqual([a for n, a in f.calls if n == "outlook.move_mail"][0]["folder"], "Filed")
+        self.assertEqual([a for n, a in f.calls if n == "sharepoint.ensure_folder"][0], {"path": "Didier"})
+        f = Fake()
+        r, out = go(f, args={"sharepoint_folder": "  "})
+        self.assertEqual((r["route"], f.calls), ("error", []))
+
+    def test_files_lists_the_stored_names(self):
+        atts = [{"id": "a1", "name": "inv.pdf", "content_type": "application/pdf", "size": 3, "is_inline": False},
+                {"id": "a2", "name": "inv.pdf", "content_type": "application/pdf", "size": 3, "is_inline": False}]
+        f = Fake(mail=dict(MAIL, attachments=atts), renamed={"inv.pdf": "inv 1.pdf"})
+        _, out = go(f)
+        self.assertEqual(out["files"], ["Email.pdf", "inv 1.pdf", "inv 1.pdf"])
 
 
 if __name__ == "__main__":
