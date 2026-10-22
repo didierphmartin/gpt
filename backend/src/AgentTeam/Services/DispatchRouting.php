@@ -166,21 +166,28 @@ final class DispatchRouting
      * Node ids to skip given the unchosen direct targets: those nodes plus,
      * transitively, any node ALL of whose predecessors are skipped. A node
      * fed by at least one live predecessor stays runnable. Ascending order.
+     * $from: the node that chose. Its links to the unchosen targets are dead, its other links live, so an
+     * unchosen target that another node still feeds (e.g. an Output fed by a later step) is not skipped.
+     * Without it every unchosen target is skipped outright.
      */
-    public static function skipSet(array $unchosenIds, array $edges): array
+    public static function skipSet(array $unchosenIds, array $edges, ?int $from = null): array
     {
-        $skipped = array_fill_keys(array_map('intval', $unchosenIds), true);
+        $unchosen = array_fill_keys(array_map('intval', $unchosenIds), true);
+        $skipped = $from === null ? $unchosen : [];
         $preds = [];
         foreach ($edges as $edge) {
             $preds[(int)$edge['to_node_id']][] = (int)$edge['from_node_id'];
         }
         do {
             $grew = false;
-            foreach ($preds as $nodeId => $from) {
+            foreach ($preds as $nodeId => $ps) {
                 if (isset($skipped[$nodeId])) continue;
-                $allSkipped = true;
-                foreach ($from as $p) { if (!isset($skipped[$p])) { $allSkipped = false; break; } }
-                if ($allSkipped) { $skipped[$nodeId] = true; $grew = true; }
+                $allDead = true;
+                foreach ($ps as $p) {
+                    $dead = isset($skipped[$p]) || ($p === $from && isset($unchosen[$nodeId]));
+                    if (!$dead) { $allDead = false; break; }
+                }
+                if ($allDead) { $skipped[$nodeId] = true; $grew = true; }
             }
         } while ($grew);
         $ids = array_keys($skipped);

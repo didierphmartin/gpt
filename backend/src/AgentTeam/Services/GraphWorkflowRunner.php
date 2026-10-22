@@ -484,7 +484,7 @@ class GraphWorkflowRunner
 
                 // Code node: continue on the exit it took; the other exits' branches are skipped.
                 if (isset($output['code_route'])) {
-                    foreach (DispatchRouting::skipSet($output['code_route']['skip'], $edges) as $skipId) {
+                    foreach (DispatchRouting::skipSet($output['code_route']['skip'], $edges, (int) $currentNodeId) as $skipId) {
                         if (!in_array($skipId, $executedNodes, true)) $executedNodes[] = $skipId;
                     }
                     foreach ($output['code_route']['chosen'] as $nextId) {
@@ -710,7 +710,7 @@ class GraphWorkflowRunner
             $this->getNextNodeIds($nodeId, $edges),
             fn($id) => $id !== $chosen
         ));
-        foreach (DispatchRouting::skipSet($unchosen, $edges) as $skipId) {
+        foreach (DispatchRouting::skipSet($unchosen, $edges, (int) $nodeId) as $skipId) {
             if (!in_array($skipId, $executedNodes, true)) $executedNodes[] = $skipId;
         }
         if (!in_array($chosen, $queue, true) && !in_array($chosen, $executedNodes, true)) $queue[] = $chosen;
@@ -729,7 +729,7 @@ class GraphWorkflowRunner
     {
         if (empty($output['halt_branches'])) return false;
         $branches = $this->getNextNodeIds($nodeId, $edges);
-        foreach (DispatchRouting::skipSet($branches, $edges) as $skipId) {
+        foreach (DispatchRouting::skipSet($branches, $edges, (int) $nodeId) as $skipId) {
             if (!in_array($skipId, $executedNodes, true)) $executedNodes[] = $skipId;
         }
         error_log("[GraphWorkflowRunner] Dispatcher {$nodeId} did not route (decision model only); skipped " . json_encode($branches));

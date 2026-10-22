@@ -3198,7 +3198,7 @@ class WorkflowEditor {
         const children = new Set();
         for (const out of Object.values(nodes[fromDf]?.outputs || {})) for (const c of (out.connections || [])) children.add(String(c.node));
         children.delete(String(toDf));
-        for (const s of this._wfSkipSet([...children], nodes)) this.highlightNode(null, 'skipped', s);
+        for (const s of this._wfSkipSet([...children], nodes, fromDf)) this.highlightNode(null, 'skipped', s);
     }
 
     /** Follows GET /workflows/{id}/live until closed: reconnects on `bye` at once, on a failure with a growing pause. */
@@ -16238,16 +16238,25 @@ class WorkflowEditor {
         }
     }
 
-    /** Ids to skip after a route: the unchosen targets plus everything reachable only through them. */
-    _wfSkipSet(unchosenIds, nodes) {
-        const skipped = new Set(unchosenIds.map(String));
+    /**
+     * Ids to skip after a route: the unchosen targets plus everything reachable only through them.
+     * fromId: the node that chose. Its links to the unchosen targets are dead, its other links live, so an
+     * unchosen target another node still feeds (an Output fed by a later step) is not skipped -- as on the
+     * server (DispatchRouting::skipSet). Without it every unchosen target is skipped outright.
+     */
+    _wfSkipSet(unchosenIds, nodes, fromId = null) {
+        const unchosen = new Set(unchosenIds.map(String));
+        const from = fromId === null ? null : String(fromId);
+        const skipped = from === null ? new Set(unchosen) : new Set();
         let grew = true;
         while (grew) {
             grew = false;
             for (const id of Object.keys(nodes)) {
                 if (skipped.has(id)) continue;
                 const ups = this._wfUpstreamIds(id, nodes);
-                if (ups.length && ups.every(u => skipped.has(u))) { skipped.add(id); grew = true; }
+                if (ups.length && ups.every(u => skipped.has(u) || (u === from && unchosen.has(id)))) {
+                    skipped.add(id); grew = true;
+                }
             }
         }
         return [...skipped];
@@ -16990,7 +16999,7 @@ class WorkflowEditor {
                                 this._markDispatchCandidates(id);
                                 for (const to of res.chosen) this._markDispatchChosen(id, to);
                             }
-                            for (const s of this._wfSkipSet(res.skip, nodes)) {
+                            for (const s of this._wfSkipSet(res.skip, nodes, id)) {
                                 if (done.has(s) || String(s) === String(id)) continue;
                                 this._wfOutputs[s] = '';
                                 done.add(s); remaining.delete(s);
@@ -17021,7 +17030,7 @@ class WorkflowEditor {
                             this._wfOutputs[id] = r.output;
                             this._markDispatchCandidates(id);
                             for (const to of r.chosen) this._markDispatchChosen(id, to);
-                            for (const s of this._wfSkipSet(r.skip, nodes)) {
+                            for (const s of this._wfSkipSet(r.skip, nodes, id)) {
                                 if (done.has(s) || String(s) === String(id)) continue;
                                 this._wfOutputs[s] = '';
                                 done.add(s); remaining.delete(s);
@@ -17055,7 +17064,7 @@ class WorkflowEditor {
                                 });
                             } catch (_) {}
                             const unchosen = this._wfDownstreamIds(id, nodes).filter(d => String(d) !== String(res.route.id));
-                            for (const s of this._wfSkipSet(unchosen, nodes)) {
+                            for (const s of this._wfSkipSet(unchosen, nodes, id)) {
                                 if (done.has(s) || String(s) === String(id)) continue;
                                 this._wfOutputs[s] = '';
                                 done.add(s); remaining.delete(s);
@@ -17067,7 +17076,7 @@ class WorkflowEditor {
                         // node cut off by that carries the "did not route" message
                         // as the run's answer. LLM no-route is unchanged.
                         if (res?.halt && dispatchTargets?.length) {
-                            for (const s of this._wfSkipSet(this._wfDownstreamIds(id, nodes), nodes)) {
+                            for (const s of this._wfSkipSet(this._wfDownstreamIds(id, nodes), nodes, id)) {
                                 if (done.has(s) || String(s) === String(id)) continue;
                                 const isOut = this._wfNodeKind(s, nodes) === 'output';
                                 this._wfOutputs[s] = isOut ? res.output : '';
