@@ -6899,30 +6899,13 @@ class ChatApp {
                 bottomRow.appendChild(spacer);
             }
 
-            // Light slate-blue panel: dark enough for the white-tinted cloud
-            // emoji (☁️) to be visible, light enough for colored emoji (❌, 📋…)
-            // to keep their pop against the dark blue user bubble.
+            // Light slate panel: colored emoji (❌, 📋…) keep their pop
+            // against the dark blue user bubble.
             // gap-2 + px-2 gives the icons room to breathe.
             const iconContainer = document.createElement('div');
             iconContainer.className = 'flex gap-2 px-2 py-1 bg-slate-200 rounded';
 
-            // Create Google Drive save button (on top).
-            // The ☁️ emoji is nearly pure white on macOS — invisible against the
-            // light icon-container background. Drop-shadow gives it a dark
-            // outline so it reads on any surface.
-            const saveBtn = document.createElement('button');
-            saveBtn.className = 'save-to-drive-btn flex-shrink-0 opacity-70 hover:opacity-100 transition-opacity';
-            saveBtn.style.filter = 'drop-shadow(0 0 1px rgba(0,0,0,0.8))';
-            saveBtn.innerHTML = '☁️';
-            saveBtn.title = 'Save to Google Drive';
-            saveBtn.setAttribute('aria-label', 'Save this conversation to Google Drive');
-            saveBtn.setAttribute('data-message-id', id);
-            saveBtn.onclick = (e) => {
-                e.stopPropagation();
-                this.saveToGoogleDrive(id);
-            };
-
-            // Create print button (below)
+            // Create print button
             const printBtn = document.createElement('button');
             printBtn.className = 'print-response-btn flex-shrink-0 opacity-70 hover:opacity-100 transition-opacity';
             printBtn.innerHTML = '🖨️';
@@ -6944,15 +6927,15 @@ class ChatApp {
                 this.saveToPromptLibrary(content);
             };
 
-            // Copy the response associated with this prompt
+            // Copy this prompt
             const copyBtn = document.createElement('button');
-            copyBtn.className = 'copy-response-btn flex-shrink-0 opacity-70 hover:opacity-100 transition-opacity';
+            copyBtn.className = 'copy-prompt-btn flex-shrink-0 opacity-70 hover:opacity-100 transition-opacity';
             copyBtn.innerHTML = '📋';
-            copyBtn.title = 'Copy response to clipboard';
-            copyBtn.setAttribute('aria-label', 'Copy the response for this prompt');
+            copyBtn.title = 'Copy prompt to clipboard';
+            copyBtn.setAttribute('aria-label', 'Copy this prompt to the clipboard');
             copyBtn.onclick = (e) => {
                 e.stopPropagation();
-                this.copyResponseFor(id, copyBtn);
+                this.copyPrompt(content, copyBtn);
             };
 
             // Delete this prompt + its response from the conversation history.
@@ -6969,7 +6952,6 @@ class ChatApp {
                 this.deleteQAPair(id);
             };
 
-            iconContainer.appendChild(saveBtn);
             iconContainer.appendChild(printBtn);
             iconContainer.appendChild(savePromptBtn);
             iconContainer.appendChild(copyBtn);
@@ -7210,27 +7192,9 @@ class ChatApp {
     }
 
     /**
-     * Copy the assistant response that follows the given user-prompt bubble.
-     * Mirrors printSingleResponse's lookup (next sibling with .markdown-content)
-     * so a click on the copy icon next to a prompt grabs that prompt's answer.
-     * Copies clean text (textContent) — strips HTML formatting but preserves
-     * the visible content order.
+     * Copy a user prompt (the text of the bubble the copy icon sits on).
      */
-    copyResponseFor(userMessageId, btn) {
-        const userWrapper = document.getElementById(userMessageId);
-        if (!userWrapper) return;
-
-        let assistantWrapper = userWrapper.nextElementSibling;
-        while (assistantWrapper && !assistantWrapper.querySelector('.markdown-content')) {
-            assistantWrapper = assistantWrapper.nextElementSibling;
-        }
-        const mdEl = assistantWrapper?.querySelector('.markdown-content');
-        // Prefer the raw markdown source we stashed at render time — it
-        // round-trips into other markdown-aware tools cleanly. Fall back
-        // to innerText for older bubbles that pre-date the data attribute.
-        const text = mdEl?.parentElement?.dataset?.rawContent
-            || mdEl?.innerText?.trim()
-            || '';
+    copyPrompt(text, btn) {
         if (!text) {
             this.flashIconLabel(btn, '⚠️');
             return;
@@ -7253,12 +7217,13 @@ class ChatApp {
      *
      * If a user wrapper has no following assistant wrapper yet (mid-stream or
      * a failed response that was never pushed), only the DOM is touched.
+     * A history change is saved to the conversation so it survives a reload.
      */
     deleteQAPair(userMessageId) {
         const userWrapper = document.getElementById(userMessageId);
         if (!userWrapper) return;
 
-        if (!confirm('Delete this prompt and its response from the conversation? Saved contexts are not updated.')) {
+        if (!confirm('Delete this prompt and its response from the conversation?')) {
             return;
         }
 
@@ -7278,6 +7243,11 @@ class ChatApp {
             if (userEntry && userEntry.role === 'user' && (!expectedContent || userEntry.content === expectedContent)) {
                 const removeCount = (this.conversationHistory[histUserIdx + 1]?.role === 'assistant') ? 2 : 1;
                 this.conversationHistory.splice(histUserIdx, removeCount);
+                if (this.currentContextId) {
+                    this.saveCurrentContext().catch(err => {
+                        console.error('❌ Failed to save context after delete:', err);
+                    });
+                }
             } else {
                 console.warn('[deleteQAPair] history index mismatch — DOM removed but history left intact', { idx, userEntry });
             }
@@ -7700,82 +7670,6 @@ class ChatApp {
             // Auto-print after a short delay
             printWindow.print();
         }, 250);
-    }
-
-    async saveToGoogleDrive(userMessageId) {
-        // TEMPORARY: Show information dialog until Google Drive integration is complete
-        alert(
-            '📋 Google Drive Integration - In Progress\n\n' +
-            '⚠️ This feature is not yet fully implemented.\n\n' +
-            'What needs to be done:\n' +
-            '✓ User authentication system\n' +
-            '✓ Google OAuth authorization\n' +
-            '✓ Database setup for storing tokens\n' +
-            '✓ Backend integration with Google Drive API\n\n' +
-            'For details, see: GOOGLE_DRIVE_INTEGRATION.md\n\n' +
-            'Current functionality: UI is ready, backend integration pending.'
-        );
-
-        // Keep for reference when implementing:
-        /*
-        const userWrapper = document.getElementById(userMessageId);
-        if (!userWrapper) {
-            console.error('User message not found');
-            alert('Error: Could not find the message to save');
-            return;
-        }
-
-        // Find the next sibling (assistant response)
-        let assistantWrapper = userWrapper.nextElementSibling;
-        while (assistantWrapper && !assistantWrapper.querySelector('.markdown-content')) {
-            assistantWrapper = assistantWrapper.nextElementSibling;
-        }
-
-        if (!assistantWrapper) {
-            alert('No response found to save. Please wait for the AI to respond first.');
-            return;
-        }
-
-        const userBubble = userWrapper.querySelector('div');
-        const userPrompt = userBubble.querySelector('span[data-message-content]')?.getAttribute('data-message-content') ||
-                           userBubble.querySelector('span')?.textContent || '';
-
-        const assistantBubble = assistantWrapper.querySelector('.markdown-content');
-        const responseContent = assistantBubble ? assistantBubble.textContent : '';
-
-        if (!responseContent) {
-            alert('Response is empty. Cannot save to Google Drive.');
-            return;
-        }
-
-        // Show loading state
-        const saveBtn = userWrapper.querySelector('.save-to-drive-btn');
-        const originalContent = saveBtn.innerHTML;
-        saveBtn.innerHTML = '⏳';
-        saveBtn.disabled = true;
-
-        try {
-            // TODO: Implement actual Google Drive save
-            // Call backend API: /gpt/app/api/save-to-drive.php
-            // Backend should use GoogleDriveService (see GOOGLE_DRIVE_INTEGRATION.md)
-
-            // Placeholder success
-            saveBtn.innerHTML = '✅';
-            setTimeout(() => {
-                saveBtn.innerHTML = originalContent;
-                saveBtn.disabled = false;
-            }, 2000);
-
-        } catch (error) {
-            console.error('Error saving to Google Drive:', error);
-            saveBtn.innerHTML = '❌';
-            setTimeout(() => {
-                saveBtn.innerHTML = originalContent;
-                saveBtn.disabled = false;
-            }, 2000);
-            alert(`Failed to save to Google Drive: ${error.message}`);
-        }
-        */
     }
 
     /**
