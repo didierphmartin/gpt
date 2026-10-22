@@ -1,7 +1,0 @@
-{
-  "name": "Move email",
-  "description": "Moves the email named by the input's source.mail_id to the folder argument (default Filed; it must differ from the drop folder), then passes the input on with moved_to added. Put it after the step that must succeed first, e.g. \"Save files to SharePoint\".",
-  "exits": ["moved", "error"],
-  "mcp_servers": ["Outlook"],
-  "timeout_s": 60
-}

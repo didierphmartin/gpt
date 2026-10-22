@@ -1,0 +1,7 @@
+{
+  "name": "Document → PDF",
+  "description": "Converts the document of a {document, attachments} package to PDF; attachments stay in their original format. Output: the package plus files (the PDF first, then the attachments), each a reference the storing node fetches at upload time. A document converts through its pdf rendition (e.g. an email rendered by Outlook) or is already a PDF; otherwise → error.",
+  "exits": ["done", "error"],
+  "mcp_servers": [],
+  "timeout_s": 30
+}

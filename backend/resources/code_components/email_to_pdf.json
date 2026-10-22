@@ -1,7 +1,0 @@
-{
-  "name": "Email → PDF",
-  "description": "Takes an email from \"Mail dropped in a folder\" and lists the files to store: Email.pdf (the email rendered by Outlook) and its attachments in their original format. Inline images stay inside Email.pdf; cloud links are skipped and listed. Files are references the storing node fetches at upload time, so no file content passes through the run. Output: {folder_name, files, skipped, source}.",
-  "exits": ["done", "error"],
-  "mcp_servers": [],
-  "timeout_s": 30
-}

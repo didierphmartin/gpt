@@ -1,6 +1,6 @@
 {
   "name": "Mail dropped in a folder",
-  "description": "Start option: takes the next email dragged into an Outlook folder (the folder Start argument) and hands it to the next node — id, sender, subject, received time, attachment list and the drop folder's name. Emails already in the folder when the watch starts are not handed on. An email the next node does not move out of the folder is handed on again after 10 minutes, up to 3 attempts; dragging it out and back in starts over.",
+  "description": "Start option: takes the next email dragged into an Outlook folder (Start argument folder) and hands on a document package — {document, attachments, not_fetched, source}. document is the email (metadata, body text, and a PDF rendition to fetch); attachments are its files in their original format, to fetch; source.release moves the email to done_folder (default Filed) and is run by the node that finishes the job. Until then the email stays in the folder and is handed on again after 10 minutes (up to 3 attempts). Emails already in the folder when the watch starts are not handed on.",
   "exits": ["mail", "idle", "error"],
   "mcp_servers": ["Outlook"],
   "timeout_s": 60,

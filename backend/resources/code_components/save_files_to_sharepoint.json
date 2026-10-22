@@ -1,7 +1,0 @@
-{
-  "name": "Save files to SharePoint",
-  "description": "Stores the files a converter node lists into the SharePoint team library, under sharepoint_folder (argument) and, when the input names one, a new subfolder folder_name. A file carries its content as base64 or as a tool call (server, tool, args) that returns it; that call is made just before the upload, so tick its server too (e.g. Outlook). Output: {status: stored, folder, files, web_urls, skipped, source}. Any failure → error, with the reason.",
-  "exits": ["stored", "error"],
-  "mcp_servers": ["SharePoint", "Outlook"],
-  "timeout_s": 300
-}
