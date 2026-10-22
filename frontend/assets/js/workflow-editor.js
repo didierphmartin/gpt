@@ -9635,12 +9635,10 @@ class WorkflowEditor {
                     <span class="node-title">${this.escapeHtml(cfg.name || 'Code')}</span>
                     <button class="node-delete-btn" title="Delete node">×</button>
                 </div>
-                <div style="display:flex;align-items:flex-start;gap:6px;padding:0 8px;max-width:230px;">
-                    <div class="code-badges" style="flex:1;min-width:0;">${this._codeBadgesHtml(cfg)}</div>
-                    <button class="node-edit-btn" data-code="true" title="Edit">✏️</button>
-                </div>
+                <div class="code-badges" style="padding:0 8px;display:flex;flex-wrap:wrap;max-width:230px;">${this._codeBadgesHtml(cfg)}</div>
                 <div class="node-body">
                     <small class="node-config-display">${this.escapeHtml(window.CodeNode.exitsLabel(cfg.exits))}</small>
+                    <button class="node-edit-btn" data-code="true" title="Edit">✏️</button>
                 </div>
             </div>`;
         const id = this.editor.addNode('code', 1, cfg.exits.length, x, y, 'code', {
