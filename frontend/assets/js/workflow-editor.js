@@ -3172,7 +3172,7 @@ class WorkflowEditor {
         this._refreshMonitoring();
     }
 
-    /** The Monitoring button: shown for a listening workflow (schedule / option mode), blue while on. */
+    /** The Monitoring button: shown for a listening workflow (schedule / option mode), orange while on (blue is Save's). */
     _refreshMonitoring() {
         if (this._monitoring && this._monitoring !== this.currentWorkflowId) {
             this._liveStop?.();
@@ -3190,10 +3190,10 @@ class WorkflowEditor {
         if (!listening && this._monitoring) this._setMonitoring(false);
         btn.style.display = listening ? 'flex' : 'none';
         const on = !!this._monitoring;
-        btn.classList.toggle('bg-blue-600', on);
+        btn.classList.toggle('bg-orange-500', on);
         btn.classList.toggle('text-white', on);
-        btn.classList.toggle('border-blue-600', on);
-        btn.classList.toggle('hover:bg-blue-700', on);
+        btn.classList.toggle('border-orange-500', on);
+        btn.classList.toggle('hover:bg-orange-600', on);
         btn.classList.toggle('bg-white', !on);
         btn.classList.toggle('text-gray-700', !on);
         btn.classList.toggle('border-gray-300', !on);
