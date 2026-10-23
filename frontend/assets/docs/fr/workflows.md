@@ -1,21 +1,35 @@
 # Workflows
 
-Construisez des pipelines automatisés multi-étapes qui orchestrent des agents IA et des outils.
+Construisez des pipelines multi-étapes d'agents IA, de routage, de procédures et de code ; testez-les pas à pas dans l'éditeur ; puis exécutez-les ici ou compilez-les en Python autonome pour le framework d'agents de votre choix.
 
 ![Capture d'écran de l'éditeur de workflow](assets/docs/images/workflow.png)
 
 ## Éditeur visuel
 
-Les workflows se construisent dans un **éditeur par glisser-déposer** (drawflow). Chaque nœud est un agent, un appel d'outil, une pièce jointe ou un formateur de sortie. Reliez les nœuds pour définir le flux.
+Les workflows se construisent dans un **éditeur par glisser-déposer**. Glissez des nœuds depuis la palette — Start, Agent, Playbook, Code, Sortie, nœuds d'ingestion et audio temps réel — et reliez-les pour définir le flux. Voir *Types de nœuds* plus bas.
 
 ## Exécution
 
-Deux modes d'exécution :
+Trois façons de démarrer un workflow :
 
-- **À la demande** — cliquez sur « Exécuter » depuis l'éditeur ou la barre latérale.
+- **À la demande** — saisissez une question et lancez-le depuis l'éditeur ou la barre latérale.
 - **Planifiée** — planifications cron-style (par exemple, chaque jour ouvré à 9 h).
+- **Sur événement** — nouveau courriel, nouveau job ServiceNow, fichier déposé dans un dossier… (voir *Options de démarrage* plus bas).
+
+Le même canevas peut s'exécuter à trois endroits :
+
+- **Dans l'éditeur** — le navigateur exécute le workflow nœud par nœud. C'est là que vous le concevez et le déboguez.
+- **Sur le serveur** — les exécutions planifiées, sur événement, et celles d'un workflow activé.
+- **Compilé** — le Python généré s'exécute sur votre ordinateur via le runner local (voir *Compiler en Python*).
 
 Seuls les nœuds connectés à **Start** s'exécutent. Un nœud laissé sans connexion sur le canevas est ignoré : vous pouvez le garder de côté et comparer une exécution avec et sans lui.
+
+## Débogage d'une exécution
+
+- Cliquez sur un nœud après une exécution pour voir ses onglets **Input**, **Output** et **Logs**.
+- La branche choisie par un dispatcher affiche sa sortie ; les autres sont grisées comme **ignorées**.
+- Les exécutions serveur, planifiées et compilées se suivent **en direct** : les événements apparaissent au fur et à mesure et restent ensuite dans le journal d'exécution.
+- Exécutez d'abord le workflow dans l'éditeur, puis compilé : les deux rapportent les mêmes événements, ce qui permet de vérifier que le code compilé fait ce que vous avez conçu.
 
 ## Sorties
 
@@ -64,16 +78,47 @@ Tout serveur MCP peut être une source d'événements pour une option de code s'
 
 ## Compiler en Python
 
-Tout workflow peut être **compilé en application Python autonome**. Le script généré utilise LangGraph et peut tourner indépendamment de l'application web — pratique quand vous voulez livrer un workflow comme CLI ou comme script planifié.
+Tout workflow peut être **compilé en Python autonome** pour l'un de quatre frameworks d'agents. Utilisez **Compiler le workflow** dans la barre d'outils et choisissez une cible :
+
+- **LangGraph**
+- **ADK** (Google Agent Development Kit)
+- **MAF** (Microsoft Agent Framework)
+- **NOOA** (NVIDIA OO Agents)
+
+Le menu de chaque cible propose **Setup** (les étapes, à faire une fois, pour ajouter ce framework à votre runner local), **Generate**, **Info**, **Run**, **Stop**, **Display Code**, **Export** (un zip) et **Architecture** (une description du code généré).
+
+Choisissez une disposition dans les options de génération :
+
+- **Fichier unique** — tout le workflow dans un seul fichier `.py`.
+- **Agents dans des fichiers séparés** — un paquet Python avec un module par agent.
+- **A2A** — un serveur Agent-to-Agent par nœud, plus un orchestrateur.
+
+Le code généré n'a pas besoin de cette application pour tourner : il contient son propre client MCP, le harnais des nœuds de code, l'interpréteur de playbooks et le routage. Les adresses des serveurs et les en-têtes de connexion vont dans son fichier `.env`. L'éditeur l'écrit dans `python/scripts/` de votre dossier local, et le runner local l'exécute sur votre ordinateur : un workflow peut ainsi lire vos fichiers et vous poser des questions en cours d'exécution.
+
+Si une cible ne sait pas faire quelque chose qu'utilise le workflow (un swarm hors LangGraph, par exemple), la compilation indique quel nœud et pourquoi, plutôt que de produire du code qui ne marche qu'à moitié. **Recompilez après avoir modifié le workflow.**
 
 ## Types de nœuds
 
-- **Agent** — exécute un appel LLM avec des instructions spécifiques.
+- **Start** — comment le workflow démarre : une question, un horaire ou un événement (voir *Options de démarrage*).
+- **Agent** — un appel LLM avec ses propres instructions, fournisseur, outils, serveurs MCP et compétences.
 - **Dispatcher** — un agent de type *Dispatcher* : envoie chaque demande à exactement une des branches connectées après lui (voir plus bas).
-- **Appel d'outil** — invoque un outil intégré ou un outil de serveur MCP.
-- **Document** — joint des PDF, documents Office, etc., comme contexte.
-- **Schéma** — applique un schéma JSON pour contraindre la forme de la sortie.
-- **Sortie** — écrit les résultats en ligne, dans un fichier, ou les deux.
+- **Playbook** — un agent de type *Playbook* : suit une procédure écrite pas à pas, avec des **portes** qui demandent à une personne de remplir un formulaire, d'approuver ou de prendre la main. Les questions apparaissent dans la conversation ; une exécution sans surveillance s'arrête proprement à une porte.
+- **Code** — du Python `run(input, call_tool)` qui appelle directement des outils MCP, avec des **sorties** nommées : seuls les nœuds de la sortie prise s'exécutent ensuite (voir *Nœud de code*).
+- **Sortie** — renvoie la réponse, en ligne, dans un fichier, ou les deux. Chaque nœud peut aussi avoir un **schéma JSON** pour une sortie structurée.
+- **Ingestion** — Chargeur → Découpeur → Base vectorielle, pour indexer des documents.
+- **Temps réel** — nœuds vocaux pour les conversations audio en temps réel.
+
+## Nœud de code
+
+Ouvrez un nœud de code avec son crayon ✏️ :
+
+- **Code** — écrivez `def run(input, call_tool)`. `call_tool("<serveur>", "<outil>", {...})` appelle un outil d'un serveur MCP coché. L'**Assistant** sous le code peut l'écrire pour vous à partir de la documentation des outils des serveurs ; relisez la comparaison, puis **Accepter** ou **Ignorer**.
+- **MCP Servers** — cochez les serveurs que le code peut appeler.
+- **Tools** — ce que prennent et renvoient les outils de chaque serveur coché. Rien n'est appelé.
+- **Settings** — le nom, les **sorties** (séparées par des virgules, un connecteur chacune ; vide = la sortie va au nœud suivant) et le délai. Le code peut lire `NODE_NAME`.
+- **Input / Output / Logs** — la dernière exécution de ce nœud.
+
+Le code s'exécute dans votre navigateur quand vous lancez le workflow dans l'éditeur, et dans le programme compilé sinon, avec les mêmes règles : les modules qui accèdent directement au réseau ou au système sont refusés, les outils passent par `call_tool`.
 
 ## Nœud dispatcher
 

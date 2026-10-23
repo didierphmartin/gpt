@@ -1,21 +1,20 @@
 # Habilidades
 
-Las habilidades son **escenarios reutilizables** que dotan a la conversación de conocimiento o comportamiento especializado en el momento.
+Una habilidad (skill) enseña al asistente una tarea que puede **realizar**: generar un documento Word, convertir un archivo, rellenar una plantilla, analizar una hoja de cálculo…
 
-## Ejemplos
+## Qué es una habilidad
 
-- «Resumidor conciso» — convierte contenido largo en resúmenes con viñetas.
-- «Experto SQL» — escribe y revisa SQL con conocimiento de los principales dialectos.
-- «Asistente de revisión legal» — revisa contratos en busca de cláusulas de riesgo.
-- «Revisor de código» — ofrece feedback estructurado sobre diffs.
+Una habilidad es una **carpeta** dentro de la carpeta `skills/` de tu carpeta synergyAI local. Contiene un archivo `SKILL.md` (su nombre, una descripción de cuándo usarla e instrucciones) y normalmente scripts Python. Los scripts se ejecutan **en tu navegador** (Pyodide), sobre tu carpeta local: no se envía nada a un servidor para ejecutarlos. Lo que produce una habilidad llega a `outputs/`.
 
 ## Usar una habilidad
 
-Arrastra una habilidad al campo de entrada — aparece una etiqueta con la habilidad activa. Tu siguiente mensaje se envía con el contenido de la habilidad anteponiéndose al prompt del sistema. Quítala haciendo clic en el × de la etiqueta.
+- **Automáticamente** — solo pídelo: «convierte este documento en una presentación». El asistente lee las descripciones de las habilidades y elige la adecuada.
+- **A elección** — arrastra una habilidad sobre el campo de entrada: aparece una etiqueta y el siguiente mensaje la usa. Haz clic en la × de la etiqueta para quitarla.
+- **En un workflow** — un agente puede tener una habilidad, que se ejecuta entonces como un paso después de su respuesta.
 
-## Crear habilidades
+## Añadir habilidades
 
-- **Desde cero** — escribe el contenido de la habilidad (prompt del sistema) y guárdalo.
-- **A partir de un agente existente** — extrae las instrucciones de un agente como habilidad reutilizable, lista para adjuntarse a cualquier conversación.
+- **Importa** una carpeta de habilidad, un archivo `.zip` o `.skill`, o una habilidad desde GitHub.
+- **Escribe una** — crea una carpeta con un `SKILL.md`; la descripción de su encabezado es lo que el asistente lee para decidir cuándo usarla.
 
-Las habilidades pueden etiquetarse, categorizarse y compartirse en el espacio de trabajo (según tu rol / paquete).
+Cuando el script de una habilidad falla, el asistente puede proponer una corrección (autorreparación), y la vista Habilidades permite revisarlas y mejorarlas con el tiempo.

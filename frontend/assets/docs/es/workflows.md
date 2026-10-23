@@ -1,21 +1,35 @@
 # Workflows
 
-Construye pipelines automatizados de varios pasos que orquestan agentes de IA y herramientas.
+Construye pipelines de varios pasos con agentes de IA, enrutamiento, procedimientos y código; pruébalos paso a paso en el editor; luego ejecútalos aquí o compílalos a Python autónomo para el framework de agentes que elijas.
 
 ![Captura de pantalla del editor de workflows](assets/docs/images/workflow.png)
 
 ## Editor visual
 
-Los workflows se construyen en un **editor de arrastrar y soltar** (drawflow). Cada nodo es un agente, una llamada a herramienta, un adjunto o un formateador de salida. Conecta los nodos para definir el flujo.
+Los workflows se construyen en un **editor de arrastrar y soltar**. Arrastra nodos desde la paleta — Start, Agente, Playbook, Código, Salida, nodos de ingesta y de audio en tiempo real — y conéctalos para definir el flujo. Consulta *Tipos de nodo* más abajo.
 
 ## Ejecución
 
-Dos modos de ejecución:
+Tres formas de iniciar un workflow:
 
-- **Bajo demanda** — haz clic en «Ejecutar» desde el editor o la barra lateral.
+- **Bajo demanda** — escribe un prompt y ejecútalo desde el editor o la barra lateral.
 - **Programado** — programación tipo cron (por ejemplo, todos los días laborables a las 9:00).
+- **Por evento** — un correo nuevo, un nuevo job de ServiceNow, un archivo dejado en una carpeta… (consulta *Opciones de inicio* más abajo).
+
+El mismo lienzo puede ejecutarse en tres lugares:
+
+- **En el editor** — el navegador ejecuta el workflow nodo por nodo. Aquí es donde lo diseñas y depuras.
+- **En el servidor** — las ejecuciones programadas, por evento y las de un workflow activado.
+- **Compilado** — el Python generado se ejecuta en tu ordenador a través del runner local (consulta *Compilar a Python*).
 
 Solo se ejecutan los nodos conectados a **Start**. Un nodo sin conexiones en el lienzo se ignora: puedes dejarlo a un lado y comparar una ejecución con y sin él.
+
+## Depurar una ejecución
+
+- Haz clic en un nodo tras una ejecución para ver sus pestañas **Input**, **Output** y **Logs**.
+- La rama elegida por un dispatcher muestra su salida; las demás aparecen en gris como **omitidas**.
+- Las ejecuciones en el servidor, programadas y compiladas se siguen **en directo**: los eventos aparecen a medida que ocurren y quedan después en el registro de ejecución.
+- Ejecuta primero el workflow en el editor y luego compilado: ambos informan de los mismos eventos, así compruebas que el código compilado hace lo que diseñaste.
 
 ## Salidas
 
@@ -64,16 +78,47 @@ que responde `{"status": "ready"}` o `{"status": "timeout"}`, como `wait_for_new
 
 ## Compilar a Python
 
-Cualquier workflow puede **compilarse en una aplicación Python independiente**. El script generado usa LangGraph y puede ejecutarse independientemente de la aplicación web — útil cuando quieres distribuir un workflow como CLI o como script programado.
+Cualquier workflow puede **compilarse a Python autónomo** para uno de cuatro frameworks de agentes. Usa **Compilar workflow** en la barra de herramientas y elige un destino:
+
+- **LangGraph**
+- **ADK** (Google Agent Development Kit)
+- **MAF** (Microsoft Agent Framework)
+- **NOOA** (NVIDIA OO Agents)
+
+El menú de cada destino ofrece **Setup** (los pasos, una sola vez, para añadir ese framework a tu runner local), **Generate**, **Info**, **Run**, **Stop**, **Display Code**, **Export** (un zip) y **Architecture** (una descripción del código generado).
+
+Elige una estructura en las opciones de generación:
+
+- **Archivo único** — todo el workflow en un único archivo `.py`.
+- **Agentes en archivos separados** — un paquete Python con un módulo por agente.
+- **A2A** — un servidor Agent-to-Agent por nodo, más un orquestador.
+
+El código generado no necesita esta aplicación para ejecutarse: lleva su propio cliente MCP, el arnés de los nodos de código, el intérprete de playbooks y el enrutamiento. Las direcciones de los servidores y las cabeceras de conexión van en su archivo `.env`. El editor lo escribe en `python/scripts/` de tu carpeta local, y el runner local lo ejecuta en tu ordenador: así un workflow puede leer tus archivos y hacerte preguntas mientras se ejecuta.
+
+Si un destino no admite algo que usa el workflow (un swarm fuera de LangGraph, por ejemplo), la compilación indica qué nodo y por qué, en lugar de producir código que funciona a medias. **Vuelve a compilar después de cambiar el workflow.**
 
 ## Tipos de nodo
 
-- **Agente** — ejecuta una llamada LLM con instrucciones específicas.
-- **Dispatcher** — un agente de tipo *Dispatcher*: envía cada solicitud a exactamente una de las ramas conectadas después de él (ver más abajo).
-- **Llamada a herramienta** — invoca una herramienta integrada o de servidor MCP.
-- **Documento** — adjunta PDFs, documentos Office, etc., como contexto.
-- **Esquema** — aplica un esquema JSON para restringir la forma de la salida.
-- **Salida** — escribe los resultados en línea, en un archivo o en ambos.
+- **Start** — cómo empieza el workflow: un prompt, un horario o un evento (consulta *Opciones de inicio*).
+- **Agente** — una llamada a un LLM con sus propias instrucciones, proveedor, herramientas, servidores MCP y habilidades.
+- **Dispatcher** — un agente de tipo *Dispatcher*: envía cada solicitud exactamente a una de las ramas conectadas tras él (ver más abajo).
+- **Playbook** — un agente de tipo *Playbook*: sigue un procedimiento escrito paso a paso, con **puertas** que piden a una persona rellenar un formulario, aprobar o tomar el relevo. Las preguntas aparecen en la conversación; una ejecución desatendida termina limpiamente en una puerta.
+- **Código** — Python `run(input, call_tool)` que llama directamente a herramientas MCP, con **salidas** con nombre: solo se ejecutan después los nodos de la salida tomada (consulta *Nodo de código*).
+- **Salida** — devuelve la respuesta, en línea, en un archivo o ambos. Cada nodo puede tener además un **JSON Schema** para una salida estructurada.
+- **Ingesta** — Cargador → Divisor → Base vectorial, para indexar documentos.
+- **Tiempo real** — nodos de voz para conversaciones de audio en tiempo real.
+
+## Nodo de código
+
+Abre un nodo de código con su lápiz ✏️:
+
+- **Code** — escribe `def run(input, call_tool)`. `call_tool("<servidor>", "<herramienta>", {...})` llama a una herramienta de un servidor MCP marcado. El **Asistente** bajo el código puede escribirlo por ti a partir de la documentación de las herramientas; revisa la comparación y luego **Aceptar** o **Descartar**.
+- **MCP Servers** — marca los servidores a los que puede llamar el código.
+- **Tools** — qué reciben y devuelven las herramientas de cada servidor marcado. No se llama a nada.
+- **Settings** — el nombre, las **salidas** (separadas por comas, un conector cada una; vacío = la salida va al nodo siguiente) y el tiempo límite. El código puede leer `NODE_NAME`.
+- **Input / Output / Logs** — la última ejecución de este nodo.
+
+El código se ejecuta en tu navegador cuando ejecutas el workflow en el editor, y en el programa compilado en los demás casos, con las mismas reglas: se rechazan los módulos que acceden directamente a la red o al sistema, y las herramientas pasan por `call_tool`.
 
 ## Nodo dispatcher
 

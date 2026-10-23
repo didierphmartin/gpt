@@ -127,7 +127,7 @@
     },
     "skills": {
       "title": "🎯 Skills",
-      "description": "Skills are <strong>reusable scenarios</strong> stored in a library. Attach one to a prompt to give the conversation <strong>specialized knowledge or behavior</strong> on the fly (e.g. legal review, data analyst, code reviewer)."
+      "description": "Skills teach the assistant tasks it can <strong>carry out</strong> — produce a document, convert a file, analyse a spreadsheet. Each is a folder of instructions and Python scripts that <strong>runs in your browser</strong> on your local folder. Ask, and the assistant picks the right one."
     },
     "libraries": {
       "title": "📚 Libraries",
@@ -135,7 +135,7 @@
     },
     "workflows": {
       "title": "🔀 Workflows",
-      "description": "Orchestrate AI agents into <strong>multi-step workflows</strong>, then run them on demand or on a schedule. Outputs can be shown inline <em>or written to a folder on your computer</em>. Bonus: any workflow can be <strong>compiled into a standalone Python app</strong>."
+      "description": "Orchestrate agents, dispatchers, playbooks and code into <strong>multi-step workflows</strong>, test them step by step, and start them from a prompt, a schedule or an event. Then <strong>compile</strong> any workflow into standalone Python for <strong>LangGraph, Google ADK, Microsoft Agent Framework or NVIDIA OO Agents</strong>."
     },
     "fileStorage": {
       "title": "📁 File Storage",

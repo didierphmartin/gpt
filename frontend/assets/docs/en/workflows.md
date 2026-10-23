@@ -1,21 +1,35 @@
 # Workflows
 
-Build automated multi-step pipelines that orchestrate AI agents and tools.
+Build multi-step pipelines of AI agents, routing, procedures and code; test them step by step in the editor; then run them here or compile them into standalone Python for the agent framework of your choice.
 
 ![Workflow editor screenshot](assets/docs/images/workflow.png)
 
 ## Visual editor
 
-Workflows are built in a **drag-and-drop editor** (drawflow). Each node is an agent, a tool call, a document attachment, or an output formatter. Connect nodes to define the flow.
+Workflows are built in a **drag-and-drop editor**. Drag nodes from the palette — Start, Agent, Playbook, Code, Output, ingestion and realtime audio nodes — and connect them to define the flow. See *Node types* below.
 
 ## Execution
 
-Run workflows two ways:
+Start a workflow three ways:
 
-- **On demand** — click "Run" from the editor or sidebar.
+- **On demand** — type a prompt and run it from the editor or the sidebar.
 - **Scheduled** — cron-style schedules (e.g., every weekday at 9 AM).
+- **On an event** — new mail, a new ServiceNow job, a file dropped in a folder… (see *Start options* below).
+
+The same canvas can run in three places:
+
+- **In the editor** — the browser runs the workflow node by node. This is where you design and debug.
+- **On the server** — scheduled and event runs, and the runs of an activated workflow.
+- **Compiled** — the generated Python runs on your computer through the local runner (see *Compile to Python*).
 
 Only the nodes connected to **Start** run. A node left unconnected on the canvas is ignored, so you can keep one aside and compare a run with and without it.
+
+## Debugging a run
+
+- Click a node after a run to see its **Input**, **Output** and **Logs**.
+- A dispatcher's chosen branch shows its output; the other branches are greyed as **skipped**.
+- Server, scheduled and compiled runs can be followed **live**: the run's events appear as they happen, and stay in the run log afterwards.
+- Run the workflow in the editor first, then compiled: both report the same events, so you can check the compiled code does what you designed.
 
 ## Outputs
 
@@ -64,16 +78,47 @@ Any MCP server can be an event source for a code option if it offers a waiting t
 
 ## Compile to Python
 
-Any workflow can be **compiled into a standalone Python application**. The generated script uses LangGraph and can run independently of the web app — useful when you want to ship a workflow as a CLI or scheduled script.
+Any workflow can be **compiled into standalone Python** for one of four agent frameworks. Use **Compile workflow** in the toolbar and pick a target:
+
+- **LangGraph**
+- **ADK** (Google Agent Development Kit)
+- **MAF** (Microsoft Agent Framework)
+- **NOOA** (NVIDIA OO Agents)
+
+Each target's menu has **Setup** (the one-time steps to add that framework to your local runner), **Generate**, **Info**, **Run**, **Stop**, **Display Code**, **Export** (a zip) and **Architecture** (a description of the generated code).
+
+Choose a layout in the code generation options:
+
+- **Single file** — the whole workflow in one `.py` file.
+- **Agents in separate files** — a Python package with one module per agent.
+- **A2A** — one Agent-to-Agent server per node, plus an orchestrator.
+
+The generated code does not need this app to run: it carries its own MCP client, code node harness, playbook interpreter and routing. Server addresses and connection headers go in its `.env` file. The editor writes it to `python/scripts/` in your local folder, and the local runner runs it on your computer, so a workflow can read your files and ask you questions while it runs.
+
+If a target can't do something the workflow uses (a swarm outside LangGraph, for example), compiling says which node and why instead of producing code that half works. **Recompile after changing the workflow.**
 
 ## Node types
 
-- **Agent** — runs an LLM call with specific instructions.
+- **Start** — how the workflow starts: a prompt, a schedule or an event (see *Start options*).
+- **Agent** — an LLM call with its own instructions, provider, tools, MCP servers and skills.
 - **Dispatcher** — an agent set to type *Dispatcher*: sends each request to exactly one of the branches connected after it (see below).
-- **Tool call** — invokes a built-in tool or MCP server tool.
-- **Document** — attaches PDFs, Office docs, etc., as context.
-- **Schema** — applies a JSON Schema to constrain output shape.
-- **Output** — writes results inline, to a file, or to both.
+- **Playbook** — an agent set to type *Playbook*: follows a written procedure step by step, with **gates** that ask a person to fill a form, approve or take over. The questions appear in the conversation; an unattended run ends cleanly at a gate.
+- **Code** — Python `run(input, call_tool)` that calls MCP tools directly, with named **exits**: only the nodes on the exit taken run next (see *Code node*).
+- **Output** — returns the answer, inline, to a file, or both. Each node can also have a **JSON Schema** for structured output.
+- **Ingestion** — Loader → Splitter → Vector store, to index documents.
+- **Realtime** — voice nodes for realtime audio conversations.
+
+## Code node
+
+Open a code node with its ✏️ pencil:
+
+- **Code** — write `def run(input, call_tool)`. `call_tool("<server>", "<tool>", {...})` calls a tool on a checked MCP server. The **Assistant** under the code can write it for you from the servers' tool documentation; review the comparison, then **Accept** or **Discard**.
+- **MCP Servers** — check the servers the code may call.
+- **Tools** — what each checked server's tools take and return. Nothing is called.
+- **Settings** — the name, the **exits** (comma-separated, one connector each; empty = the output goes to the next node) and the timeout. The code can read `NODE_NAME`.
+- **Input / Output / Logs** — the last run of this node.
+
+The code runs in your browser when you run the workflow in the editor, and in the compiled program otherwise, with the same rules: modules that reach the network or the system directly are refused, tools go through `call_tool`.
 
 ## Dispatcher node
 

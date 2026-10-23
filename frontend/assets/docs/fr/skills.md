@@ -1,21 +1,20 @@
 # Compétences
 
-Les compétences sont des **scénarios réutilisables** qui donnent à la conversation des connaissances ou un comportement spécialisé à la volée.
+Une compétence (skill) apprend à l'assistant une tâche qu'il peut **réaliser** : produire un document Word, convertir un fichier, remplir un modèle, analyser un tableur…
 
-## Exemples
+## Ce qu'est une compétence
 
-- « Résumeur concis » — transforme un contenu long en résumé sous forme de puces.
-- « Expert SQL » — écrit et relit du SQL en connaissant les principaux dialectes.
-- « Assistant de revue juridique » — relit des contrats à la recherche de clauses à risque.
-- « Relecteur de code » — fournit un retour structuré sur des diffs.
+Une compétence est un **dossier** dans le dossier `skills/` de votre dossier synergyAI local. Il contient un fichier `SKILL.md` (son nom, une description de quand l'utiliser, et des instructions) et généralement des scripts Python. Les scripts s'exécutent **dans votre navigateur** (Pyodide), sur votre dossier local : rien n'est envoyé à un serveur pour les exécuter. Ce qu'une compétence produit arrive dans `outputs/`.
 
 ## Utiliser une compétence
 
-Glissez une compétence dans la zone de saisie — une étiquette apparaît indiquant la compétence active. Votre prochain message est envoyé avec le contenu de la compétence ajouté au prompt système. Détachez en cliquant sur le × de l'étiquette.
+- **Automatiquement** — demandez simplement : « transforme ce document en présentation ». L'assistant lit les descriptions des compétences et choisit la bonne.
+- **Au choix** — glissez une compétence sur la zone de saisie : une puce l'affiche, et le message suivant l'utilise. Cliquez sur le × de la puce pour la retirer.
+- **Dans un workflow** — un agent peut avoir une compétence, qui s'exécute alors comme une étape après la réponse de l'agent.
 
-## Créer des compétences
+## Ajouter des compétences
 
-- **De zéro** — rédigez le contenu de la compétence (prompt système) et sauvegardez-le.
-- **À partir d'un agent existant** — extrayez les instructions d'un agent vers une compétence réutilisable, qui pourra être attachée à n'importe quelle conversation.
+- **Importer** un dossier de compétence, un fichier `.zip` ou `.skill`, ou une compétence depuis GitHub.
+- **En écrire une** — créez un dossier avec un `SKILL.md` ; la description dans son en-tête est ce que l'assistant lit pour décider quand l'utiliser.
 
-Les compétences peuvent être étiquetées, classées et partagées dans l'espace de travail (selon votre rôle / paquet).
+Quand le script d'une compétence échoue, l'assistant peut proposer une correction (auto-réparation), et la vue Compétences permet de les revoir et de les améliorer au fil du temps.

@@ -127,7 +127,7 @@
     },
     "skills": {
       "title": "🎯 Compétences",
-      "description": "Les compétences sont des <strong>scénarios réutilisables</strong> stockés dans une bibliothèque. Attachez-en une à un prompt pour donner à la conversation des <strong>connaissances ou un comportement spécialisé</strong> (ex. revue juridique, analyste de données, relecteur de code)."
+      "description": "Les compétences apprennent à l'assistant des tâches qu'il peut <strong>réaliser</strong> — produire un document, convertir un fichier, analyser un tableur. Chacune est un dossier d'instructions et de scripts Python qui <strong>s'exécute dans votre navigateur</strong> sur votre dossier local. Demandez, et l'assistant choisit la bonne."
     },
     "libraries": {
       "title": "📚 Bibliothèques",
@@ -135,7 +135,7 @@
     },
     "workflows": {
       "title": "🔀 Workflows",
-      "description": "Orchestrez des agents IA en <strong>workflows multi-étapes</strong>, puis exécutez-les à la demande ou planifiez-les. Les sorties peuvent s'afficher directement <em>ou être écrites dans un dossier sur votre ordinateur</em>. Bonus : tout workflow peut être <strong>compilé en application Python autonome</strong>."
+      "description": "Orchestrez agents, dispatchers, playbooks et code en <strong>workflows multi-étapes</strong>, testez-les pas à pas, et démarrez-les par une question, un horaire ou un événement. Puis <strong>compilez</strong> n'importe quel workflow en Python autonome pour <strong>LangGraph, Google ADK, Microsoft Agent Framework ou NVIDIA OO Agents</strong>."
     },
     "fileStorage": {
       "title": "📁 Stockage de fichiers",

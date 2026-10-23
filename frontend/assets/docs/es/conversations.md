@@ -4,7 +4,7 @@ El modo por defecto. Escribe un mensaje en el campo de entrada y el proveedor de
 
 ## Proveedores
 
-Cambia entre los 6 proveedores de IA usando las pestañas sobre el chat: **OpenAI, Claude, Grok, Gemini, DeepSeek, Kimi**.
+Cambia de proveedor usando las pestañas sobre el chat: **OpenAI, Claude, Grok, Gemini, DeepSeek, Kimi, GLM**, además de cualquier modelo autoalojado que añada tu administrador. Los que ves dependen de tu plan y de las claves definidas en *Ajustes*.
 
 ## Fusionar respuestas
 
@@ -21,11 +21,11 @@ Haz clic en el 📎 clip o **arrastra archivos al chat** para adjuntar:
 - Imágenes (PNG, JPEG, WebP, GIF)
 - Texto plano, Markdown, CSV, JSON
 
-La IA los lee y los analiza como parte del prompt.
+Los documentos Office y los PDF se convierten a texto en tu navegador: todos los proveedores pueden leerlos, no solo los que aceptan archivos.
 
-## Gráficos SVG
+## Gráficos, diagramas y páginas
 
-Pide un gráfico, diagrama o tabla — la IA devuelve SVG que se renderiza directamente en la respuesta.
+Pide un gráfico, un diagrama o una página web: el SVG, los diagramas Mermaid y el HTML se muestran en la respuesta o en el panel de vista previa junto al chat.
 
 ## Historial de conversaciones
 

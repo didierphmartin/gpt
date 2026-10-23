@@ -4,7 +4,7 @@ The default mode. Type a message in the prompt area and the active AI provider a
 
 ## Providers
 
-Switch between 6 AI providers using the tabs above the chat: **OpenAI, Claude, Grok, Gemini, DeepSeek, Kimi**.
+Switch providers using the tabs above the chat: **OpenAI, Claude, Grok, Gemini, DeepSeek, Kimi, GLM**, plus any self-hosted model your administrator adds. Which ones you see depends on your plan and on the keys set in *Settings*.
 
 ## Merge responses
 
@@ -21,11 +21,11 @@ Click the 📎 paperclip or **drag files onto the chat** to attach:
 - Images (PNG, JPEG, WebP, GIF)
 - Plain text, Markdown, CSV, JSON
 
-The AI reads and analyzes them as part of the prompt.
+Office documents and PDFs are converted to text in your browser, so every provider can read them, not only those that accept files.
 
-## SVG charts
+## Charts, diagrams and pages
 
-Ask for a chart, diagram, or table — the AI returns SVG code that renders inline in the response.
+Ask for a chart, diagram or web page: SVG, Mermaid diagrams and HTML render in the response or in the preview pane next to the chat.
 
 ## Conversation history
 

@@ -127,7 +127,7 @@
     },
     "skills": {
       "title": "🎯 Habilidades",
-      "description": "Las habilidades son <strong>escenarios reutilizables</strong> almacenados en una biblioteca. Adjunta una a un prompt para dotar a la conversación de <strong>conocimiento o comportamiento especializado</strong> (p. ej., revisión legal, analista de datos, revisor de código)."
+      "description": "Las habilidades enseñan al asistente tareas que puede <strong>realizar</strong>: generar un documento, convertir un archivo, analizar una hoja de cálculo. Cada una es una carpeta de instrucciones y scripts Python que <strong>se ejecuta en tu navegador</strong> sobre tu carpeta local. Pídelo y el asistente elige la adecuada."
     },
     "libraries": {
       "title": "📚 Bibliotecas",
@@ -135,7 +135,7 @@
     },
     "workflows": {
       "title": "🔀 Workflows",
-      "description": "Orquesta agentes de IA en <strong>workflows de varios pasos</strong>, ejecútalos al instante o prográmalos. Las salidas pueden mostrarse en línea <em>o escribirse en una carpeta de tu equipo</em>. Plus: cualquier workflow puede <strong>compilarse en una aplicación Python independiente</strong>."
+      "description": "Orquesta agentes, dispatchers, playbooks y código en <strong>workflows de varios pasos</strong>, pruébalos paso a paso e inícialos con un prompt, un horario o un evento. Después <strong>compila</strong> cualquier workflow a Python autónomo para <strong>LangGraph, Google ADK, Microsoft Agent Framework o NVIDIA OO Agents</strong>."
     },
     "fileStorage": {
       "title": "📁 Almacenamiento de archivos",

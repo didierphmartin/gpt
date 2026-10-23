@@ -1,55 +1,82 @@
-# LangChain Workflow Runner (prototype)
+# Local workflow runner
 
-Runs a saved **batch workflow** from the PHP backend as a LangGraph graph in Python.
-MCP tools are invoked through the backend's existing `/api/v1/mcp/proxy` route, so
-no direct MCP transport handling is needed here.
+A small FastAPI server, on **http://127.0.0.1:8765**, that runs **compiled workflows on your own
+computer**. The workflow editor compiles a workflow into standalone Python, for LangGraph, Google
+ADK, Microsoft Agent Framework or NVIDIA OO Agents, and writes it to `scripts/`. The runner then
+executes it as *you*. That is how a compiled workflow can read your files, use your MCP connections
+and ask you questions while it runs. The web server never runs compiled code.
 
-## Scope (v1)
+## Installing
 
-- Node types: `start`, `agent`, `output` (linear traversal)
-- LLM: Anthropic Claude only
-- Auth: JWT pasted in UI (sent with every backend call)
-- Logs: per-node + per-tool-call, streamed over SSE
+The runner lives in the `python/` folder of your local synergyAI folder, next to `skills/` and
+`outputs/`.
 
-## Setup
+- **From the app.** The setup wizard writes the runner files into `<your folder>/python/`, listed in
+  `install-manifest.json`. A browser can't build a virtual environment, so finish once in a terminal:
+
+  ```bash
+  cd <your folder>/python
+  python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
+  ```
+
+- **From this repository.** Run `setup.py`. It copies the same files to `~/Documents/synergyAI/python/`
+  and builds the venv:
+
+  ```bash
+  python3 setup.py                      # install at the default location
+  python3 setup.py --path /other/place  # install elsewhere
+  python3 setup.py --force              # overwrite files and pick up requirements changes
+  python3 setup.py --skip-venv          # copy the files only
+  python3 setup.py --launchagent        # macOS: also start the runner at login
+  python3 setup.py --no-launchagent     # remove that LaunchAgent
+  ```
+
+  Edits to the files here don't reach a running runner until `setup.py --force` copies them again.
+
+`requirements.txt` installs LangGraph with its Anthropic, OpenAI and Google integrations, Google ADK
+with LiteLLM, Microsoft Agent Framework and the A2A SDK, all in one venv. NVIDIA OO Agents is added by
+that target's **Setup** step in the editor's *Compile workflow* menu.
+
+## Running
 
 ```bash
-cd langchain_runner
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-export ANTHROPIC_API_KEY=sk-ant-...
-# optional: GPT_BACKEND_URL prepopulates the form
-export GPT_BACKEND_URL=http://localhost/gpt/backend
-
-python main.py
+cd <your folder>/python
+./.venv/bin/python main.py        # NOT bare python3: the frameworks are in the venv
 ```
 
-Then open `index.html` directly in your browser (double-click, or any static
-server). It calls the FastAPI endpoints via CORS — no Python templating
-involved. Default API URL in the form is `http://127.0.0.1:8765`.
+`python main.py run <file>` runs one script from `scripts/` directly, without the server.
 
-## Flow
+Provider keys and MCP connection headers come from `.env` files. A compiled workflow reads its own
+folder's `.env` first, then this folder's `.env`, and the nearest value wins. The editor fills them
+from the keys stored in the app.
 
-1. Enter backend URL + JWT, click **Load workflows**.
-2. Pick a workflow, enter a user prompt, click **Run**.
-3. Logs stream live: graph build, node execution, MCP tool calls + results.
-4. Final output lands in the right pane.
+## What the editor calls
 
-## What this is not (yet)
+| Route | Purpose |
+|---|---|
+| `GET /health` | Liveness check; the editor checks the runner is up before a run. |
+| `POST /api/run-file` | Run a compiled script from `scripts/` as a subprocess; stdout and stderr stream back over SSE. |
+| `POST /api/workflow-server/start` | Start a compiled workflow's **run server** (`api.py`) and return its URL. The editor then talks to it over the run protocol (`backend/schema/run-protocol-v1.json`): live events, replay, questions and answers, `POST /listen` for scheduled and event starts. |
+| `POST /api/workflow-server/stop` | Stop that run server. |
+| `GET /api/workflow-servers` | The run servers this runner has started: `[{folder, url, pid}]`. |
+| `GET /api/scripts` | The `.py` files under `scripts/`. |
+| `GET /api/outputs`, `GET /api/output` | List and read what workflows wrote to `outputs/`. |
 
-- No condition / switch / parallel nodes
-- No prompt-template variable substitution
-- No multi-provider (only Anthropic)
-- No static code generation — this **interprets** the workflow directly.
-  Converting that to a static generator (emit `.py` files per workflow) is the
-  next step once this runtime matches the PHP output.
+Older routes from the first prototype are still there. `POST /api/workflows/list` and `POST /api/run`
+load a saved workflow from the backend and interpret it here as a LangGraph graph
+(`workflow_loader.py`, `graph_builder.py`, `mcp_tools.py`). `POST /api/generate` emits a script with
+`code_generator.py`. The editor's compilers replaced them: they run in the backend
+(`backend/src/AgentTeam/Services/*Generator.php`) and produce self-contained code for all four
+frameworks.
 
 ## Files
 
-- `main.py` — FastAPI + SSE
-- `workflow_loader.py` — pulls workflow, agents, MCP tools from PHP
-- `mcp_tools.py` — wraps MCP tools as LangChain `StructuredTool`s via proxy
-- `graph_builder.py` — builds + runs a LangGraph from the workflow graph
-- `templates/index.html` — one-page UI
+- `main.py` — the FastAPI server and the `run <file>` CLI.
+- `script_io.py` — how scripts write their result to `outputs/` (file naming, a "generated by" header).
+- `setup.py`, `install-manifest.json` — the two installers and the one list of files they install.
+- `requirements.txt` — the frameworks every compiled target needs.
+- `workflow_loader.py`, `graph_builder.py`, `mcp_tools.py`, `code_generator.py` — the prototype's
+  interpreter and generator, still used by `/api/run` and `/api/generate`.
+- `ingestion*.py`, `requirements-ingestion.txt` — the document ingestion pipeline (loader → splitter
+  → vector store) that the ingestion nodes generate.
+- `tests/` — the runner's tests.
