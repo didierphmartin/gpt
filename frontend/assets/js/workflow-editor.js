@@ -9722,7 +9722,7 @@ class WorkflowEditor {
                 <div class="storage-config-header"><h3>⚙️ ${this.escapeHtml(node ? this.t('codeLibrary.nodeTitle') : this.t('codeLibrary.componentTitle'))}</h3><button class="storage-config-close" data-act="close">×</button></div>
                 <div data-f="link" class="text-xs text-gray-600" style="padding:4px 16px;display:none;"></div>
                 <div class="flex border-b border-gray-200" style="padding:0 16px;">
-                    ${tab('settings', 'Settings')}${tab('code', 'Code')}${tab('servers', 'MCP Servers')}${tab('input', 'Input')}${tab('output', 'Output')}${tab('logs', 'Logs')}
+                    ${tab('settings', 'Settings')}${tab('code', 'Code')}${tab('servers', 'MCP Servers')}${tab('tools', 'Tools')}${tab('input', 'Input')}${tab('output', 'Output')}${tab('logs', 'Logs')}
                 </div>
                 <div class="storage-config-body" style="overflow:auto;flex:1;">
                     ${pane('settings', `<div class="storage-config-grid">
@@ -9736,10 +9736,12 @@ class WorkflowEditor {
                     ${pane('code', `<div class="storage-config-grid">
                         <div class="storage-config-folder full"><label>Code — def run(input, call_tool)</label>
                             <textarea data-f="code" rows="16" spellcheck="false" style="font-family:ui-monospace,Menlo,monospace;font-size:12px;width:100%;"></textarea></div>
+                        <div data-f="assist" class="storage-config-folder full"></div>
                     </div>`)}
                     ${pane('servers', `<p class="text-xs text-gray-500" style="margin:0 0 8px;">The code calls a checked server's tools with
                         <code>call_tool("&lt;server&gt;", "&lt;tool&gt;", {...})</code>; the server is written as shown in grey.</p>
                         <div data-f="servers"><p class="text-sm text-gray-400 italic">…</p></div>`)}
+                    ${pane('tools', '<div data-f="tools"></div>')}
                     ${pane('input', pre('input'))}
                     ${pane('output', pre('output'))}
                     ${pane('logs', '<div data-f="logs"></div>')}
@@ -9762,7 +9764,10 @@ class WorkflowEditor {
             });
             overlay.querySelectorAll('[data-pane]').forEach((p) => { p.style.display = p.dataset.pane === k ? '' : 'none'; });
         };
-        overlay.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
+        overlay.querySelectorAll('[data-tab]').forEach((b) => b.addEventListener('click', () => {
+            showTab(b.dataset.tab);
+            if (b.dataset.tab === 'tools') renderTools();
+        }));
         showTab('settings');
         // Values are set through the DOM, never interpolated into attributes: escapeHtml leaves
         // quotes alone, so a name like Poll "prod" would be cut short (or inject an attribute).
@@ -9807,6 +9812,45 @@ class WorkflowEditor {
         // MCP Servers: the user's servers (the agent form's /me/mcp-servers list), checked by name.
         let checked = new Set(Array.isArray(d.mcp_servers) ? d.mcp_servers : []);
         let servers = [];
+        const testTools = new Map();   // one successful tools listing per server per modal open
+        // The checked servers' tools/list (Test confirmation, Tools tab, assistant). A failed listing is never
+        // cached (the next call lists again) and never reads as "no tools".
+        const listChecked = () => Promise.all(servers.filter((m) => checked.has(m.name)).map(async (m) => {
+            if (!testTools.has(m.name)) testTools.set(m.name, this._mcpProxyListToolEntries(m).catch((e) => ({ error: String(e?.message || e) })));
+            const r = (await testTools.get(m.name)) || { error: 'tools/list failed' };
+            if (r.error || !Array.isArray(r.tools)) testTools.delete(m.name);
+            return { name: m.name, slug: CN.slug(m.name), tools: r.tools || [], error: r.error || (Array.isArray(r.tools) ? undefined : 'tools/list failed') };
+        }));
+        // Tools: each checked server's tools with their input and result schemas, read-only (nothing is called).
+        let toolsSeq = 0;
+        const renderTools = async () => {
+            const seq = ++toolsSeq;
+            const esc = (v) => this.escapeHtml(String(v ?? ''));
+            if (!checked.size) { f('tools').innerHTML = '<p class="text-sm text-gray-400 italic">No server checked. Check one in MCP Servers.</p>'; return; }
+            f('tools').innerHTML = '<p class="text-sm text-gray-400 italic">Listing tools…</p>';
+            const listed = await listChecked();
+            if (seq !== toolsSeq) return;   // a newer tick re-rendered meanwhile
+            const fields = (schema) => {
+                const lines = window.CodeNodeAssist.schemaLines(schema);
+                return lines.map((l) => `<div style="padding-left:${12 + l.depth * 14}px;"><code>${esc(l.name)}</code>${l.required ? '<span class="text-red-600">*</span>' : ''}
+                    <span class="text-gray-500">${esc(l.type)}</span>${l.description ? ` <span class="text-gray-500">— ${esc(l.description)}</span>` : ''}</div>`).join('');
+            };
+            const muted = (text) => `<div class="text-gray-400 italic" style="padding-left:12px;">${esc(text)}</div>`;
+            f('tools').innerHTML = `<p class="text-xs text-gray-500" style="margin:0 0 8px;">What each checked server's <code>tools/list</code> says.
+                <span class="text-red-600">*</span> = required. Nothing here calls a tool.</p>` + listed.map((s) => `
+                <div style="margin-bottom:14px;">
+                    <div class="text-sm font-semibold text-gray-800" style="border-bottom:1px solid #e5e7eb;margin-bottom:4px;">${esc(s.name)} <code class="text-xs text-gray-400 font-normal">${esc(s.slug)}</code></div>
+                    ${s.error ? `<div class="text-xs text-red-700">Couldn't list tools — ${esc(s.error)}</div>` : !s.tools.length ? muted('No tools.') : s.tools.map((t) => `
+                    <div class="text-xs" style="margin:6px 0 8px;">
+                        <div><code class="font-semibold">${esc(t.name)}</code>${window.CodeNodeAssist.isDocumented(t) ? '' : ' <span class="px-1 rounded bg-red-100 text-red-700">undocumented</span>'}</div>
+                        ${window.CodeNodeAssist.isDocumented(t) ? `<div class="text-gray-700" style="white-space:pre-wrap;">${esc(t.description)}</div>` : ''}
+                        <div class="text-gray-600" style="margin-top:2px;">Input</div>${fields(t.inputSchema) || muted('No arguments.')}
+                        <div class="text-gray-600" style="margin-top:2px;">Result</div>${t.outputSchema ? (fields(t.outputSchema) || muted(window.CodeNodeAssist.schemaType(t.outputSchema) || 'Schema without fields.')) : muted('No result schema.')}
+                    </div>`).join('')}
+                </div>`).join('');
+        };
+        const toolsShown = () => f('tools').closest('[data-pane]')?.style.display !== 'none';
+        let assist = null;   // the assistant box (mounted below); a server tick refreshes its listings
         const renderServers = () => {
             const esc = (v) => this.escapeHtml(String(v ?? ''));
             const known = new Set(servers.map((m) => m.name));
@@ -9829,6 +9873,8 @@ class WorkflowEditor {
             f('servers').querySelectorAll('input[data-server]').forEach((cb) => cb.addEventListener('change', () => {
                 if (cb.checked) checked.add(cb.dataset.server); else checked.delete(cb.dataset.server);
                 refreshConnect();
+                assist?.refresh();
+                if (toolsShown()) renderTools();
             }));
         };
         // Connect: one box per checked server whose tools implement the connect contract
@@ -9868,7 +9914,54 @@ class WorkflowEditor {
             servers = await this._loadMcpServersMeta(true);
             renderServers();
             refreshConnect();
+            assist?.refresh();
         })();
+
+        // The assistant under the Code tab: writes the code and exits from the checked servers' tool docs.
+        const savedExits = Array.isArray(d.exits) && d.exits.length ? d.exits : ['next'];
+        // Drawflow ports follow the SAVED exits until Save: wiring is read through them, by exit name.
+        const wiredExits = () => {
+            const all = this.editor.export().drawflow.Home.data;
+            return new Set(savedExits.filter((e) => CN.targetsForExit(String(nodeId), all, e, savedExits).length));
+        };
+        const wiring = () => {
+            const all = this.editor.export().drawflow.Home.data;
+            const out = {};
+            for (const e of savedExits) {
+                out[e] = CN.targetsForExit(String(nodeId), all, e, savedExits)
+                    .map((id) => all[id]?.data?.name || all[id]?.data?.agent_name || all[id]?.data?.type || id);
+            }
+            return out;
+        };
+        assist = window.CodeNodeAssist.mountAssistBox(f('assist'), {
+            t: (k, p) => this.t(k, p),
+            tickedCount: () => checked.size,
+            listServers: listChecked,
+            // One entry per provider, labelled with the model the user settings say runs: on the package key the
+            // admin's default_model, with the user's own key their saved choice. /chat applies that model itself.
+            models: async () => {
+                await this.loadProviders();
+                let s = {};
+                try { s = await (await fetch(`${this.apiBase}/settings/keys`, { headers: this.getAuthHeaders(), credentials: 'include' })).json(); }
+                catch (_) { s = {}; }
+                return (this.providers || []).map((p) => {
+                    const model = (!s.locked?.[p.name] && s.models?.[p.name]) || s.package_models?.[p.name] || '';
+                    return { provider: p.name, model, label: model ? `${p.name} · ${model}` : this.t('workflow.codeAssist.providerDefault', { provider: p.name }) };
+                });
+            },
+            ask: (o) => this._codeAssistAsk(o),
+            checkPython: (code) => this._codeNodeCheck(code),
+            getCode: () => f('code').value,
+            getExits: () => CN.parseExits(f('exits').value),
+            wiredExits,
+            wiring,
+            getSample: () => '',   // the editor has no test input; the assistant goes by the tool docs
+            apply: ({ code, exits }) => {
+                f('code').value = code;
+                f('exits').value = CN.exitsText(exits);
+                refreshConnect();
+            },
+        });
 
         const read = () => ({
             name: f('name').value.trim() || 'Code',
@@ -11206,6 +11299,25 @@ class WorkflowEditor {
             console.warn(`[ingestion] ${toolName} proxy call failed:`, e);
             return null;
         }
+    }
+
+    /** tools/list through the proxy, full entries; {error} when the server could not be listed. */
+    async _mcpProxyListToolEntries(server) {
+        try {
+            if (!server?.url || typeof window.mcpClient?.request !== 'function') return { error: 'no URL for this server' };
+            const data = await window.mcpClient.request('/mcp/proxy', {
+                method: 'POST',
+                body: JSON.stringify({
+                    action: 'proxy', server_url: server.url, server_id: server.id,
+                    user_id: typeof window.mcpClient.getUserId === 'function' ? window.mcpClient.getUserId() : undefined,
+                    jsonrpc: { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
+                }),
+            });
+            const rpc = data?.response || data;
+            if (rpc?.error) return { error: typeof rpc.error === 'string' ? rpc.error : (rpc.error.message || 'tools/list failed') };
+            const tools = rpc?.result?.tools;
+            return Array.isArray(tools) ? { tools: tools.filter((x) => x && x.name) } : { error: 'no tool list in the answer' };
+        } catch (e) { return { error: String(e?.message || e) }; }
     }
 
     /**
@@ -14928,31 +15040,76 @@ class WorkflowEditor {
         }
     }
 
-    async _codeNodeExecuteOnce(req) {
+    async _codeHarness() {
         if (!this._codeHarnessSrc) {
             const resp = await fetch('assets/py/code_node_harness.py?v=20261005-no-exit-2');
             if (!resp.ok) throw new Error(`cannot load the code node harness (HTTP ${resp.status})`);
             this._codeHarnessSrc = await resp.text();
         }
-        const payload = { ...req, harness: this._codeHarnessSrc,
+        return this._codeHarnessSrc;
+    }
+
+    async _codeNodeExecuteOnce(req) {
+        const payload = { ...req, harness: await this._codeHarness(),
             api_base: window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1',
             token: window.authManager?.token || window.authManager?.getToken?.() || null };
-        // The worker runs Python synchronously, so jobs go through it one at a time; each job's
-        // timer starts when the job starts, not while it waits in the queue.
+        return this._codeWorkerJob('runCode', payload, (req.timeout_s + 5) * 1000,
+            `timed out after ${req.timeout_s}s`);
+    }
+
+    /** The harness's static check of `source`: its message, or null when the code is acceptable. */
+    async _codeNodeCheck(source) {
+        const r = await this._codeWorkerJob('checkCode', { code: source, harness: await this._codeHarness() },
+            10000, 'code check timed out');
+        return r.error || null;
+    }
+
+    /** One non-streaming /chat turn for the code node assistant: no history, no tools, no memory. Returns the text. */
+    async _codeAssistAsk({ provider, system, message, signal }) {
+        const resp = await fetch(`${this.apiBase}/chat`, {
+            method: 'POST',
+            headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
+            credentials: 'include',
+            signal,
+            body: JSON.stringify({ message, conversation_history: [], streaming: false, provider,
+                system_prompt: system, tools: [], memory: false }),
+        });
+        if (!resp.ok) {
+            // The backend's own error message, as _runNodeAsChatUnit reads it.
+            let detail = '';
+            try {
+                const errText = await resp.text();
+                try {
+                    const j = JSON.parse(errText);
+                    detail = (j && (j.error?.message || j.message || (typeof j.error === 'string' ? j.error : '') || j.detail)) || errText;
+                } catch { detail = errText; }
+            } catch { /* body unreadable */ }
+            detail = String(detail || '').trim().replace(/\s+/g, ' ').slice(0, 600);
+            throw new Error(detail ? `${detail} (HTTP ${resp.status})` : `Request failed (HTTP ${resp.status})`);
+        }
+        const r = await resp.json();
+        return r.assistant_text || r.text || '';
+    }
+
+    /**
+     * One job through the single code worker. The worker runs Python synchronously, so jobs go
+     * through it one at a time; each job's timer starts when the job starts, not while it waits
+     * in the queue. A cold worker first loads Pyodide (tens of seconds), so it gets +90 s.
+     */
+    _codeWorkerJob(verb, payload, limitMs, timeoutMsg) {
         const runOne = () => {
             const cold = !this._codeWorker || !this._codeWorkerWarm;
-            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261016-node-name');
+            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261023-assist');
             const w = this._codeWorker;
             const id = (this._codeSeq = (this._codeSeq || 0) + 1);
-            // A cold worker first loads Pyodide (tens of seconds); the code's own timeout starts after.
-            const limitMs = (req.timeout_s + 5) * 1000 + (cold ? 90000 : 0);
+            const limit = limitMs + (cold ? 90000 : 0);
             return new Promise((resolve, reject) => {
                 const timer = setTimeout(() => {
                     w.removeEventListener('message', onMsg);
                     w.terminate();
                     if (this._codeWorker === w) { this._codeWorker = null; this._codeWorkerWarm = false; }
-                    reject(new Error(`timed out after ${req.timeout_s}s`));
-                }, limitMs);
+                    reject(new Error(timeoutMsg));
+                }, limit);
                 const onMsg = (e) => {
                     const m = e.data || {};
                     if (m.type === 'progress' || m.id !== id) return;
@@ -14962,12 +15119,12 @@ class WorkflowEditor {
                     m.ok ? resolve(m.result) : reject(new Error(m.error));
                 };
                 w.addEventListener('message', onMsg);
-                w.postMessage({ id, verb: 'runCode', payload });
+                w.postMessage({ id, verb, payload });
             });
         };
         const job = (this._codeQueue || Promise.resolve()).then(runOne, runOne);
         this._codeQueue = job.catch(() => {});
-        return await job;
+        return job;
     }
 
     /**

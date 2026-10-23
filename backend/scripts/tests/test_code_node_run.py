@@ -24,8 +24,11 @@ class FakeMcp(BaseHTTPRequestHandler):
                 result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}}
             case "tools/call":
                 args = body["params"]["arguments"]
-                data = {"mail": None} if args.get("folder") == "Empty" else {"mail": {"id": "m1", "subject": "Hi"}}
-                result = {"content": [{"type": "text", "text": json.dumps(data)}]}
+                if args.get("folder") == "Broken":
+                    result = {"isError": True, "content": [{"type": "text", "text": "mailbox_locked"}]}
+                else:
+                    data = {"mail": None} if args.get("folder") == "Empty" else {"mail": {"id": "m1", "subject": "Hi"}}
+                    result = {"content": [{"type": "text", "text": json.dumps(data)}]}
             case _:
                 result = {}
         out = json.dumps({"jsonrpc": "2.0", "id": body.get("id"), "result": result}).encode()
@@ -87,6 +90,12 @@ class CodeNodeRun(unittest.TestCase):
         self.run_node(self.req("Inbox"))
         calls = [h for m, h in FakeMcp.seen if m == "tools/call"]
         self.assertEqual(calls[0].get("X-Outlook-Account"), "k-123")
+
+    def test_tool_error_result_takes_error_exit(self):
+        res = self.run_node(self.req("Broken"))
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["route"], "error")
+        self.assertIn("mailbox_locked", res["output_text"])
 
     def test_unreachable_server_takes_error_exit(self):
         res = self.run_node(self.req("Inbox", servers={"outlook": {"url": "http://127.0.0.1:9/mcp", "headers": {}}}))

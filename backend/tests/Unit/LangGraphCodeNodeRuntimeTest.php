@@ -74,4 +74,21 @@ final class LangGraphCodeNodeRuntimeTest extends TestCase
         self::assertStringContainsString('with open(os.path.join(PACKAGE_DIR, self.cfg["source_file"]), encoding="utf-8") as fh:', $with);
         self::assertStringContainsString('res = await asyncio.to_thread(CODE_HARNESS.execute, self.source(), value,', $with);
     }
+
+    public function testToolErrorResultTakesErrorExitInCompiledScript(): void
+    {
+        $block = LangGraphRuntime::codeHarnessBlock();
+        $py = "import json, sys, types\nMCP_SLUGS = {'s': 'http://x/mcp'}\nclass _M:\n"
+            . "    def call_tool_raw(self, u, t, a):\n"
+            . "        return {'isError': True, 'content': [{'type': 'text', 'text': 'quota_exceeded'}]}\nMCP = _M()\n"
+            . $block
+            . "\nr = CODE_HARNESS.execute('def run(i, call_tool):\\n    return {\"route\": \"ok\", \"output\": call_tool(\"s\", \"t\")}',"
+            . " None, ['ok', 'error'], ['s'], _code_transport, 5)\n"
+            . "print(r['route'])\nprint('quota_exceeded' in r['output_text'])\n";
+        $file = tempnam(sys_get_temp_dir(), 'cn') . '.py';
+        file_put_contents($file, $py);
+        exec('python3 ' . escapeshellarg($file) . ' 2>&1', $out, $rc);
+        self::assertSame(0, $rc, implode("\n", $out));
+        self::assertSame(['error', 'True'], $out);
+    }
 }
