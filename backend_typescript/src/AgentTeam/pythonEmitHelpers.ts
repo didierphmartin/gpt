@@ -130,7 +130,7 @@ export function pyStr(s: string): string {
 /**
  * Emit the MCP JSON-RPC client Python block.
  *
- * Returns the three functions: _normalize_mcp_url, _init_mcp_session,
+ * Returns the functions: _mcp_candidates, _init_mcp_session,
  * _parse_mcp_response, and _call_mcp_tool.
  *
  * Byte-identical to PythonEmitHelpers::mcpClientBlock() (verified against a

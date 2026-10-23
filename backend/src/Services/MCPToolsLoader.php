@@ -268,17 +268,9 @@ class MCPToolsLoader
         // parse. Several registered servers legitimately have trailing-slash
         // URLs, so this must not be "fixed" by re-adding an rtrim.
         //
-        // Unlike MCPProxyController::resolveEndpointUrl(), this loader does
-        // NOT append "/mcp" to the stored URL — doing so here would change
-        // behavior for every already-registered server. We only apply the
-        // narrower SSE rewrite (MCPeek's SSEMCPClient.initializeSession
-        // behaviour: a trailing "/sse" is really the "/mcp" JSON-RPC
-        // endpoint) so SSE-transport servers stop getting POSTed at their
-        // event-stream URL.
-        $mcpUrl = $serverUrl;
-        if ($transport === 'sse' && str_ends_with(rtrim($mcpUrl, '/'), '/sse')) {
-            $mcpUrl = substr(rtrim($mcpUrl, '/'), 0, -4) . '/mcp';
-        }
+        // Endpoint rule shared with the proxy (McpEndpoint): the stored URL
+        // as given first, then with "/mcp" in its path; for SSE transport a
+        // trailing "/sse" is really the "/mcp" JSON-RPC endpoint.
 
         // Ensure empty arguments is an object {} not array []
         // MCP servers expect "arguments" to be a record/object
@@ -301,36 +293,30 @@ class MCPToolsLoader
         ];
         $headers = array_merge($baseHeaders, $extraHeaders);
 
-        [$response, $httpCode, $error] = $this->postJsonRpc($mcpUrl, (string) json_encode($request), $headers);
+        $parsed = null;
+        $failure = 'MCP server unreachable';
+        foreach (McpEndpoint::candidates($serverUrl, $transport) as $mcpUrl) {
+            [$response, $httpCode, $error] = $this->postJsonRpc($mcpUrl, (string) json_encode($request), $headers);
 
-        if ($error) {
-            return [
-                'formatted' => [
-                    'error' => true,
-                    'message' => "MCP connection failed: $error"
-                ],
-                'raw' => null
-            ];
+            if ($error) {
+                $failure = "MCP connection failed: $error";
+                continue;
+            }
+
+            // Parse response (may be JSON or SSE)
+            $reply = $this->parseResponse((string) $response);
+            if (McpEndpoint::isJsonRpcReply($reply)) {
+                $parsed = $reply;
+                break;
+            }
+            $failure = $httpCode >= 400 ? "MCP server returned HTTP $httpCode" : 'Failed to parse MCP response';
         }
-
-        if ($httpCode >= 400) {
-            return [
-                'formatted' => [
-                    'error' => true,
-                    'message' => "MCP server returned HTTP $httpCode"
-                ],
-                'raw' => null
-            ];
-        }
-
-        // Parse response (may be JSON or SSE)
-        $parsed = $this->parseResponse($response);
 
         if ($parsed === null) {
             return [
                 'formatted' => [
                     'error' => true,
-                    'message' => "Failed to parse MCP response"
+                    'message' => $failure
                 ],
                 'raw' => null
             ];

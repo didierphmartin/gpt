@@ -1,4 +1,5 @@
 import { db } from '../db/pools';
+import { McpEndpoint } from '../Services/McpEndpoint';
 import { Ctx, ControllerResult } from '../Support/Http';
 
 /** Per-call error slot so concurrent requests don't clobber each other's message. */
@@ -15,6 +16,9 @@ interface ErrRef {
  * Runtime DDL (ensureTablesExist) is not replicated — the schema already exists.
  */
 export class MCPProxyController {
+  /** "transport url" => the endpoint that answered (per controller instance). */
+  private endpoints = new Map<string, string>();
+
   /** POST /api/v1/mcp/proxy */
   async forward(ctx: Ctx): Promise<ControllerResult> {
     const input = ctx.body ?? {};
@@ -176,9 +180,7 @@ export class MCPProxyController {
     const response = await this.sendToMCPServer(serverUrl, initRequest, true, extraHeaders, err);
 
     if (response === null) {
-      const trimmed = serverUrl.replace(/\/+$/, '');
-      const urlTried =
-        trimmed.endsWith('/mcp') || trimmed.endsWith('.php') ? trimmed : trimmed + '/mcp';
+      const urlTried = McpEndpoint.candidates(serverUrl).join(', ');
       return {
         success: false,
         error: err.lastError ?? 'Failed to connect to MCP server',
@@ -284,10 +286,14 @@ export class MCPProxyController {
   }
 
   /**
-   * POST a JSON-RPC request to an MCP server. Returns the parsed JSON-RPC object
-   * (from a JSON or SSE `data:` line), `{ success: true }` for notifications
-   * (expectResponse=false), or null on HTTP/parse failure — recording the reason
-   * in err.lastError. Mirrors the PHP curl helper.
+   * Send a JSON-RPC request to an MCP server.
+   *
+   * Tries McpEndpoint.candidates() in order — the registered URL as given,
+   * then with "/mcp" in its path — and remembers the one that answered
+   * JSON-RPC, so the rest of the exchange (initialized, tools/list...) goes
+   * there directly. A JSON-RPC reply, even an error, means the endpoint was
+   * found: its error is reported, no further candidate is tried. Returns the
+   * reply, or null (reason in err.lastError) when no candidate answered.
    */
   private async sendToMCPServer(
     serverUrl: string,
@@ -295,16 +301,39 @@ export class MCPProxyController {
     expectResponse = true,
     extraHeaders: Record<string, string> = {},
     err: ErrRef = { lastError: null },
+    transport = 'http',
   ): Promise<any | null> {
-    err.lastError = null;
-
-    // Normalize URL: some MCP servers are exposed as XAMPP-style .php scripts
-    // (e.g. mcp-server.php) that ARE the endpoint already. Only append /mcp
-    // when the URL doesn't already end in /mcp or .php.
-    let mcpUrl = serverUrl.replace(/\/+$/, '');
-    if (!mcpUrl.endsWith('/mcp') && !mcpUrl.endsWith('.php')) {
-      mcpUrl += '/mcp';
+    const key = transport + ' ' + serverUrl;
+    const known = this.endpoints.get(key);
+    const candidates = known !== undefined ? [known] : McpEndpoint.candidates(serverUrl, transport);
+    const errors: string[] = [];
+    for (const mcpUrl of candidates) {
+      const [reply, isEndpoint] = await this.postJsonRpc(mcpUrl, request, expectResponse, extraHeaders, err);
+      if (isEndpoint) {
+        this.endpoints.set(key, mcpUrl);
+        return reply;
+      }
+      errors.push(err.lastError ?? '');
     }
+    err.lastError = [...new Set(errors)].join('; ');
+    return null;
+  }
+
+  /**
+   * POST one JSON-RPC message. Returns [reply, isEndpoint]: isEndpoint is true
+   * when the URL answered as an MCP endpoint (a JSON-RPC reply, or any 2xx to a
+   * notification); reply is null on an error, with err.lastError set. The reply
+   * is the parsed JSON-RPC object (from a JSON or SSE `data:` line) or
+   * `{ success: true }` for notifications (expectResponse=false).
+   */
+  private async postJsonRpc(
+    mcpUrl: string,
+    request: unknown,
+    expectResponse: boolean,
+    extraHeaders: Record<string, string>,
+    err: ErrRef,
+  ): Promise<[any | null, boolean]> {
+    err.lastError = null;
 
     let res: globalThis.Response;
     let text: string;
@@ -321,52 +350,48 @@ export class MCPProxyController {
       });
       text = await res.text();
     } catch (e: any) {
-      err.lastError = `Connection failed: ${e?.message ?? e} (code: ${e?.cause?.code ?? 0})`;
-      return null;
+      err.lastError = `Connection failed at ${mcpUrl}: ${e?.message ?? e} (code: ${e?.cause?.code ?? 0})`;
+      return [null, false];
     }
 
-    if (res.status >= 400) {
-      let errorDetails = '';
-      try {
-        const parsed = JSON.parse(text);
-        if (parsed?.error?.message) errorDetails = ': ' + parsed.error.message;
-      } catch {
-        // non-JSON error body — no details to extract
-      }
-      err.lastError = `Server returned HTTP ${res.status}${errorDetails}`;
-      return null;
-    }
-
-    if (!expectResponse) return { success: true };
-
-    // Try to parse as plain JSON
+    // Plain JSON first, then SSE framing (last data: <json> line wins, like the PHP parser).
+    let decoded: any = null;
     try {
-      const decoded = JSON.parse(text);
-      if (decoded !== null) return decoded;
+      decoded = JSON.parse(text);
     } catch {
       // fall through to SSE parsing
     }
-
-    // Try to parse as SSE format (last data: <json> line wins, like the PHP parser)
-    let jsonData: any = null;
-    for (const rawLine of text.split('\n')) {
-      const line = rawLine.trim();
-      if (line.startsWith('data:')) {
-        const data = line.slice(5).trim();
-        if (data) {
-          try {
-            const parsed = JSON.parse(data);
-            if (parsed !== null) jsonData = parsed;
-          } catch {
-            // keep scanning subsequent data: lines
+    if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) {
+      decoded = null;
+      for (const rawLine of text.split('\n')) {
+        const line = rawLine.trim();
+        if (line.startsWith('data:')) {
+          const data = line.slice(5).trim();
+          if (data) {
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) decoded = parsed;
+            } catch {
+              // keep scanning subsequent data: lines
+            }
           }
         }
       }
     }
-    if (jsonData !== null) return jsonData;
+    const isJsonRpc = McpEndpoint.isJsonRpcReply(decoded);
 
-    err.lastError = 'Server returned invalid response format';
-    return null;
+    if (res.status >= 400) {
+      const details = isJsonRpc && decoded.error?.message ? ': ' + decoded.error.message : '';
+      err.lastError = `Server returned HTTP ${res.status} at ${mcpUrl}${details}`;
+      return [null, isJsonRpc];
+    }
+
+    if (!expectResponse) return [{ success: true }, true];
+
+    if (isJsonRpc) return [decoded, true];
+
+    err.lastError = `Server at ${mcpUrl} did not reply with JSON-RPC`;
+    return [null, false];
   }
 
   /** Get server URL from database (caller-scoped, enabled servers only). */

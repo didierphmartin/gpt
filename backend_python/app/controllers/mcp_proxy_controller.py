@@ -14,6 +14,7 @@ import time
 import httpx
 
 from app.controllers.mcp_server_controller import MCPServerController
+from app.services.mcp_endpoint import McpEndpoint
 from app.providers._http import SHARED_SSL_CONTEXT
 from app.support.db_presence import DbPresence
 from app.support.logger import error_log
@@ -33,6 +34,8 @@ class MCPProxyController:
         self.db = db
         self.config = config
         self.lastError: str | None = None
+        # "transport url" => the endpoint that answered
+        self._endpoints: dict[str, str] = {}
         self._presence = DbPresence(db, 'MCPProxyController')
         self.ensureTablesExist()
 
@@ -198,7 +201,7 @@ class MCPProxyController:
         response = self._sendToMCPServer(serverUrl, initRequest, True, extraHeaders, transport)
 
         if response is None:
-            urlTried = self.resolveEndpointUrl(serverUrl, transport)
+            urlTried = ', '.join(McpEndpoint.candidates(serverUrl, transport))
             return {
                 'success': False,
                 'error': self.lastError if self.lastError is not None else 'Failed to connect to MCP server',
@@ -299,24 +302,6 @@ class MCPProxyController:
             'status_code': 200,
         }
 
-    # ─── resolveEndpointUrl (PHP 323-333, static) ───────────────────────────
-
-    @staticmethod
-    def resolveEndpointUrl(serverUrl: str, transport: str = 'http') -> str:
-        """Compute the URL the proxy POSTs JSON-RPC to.
-         - 'sse' transport: a trailing "/sse" is replaced by "/mcp" (MCPeek's
-           SSEMCPClient.initializeSession behaviour). Servers that only answer
-           over the event stream are not supported by this proxy.
-         - then, for every transport: append "/mcp" unless the URL already ends
-           in "/mcp" or ".php" (XAMPP-style script endpoints).
-        """
-        url = serverUrl.rstrip('/')
-        if transport == 'sse' and url.endswith('/sse'):
-            url = url[:-4] + '/mcp'
-        if not url.endswith('/mcp') and not url.endswith('.php'):
-            url += '/mcp'
-        return url
-
     # ─── sendToMCPServer (PHP 338-405) ──────────────────────────────────────
 
     def _makeClient(self) -> httpx.Client:
@@ -331,11 +316,32 @@ class MCPProxyController:
 
     def _sendToMCPServer(self, serverUrl: str, request: dict, expectResponse: bool = True,
                           extraHeaders=None, transport: str = 'http'):
-        """Send request to MCP server."""
+        """Send request to MCP server.
+
+        Tries McpEndpoint.candidates() in order — the registered URL as given,
+        then with "/mcp" in its path — and remembers the one that answered
+        JSON-RPC, so the rest of the exchange (initialized, tools/list...) goes
+        there directly. A JSON-RPC reply, even an error, means the endpoint was
+        found: its error is reported, no further candidate is tried.
+        """
+        key = transport + ' ' + serverUrl
+        candidates = [self._endpoints[key]] if key in self._endpoints else McpEndpoint.candidates(serverUrl, transport)
+        errors: list[str] = []
+        for mcpUrl in candidates:
+            reply, isEndpoint = self._postJsonRpc(mcpUrl, request, expectResponse, extraHeaders)
+            if isEndpoint:
+                self._endpoints[key] = mcpUrl
+                return reply
+            errors.append(self.lastError)
+        self.lastError = '; '.join(dict.fromkeys(errors))
+        return None
+
+    def _postJsonRpc(self, mcpUrl: str, request: dict, expectResponse: bool, extraHeaders=None):
+        """POST one JSON-RPC message. Returns (reply, isEndpoint): isEndpoint is
+        True when the URL answered as an MCP endpoint (a JSON-RPC reply, or any
+        2xx to a notification); reply is None on an error, with lastError set."""
         extraHeaders = extraHeaders if extraHeaders is not None else []
         self.lastError = None
-
-        mcpUrl = self.resolveEndpointUrl(serverUrl, transport)
 
         headers = {
             'Content-Type': 'application/json',
@@ -351,46 +357,41 @@ class MCPProxyController:
             try:
                 response = client.post(mcpUrl, json=request, headers=headers)
             except httpx.RequestError as e:
-                # PHP: "Connection failed: $error (code: $errno)" — libcurl's
+                # PHP: "Connection failed at $mcpUrl: $error (code: $errno)" — libcurl's
                 # numeric errno has no httpx equivalent; the exception text
-                # takes its place (ruling: PHP 367-370, not byte-identical).
-                self.lastError = f"Connection failed: {e}"
-                return None
+                # takes its place (ruling: not byte-identical).
+                self.lastError = f"Connection failed at {mcpUrl}: {e}"
+                return None, False
 
             httpCode = response.status_code
 
-            if httpCode >= 400:
-                errorDetails = ''
-                try:
-                    parsed = response.json()
-                except ValueError:
-                    parsed = None
-                if isinstance(parsed, dict):
-                    err = parsed.get('error')
-                    if isinstance(err, dict) and err.get('message') is not None:
-                        errorDetails = ': ' + php_strval(err['message'])
-                self.lastError = f"Server returned HTTP {httpCode}{errorDetails}"
-                return None
-
-            if not expectResponse:
-                return {'success': True}
-
-            # Try to parse as plain JSON
+            # Plain JSON first, then SSE framing.
             responseText = response.text
             try:
                 decoded = json.loads(responseText)
             except (ValueError, TypeError):
                 decoded = None
-            if decoded is not None:
-                return _php_json_arrays(decoded)
+            decoded = _php_json_arrays(decoded) if isinstance(decoded, (dict, list)) else None
+            if not isinstance(decoded, dict) and not isinstance(decoded, list):
+                decoded = self._parseSSEResponse(responseText)
+            isJsonRpc = McpEndpoint.isJsonRpcReply(decoded)
 
-            # Try to parse as SSE format
-            decoded = self._parseSSEResponse(responseText)
-            if decoded is not None:
-                return decoded
+            if httpCode >= 400:
+                err = decoded.get('error') if isJsonRpc else None
+                errorDetails = ''
+                if isinstance(err, dict) and err.get('message') is not None:
+                    errorDetails = ': ' + php_strval(err['message'])
+                self.lastError = f"Server returned HTTP {httpCode} at {mcpUrl}{errorDetails}"
+                return None, isJsonRpc
 
-            self.lastError = "Server returned invalid response format"
-            return None
+            if not expectResponse:
+                return {'success': True}, True
+
+            if isJsonRpc:
+                return decoded, True
+
+            self.lastError = f"Server at {mcpUrl} did not reply with JSON-RPC"
+            return None, False
         finally:
             client.close()
 

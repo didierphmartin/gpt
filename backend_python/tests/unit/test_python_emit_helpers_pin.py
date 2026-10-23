@@ -32,9 +32,9 @@ from app.agent_team.services.python_emit_helpers import PythonEmitHelpers
 def test_mcp_client_block_unchanged():
     """PHP testMcpClientBlockUnchanged (lines 20-29)."""
     block = PythonEmitHelpers.mcpClientBlock()
-    assert len(block.encode('utf-8')) == 4868, 'mcpClientBlock byte length changed'
+    assert len(block.encode('utf-8')) == 4959, 'mcpClientBlock byte length changed'
     assert hashlib.sha256(block.encode('utf-8')).hexdigest() == (
-        '873230865dafdbdbaa7fdccf4189c99f6cf47d9fac32977350dbdb1545b94ab4'
+        '834b131509dd600011ad0a1002a1fc1e4246076b61f5af4200b16e66f148f0e6'
     ), 'mcpClientBlock content changed -- this alters generated Python for both generators'
 
 

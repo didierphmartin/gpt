@@ -538,14 +538,31 @@ TXT;
     // MCP (native MCPManager) — emitted only when the workflow uses MCP tools
     // -------------------------------------------------------------------------
 
-    /** Mirror of the emitted-Python _normalize_mcp_url, applied at generation time. */
-    private static function normalizeMcpUrl(string $url): string
+    /**
+     * MCPManager takes one URL and does no fallback, so the module probes the
+     * endpoint at import: the live URL as given first, then with /mcp in its path
+     * (_mcp_candidates, CompiledRuntimeEmit).
+     */
+    private static function mcpEndpointFn(): string
     {
-        $url = rtrim($url, '/');
-        if (str_ends_with($url, '/mcp') || str_ends_with($url, '.php')) {
-            return $url;
-        }
-        return $url . '/mcp';
+        return <<<'PY'
+def _mcp_endpoint(server_url: str) -> str:
+    """The MCP endpoint for a registered server: the first of _mcp_candidates(live URL)
+    that answers 'initialize' with JSON-RPC; the last candidate when none does."""
+    candidates = _mcp_candidates(_mcp_live_url(server_url))
+    init = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                       "clientInfo": {"name": "NOOA-Workflow", "version": "1.0.0"}}}
+    headers = _mcp_headers(server_url)   # outside the try: a bad MCP_HEADERS_<SLUG> stops the run
+    for url in candidates[:-1]:
+        try:
+            r = httpx.post(url, json=init, headers=headers, timeout=15)
+            if r.status_code < 400 and ('"result"' in r.text or '"error"' in r.text):
+                return url
+        except Exception:
+            pass
+    return candidates[-1]
+PY;
     }
 
     private static function mcpBlock(array $analyzed): string
@@ -555,15 +572,16 @@ TXT;
         $lines[] = '# Server registry (metadata only, for logs/debugging).';
         $lines[] = 'MCP_SERVERS = ' . PythonEmitHelpers::jsonToPython($servers, true);
         $lines[] = '';
+        $lines[] = self::mcpEndpointFn();
+        $lines[] = '';
         $lines[] = '# One live connection per server; the value exposes each server tool as a';
         $lines[] = '# method. tool_call_timeout matches the 180s the other targets allow.';
         $lines[] = 'MCP = {';
         foreach ($servers as $url => $meta) {
             $safeName = preg_replace('/[^A-Za-z0-9_-]+/', '-', (string) (($meta['name'] ?? '') ?: 'server'));
-            $normalized = self::normalizeMcpUrl((string) $url);
             $lines[] = '    ' . PythonEmitHelpers::pyStr((string) $url) . ': MCPManager.create_from_server(';
             $lines[] = '        ' . PythonEmitHelpers::pyStr($safeName) . ',';
-            $lines[] = '        url=_normalize_mcp_url(_mcp_live_url(' . PythonEmitHelpers::pyStr((string) $url) . ')),   # MCP_URL_<SLUG> overrides';
+            $lines[] = '        url=_mcp_endpoint(' . PythonEmitHelpers::pyStr((string) $url) . '),   # MCP_URL_<SLUG> overrides';
             $lines[] = '        headers=_mcp_headers(' . PythonEmitHelpers::pyStr((string) $url) . '),   # MCP_HEADERS_<SLUG> from .env';
             $lines[] = '        transport="streamable-http",';
             $lines[] = '        tool_call_timeout=timedelta(seconds=180),';

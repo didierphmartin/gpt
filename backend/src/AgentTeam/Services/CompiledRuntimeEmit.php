@@ -110,12 +110,14 @@ def _mcp_live_url(server_url: str) -> str:
     return (os.environ.get(f"MCP_URL_{slug.upper()}", "").strip() if slug else "") or server_url
 
 
-def _normalize_mcp_url(url: str) -> str:
-    """The MCP endpoint: as given when it ends with /mcp or .php, else with /mcp appended."""
-    url = url.rstrip("/")
-    if url.endswith("/mcp") or url.endswith(".php"):
-        return url
-    return url + "/mcp"
+def _mcp_candidates(url: str) -> list:
+    """The endpoints to try, in order: the URL exactly as given, then with /mcp in its path
+    (before any query string). A path already ending in /mcp or .php is the endpoint."""
+    cut = min([i for i in (url.find("?"), url.find("#")) if i >= 0] or [len(url)])
+    path, rest = url[:cut].rstrip("/"), url[cut:]
+    if path.endswith("/mcp") or path.endswith(".php"):
+        return [url]
+    return [url, path + "/mcp" + rest]
 
 
 def _parse_mcp_response(text: str) -> dict | None:
@@ -137,7 +139,7 @@ def _parse_mcp_response(text: str) -> dict | None:
 
 
 def _init_mcp_session(server_url: str) -> str | None:
-    """The initialize handshake; tries the /mcp-normalised live URL, then the live URL as is.
+    """The initialize handshake; tries _mcp_candidates(live URL): as given, then with /mcp.
     Returns the endpoint that answered (remembered per server), or None."""
     h = _mcp_headers(server_url)   # outside the try: a bad MCP_HEADERS_<SLUG> stops the run
     init_req = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -145,7 +147,7 @@ def _init_mcp_session(server_url: str) -> str | None:
                            "clientInfo": {"name": "ADK-Workflow", "version": "1.0.0"}, "capabilities": {}}}
     candidates = [_MCP_ENDPOINTS[server_url]] if server_url in _MCP_ENDPOINTS else []
     live = _mcp_live_url(server_url)
-    for cand in (_normalize_mcp_url(live), live):
+    for cand in _mcp_candidates(live):
         if cand not in candidates:
             candidates.append(cand)
     last_err = None
@@ -169,7 +171,7 @@ def _init_mcp_session(server_url: str) -> str | None:
 
 def _call_mcp_tool_raw(server_url: str, tool_name: str, arguments: dict) -> dict:
     """tools/call; the raw MCP result {content, structuredContent?, isError?} (code nodes)."""
-    mcp_url = _init_mcp_session(server_url) or _normalize_mcp_url(_mcp_live_url(server_url))
+    mcp_url = _init_mcp_session(server_url) or _mcp_candidates(_mcp_live_url(server_url))[-1]
     request = {"jsonrpc": "2.0", "id": int(time.time()), "method": "tools/call",
                "params": {"name": tool_name, "arguments": arguments or {}}}
     try:

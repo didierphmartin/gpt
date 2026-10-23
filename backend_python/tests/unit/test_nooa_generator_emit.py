@@ -106,7 +106,7 @@ def test_mcp_emission():
     assert 'Tools selected for this node: web_search' in code
 
 
-def test_mcp_url_normalized():
+def test_mcp_url_tried_as_given_then_with_mcp():
     a = _analyzed()
     a['usedServers'] = {'https://vector.example.com': {'name': 'Vector'}}
     a['usedCatalog'] = {'find': {
@@ -115,8 +115,32 @@ def test_mcp_url_normalized():
     }}
     a['agents']['2']['tools'] = ['find']
     code = NOOAGenerator.emitNooa(a)
-    assert 'url="https://vector.example.com/mcp"' in code
+    # MCPManager does no URL normalization: the endpoint is probed at import,
+    # the registered URL first, then with /mcp in its path.
+    assert 'url=_mcp_endpoint(["https://vector.example.com", "https://vector.example.com/mcp"])' in code
+    assert 'def _mcp_endpoint(candidates: list) -> str:' in code
+    # The dict key stays the raw catalog URL (agent attrs look it up verbatim).
     assert 'MCP["https://vector.example.com"]' in code
+
+
+def test_mcp_query_url_keeps_its_query():
+    url = 'http://localhost/servicenow/?profile=mock&toolset=jobs'
+    a = _analyzed()
+    a['usedServers'] = {url: {'name': 'ServiceNow'}}
+    a['usedCatalog'] = {'poll_jobs': {'server_url': url, 'tool_name': 'poll_jobs', 'input_schema': {}}}
+    a['agents']['2']['tools'] = ['poll_jobs']
+    code = NOOAGenerator.emitNooa(a)
+    assert 'url=_mcp_endpoint(["' + url + '", "http://localhost/servicenow/mcp?profile=mock&toolset=jobs"])' in code
+
+
+def test_mcp_endpoint_url_is_baked_as_is():
+    a = _analyzed()
+    a['usedServers'] = {'https://mcp.example/mcp': {'name': 'Example Server'}}
+    a['usedCatalog'] = {'web_search': {'server_url': 'https://mcp.example/mcp', 'tool_name': 'web_search', 'input_schema': {}}}
+    a['agents']['2']['tools'] = ['web_search']
+    code = NOOAGenerator.emitNooa(a)
+    assert 'url="https://mcp.example/mcp"' in code
+    assert 'def _mcp_endpoint' not in code
 
 
 def test_skill_runtime_emitted_when_skill_present():

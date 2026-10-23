@@ -4389,8 +4389,8 @@ servers and tool schemas (MCP_SERVERS, TOOL_CATALOG) and the graph
   5. The Output node merges its parents' outputs verbatim (no LLM) into the
      final result.
 
-Tools are called over the MCP protocol: initialize handshake (the /mcp
-endpoint first, then the URL as registered), tools/call, JSON or SSE
+Tools are called over the MCP protocol: initialize handshake (the URL as
+registered first, then with /mcp in its path), tools/call, JSON or SSE
 response, text content back to the model.
 TXT;
     }

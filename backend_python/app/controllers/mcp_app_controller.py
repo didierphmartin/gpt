@@ -11,6 +11,7 @@ import json
 import httpx
 
 from app.providers._http import SHARED_SSL_CONTEXT
+from app.services.mcp_endpoint import McpEndpoint
 from app.support.phpcompat import php_empty, php_floatval, php_trim
 from app.support.phpjson import php_json_arrays as _php_json_arrays
 from app.support.phpjson import php_json_encode
@@ -45,14 +46,6 @@ class MCPAppController:
         if not resourceUri:
             return {'error': 'Missing resource parameter', 'status_code': 400, 'content_type': 'text/plain'}
 
-        # Normalize URL: servers ending in .php are already the endpoint
-        # (e.g. XAMPP-style mcp-server.php). Only append /mcp otherwise.
-        # PHP: rtrim($serverUrl, '/') — trailing-only, unlike php_trim()'s
-        # trim() semantics, so str.rstrip('/') is used directly here.
-        mcpUrl = serverUrl.rstrip('/')
-        if not mcpUrl.endswith('/mcp') and not mcpUrl.endswith('.php'):
-            mcpUrl += '/mcp'
-
         # Initialize MCP session
         initRequest = {
             'jsonrpc': '2.0',
@@ -65,7 +58,14 @@ class MCPAppController:
             },
         }
 
-        initResponse = self._sendMCPRequest(mcpUrl, initRequest)
+        # The endpoint is the first candidate (McpEndpoint: the URL as given,
+        # then with "/mcp" in its path) that answers initialize with JSON-RPC.
+        initResponse = None
+        mcpUrl = serverUrl
+        for mcpUrl in McpEndpoint.candidates(serverUrl):
+            initResponse = self._sendMCPRequest(mcpUrl, initRequest)
+            if McpEndpoint.isJsonRpcReply(initResponse):
+                break
         if not initResponse or _isset_error(initResponse):
             return {'error': 'Failed to initialize MCP session', 'status_code': 502, 'content_type': 'text/plain'}
 

@@ -1,6 +1,7 @@
 import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { ToolDefinition } from '../Contracts/FunctionExecutor';
+import { McpEndpoint } from './McpEndpoint';
 
 interface ToolMeta {
   original_name: string;
@@ -184,25 +185,37 @@ export class MCPToolsLoader {
   }
 
   private async callMCPServer(serverUrl: string, toolName: string, args: any, extraHeaders: Record<string, string>): Promise<{ formatted: any; raw: any }> {
-    const url = serverUrl.replace(/\/+$/, '');
     const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream, */*', ...extraHeaders };
     const body = JSON.stringify({ jsonrpc: '2.0', id: Math.floor(Date.now() / 1000), method: 'tools/call', params: { name: toolName, arguments: args && Object.keys(args).length ? args : {} } });
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 180_000);
-    let res: Response;
-    try {
-      res = await fetch(url, { method: 'POST', headers, body, signal: controller.signal });
-    } catch (e: any) {
+    // Endpoint rule shared with the proxy (McpEndpoint): the stored URL as given
+    // first (never trimmed: several registered servers have trailing-slash URLs),
+    // then with "/mcp" in its path.
+    let parsed: any = null;
+    let failure = 'MCP server unreachable';
+    for (const url of McpEndpoint.candidates(serverUrl)) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 180_000);
+      let res: Response;
+      try {
+        res = await fetch(url, { method: 'POST', headers, body, signal: controller.signal });
+      } catch (e: any) {
+        clearTimeout(timer);
+        failure = `MCP connection failed: ${e?.message ?? e}`;
+        continue;
+      }
       clearTimeout(timer);
-      return { formatted: { error: true, message: `MCP connection failed: ${e?.message ?? e}` }, raw: null };
-    }
-    clearTimeout(timer);
 
-    if (res.status >= 400) return { formatted: { error: true, message: `MCP server returned HTTP ${res.status}` }, raw: null };
-    const text = await res.text().catch(() => '');
-    const parsed = this.parseResponse(text);
-    if (parsed == null) return { formatted: { error: true, message: 'Failed to parse MCP response' }, raw: null };
+      // Parse response (may be JSON or SSE)
+      const text = await res.text().catch(() => '');
+      const reply = this.parseResponse(text);
+      if (McpEndpoint.isJsonRpcReply(reply)) {
+        parsed = reply;
+        break;
+      }
+      failure = res.status >= 400 ? `MCP server returned HTTP ${res.status}` : 'Failed to parse MCP response';
+    }
+    if (parsed == null) return { formatted: { error: true, message: failure }, raw: null };
     if (parsed.error) return { formatted: { error: true, message: parsed.error.message ?? 'MCP tool execution failed' }, raw: null };
 
     const result = parsed.result ?? parsed;

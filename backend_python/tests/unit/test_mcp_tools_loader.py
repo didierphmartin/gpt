@@ -55,6 +55,29 @@ def test_execute_tool_jsonrpc_and_text_result():
     assert seen['headers']['x-key'] == 'v' and seen['headers']['accept'] == 'application/json, text/event-stream, */*'
 
 
+def test_execute_tool_stored_url_as_given_then_mcp():
+    hits = []
+    def handler(req):
+        hits.append(str(req.url))
+        if str(req.url) == 'http://h/srv':
+            return httpx.Response(301, text='')
+        return httpx.Response(200, json={'jsonrpc': '2.0', 'id': 1, 'result': {'content': [{'type': 'text', 'text': 'hi'}]}})
+    ld = _loader_with_transport(handler, {**ROW, 'server_url': 'http://h/srv'})
+    assert ld.executeTool('lookup', {}) == {'result': 'hi', '_meta': None}
+    assert hits == ['http://h/srv', 'http://h/srv/mcp']
+
+
+def test_execute_tool_query_addressed_url_is_used_as_given():
+    url = 'http://h/servicenow/?profile=mock'
+    hits = []
+    def handler(req):
+        hits.append(str(req.url))
+        return httpx.Response(200, json={'jsonrpc': '2.0', 'id': 1, 'result': {'content': [{'type': 'text', 'text': 'ok'}]}})
+    ld = _loader_with_transport(handler, {**ROW, 'server_url': url})
+    assert ld.executeTool('lookup', {}) == {'result': 'ok', '_meta': None}
+    assert hits == [url]
+
+
 def test_execute_tool_sse_body_http_error_and_rpc_error():
     ld = _loader_with_transport(lambda r: httpx.Response(200, text='event: message\ndata: {"result":{"content":[{"type":"text","text":"S"}]}}\n\n'))
     assert ld.executeTool('mcp_lookup', {}) == {'result': 'S', '_meta': None}
@@ -75,10 +98,10 @@ def test_execute_tool_ui_metadata():
 
 
 def test_execute_tool_top_level_list_response():
-    # PHP isset($parsed['error']) on a list is false, and $parsed['result'] ?? $parsed
-    # yields the list itself when there's no 'result' key -- must not AttributeError.
+    # A top-level list has no result/error key: not a JSON-RPC reply (McpEndpoint),
+    # so no candidate qualifies -- reported as a parse failure, not an AttributeError.
     ld = _loader_with_transport(lambda r: httpx.Response(200, json=[{'a': 1}]))
-    assert ld.executeTool('lookup', {}) == {'result': '[{"a":1}]'}
+    assert ld.executeTool('lookup', {}) == {'error': True, 'message': 'Failed to parse MCP response'}
 
 
 def test_close_closes_http_client():

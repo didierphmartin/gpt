@@ -2752,7 +2752,7 @@ PY;
      * through (URL normalisation, the initialize handshake with its fallback to the URL as
      * registered, the per-server endpoint cache, tools/call, plain-JSON or SSE parsing).
      *
-     * LangGraph's own copy of PythonEmitHelpers::mcpClientBlock() (_normalize_mcp_url,
+     * LangGraph's own copy of PythonEmitHelpers::mcpClientBlock() (_mcp_candidates,
      * _MCP_ENDPOINTS, _init_mcp_session, _parse_mcp_response, _call_mcp_tool), restructured
      * into a class that reuses one httpx.Client. PythonEmitHelpers::mcpClientBlock() stays
      * as it is for ADK, MAF and NOOA.
@@ -2768,7 +2768,7 @@ class McpClient:
 
     The Model Context Protocol (MCP) uses JSON-RPC 2.0 over HTTP.
     Each tool call requires:
-      1. URL normalization -- append /mcp if not present
+      1. Endpoint -- the registered URL as given, then with /mcp in its path
       2. Session initialization -- send 'initialize' + notification
       3. Tool invocation -- send 'tools/call' with name + arguments
       4. Response parsing -- handle plain JSON or SSE-wrapped JSON
@@ -2820,18 +2820,19 @@ class McpClient:
         return (os.environ.get(f"MCP_URL_{slug.upper()}", "").strip() if slug else "") or server_url
 
     @staticmethod
-    def normalize_url(url: str) -> str:
-        """Ensure the URL points to the MCP endpoint.
+    def candidates(url: str) -> list:
+        """The endpoints to try for an MCP server URL, in order.
 
-        - If it already ends with /mcp, leave it alone.
-        - If it ends with a .php file, it IS the endpoint already (XAMPP-style
-          MCP server scripts like mcp-server.php). Don't append anything.
-        - Otherwise, append /mcp per the MCP convention.
+        - The URL exactly as given first (servers addressed by query or
+          mounted at their bare URL answer there, e.g. PHP endpoints).
+        - Then with /mcp inserted into the path, before any query string.
+        - A path already ending in /mcp or .php is the endpoint: no fallback.
         """
-        url = url.rstrip("/")
-        if url.endswith("/mcp") or url.endswith(".php"):
-            return url
-        return url + "/mcp"
+        cut = min([i for i in (url.find("?"), url.find("#")) if i >= 0] or [len(url)])
+        path, rest = url[:cut].rstrip("/"), url[cut:]
+        if path.endswith("/mcp") or path.endswith(".php"):
+            return [url]
+        return [url, path + "/mcp" + rest]
 
     @staticmethod
     def _parse(text: str) -> dict | None:
@@ -2865,9 +2866,8 @@ class McpClient:
         2. Server responds with its capabilities
         3. Client sends 'notifications/initialized' to confirm
 
-        Tries the /mcp-normalised URL first, then the URL exactly as registered
-        (servers mounted at their bare URL, e.g. PHP mock servers, answer there
-        and 404 or error on /mcp). The endpoint that answers is remembered.
+        Tries candidates() of the live URL in order: as given, then with /mcp
+        in its path. The endpoint that answers is remembered.
         Returns that endpoint URL, or None when no candidate accepted the handshake.
         """
         init_req = {
@@ -2880,7 +2880,7 @@ class McpClient:
         }
         candidates = [self._endpoints[url]] if url in self._endpoints else []
         live = self._live_url(url)
-        for cand in (self.normalize_url(live), live):
+        for cand in self.candidates(live):
             if cand not in candidates:
                 candidates.append(cand)
         last_err = None
@@ -2913,7 +2913,7 @@ class McpClient:
         The MCP response contains a 'content' array; we extract all text items
         and join them. If no text is found, falls back to raw JSON.
         """
-        mcp_url = self._handshake(server_url) or self.normalize_url(server_url)
+        mcp_url = self._handshake(server_url) or self.candidates(server_url)[-1]
 
         request = {
             "jsonrpc": "2.0", "id": int(time.time()),
@@ -2940,7 +2940,7 @@ class McpClient:
 
     def call_tool_raw(self, server_url: str, tool_name: str, arguments: dict) -> dict:
         """Call a tool and return the raw MCP result {content, structuredContent?, isError?} (code nodes)."""
-        mcp_url = self._handshake(server_url) or self.normalize_url(server_url)
+        mcp_url = self._handshake(server_url) or self.candidates(server_url)[-1]
         request = {
             "jsonrpc": "2.0", "id": int(time.time()),
             "method": "tools/call",
