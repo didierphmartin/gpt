@@ -150,6 +150,17 @@ class AdkCodeNodeE2ETest extends TestCase
         }
     }
 
+    /** A node's arguments (a component's settings, a Start option's Start args) reach its code as ARGS. */
+    public function testTheCodeReadsItsArguments(): void
+    {
+        $this->startServer();
+        $a = $this->analyzed("def run(input, call_tool):\n    return 'folder=' + str(ARGS.get('folder'))\n");
+        $a['code']['3']['args'] = ['folder' => 'Didier'];
+        [$rc, $text] = $this->run_($a);
+        self::assertSame(0, $rc, $text);
+        self::assertStringContainsString('folder=Didier', $text);
+    }
+
     public function testNoMailSkipsEverythingDownstream(): void
     {
         $this->startServer(true);

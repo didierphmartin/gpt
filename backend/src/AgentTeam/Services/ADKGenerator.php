@@ -545,6 +545,7 @@ PY;
         exits: list = []
         mcp_servers: list = []
         timeout_s: int = 30
+        args: dict = {}         # the code's ARGS: the node's settings (or the Start option's Start args)
         parents: list = []      # [[state_key, name, is_start], ...]; a key not in state = a branch not taken
 
         async def _run_async_impl(self, ctx):
@@ -558,7 +559,7 @@ PY;
                 with open(os.path.join(PACKAGE_DIR, self.source_file), encoding="utf-8") as fh:
                     source = fh.read()
             res = await asyncio.to_thread(CODE_HARNESS.execute, source, value, self.exits, self.mcp_servers,
-                                          _code_transport, self.timeout_s, node_name=self.display)
+                                          _code_transport, self.timeout_s, node_name=self.display, args=self.args)
             for call in res["tool_calls"]:
                 print(f"[tool] {call['server']}.{call['tool']} ok={call['ok']} ({call['ms']} ms)", flush=True)
             if res["stdout"]:
@@ -595,6 +596,7 @@ PY;
                 . '    exits=' . PythonEmitHelpers::jsonToPython($cd['exits']) . ",\n"
                 . '    mcp_servers=' . PythonEmitHelpers::jsonToPython($cd['mcp_servers']) . ",\n"
                 . "    timeout_s={$cd['timeout_s']},\n"
+                . '    args=' . PythonEmitHelpers::jsonToPython((object) ($cd['args'] ?? [])) . ",\n"
                 . '    parents=[' . implode(', ', $parents) . "],\n"
                 . ")";
         }
