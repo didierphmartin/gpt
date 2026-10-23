@@ -1,19 +1,27 @@
-# gpt — Multi‑Provider AI Framework
+# GPT - New generation Harness
 
-A self‑hostable **framework for building with many LLM providers**. It brings together three things:
+**Design an agent workflow once, debug it live, then compile it for the agent framework you choose:
+LangGraph, Google ADK, Microsoft Agent Framework or NVIDIA OO Agents.**
 
-- 🧩 **A harness** — a backend runtime that brokers **Claude, OpenAI, Grok, Gemini, DeepSeek, Kimi,
-  GLM and self-hosted (vLLM) models** behind one API, with streaming, function/tool calling, MCP,
-  agent teams and workflows. It handles provider resolution, auth, tool execution and orchestration
-  so you don't have to. The same runtime comes in three interchangeable implementations — PHP
-  (reference), TypeScript and Python.
-- 🗣️ **A human‑AI interface** — a frontend for *directing* and *conversing with* the AI: a chat UI,
-  realtime voice, and a visual workflow editor.
-- 📦 **Packaged know‑how** — reusable capability built in: browser‑side **Skills** (Python), MCP tool
-  servers, agent‑team designs, workflow templates, and service integrations (search, financial,
-  PubMed, Google Drive).
+GPT is a self-hostable AI platform built around a **harness**. The harness is the runtime that sits
+between people, models and tools: it picks the provider, keeps the keys, calls the tools, runs the
+agents and records what happened. Most agent builders *are* one harness: the workflow you draw only
+runs inside their engine. GPT works differently. You design and debug in its own interpreter, then a
+**compiler** turns the same canvas into ordinary, self-contained Python for one of **four
+production frameworks**. You can read that code, keep it and run it without this app.
 
-Chat is just one surface onto a general multi‑provider AI orchestration layer.
+It brings together:
+
+- 🧠 **A multi-provider harness.** **Claude, OpenAI, Gemini, Grok, DeepSeek, Kimi, GLM** and
+  self-hosted OpenAI-compatible models (vLLM, Gemma) behind one API. It adds streaming, tool calling,
+  MCP, memory, agents and workflows. Provider keys and endpoints are managed per organisation and per
+  user. The same API comes in three implementations: PHP (the reference), TypeScript and Python.
+- 🛠️ **A workflow compiler.** A visual editor with an in-browser interpreter, live monitoring and
+  four code generators (see [Workflows](#workflows-interpret-to-design-compile-to-ship)).
+- 🗣️ **A human‑AI interface.** Chat with compare and verify modes, an artifact pane, realtime
+  voice, and a workflow editor where a run's questions and approvals appear in the conversation.
+- 📦 **Packaged know‑how.** Skills (Python that runs in your browser), MCP connectors, reusable
+  code components, playbooks and automations that tie a workflow to ServiceNow, Outlook or SharePoint.
 
 > **Status:** standalone, self‑hostable. Secrets live outside the repo — see [Configuration](#configuration--secrets).
 
@@ -33,26 +41,111 @@ Chat is just one surface onto a general multi‑provider AI orchestration layer.
 
 ---
 
-## What it does
+## Workflows: interpret to design, compile to ship
 
-- **One chat API, many providers.** Talk to **Claude, OpenAI, Grok, Gemini, DeepSeek, Kimi, GLM**
-  and any OpenAI-compatible endpoint you host yourself, through a single endpoint. Provider keys are
-  managed in the database (global + per‑user), not in code.
-- **Streaming.** Responses stream over **Server‑Sent Events (SSE)**, with progress, verifier, and
-  compare events.
-- **Tools & MCP.** Function‑calling with a server‑side tool registry and **MCP** (Model Context
-  Protocol) servers, plus **client‑side "Skills"** that run **Python in the browser** (Pyodide/WASM)
-  against the user's local folder via the File System Access API.
-- **Realtime voice.** A voice prompt‑builder backed by **Hume EVI**, **Grok realtime**, and
-  **Gemini native audio**.
-- **Agents & workflows.** Agent teams and a **visual workflow editor** that compiles one canvas to
-  **four runtimes** — LangGraph, **Google ADK**, **Microsoft Agent Framework** and **NVIDIA NOOA** —
-  as self-contained Python you can read, keep and run without this app. Dispatcher nodes route to one
-  branch instead of fanning out, and playbook nodes run an interpreter loop with human gates (forms,
-  approvals, hand-offs) that surface in the conversation. Compiled workflows run on **your machine**
-  through a small local runner, not on the web server.
-- **Auth & accounts.** Firebase (Google/Facebook OAuth), app keys, per‑user API keys, plans/subscriptions.
-- **Integrations.** Web/search (SerpAPI, Brave, ScrapingDog), financial data (FMP), PubMed, Google Drive.
+### Single harness vs. compiled harness
+
+Most agent platforms are **interpreted, single-harness** systems. The workflow is data that their
+engine reads at run time, so it runs only where that engine runs, with the features that engine has.
+Debugging means reading that engine's logs, and moving to another framework means starting over.
+
+GPT keeps the interpreter for **design time** and adds a compiler for **run time**:
+
+| | Interpreted single harness | GPT |
+|---|---|---|
+| **Where the workflow runs** | Only inside the vendor's engine | In GPT's interpreter while you design it; anywhere Python runs once it is compiled |
+| **Target frameworks** | One | **Four**: LangGraph, Google ADK, Microsoft Agent Framework, NVIDIA OO Agents |
+| **What you ship** | A workflow definition that needs the platform | Plain Python packages, plus requirements, `.env.example`, README and ARCHITECTURE.md |
+| **Lock-in** | The workflow is tied to the platform | The code is yours: read it, review it, version it, change frameworks later |
+| **Debugging** | Whatever the engine logs | Step through in the editor first, then watch compiled runs live through the same event protocol |
+| **Testing before production** | Usually in production, on the engine | Run in the browser interpreter, on the server, or compiled on your machine, and compare |
+| **Deployment shapes** | Fixed by the platform | One file, one file per agent, or one A2A service per agent |
+
+### Design and debug in the interpreter
+
+The editor (Drawflow canvas) runs the workflow **node by node** while you build it, so you see each
+step before compiling anything:
+
+- **Per-node Input, Output and Logs** for every node of a run, and the branch a dispatcher chose (and
+  the ones it skipped) drawn on the canvas.
+- **Three ways to run the same canvas**: the browser interpreter, the server (`/workflows/{id}/run-stream`),
+  and the compiled code on your machine. Running all three is how you check the compiled code does
+  what the design did.
+- **Live monitoring** of server and scheduled runs: an overlay follows the events as they happen,
+  and the run log keeps them for later.
+- **Code nodes are tested in the browser.** Their Python runs in a Pyodide worker against your real
+  MCP servers, with a harness that checks the code and refuses unsafe modules. The **code assistant**
+  writes a node's code and exits from the MCP servers' own tool docs. You review a diff and accept it.
+- **Validation before compiling.** Structured outputs (a JSON Schema per node), playbook validation,
+  and the compiler refuses what a target can't do, telling you which node and why.
+
+### The building blocks
+
+- **Start** with a prompt, a **schedule** (cron) or an **event**. An event start is a code component
+  such as "new Outlook mail", "new ServiceNow job" or "file dropped in a folder"; its exits become the
+  Start node's branches. One workflow per user can be *active*: an event worker watches its source and
+  starts a run on each event.
+- **Agents** on any provider, with their own tools, MCP servers and skills.
+- **Dispatchers** route to **one** branch, not all of them. The router is an LLM or a decision model
+  (TypeSafe Jev or OpenAI Decisions), with a confidence floor and a catch-all branch.
+- **Playbooks** run a step-by-step procedure, written in prose with `#Action` references, as an
+  interpreter loop. It includes **human gates**: forms, approvals and hand-offs that show up in the
+  conversation, or end the run cleanly when it is unattended.
+- **Code nodes** run deterministic Python `run(input, call_tool)` with named exits; only the exit
+  taken runs next. The **Code Library** keeps reusable components (Poll Outlook, mail-drop → PDF →
+  SharePoint, ServiceNow jobs…) that many workflows link to.
+- **Ingestion** nodes (loader → splitter → vector store) and **realtime audio** nodes.
+- **Swarm** orchestration as an alternative to a fixed graph.
+- **Output** returns the answer, and can save it as HTML or Markdown.
+
+### Compile to four frameworks
+
+From the toolbar, *Compile workflow* offers **LangGraph**, **ADK (Google)**, **MAF (Microsoft)** and
+**NOOA (NVIDIA)**. Each one has Setup, Generate, Run, Display Code, Export (zip) and Architecture.
+
+- **Three layouts per target:** a single file, *agents in separate files* (a package), or
+  **A2A**, with one Agent-to-Agent server per node and an orchestrator.
+- **Self-contained output.** The generated folder needs nothing from GPT at run time: no database,
+  no backend and no app imports. It carries its own MCP client, code-node harness, playbook
+  interpreter and decision-model adapters. Per-server URLs and headers come from its `.env`
+  (`MCP_URL_<SLUG>`, `MCP_HEADERS_<SLUG>`).
+- **Same behaviour on every target.** Code nodes, MCP tools, dispatcher routing, playbook gates,
+  skills as pipeline steps, and listening for scheduled or event starts are emitted for each
+  framework. Where a target can't do something yet (swarms outside LangGraph, for example), the
+  compiler says so instead of producing code that half-works.
+- **One run contract.** Every compiled workflow can serve the same event protocol
+  ([`run-protocol-v1.json`](backend/schema/run-protocol-v1.json)): SSE, replay, `POST /listen`.
+  The editor monitors a compiled run exactly as it monitors an interpreted one.
+- **Runs on your machine.** A small local runner (127.0.0.1:8765) installs the frameworks and runs
+  the code as *you*, so a workflow can read your files and ask you questions mid-run.
+- **Over HTTP:** `GET /api/v1/workflows/{id}/generate-python` (LangGraph), `generate-adk`,
+  `generate-maf`, `generate-nooa`, with `?modular=1`, `?a2a=1`, `?format=zip`.
+
+---
+
+## What else it does
+
+- **One chat API, many providers.** Keys and models are managed in the database (organisation-wide
+  plus per user), and an admin or user can point a provider at a gateway endpoint.
+  Responses stream over SSE.
+- **Compare and verify.** Ask several models at once and compare or merge their answers, or have one
+  model check another's.
+- **Memory.** User memory is injected into each chat and kept up to date automatically after
+  conversations, with history and revert.
+- **Attachments.** Word, PowerPoint, Excel and PDF files are converted to Markdown in the browser,
+  so any model can read them.
+- **Skills.** Folders with a `SKILL.md` and Python scripts, run in the browser (Pyodide/WASM) against
+  your local folder. The model picks the right skill from your intent. Skills can be imported from a
+  folder, a zip or GitHub, repaired (self-healing) and optimised.
+- **MCP.** Connect servers for everyone or per user, test their tools from the sidebar, sign in to
+  accounts (device code or browser), and display MCP Apps in a sandboxed frame.
+- **Artifacts.** HTML, Mermaid and SVG render in a side pane next to the chat.
+- **Realtime voice.** Hume EVI, Grok realtime and Gemini Live, plus dictation.
+- **Automations.** Packages a ServiceNow catalog item and flow with a GPT playbook and workflow, with
+  a drift check and a dev/test install.
+- **Publishing.** Playbooks can be published to a robot account that runs them unattended.
+- **Accounts.** Firebase social login, passkeys, app keys, plans and subscriptions. The interface
+  is in English, French and Spanish.
 
 ---
 
@@ -95,7 +188,7 @@ graph TD
     Resolver -.->|keys| Store
     Auth -.-> Store
     Harness -.-> Secrets
-    Flow -->|"compiled package"| Runner
+    Flow -->|"LangGraph · ADK · MAF · NOOA package"| Runner
     Runner --> Providers
 ```
 
@@ -110,8 +203,12 @@ Repository layout:
 gpt/
 ├── backend/            PHP 8.1+ API (front controller at /api/v1) — the reference implementation
 │   ├── src/                controllers, services (LLMProviderResolver, …), AgentTeam, middleware
-│   │   └── AgentTeam/      workflow compilers: LangGraph, ADK, MAF, NOOA + the shared
-│   │                       PlaybookEmit interpreter and RunServerEmitter
+│   │   ├── AgentTeam/      workflow interpreter (GraphWorkflowRunner) and the compilers:
+│   │   │                   LangGraph, ADK, MAF, NOOA + shared runtime, package, A2A,
+│   │   │                   playbook and run-server emitters
+│   │   ├── Playbook/       playbook interpreter and human gates
+│   │   └── CodeComponent/  the Code Library
+│   ├── bin/                event worker (active workflows, schedules)
 │   ├── config/             ai_config.php (reads backend/.env), load_env.php
 │   ├── schema/             chatbot.sql, migrations, run-protocol-v1.json (event contract)
 │   └── .env                secrets (gitignored; copy from .env.example)
@@ -240,11 +337,19 @@ We send you the admin app and the login service with your corporate package.
    from it:
    - Replace `MYSQL_PASSWORD` and `MYSQL_ROOT_PASSWORD` with strong passwords.
    - Change `GPT_PORT` if 8080 is already in use on the server.
+   - Set `GPT_ADMIN_SRC` and `GPT_LOGIN_SRC` to where you unpacked the admin
+     app and the login service from your corporate package.
 
-2. **Start the app.**
+2. **Build the corporate images and start the app.** The admin app and the
+   login service are built into their own images first, then the corporate
+   overlay adds them to the stack:
 
    ```bash
-   docker compose up -d --build
+   set -a; . ./.env; set +a
+   docker build -t gpt-web-base:latest  -f docker/web/Dockerfile .
+   docker build -t gpt-admin-dist:latest -f docker/gptadmin/Dockerfile "$GPT_ADMIN_SRC"
+   docker build -t gpt-login-src:latest  -f docker/login/Dockerfile    "$GPT_LOGIN_SRC"
+   docker compose -f compose.yaml -f compose.corporate.yaml up -d --build
    ```
 
    The containers restart on their own when the server reboots.
@@ -364,7 +469,8 @@ cd backend && composer install
 gpt uses **two** MySQL connections. The schema dump creates the first:
 
 ```bash
-mysql -u <user> -p < backend/schema/chatbot.sql     # creates netfo587_chatbot (41 tables)
+mysql -u <user> -p -e 'CREATE DATABASE netfo587_chatbot'
+mysql -u <user> -p netfo587_chatbot < backend/schema/chatbot.sql   # 52 tables
 ```
 
 - **Contexts DB** (`netfo587_chatbot`) — everything gpt owns: users, agents, workflows, playbooks,
@@ -473,7 +579,6 @@ voice keys to backend brokering).
 - [`backend/schema/README.md`](backend/schema/README.md) — the database schema and the note on the second DB
 - [`backend/docs/architecture-chat.md`](backend/docs/architecture-chat.md) · [`backend/docs/agentDesign.md`](backend/docs/agentDesign.md) — backend internals
 - [`backend/schema/run-protocol-v1.json`](backend/schema/run-protocol-v1.json) — the run-protocol event contract a compiled workflow server speaks
-- [`HUME_TOOLS_SYNC_SETUP.md`](HUME_TOOLS_SYNC_SETUP.md) — Hume tool sync
 
 **Not published.** The deep-dive guides and design notes (auth, MCP, workflows, voice, context
 management, i18n, hardening) live in `docs/` in the working tree, which is deliberately kept out of
@@ -487,7 +592,7 @@ this repository. Ask the maintainer if you need them.
   `smalot/pdfparser`, `vlucas/phpdotenv`), MySQL. Two ports of the same API: **TypeScript** (Node 18+,
   tsx/tsc) and **Python** (FastAPI + uvicorn).
 - **Compiled workflows:** Python 3.10+ — LangGraph, Google ADK, Microsoft Agent Framework, NVIDIA
-  NOOA — executed by a local FastAPI runner, never by the web server.
+  OO Agents (NOOA), A2A (a2a-sdk) — executed by a local FastAPI runner, never by the web server.
 - **Frontend:** vanilla HTML/CSS/JS, Tailwind CSS, Marked.js, Highlight.js, Firebase compat SDK,
   **Pyodide** (CPython→WebAssembly), File System Access API, Drawflow (workflow editor).
 
