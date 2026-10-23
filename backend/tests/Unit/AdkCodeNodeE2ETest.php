@@ -161,6 +161,51 @@ class AdkCodeNodeE2ETest extends TestCase
         self::assertStringContainsString('folder=Didier', $text);
     }
 
+    /**
+     * The Output takes a node once, and only through the exit it took: Convert(2) took done -> Store(5); its
+     * error link to the Output carries nothing, and Store's two exits to the same Output give one answer.
+     */
+    public function testTheOutputTakesANodeOnceAndOnlyThroughTheExitItTook(): void
+    {
+        $code = fn(string $name, string $text) => ['type' => 'code', 'name' => $name, 'exits' => ['done', 'error'],
+            'mcp_servers' => [], 'timeout_s' => 30, 'code' => "def run(input, call_tool):\n    return {'route': 'done', 'output': '$text'}\n"];
+        $graph = ['nodes' => [
+            ['id' => '1', 'type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'go']],
+            ['id' => '2', 'type' => 'code', 'config' => $code('Convert', 'PACKAGE')],
+            ['id' => '5', 'type' => 'code', 'config' => $code('Store', 'STORED')],
+            ['id' => '3', 'type' => 'output', 'config' => ['type' => 'output']],
+        ], 'edges' => [
+            ['from' => '1', 'to' => '2', 'from_port' => 'output_1'],
+            ['from' => '2', 'to' => '5', 'from_port' => 'output_1'],
+            ['from' => '2', 'to' => '3', 'from_port' => 'output_2'],
+            ['from' => '5', 'to' => '3', 'from_port' => 'output_1'],
+            ['from' => '5', 'to' => '3', 'from_port' => 'output_2'],
+        ]];
+        $a = array_merge(WorkflowGraphAnalyzer::analyzeGraph($graph), [
+            'workflow' => ['id' => 99, 'name' => 'adk e2e'], 'usedCatalog' => [], 'usedServers' => [],
+            'serverSlugs' => [], 'startPrompt' => 'go', 'startDocuments' => [], 'agents' => [], 'playbooks' => [],
+        ]);
+        $byId = array_column($graph['nodes'], null, 'id');
+        $a['code'] = [];
+        foreach (['2', '5'] as $cid) {
+            $a['code'][$cid] = CodeNodeEmit::nodeData($byId[$cid], $graph['edges'], [], ['1', '2', '5', '3']);
+        }
+        [$rc, $text] = $this->run_($a);
+        self::assertSame(0, $rc, $text);
+        self::assertStringContainsString('STORED', $text);
+        self::assertStringNotContainsString('PACKAGE', $this->finalAnswer($text), $text);
+        self::assertSame(1, substr_count($this->finalAnswer($text), 'STORED'), $text);
+    }
+
+    /** The run's answer as the program prints it: after "FINAL OUTPUT" (MAF, NOOA) or "[workflow] done" (ADK), up to RUN SUMMARY. */
+    private function finalAnswer(string $text): string
+    {
+        $i = strrpos($text, 'FINAL OUTPUT');
+        $i = $i !== false ? $i : strrpos($text, '[workflow] done');
+        self::assertNotFalse($i, "no final answer in:\n$text");
+        return substr($text, $i, (int) (strpos($text, 'RUN SUMMARY', $i) ?: strlen($text)) - $i);
+    }
+
     public function testNoMailSkipsEverythingDownstream(): void
     {
         $this->startServer(true);

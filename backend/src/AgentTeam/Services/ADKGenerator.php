@@ -1288,9 +1288,12 @@ class _PassThroughAgent(BaseAgent):
     a finished HTML report back into plain markdown.)
     """
     source_keys: list = []
+    took: dict = {}   # parent key -> [route key, exits leading here]: a code parent counts only through the exit it took
 
     async def _run_async_impl(self, ctx):
-        vals = [str(ctx.session.state.get(k, "")) for k in self.source_keys]
+        st = ctx.session.state
+        keys = [k for k in self.source_keys if k not in self.took or st.get(self.took[k][0]) in self.took[k][1]]
+        vals = [str(st.get(k, "")) for k in keys]
         vals = [v for v in vals if v]
         text = vals[0] if len(vals) == 1 else "\n\n---\n\n".join(vals)
         yield Event(
@@ -1547,14 +1550,21 @@ PY;
             }
             $parents = $analyzed['parents'][$id] ?? [];
             $keys = [];
+            $took = [];
             foreach ($parents as $p) {
                 $keys[] = '"node_' . $p . '"';
+                if (count($analyzed['code'][$p]['exits'] ?? []) > 1) {
+                    $exits = array_keys(array_filter($analyzed['code'][$p]['exit_targets'],
+                        fn($children) => in_array($id, array_map('strval', $children), true)));
+                    $took["node_{$p}"] = ["route_{$p}", array_map('strval', $exits)];
+                }
             }
             $keysPy = '[' . implode(', ', $keys) . ']';
+            $tookPy = $took === [] ? '' : ', took=' . PythonEmitHelpers::jsonToPython((object) $took);
 
             $entry  = "# Output (fan-in) node {$id} -- forwards its parent(s) result verbatim (no LLM),\n";
             $entry .= "# so formatting such as HTML is preserved. Single parent = pass-through.\n";
-            $entry .= "node_{$id} = _PassThroughAgent(name=\"node_{$id}\", source_keys={$keysPy})";
+            $entry .= "node_{$id} = _PassThroughAgent(name=\"node_{$id}\", source_keys={$keysPy}{$tookPy})";
             $out[(string) $id] = $entry;
         }
         return $out;

@@ -525,9 +525,12 @@ class _PassThroughAgent(BaseAgent):
     a finished HTML report back into plain markdown.)
     """
     source_keys: list = []
+    took: dict = {}   # parent key -> [route key, exits leading here]: a code parent counts only through the exit it took
 
     async def _run_async_impl(self, ctx):
-        vals = [str(ctx.session.state.get(k, "")) for k in self.source_keys]
+        st = ctx.session.state
+        keys = [k for k in self.source_keys if k not in self.took or st.get(self.took[k][0]) in self.took[k][1]]
+        vals = [str(st.get(k, "")) for k in keys]
         vals = [v for v in vals if v]
         text = vals[0] if len(vals) == 1 else "\n\n---\n\n".join(vals)
         yield Event(

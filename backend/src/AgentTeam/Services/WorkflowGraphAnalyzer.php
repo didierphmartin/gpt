@@ -110,7 +110,9 @@ class WorkflowGraphAnalyzer
         foreach ($edges as $e) {
             $from = (string) ($e['from'] ?? $e['from_node_id'] ?? $e['source'] ?? '');
             $to   = (string) ($e['to']   ?? $e['to_node_id']   ?? $e['target'] ?? '');
-            if ($from === '' || $to === '' || !isset($byId[$from]) || !isset($byId[$to])) {
+            // Two exits of one node linked to the same node are one connection here (which exit leads
+            // where is read from the raw edges: CodeNodeEmit::exitTargets).
+            if ($from === '' || $to === '' || !isset($byId[$from]) || !isset($byId[$to]) || in_array($to, $children[$from], true)) {
                 continue;
             }
             $norm[]           = ['from' => $from, 'to' => $to];
