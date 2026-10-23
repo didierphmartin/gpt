@@ -1485,10 +1485,19 @@ class WorkflowGraph:
             return result
         return _run
 
+    def _took_link(self, pid: str, nid: str, routes: dict) -> bool:
+        """Whether parent `pid` reached `nid`: a node that chose (an exit, or a dispatcher's child) only through its choice."""
+        if pid not in routes:
+            return True
+        targets = self.agents.get(pid, {}).get("exit_targets")
+        return nid in targets.get(routes[pid], []) if targets is not None else routes[pid] == nid
+
     def _output_node(self, nid: str):
-        """The Output node: the lone parent's text verbatim, else every parent's text under its name."""
+        """The Output node: the lone parent's text verbatim, else every parent's text under its name.
+        A parent counts once, and only through the exit it took (two exits to one Output are one parent)."""
         def _run(state):
-            pids = self.parents(nid)
+            routes = state.get("routes", {})
+            pids = [p for p in dict.fromkeys(self.parents(nid)) if self._took_link(p, nid, routes)]
             outs = state.get("node_outputs", {})
             if len(pids) == 1 and pids[0] in outs:
                 final = outs[pids[0]]["text"]

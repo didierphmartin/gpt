@@ -172,4 +172,39 @@ class LangGraphGeneratorCodeNodeTest extends TestCase
         self::assertSame(0, $rc, implode("\n", $out));
         self::assertStringContainsString('folder=Didier', implode("\n", $out));
     }
+    /**
+     * The Output takes a node once, and only through the exit it took (as the editor and the server runner do):
+     * Convert(2) took done -> Store(5); its error link to the Output carries nothing, and Store's two exits
+     * linked to the same Output give one answer, verbatim.
+     */
+    public function testTheOutputTakesANodeOnceAndOnlyThroughTheExitItTook(): void
+    {
+        $venv = '/Users/didierphmartin/Documents/synergyAI/python/.venv/bin/python';
+        if (!is_executable($venv)) {
+            self::markTestSkipped('venv python missing');
+        }
+        $code = fn(string $route, string $text) => ['type' => 'code', 'exits' => ['done', 'error'], 'mcp_servers' => [], 'timeout_s' => 30,
+            'code' => "def run(input, call_tool):\n    return {'route': '$route', 'output': '$text'}\n"];
+        $g = ['nodes' => [
+                ['id' => '1', 'node_type' => 'start', 'config' => ['type' => 'start', 'prompt' => 'go']],
+                ['id' => '2', 'node_type' => 'code', 'config' => ['name' => 'Convert'] + $code('done', 'PACKAGE')],
+                ['id' => '5', 'node_type' => 'code', 'config' => ['name' => 'Store'] + $code('done', 'STORED')],
+                ['id' => '3', 'node_type' => 'output', 'config' => ['type' => 'output']],
+            ], 'edges' => [
+                ['from' => '1', 'to' => '2', 'from_port' => 'output_1'],
+                ['from' => '2', 'to' => '5', 'from_port' => 'output_1'],
+                ['from' => '2', 'to' => '3', 'from_port' => 'output_2'],
+                ['from' => '5', 'to' => '3', 'from_port' => 'output_1'],
+                ['from' => '5', 'to' => '3', 'from_port' => 'output_2'],
+            ]];
+        $dir = sys_get_temp_dir() . '/lgout' . uniqid();
+        mkdir($dir);
+        file_put_contents("$dir/wf.py", $this->generate($g));
+        exec('cd ' . escapeshellarg($dir) . ' && RUNS_DIR=' . escapeshellarg("$dir/runs") . ' ' . escapeshellarg($venv)
+            . ' wf.py --once go 2>&1', $out, $rc);
+        $text = implode("\n", $out);
+        self::assertSame(0, $rc, $text);
+        self::assertMatchesRegularExpression('~FINAL OUTPUT\n=+\nSTORED\n~', $text);
+        self::assertStringNotContainsString('PACKAGE', substr($text, strpos($text, 'FINAL OUTPUT')));
+    }
 }
