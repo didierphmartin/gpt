@@ -1494,15 +1494,17 @@ class WorkflowGraph:
 
     def _output_node(self, nid: str):
         """The Output node: the lone parent's text verbatim, else every parent's text under its name.
-        A parent counts once, and only through the exit it took (two exits to one Output are one parent)."""
+        A parent counts once, only through the exit it took (two exits to one Output are one parent),
+        and only when it produced text on this run (a branch that was not taken is not a parent)."""
         def _run(state):
             routes = state.get("routes", {})
-            pids = [p for p in dict.fromkeys(self.parents(nid)) if self._took_link(p, nid, routes)]
             outs = state.get("node_outputs", {})
-            if len(pids) == 1 and pids[0] in outs:
+            pids = [p for p in dict.fromkeys(self.parents(nid))
+                    if self._took_link(p, nid, routes) and outs.get(p, {}).get("text")]
+            if len(pids) == 1:
                 final = outs[pids[0]]["text"]
             else:
-                blocks = [f"## {outs[p]['source']}\n\n{outs[p]['text']}" for p in pids if p in outs]
+                blocks = [f"## {outs[p]['source']}\n\n{outs[p]['text']}" for p in pids]
                 final = "\n\n---\n\n".join(blocks)
             RUN_OUT(f"[node] [{nid}] output -- {len(final)} chars")
             self.ran.append(nid)
