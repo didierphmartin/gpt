@@ -318,7 +318,7 @@ PY;
         $parts[] = !empty($analyzed['package']) ? CompiledRuntimeEmit::packageListenBlock(<<<'PY'
 def _cli_begin(prompt: str) -> None:
     """Before a one-off CLI run (not --quiet): the banner and the liveness heartbeat."""
-    Progress.begin(len(AGENTS), prompt)
+    Progress.begin(prompt)
 
 
 def _cli_end(output: str) -> None:
@@ -702,12 +702,14 @@ PY;
             _stop = None      # threading.Event terminating the heartbeat
 
             @classmethod
-            def begin(cls, total, prompt):
+            def begin(cls, prompt):
+                # Every node that reports done: agents (dispatchers included), code nodes, playbooks.
+                total = len(AGENTS) + len(globals().get("CODE_NODES", {})) + len(globals().get("PLAYBOOKS", {}))
                 cls._t0 = time.monotonic()
                 cls._total = total
                 print("=" * 74, flush=True)
                 print(f"WORKFLOW  {WORKFLOW_NAME}  (id {WORKFLOW_ID})  [NVIDIA OO Agents]", flush=True)
-                print(f"  {total} agent node(s) + output sink", flush=True)
+                print(f"  {total} node(s) + output sink", flush=True)
                 print(f"  prompt: {str(prompt)[:120]!r}", flush=True)
                 print("=" * 74, flush=True)
                 cls._stop = threading.Event()
@@ -720,7 +722,7 @@ PY;
                     busy = ", ".join(f"{n} ({time.monotonic() - t:.0f}s)"
                                      for n, t in list(cls._in_flight.items()))
                     elapsed = time.monotonic() - cls._t0
-                    print(f"[alive {elapsed:5.0f}s] {cls._done}/{cls._total} agent node(s) done"
+                    print(f"[alive {elapsed:5.0f}s] {cls._done}/{cls._total} node(s) done"
                           + (f" — running: {busy}" if busy else " — idle (waiting on graph)"),
                           flush=True)
 
@@ -738,7 +740,15 @@ PY;
                     cls._durations[name] = time.monotonic() - started
                     dur = f" in {cls._durations[name]:.1f}s"
                 print(f"[node ✓] {name} — {chars} chars{dur}"
-                      f"  ({cls._done}/{cls._total} agent nodes done)", flush=True)
+                      f"  ({cls._done}/{cls._total} nodes done)", flush=True)
+
+            @classmethod
+            def skipped(cls, nid, name, announce):
+                """A node that will not run leaves the total; announce names it (its own branch was not taken)."""
+                if any(nid in globals().get(t, {}) for t in ("AGENTS", "CODE_NODES", "PLAYBOOKS")):
+                    cls._total -= 1
+                if announce:
+                    print(f"[info  ] {name}: skipped (its branch was not taken)", flush=True)
 
             @classmethod
             def note(cls, msg):
@@ -1284,8 +1294,8 @@ async def _run_graph(prompt: str) -> str:
         for layer in GRAPH["layers"]:
             ready = [nid for nid in layer if reached(nid)]
             for nid in layer:
-                if nid not in ready and any(p in out for p in nodes[nid]["parents"]):
-                    Progress.note(f"{nodes[nid]['name']}: skipped (its branch was not taken)")
+                if nid not in ready:
+                    Progress.skipped(nid, nodes[nid]["name"], any(p in out for p in nodes[nid]["parents"]))
             texts = await asyncio.gather(*(run_node(nid) for nid in ready))
             for nid, text in zip(ready, texts):
                 out[nid] = (nodes[nid]["name"], text)
@@ -1334,7 +1344,7 @@ PY;
         # enabled output storage -- saves it as .html/.md in the output folder.
         if __name__ == "__main__":
             _prompt = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else DEFAULT_PROMPT
-            Progress.begin(len(AGENTS), _prompt)
+            Progress.begin(_prompt)
             try:
                 _text = asyncio.run(run_workflow(_prompt))
             except Exception as _err:
