@@ -372,10 +372,14 @@ const makeSend = new Function('input', 'sendBtn',
     'return function () { const send = ' + sendSrc + '; return send; };');
 
 const openBatchSrc = extract('    async _openBatchSession() {');
+// _openBatchSession only guards against a double click; the session is opened here.
+const openBatchNowSrc = extract('    async _openBatchSessionNow() {');
+// Leaving a compiled conversation stops its stream first (real method: editor fields only).
+const detachSrc = extract('    _detachCompiledStream() {');
 
 function makeSessionEditor(mode) {
     const input = { value: '', disabled: false, focus() {} };
-    const obj = eval('({ ' + openBatchSrc + ' })');
+    const obj = eval('({ ' + openBatchSrc + ', ' + openBatchNowSrc + ', ' + detachSrc + ' })');
     Object.assign(obj, {
         dispatched: [],
         input,
@@ -534,6 +538,7 @@ function makeForkEditor({ swarm = false } = {}) {
     const obj = eval('({ ' + forkSrc + ' })');
     Object.assign(obj, {
         _isSwarm: () => swarm,
+        _wfNodeKind: (id) => KIND[String(id)],
         _wfDownstreamIds(nodeId) { return [...(EDGES[String(nodeId)] || [])]; },
     });
     return obj;

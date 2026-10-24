@@ -26,6 +26,8 @@ class AgentDelegationFunctionsTest extends TestCase
     {
         $this->mockRepository = Mockery::mock(AgentRepository::class);
         $this->mockRunner = Mockery::mock(AgentRunner::class);
+        // The functions read agents through a fresh repository (stale DB connections): the same mock.
+        $this->mockRunner->shouldReceive('getFreshRepository')->andReturn($this->mockRepository)->byDefault();
         $this->functions = new AgentDelegationFunctions($this->mockRepository, $this->mockRunner);
     }
 

@@ -48,11 +48,12 @@ class WorkflowGraphAnalyzerAnalyzeTest extends TestCase
 
         $agentRepo = Mockery::mock(AgentRepository::class);
 
-        // buildToolCatalog() always queries MCP tools; return an empty result set.
+        // buildToolCatalog() always loads MCP tools (a prepared, user-scoped query); return an empty result set.
         $stmt = Mockery::mock(\PDOStatement::class);
+        $stmt->shouldReceive('execute')->andReturn(true);
         $stmt->shouldReceive('fetchAll')->andReturn([]);
         $pdo = Mockery::mock(\PDO::class);
-        $pdo->shouldReceive('query')->andReturn($stmt);
+        $pdo->shouldReceive('prepare')->andReturn($stmt);   // user-scoped: global servers + the caller's own
 
         $analyzer = new WorkflowGraphAnalyzer($pdo, $wfRepo, $graphRepo, $agentRepo);
 
@@ -76,9 +77,10 @@ class WorkflowGraphAnalyzerAnalyzeTest extends TestCase
         $graphRepo = Mockery::mock(WorkflowGraphRepository::class);
         $graphRepo->shouldReceive('getGraph')->with(99)->andReturn($graph);
         $stmt = Mockery::mock(\PDOStatement::class);
+        $stmt->shouldReceive('execute')->andReturn(true);
         $stmt->shouldReceive('fetchAll')->andReturn([]);
         $pdo = Mockery::mock(\PDO::class);
-        $pdo->shouldReceive('query')->andReturn($stmt);
+        $pdo->shouldReceive('prepare')->andReturn($stmt);   // user-scoped: global servers + the caller's own
 
         $analyzer = new WorkflowGraphAnalyzer($pdo, $wfRepo, $graphRepo, Mockery::mock(AgentRepository::class));
         $result = $analyzer->analyze(99, '1');

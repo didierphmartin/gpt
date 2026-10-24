@@ -130,7 +130,7 @@ class AIPortfolioAssistantTest extends TestCase
             'claude' => ['api_key' => 'test-key'],
         ]);
 
-        $result = $assistant->setModel('claude-3-opus-20240229');
+        $result = $assistant->setModel('claude-3-opus-20240229', 'claude');
 
         $this->assertSame($assistant, $result); // Fluent interface
     }

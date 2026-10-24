@@ -272,9 +272,9 @@ class AgentTest extends TestCase
         $this->assertArrayHasKey('name', $apiArray);
         $this->assertArrayHasKey('description', $apiArray);
 
-        // Should NOT include sensitive fields
-        $this->assertArrayNotHasKey('instructions', $apiArray);
-        $this->assertArrayNotHasKey('settings', $apiArray);
+        // The workflow editor builds a node from these (agents are listed only to users who can access them).
+        $this->assertArrayHasKey('instructions', $apiArray);
+        $this->assertArrayHasKey('settings', $apiArray);
     }
 
     public function testJsonSerialize(): void
