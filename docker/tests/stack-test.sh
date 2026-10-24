@@ -25,7 +25,7 @@ done
 
 q() { docker compose exec -T db mysql -ugpt -pgpt gpt_chatbot -N -B -e "$1" 2>/dev/null; }
 
-[ "$(q 'SHOW TABLES;' | wc -l | tr -d ' ')" = "50" ] || fail "expected 50 tables"
+[ "$(q 'SHOW TABLES;' | wc -l | tr -d ' ')" = "55" ] || fail "expected 55 tables"
 [ "$(q 'SELECT COUNT(*) FROM system_llm_settings;')" -gt 0 ] \
   || fail "provider catalog was not seeded"
 

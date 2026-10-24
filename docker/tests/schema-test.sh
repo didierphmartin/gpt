@@ -6,14 +6,15 @@ SCHEMA="$(dirname "$0")/../../backend/schema/chatbot.sql"
 fail() { echo "FAIL: $1" >&2; exit 1; }
 
 tables=$(grep -cE '^CREATE TABLE' "$SCHEMA")
-[ "$tables" -eq 50 ] || fail "expected 50 CREATE TABLE, got $tables"
+[ "$tables" -eq 55 ] || fail "expected 55 CREATE TABLE, got $tables"
 
 inserts=$(grep -ciE '^(INSERT|REPLACE) INTO' "$SCHEMA" || true)
 [ "$inserts" -eq 0 ] || fail "schema contains $inserts data statements"
 
 for t in execution_traces heal_spend skill_promotions user_mcp_settings \
          playbook_runs playbook_run_gates playbook_run_ledger \
-         playbook_run_messages playbook_run_notes; do
+         playbook_run_messages playbook_run_notes \
+         active_workflows automations automation_instances code_components; do
   grep -q "CREATE TABLE \`$t\`" "$SCHEMA" || fail "missing table: $t"
 done
 
