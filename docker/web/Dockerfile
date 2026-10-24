@@ -1,4 +1,4 @@
-FROM php:8.3-apache
+FROM php:8.3.36-apache
 
 # Extension set derived from backend/composer.lock's platform requirements.
 # ctype, curl, dom, fileinfo, filter, iconv, json, libxml, mbstring, pcre,
