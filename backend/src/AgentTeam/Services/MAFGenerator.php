@@ -1704,7 +1704,7 @@ PY;
                 elif not_classified and dec.get("unclear_branch"):
                     chosen = next(((c, n) for c, n in self.menu if n == dec["unclear_branch"]), None)
                     if chosen is not None:
-                        ProgressReporter.note(f"{name}: {key} did not classify ({res.outcome}: {res.reason}, confidence {conf})"
+                        ProgressReporter.note(f"{name}: {key} did not classify ({res.outcome}: {res.reason}{'' if res.outcome == 'low_confidence' else f', confidence {conf}'})"
                                               f" -- sent to the unclear branch {chosen[1]!r}")
                 if chosen is None:
                     msg_txt = (f'{"Not classified" if not_classified else "Error"}: dispatcher "{name}" did not route the '

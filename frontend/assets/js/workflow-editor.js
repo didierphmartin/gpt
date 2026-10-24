@@ -14495,7 +14495,7 @@ class WorkflowEditor {
                 const unclear = hit ? null
                     : window.DecisionRouting.unclearBranch(data.settings, dispatchTargets, jr.outcome);
                 if (unclear) {
-                    this._wfNodeLog(dfId, 'routing', `${who} did not classify (${jr.outcome}: ${jr.reason || 'no reason given'}, confidence ${conf}) — sent to the unclear branch ${unclear.name}`);
+                    this._wfNodeLog(dfId, 'routing', `${who} did not classify (${jr.outcome}: ${jr.reason || 'no reason given'}${jr.outcome === 'low_confidence' ? '' : `, confidence ${conf}`}) — sent to the unclear branch ${unclear.name}`);
                 }
                 if (hit || unclear) {
                     const chosen = hit || unclear;
@@ -14518,7 +14518,7 @@ class WorkflowEditor {
                 nd.success = notClassified;
                 nd.executionTime = Date.now() - _startedAt;
                 try { this.stopNodeTimer(dfId); } catch (_) {}
-                this._wfNodeLog(dfId, notClassified ? 'routing' : 'error', `${who} did not route (${why}, confidence ${conf}) — decision-model dispatcher, no model fallback`, notClassified ? undefined : 'error');
+                this._wfNodeLog(dfId, notClassified ? 'routing' : 'error', `${who} did not route (${why}${jr.outcome === 'low_confidence' ? '' : `, confidence ${conf}`}) — decision-model dispatcher, no model fallback`, notClassified ? undefined : 'error');
                 this.highlightNode(dfId, notClassified ? 'completed' : 'error', dfId, 'agent');
                 this.updateModalInputOutput(dfId);
                 return { success: notClassified, output: nd.output, halt: true, history: conversationHistory };

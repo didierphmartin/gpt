@@ -1200,7 +1200,7 @@ async def _route_dispatcher(nid: str, parent_texts: list, request: str, menu: li
     elif not_classified and dec.get("unclear_branch"):
         chosen = next((c for c, n in menu if n == dec["unclear_branch"]), None)
         if chosen is not None:
-            Progress.note(f"{name}: {key} did not classify ({res.outcome}: {res.reason}, confidence {conf})"
+            Progress.note(f"{name}: {key} did not classify ({res.outcome}: {res.reason}{'' if res.outcome == 'low_confidence' else f', confidence {conf}'})"
                           f" -- sent to the unclear branch {dec['unclear_branch']!r}")
     if chosen is None:
         msg = (f'{"Not classified" if not_classified else "Error"}: dispatcher "{name}" did not route the request '

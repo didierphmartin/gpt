@@ -1504,7 +1504,7 @@ class _DispatcherAgent(BaseAgent):
         elif not_classified and self.unclear_branch:
             chosen = next((e for e in self.menu if str(e[1]) == self.unclear_branch), None)
             if chosen is not None:
-                print(f"[node] [{self.name}] {key} did not classify ({res.outcome}: {res.reason}, confidence {conf})"
+                print(f"[node] [{self.name}] {key} did not classify ({res.outcome}: {res.reason}{'' if res.outcome == 'low_confidence' else f', confidence {conf}'})"
                       f" -- sent to the unclear branch {self.unclear_branch!r}", flush=True)
         if chosen is None:
             msg = (f'{"Not classified" if not_classified else "Error"}: dispatcher "{self.display}" did not route the '

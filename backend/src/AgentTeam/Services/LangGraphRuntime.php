@@ -837,16 +837,16 @@ class Dispatcher:
         unclear = self.cfg.get("unclear_branch", "")
         chosen = next((t for t in self.targets if t["name"] == unclear), None) if not_classified and unclear else None
         if chosen is not None:
-            node_print(f"[node] [{nid}] {self.display!r} {key} did not classify ({res.outcome}: {res.reason}, "
-                       f"confidence {conf}) -- sent to the unclear branch {chosen['name']!r}")
+            node_print(f"[node] [{nid}] {self.display!r} {key} did not classify ({res.outcome}: {res.reason}"
+                       f"{'' if res.outcome == 'low_confidence' else f', confidence {conf}'}) -- sent to the unclear branch {chosen['name']!r}")
             return RouteDecision(text=task, route=chosen["id"], notes="", status="ok")
         # Decision model only: no model fallback, so the run stops here and says why
         # (the reason names a missing key, too). Same message as the interpreter.
         # A request no branch fits is a normal ending ("Not classified"), anything else an error.
         msg = (f'{"Not classified" if not_classified else "Error"}: dispatcher "{self.display}" did not route the request '
                f'({key}: {res.outcome}: {res.reason}).')
-        node_print(f"[node] [{nid}] ⚠ {self.display!r} {key} did not route ({res.outcome}: {res.reason}, "
-                   f"confidence {conf}) — decision-model dispatcher, no model fallback")
+        node_print(f"[node] [{nid}] ⚠ {self.display!r} {key} did not route ({res.outcome}: {res.reason}"
+                   f"{'' if res.outcome == 'low_confidence' else f', confidence {conf}'}) — decision-model dispatcher, no model fallback")
         return RouteDecision(text=msg, route="", notes="", status="unrouted")
 
     def _route_tool(self) -> StructuredTool:
