@@ -1280,13 +1280,15 @@ PY;
             _stop = None      # threading.Event that terminates the heartbeat
 
             @classmethod
-            def begin(cls, total_agents, prompt):
+            def begin(cls, prompt):
                 """Print the run banner and start the liveness heartbeat."""
+                # Every node that reports done: agents (dispatchers included), code nodes, playbooks.
+                total = len(AGENTS) + len(globals().get("CODE_NODES", {})) + len(globals().get("PLAYBOOKS", {}))
                 cls._t0 = time.monotonic()
-                cls._total = total_agents
+                cls._total = total
                 print("=" * 74, flush=True)
                 print(f"WORKFLOW  {WORKFLOW_NAME}  (id {WORKFLOW_ID})", flush=True)
-                print(f"  {total_agents} agent node(s) + output sink", flush=True)
+                print(f"  {total} node(s) + output sink", flush=True)
                 print(f"  prompt: {str(prompt)[:120]!r}", flush=True)
                 print("=" * 74, flush=True)
                 cls._stop = threading.Event()
@@ -1299,7 +1301,7 @@ PY;
                     busy = ", ".join(f"{n} ({time.monotonic() - t:.0f}s)"
                                      for n, t in list(cls._in_flight.items()))
                     elapsed = time.monotonic() - cls._t0
-                    print(f"[alive {elapsed:5.0f}s] {cls._done}/{cls._total} agent node(s) done"
+                    print(f"[alive {elapsed:5.0f}s] {cls._done}/{cls._total} node(s) done"
                           + (f" — running: {busy}" if busy else " — idle (waiting on graph)"),
                           flush=True)
 
@@ -1317,7 +1319,13 @@ PY;
                     cls._durations[name] = time.monotonic() - started
                     dur = f" in {cls._durations[name]:.1f}s"
                 print(f"[node ✓] {name} — {chars} chars{dur}"
-                      f"  ({cls._done}/{cls._total} agent nodes done)", flush=True)
+                      f"  ({cls._done}/{cls._total} nodes done)", flush=True)
+
+            @classmethod
+            def skipped(cls, name, why):
+                """A node that will not run: it leaves the total (a skipped node passes the skip on, so each says so once)."""
+                cls._total -= 1
+                print(f"[info  ] {name}: skipped ({why})", flush=True)
 
             @classmethod
             def waiting(cls, name, have, need):
@@ -1468,7 +1476,7 @@ PY;
                 _msgs = list(self._inbox.values())
                 _skip = _skip_node(_msgs, self.node_id)
                 if _skip:
-                    ProgressReporter.note(f"{name}: skipped (the dispatcher routed elsewhere)")
+                    ProgressReporter.skipped(name, "the dispatcher routed elsewhere")
                     await ctx.send_message(NodeMessage(self.node_id, name, "", skipped=True))
                     return
                 _rec_start(self.node_id)
@@ -1559,7 +1567,7 @@ PY;
                     return
                 _msgs = list(self._inbox.values())
                 if _skip_node(_msgs, self.node_id):
-                    ProgressReporter.note(f"{name}: skipped (the dispatcher routed elsewhere)")
+                    ProgressReporter.skipped(name, "the dispatcher routed elsewhere")
                     await ctx.send_message(NodeMessage(self.node_id, name, "", skipped=True))
                     return
                 if "_CURRENT_NODE" in globals():
@@ -1604,7 +1612,7 @@ PY;
                     ProgressReporter.waiting(name, len(self._inbox), max(1, len(self.parents)))
                     return
                 if _skip_node(list(self._inbox.values()), self.node_id):
-                    ProgressReporter.note(f"{name}: skipped (its branch was not taken)")
+                    ProgressReporter.skipped(name, "its branch was not taken")
                     await ctx.send_message(NodeMessage(self.node_id, name, "", skipped=True))
                     return
                 dec = DECISIONS.get(self.node_id, {})
@@ -1738,7 +1746,7 @@ PY;
                     ProgressReporter.waiting(name, len(self._inbox), max(1, len(self.parents)))
                     return
                 if _skip_node(list(self._inbox.values()), self.node_id):
-                    ProgressReporter.note(f"{name}: skipped (its branch was not taken)")
+                    ProgressReporter.skipped(name, "its branch was not taken")
                     await ctx.send_message(NodeMessage(self.node_id, name, "", skipped=True))
                     return
                 # Its parents one by one (the harness decodes them); a dispatcher parent hands on its own input.
@@ -1998,7 +2006,7 @@ PY;
             """
             # Banner + liveness heartbeat first, so the console shows signs of
             # life even while the first LLM calls are still connecting.
-            ProgressReporter.begin(len(AGENTS), prompt)
+            ProgressReporter.begin(prompt)
             _run_reset()
             if START_NODE:
                 _rec_node_start(START_NODE[0], START_NODE[1], "start")
