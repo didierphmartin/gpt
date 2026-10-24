@@ -186,7 +186,12 @@ class DispatcherNode(Node):
     async def run(self, request: str, trace) -> dict:
         """Dispatcher: a decision model or one forced route_to call (Dispatcher); the chosen child id travels back as "route"."""
         c = self.cfg
-        await trace(f"{self.display!r} -- {len(self.tools)} tools (provider={c.get('provider', '?')}, model={c.get('model', '?')})")
+        # Name what routes: a decision model never calls the node's own model.
+        match self.dispatcher.mode():
+            case "llm":
+                await trace(f"{self.display!r} -- {len(self.tools)} tools (provider={c.get('provider', '?')}, model={c.get('model', '?')})")
+            case key:
+                await trace(f"{self.display!r} -- dispatcher -- {key} chooses one of: " + " | ".join(t["name"] for t in self.dispatcher.targets))
         await trace(f"inputs: system={len(c.get('system_prompt') or '')} chars, context={len(request)} chars")
         decision = await self.dispatcher.route(request, self._messages(c.get("system_prompt"), request), lambda: self.llm)
         return asdict(decision)
