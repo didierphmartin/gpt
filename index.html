@@ -37,52 +37,12 @@
     <div class="container">
         <h1>🤖 GPT Chatbot</h1>
         <div class="spinner"></div>
-        <p id="status-text">Checking authentication...</p>
+        <p id="status-text">Loading app...</p>
     </div>
     <script>
-        /**
-         * Check if JWT token is expired by decoding it client-side
-         */
-        function isTokenExpired(token) {
-            try {
-                // Decode JWT token (it's base64 encoded)
-                const payload = JSON.parse(atob(token.split('.')[1]));
-
-                // Check expiration time (exp is in seconds, Date.now() is in milliseconds)
-                if (payload.exp) {
-                    const now = Math.floor(Date.now() / 1000);
-                    return payload.exp < now;
-                }
-
-                // If no expiration in token, assume it's valid
-                return false;
-            } catch (error) {
-                // If we can't decode the token, assume it's invalid/expired
-                console.error('Error decoding token:', error);
-                return true;
-            }
-        }
-
-        // Check authentication before redirecting
-        const token = localStorage.getItem('token');
-        const user = localStorage.getItem('user');
-
-        if (token && user && !isTokenExpired(token)) {
-            // Token exists and is not expired, redirect to app
-            document.getElementById('status-text').textContent = 'Authentication verified, loading app...';
-            window.location.href = 'frontend/index.html';
-        } else {
-            // No token or expired token, redirect to login
-            if (token) {
-                // Clear expired token
-                localStorage.removeItem('token');
-                localStorage.removeItem('refresh_token');
-                localStorage.removeItem('user');
-                console.log('Token expired, cleared from storage');
-            }
-            document.getElementById('status-text').textContent = 'Redirecting to login...';
-            window.location.href = 'frontend/login.html';
-        }
+        // The app checks the session itself (missing, expired, or rejected by the
+        // server → login page), so this page only forwards to it.
+        window.location.replace('frontend/index.html');
     </script>
 </body>
 </html>
