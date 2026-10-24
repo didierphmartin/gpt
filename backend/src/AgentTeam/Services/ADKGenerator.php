@@ -1739,6 +1739,13 @@ PY;
         foreach (($analyzed['playbooks'] ?? []) as $nid => $pd) {
             $nodeNames[(string) $nid] = (string) $pd['display'];
         }
+        $outputIds = [];
+        foreach (($analyzed['byId'] ?? []) as $nid => $node) {
+            if (WorkflowGraphAnalyzer::typeOf($node) === 'output') {
+                $outputIds[] = (string) $nid;
+            }
+        }
+        $outputIdsPy = PythonEmitHelpers::jsonToPython($outputIds);
         // A dict even when empty (a workflow with no agent node): jsonToPython([]) would be a list.
         $nodeNamesPy = $nodeNames === [] ? '{}' : PythonEmitHelpers::jsonToPython($nodeNames);
         return
@@ -1757,6 +1764,7 @@ PY;
             "OUTPUT_STORAGE_ENABLED = {$storageEnabled}\n" .
             "OUTPUT_FOLDER = {$folderPy}\n" .
             "NODE_NAMES = {$nodeNamesPy}  # node id -> human name (for readable logs)\n" .
+            "OUTPUT_IDS = {$outputIdsPy}  # the Output nodes: named \"Output\" in the logs, not timed in the summary\n" .
             "\n" .
             "async def run_workflow(prompt: str, session: str | None = None) -> str:\n" .
             "    if START_DOCUMENTS:\n" .
@@ -1815,7 +1823,7 @@ PY;
             "                    _ap = author.split(\"_\")\n" .
             "                    _nid = _ap[1] if len(_ap) > 1 else author\n" .
             "                    _kind = \"skill step\" if \"skill\" in author else \"node\"\n" .
-            "                    print(f\"[node {_nid}] {NODE_NAMES.get(_nid, _nid)!r} \\u2192 {_kind} active\", flush=True)\n" .
+            "                    print(f\"[node {_nid}] {NODE_NAMES.get(_nid, 'Output' if _nid in OUTPUT_IDS else _nid)!r} \\u2192 {_kind} active\", flush=True)\n" .
             "                else:\n" .
             "                    print(f\"[node] > {author}\", flush=True)\n" .
             "            parts = (event.content.parts if event.content else None) or []\n" .
