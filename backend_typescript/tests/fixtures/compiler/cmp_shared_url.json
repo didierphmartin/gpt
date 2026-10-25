@@ -1,0 +1,20 @@
+{
+  "description": "CompiledEmitParity: two registered MCP servers share one URL and a code node calls both -- analyzeRuntime's serverSlugs refuses it",
+  "workflow": {"id": 74, "name": "Shared URL", "user_id": "3"},
+  "user_id": "3",
+  "graph": {
+    "nodes": [
+      {"id": "1", "node_type": "start", "config": {"type": "start", "prompt": "go"}},
+      {"id": "2", "node_type": "code", "config": {"type": "code", "name": "Both boxes", "code": "def run(input, call_tool):\n    return {'route': 'next', 'output': input}\n", "mcp_servers": ["Mailbox A", "Mailbox B"]}},
+      {"id": "3", "node_type": "output", "config": {"type": "output"}}
+    ],
+    "edges": [{"from": "1", "to": "2"}, {"from": "2", "to": "3"}]
+  },
+  "sql": [
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (50, '3', 'Mailbox A', 'http://127.0.0.1:8770/mcp', 1)",
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (51, '3', 'Mailbox B', 'http://127.0.0.1:8770/mcp', 1)",
+    "INSERT INTO mcp_server_tools VALUES (1, 50, 'wait_for_new', 'Wait', '{}')",
+    "INSERT INTO mcp_server_tools VALUES (2, 51, 'wait_for_new', 'Wait', '{}')"
+  ],
+  "options": {}
+}

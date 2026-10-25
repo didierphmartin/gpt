@@ -1,0 +1,15 @@
+{
+  "description": "An ingestion loader node reached from Start: refused (LangGraph runs start, agent, playbook, code and output nodes)",
+  "workflow": {"id": 91, "name": "Ingest", "user_id": "3"},
+  "user_id": "3",
+  "graph": {
+    "nodes": [
+      {"id": "1", "node_type": "start", "config": {"type": "start", "prompt": "x"}},
+      {"id": "2", "node_type": "loader", "config": {"type": "loader", "name": "Files"}},
+      {"id": "3", "node_type": "output", "config": {"type": "output"}}
+    ],
+    "edges": [{"from": "1", "to": "2"}, {"from": "2", "to": "3"}]
+  },
+  "sql": [],
+  "options": {}
+}

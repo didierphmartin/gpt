@@ -1,0 +1,1 @@
+{"extends": "dispatcher_demo", "description": "dispatcher_demo as an A2A folder (orchestrator + one agent server per node)", "options": {"a2a": true}}

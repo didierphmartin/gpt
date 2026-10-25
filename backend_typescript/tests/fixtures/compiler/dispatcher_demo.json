@@ -1,0 +1,29 @@
+{
+  "description": "LangGraphA2AGeneratorTest's workflow 44: start -> dispatcher techBuddy -> {IT claims (MCP tool + html skill), Human resources -> playbook} -> output",
+  "workflow": {"id": 44, "name": "Dispatcher demo", "user_id": "3"},
+  "user_id": "3",
+  "graph": {
+    "nodes": [
+      {"id": "1", "node_type": "start", "config": {"type": "start", "prompt": "I want to take some vacations"}},
+      {"id": "2", "node_type": "", "config": {"type": "agent-template", "agent_name": "techBuddy", "agent_type": "dispatcher", "instructions": "You are techBuddy.", "agent_provider": "claude", "model": "claude-sonnet-4-5", "tools": [], "settings": {"temperature": 0.7, "max_tokens": 4096}}},
+      {"id": "3", "node_type": "", "config": {"type": "agent-template", "agent_name": "IT claims", "agent_type": "standard", "instructions": "You are IT claims.", "agent_provider": "claude", "model": "claude-sonnet-4-5", "tools": ["mcp_get_news", "run_skill_script"], "settings": {"temperature": 0.7, "max_tokens": 4096}, "bound_skill": {"dir_name": "html"}}},
+      {"id": "4", "node_type": "", "config": {"type": "agent-template", "agent_name": "Human resources", "agent_type": "standard", "instructions": "You are Human resources.", "agent_provider": "claude", "model": "claude-sonnet-4-5", "tools": [], "settings": {"temperature": 0.7, "max_tokens": 4096}}},
+      {"id": "5", "node_type": "playbook", "config": {"type": "playbook", "name": "Playbook HR", "playbook": "Title: Time Off\n\nTrigger: PTO.\n\nInstructions:\n1. #Get PTO Balance for the requester.\n2. #Request Approval from the manager then #Resolve Request.\n\nTools used: Workday\n\nActions used: #Get PTO Balance; #Request Approval; #Resolve Request\n", "agent_provider": "deepseek", "model": "deepseek-flash", "writes_enabled": true}},
+      {"id": "6", "node_type": "output", "config": {"type": "output"}}
+    ],
+    "edges": [
+      {"from": "1", "to": "2"}, {"from": "2", "to": "3"}, {"from": "2", "to": "4"},
+      {"from": "3", "to": "6"}, {"from": "4", "to": "5"}, {"from": "5", "to": "6"}
+    ]
+  },
+  "sql": [
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (85, '3', 'Workday', 'http://localhost/mockstack/index.php/workday', 1)",
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (9, NULL, 'News', 'http://localhost/news/', 1)",
+    "INSERT INTO mcp_server_tools VALUES (1, 85, 'get_pto_balance', 'Get balances', '{\"type\":\"object\",\"properties\":{\"email\":{\"type\":\"string\"}}}')",
+    "INSERT INTO mcp_server_tools VALUES (2, 9, 'get_news', 'News', '{}')",
+    "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)",
+    "INSERT INTO system_llm_settings (provider_key, display_name, model, base_url, api_format, protocol, enabled, sort_order) VALUES ('jev', 'Jev', 'jev-latest', NULL, 'router', 'typesafe', 1, 100)"
+  ],
+  "skills": {"html": {"SKILL.md": "---\nname: html\n---\nFixture skill.\n"}},
+  "options": {}
+}

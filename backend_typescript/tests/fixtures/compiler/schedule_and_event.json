@@ -1,0 +1,23 @@
+{
+  "description": "A prompt Start with a saved cron schedule (newest non-paused row) and an event trigger on a server a code node uses: DEFAULT_CRON, DEFAULT_WATCH, cron mode, the code-node drain doc line",
+  "workflow": {"id": 61, "name": "Ops poller", "user_id": "3"},
+  "user_id": "3",
+  "graph": {
+    "nodes": [
+      {"id": "1", "node_type": "start", "config": {"type": "start", "prompt": "Check the queue"}},
+      {"id": "2", "node_type": "code", "config": {"type": "code", "name": "Poll jobs", "code": "def run(input, call_tool):\n    return {'route': 'next', 'output': call_tool('servicenow', 'poll_jobs', {})}\n", "mcp_servers": ["ServiceNow"]}},
+      {"id": "3", "node_type": "output", "config": {"type": "output"}}
+    ],
+    "edges": [{"from": "1", "to": "2", "from_port": "output_1"}, {"from": "2", "to": "3", "from_port": "output_1"}]
+  },
+  "sql": [
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (85, '3', 'ServiceNow', 'http://localhost/servicenow/', 1)",
+    "INSERT INTO mcp_server_tools VALUES (1, 85, 'poll_jobs', 'Poll', '{}')",
+    "INSERT INTO mcp_server_tools VALUES (2, 85, 'wait_for_jobs', 'Wait', '{}')",
+    "INSERT INTO scheduled_workflows VALUES (1, 61, 'cron', 'pending', '0 9 * * 1-5', NULL)",
+    "INSERT INTO scheduled_workflows VALUES (2, 61, 'cron', 'pending', '*/10 8-18 * * 1-5', NULL)",
+    "INSERT INTO scheduled_workflows VALUES (3, 61, 'cron', 'paused', '* * * * *', NULL)",
+    "INSERT INTO scheduled_workflows VALUES (4, 61, 'event', 'pending', NULL, '{\"server\": \"ServiceNow\", \"tool\": \"wait_for_jobs\", \"args\": {\"queue\": \"ops\", \"n\": 2}}')"
+  ],
+  "options": {}
+}

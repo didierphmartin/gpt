@@ -1,0 +1,35 @@
+{
+  "description": "CompiledEmitParity: module/server names from awkward display names (accents, CJK, quotes, a digit-only name, names clashing with common/workflow, a 50-char name, a duplicate), numeric non-sequential ids, a dispatcher over an agent and a two-exit code node on a user MCP server, a playbook, output storage to a custom folder",
+  "workflow": {"id": 73, "name": "Équipe \"names\" — test", "user_id": "3", "output_storage_enabled": 1, "output_folder": "reports/q3"},
+  "user_id": "3",
+  "graph": {
+    "nodes": [
+      {"id": "1", "node_type": "start", "config": {"type": "start", "prompt": "Bonjour"}},
+      {"id": "20", "node_type": "", "config": {"type": "agent-template", "agent_name": "Équipe café", "agent_type": "dispatcher", "instructions": "Route it.", "agent_provider": "claude", "model": "claude-sonnet-4-5", "tools": [], "settings": {"routing_mode": "llm"}}},
+      {"id": "11", "node_type": "", "config": {"type": "agent-template", "agent_name": "common", "instructions": "You are common.", "agent_provider": "openai", "model": "gpt-5", "tools": ["mcp_lookup"], "settings": {}}},
+      {"id": "12", "node_type": "code", "config": {"type": "code", "name": "Check \"mail\"", "code": "def run(input, call_tool):\n    return {'route': 'yes', 'output': input}\n", "exits": ["yes", "no"], "mcp_servers": ["Mail Box"], "timeout_s": 45, "args": {"folder": "Inbox"}}},
+      {"id": "13", "node_type": "", "config": {"type": "agent-template", "agent_name": "日本語チーム", "instructions": "Answer.", "agent_provider": "gemini", "model": "gemini-2.5-pro", "tools": [], "settings": {}}},
+      {"id": "14", "node_type": "", "config": {"type": "agent-template", "agent_name": "123", "instructions": "Numbers.", "agent_provider": "OpenAI", "model": "gpt-5", "tools": [], "settings": {}}},
+      {"id": "15", "node_type": "", "config": {"type": "agent-template", "agent_name": "A very long agent name that goes on and on beyond forty characters", "instructions": "Long.", "agent_provider": "deepseek", "model": "deepseek-v4-flash", "tools": [], "settings": {}}},
+      {"id": "16", "node_type": "", "config": {"type": "agent-template", "agent_name": "workflow", "instructions": "Clash.", "agent_provider": "claude", "model": "claude-sonnet-4-5", "tools": [], "settings": {}}},
+      {"id": "17", "node_type": "", "config": {"type": "agent-template", "agent_name": "Équipe café", "instructions": "Duplicate.", "agent_provider": "claude", "model": "claude-sonnet-4-5", "tools": [], "settings": {}}},
+      {"id": "9", "node_type": "output", "config": {"type": "output", "name": "Final answer"}}
+    ],
+    "edges": [
+      {"from": "1", "to": "20"},
+      {"from": "20", "to": "11"}, {"from": "20", "to": "12"},
+      {"from": "12", "to": "13", "from_port": "output_1"}, {"from": "12", "to": "14", "from_port": "output_2"},
+      {"from": "11", "to": "15"}, {"from": "13", "to": "16"}, {"from": "14", "to": "17"},
+      {"from": "15", "to": "9"}, {"from": "16", "to": "9"}, {"from": "17", "to": "9"}
+    ]
+  },
+  "sql": [
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (40, '3', 'Mail Box', 'http://127.0.0.1:8770/mcp', 1)",
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (41, NULL, 'Directory', 'http://localhost/directory/', 1)",
+    "INSERT INTO mcp_server_tools VALUES (1, 40, 'wait_for_new', 'Wait', '{}')",
+    "INSERT INTO mcp_server_tools VALUES (2, 41, 'lookup', 'Look someone up', '{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"}}}')",
+    "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)",
+    "INSERT INTO system_llm_settings (provider_key, display_name, model, base_url, api_format, protocol, enabled, sort_order) VALUES ('jev', 'Jev', 'jev-latest', NULL, 'router', 'typesafe', 1, 100)"
+  ],
+  "options": {}
+}

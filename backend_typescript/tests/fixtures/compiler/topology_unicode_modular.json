@@ -1,0 +1,1 @@
+{"extends": "topology_unicode", "description": "topology_unicode as a modular package (module names that are not identifiers fall back to node_<id>_<slug>)", "options": {"modular": true}}

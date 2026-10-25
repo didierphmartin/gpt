@@ -1,0 +1,1 @@
+{"extends": "topology_unicode", "description": "topology_unicode as an A2A folder (byte-padded endpoint table with accented names)", "options": {"a2a": true}}

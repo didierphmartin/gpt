@@ -1,0 +1,190 @@
+{
+  "description": "GraphAnalyzer port: ids inserted as 10, 2, 7, 5, 3, 12, 99 (topological order differs from both insertion and numeric order); 99 unreachable; doubled edge; agent_id fallback tools; provider-only nodes; thinking; playbook title; user-scoped MCP servers",
+  "workflow": {
+    "id": 51,
+    "name": "Numeric order",
+    "user_id": "3",
+    "output_storage_enabled": true,
+    "output_folder": "reports"
+  },
+  "user_id": "3",
+  "graph": {
+    "nodes": [
+      {
+        "id": "10",
+        "node_type": "output",
+        "config": {
+          "type": "output"
+        }
+      },
+      {
+        "id": "2",
+        "node_type": "",
+        "config": {
+          "type": "agent-template",
+          "agent_name": "Writer",
+          "agent_type": "standard",
+          "instructions": "Write it.",
+          "agent_provider": "Gemini",
+          "model": "",
+          "tools": [
+            "mcp_search_docs",
+            "get_news"
+          ],
+          "settings": {
+            "temperature": 1.0,
+            "max_tokens": 2048,
+            "thinking": "on"
+          },
+          "skill_content": "  Inline skill text  "
+        }
+      },
+      {
+        "id": "7",
+        "node_type": "start",
+        "config": {
+          "type": "start",
+          "prompt": "Plan a trip",
+          "documents": [
+            {
+              "name": "brief.pdf",
+              "path": "docs/brief.pdf"
+            }
+          ]
+        }
+      },
+      {
+        "id": "5",
+        "node_type": "",
+        "agent_id": "2",
+        "config": {
+          "type": "agent-template",
+          "agent_name": "Router",
+          "agent_type": "dispatcher",
+          "instructions": "Route.",
+          "agent_provider": "deepseek",
+          "model": "",
+          "settings": {
+            "thinking": "maybe",
+            "temperature": 0.25
+          }
+        }
+      },
+      {
+        "id": "3",
+        "node_type": "",
+        "agent_id": 1,
+        "config": {
+          "type": "agent-template",
+          "agent_name": "Researcher",
+          "agent_type": "standard",
+          "systemPrompt": "Research.",
+          "provider": "claude",
+          "model": "claude-sonnet-4-5",
+          "tools": [],
+          "bound_skill": {
+            "dir_name": " html "
+          }
+        }
+      },
+      {
+        "id": "12",
+        "node_type": "playbook",
+        "config": {
+          "type": "playbook",
+          "name": "Booking playbook",
+          "playbook": "Intro\n## Title: Book travel  \n\nTrigger: trip.\n\nInstructions:\n1. #Book Flight.\n",
+          "agent_provider": "deepseek",
+          "model": "deepseek-flash",
+          "writes_enabled": false
+        }
+      },
+      {
+        "id": "99",
+        "node_type": "",
+        "config": {
+          "type": "agent-template",
+          "agent_name": "Orphan",
+          "agent_provider": "claude",
+          "model": "x"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "7",
+        "to": "5"
+      },
+      {
+        "from": "5",
+        "to": "3"
+      },
+      {
+        "from": "5",
+        "to": "2"
+      },
+      {
+        "from": "5",
+        "to": "2"
+      },
+      {
+        "from": "3",
+        "to": "10"
+      },
+      {
+        "from": "2",
+        "to": "12"
+      },
+      {
+        "from": "12",
+        "to": "10"
+      },
+      {
+        "from": "99",
+        "to": "10"
+      }
+    ]
+  },
+  "agents": {
+    "1": {
+      "id": 1,
+      "user_id": 3,
+      "name": "Saved researcher",
+      "tools": "[\"mcp_get_news\", {\"name\": \"mcp_search_docs\"}, {\"tool_name\": \"lookup\"}, \"\"]",
+      "settings": "{}"
+    },
+    "2": {
+      "id": 2,
+      "user_id": 3,
+      "name": "  ",
+      "description": "Saved desc",
+      "settings": "{\"routing_mode\":\"luna-gw.eu\",\"min_confidence\":\"1.5\",\"unclear_branch\":\" Writer \"}"
+    }
+  },
+  "sql": [
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (85, '3', 'Docs Server', 'http://docs.local/mcp', 1)",
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (9, NULL, 'News', 'http://localhost/news/', 1)",
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (12, '4', 'Other user', 'http://other/', 1)",
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (13, NULL, 'Disabled', 'http://dis/', 0)",
+    "INSERT INTO mcp_server_tools VALUES (1, 85, 'search_docs', 'Search docs', '{\"type\":\"object\",\"properties\":{\"q\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\",\"default\":1.0}},\"required\":[\"q\"]}')",
+    "INSERT INTO mcp_server_tools VALUES (2, 9, 'get_news', 'News', NULL)",
+    "INSERT INTO mcp_server_tools VALUES (3, 12, 'other_tool', 'x', '{}')",
+    "INSERT INTO mcp_server_tools VALUES (4, 13, 'dis_tool', 'd', '{}')",
+    "INSERT INTO mcp_server_tools VALUES (5, 9, 'lookup', NULL, 'not json')",
+    "INSERT INTO mcp_server_tools VALUES (6, 9, '10', 'numeric tool', '{\"2\":1,\"1\":2}')",
+    "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)",
+    "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('Gemini', 'gemini-2.5-pro', 1)",
+    "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('deepseek', 'deepseek-chat', 1)",
+    "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('kimi', 'kimi-k2', 0)",
+    "INSERT INTO system_llm_settings (provider_key, display_name, model, base_url, api_format, protocol, enabled, sort_order) VALUES ('jev', 'Jev', 'jev-latest', NULL, 'router', 'typesafe', 1, 100)",
+    "INSERT INTO system_llm_settings (provider_key, display_name, model, base_url, api_format, protocol, enabled, sort_order) VALUES ('luna-gw.eu', 'Luna', '', 'https://gw.example/v1', 'router', 'openai', 1, 50)",
+    "INSERT INTO system_llm_settings (provider_key, display_name, model, base_url, api_format, protocol, enabled, sort_order) VALUES ('off', 'Off', 'x', NULL, 'router', 'typesafe', 0, 10)"
+  ],
+  "skills": {
+    "html": {
+      "SKILL.md": "---\nname: html\ndescription: Builds HTML\n---\nFixture skill.\n",
+      "scripts/create.py": "print('hi')\n"
+    }
+  },
+  "options": {}
+}

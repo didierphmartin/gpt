@@ -1,0 +1,1 @@
+{"extends": "schedule_and_event", "description": "schedule_and_event as a modular package", "options": {"modular": true}}

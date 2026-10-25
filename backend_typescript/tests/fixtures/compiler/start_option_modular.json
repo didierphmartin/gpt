@@ -1,0 +1,1 @@
+{"extends": "start_option", "description": "start_option as a modular package (the trigger's code file is code/start_<slug>.py)", "options": {"modular": true}}

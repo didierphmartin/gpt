@@ -1,0 +1,28 @@
+{
+  "description": "Numeric ids whose topological order differs from numeric order (10 -> 2 -> 7, a diamond), an unconnected node (dropped), accented / em-dash / quote names, HTML nudge, a missing tool, start documents, output storage with a custom folder, providers grok/glm, string node ids, a prompt with quotes, backslashes and triple quotes",
+  "workflow": {"id": 9, "name": "Rédaction — \"Équipe\" 2026", "user_id": "3", "output_storage_enabled": true, "output_folder": "reports/Équipe"},
+  "user_id": "3",
+  "graph": {
+    "nodes": [
+      {"id": "10", "node_type": "start", "config": {"type": "start", "prompt": "Écris un rapport \"complet\" sur C:\\data et \"\"\"citations\"\"\" — merci", "documents": [{"name": "brief.docx", "path": "docs/brief.docx", "storage": "remote", "fullPath": "/x/brief.docx"}, {"name": "notes.md", "path": "notes.md", "storage": "local"}]}},
+      {"id": "2", "node_type": "", "config": {"type": "agent-template", "agent_name": "Rédacteur en chef", "instructions": "You write a self-contained report with a <style> block.\nUse \\n escapes and \"\"\"quotes\"\"\".", "agent_provider": "grok", "model": "grok-4", "tools": ["mcp_search_web"], "settings": {"temperature": 0.5, "max_tokens": 16000}}},
+      {"id": "7", "node_type": "", "config": {"type": "agent-template", "agent_name": "Vérificateur", "instructions": "Check facts.", "agent_provider": "glm", "model": "glm-5.2", "tools": [{"name": "mcp_search_web"}, {"tool_name": "fetch_page"}], "settings": {"temperature": "0.25", "max_tokens": "1200"}}},
+      {"id": "3", "node_type": "", "config": {"type": "agent-template", "agent_name": "2024 Review!", "instructions": "Review it.", "agent_provider": "claude", "settings": {}}},
+      {"id": "11", "node_type": "", "config": {"type": "agent-template", "agent_name": "Orphan", "instructions": "never reached", "agent_provider": "claude"}},
+      {"id": "4", "node_type": "output", "config": {"type": "output"}}
+    ],
+    "edges": [
+      {"from": "10", "to": "2"}, {"from": "10", "to": "7"},
+      {"from": "2", "to": "3"}, {"from": "7", "to": "3"},
+      {"from": "3", "to": "4"}
+    ]
+  },
+  "sql": [
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (4, NULL, 'Web Search', 'https://search.example/mcp', 1)",
+    "INSERT INTO mcp_server_tools VALUES (1, 4, 'search_web', 'Search the web', '{\"type\":\"object\",\"properties\":{\"q\":{\"type\":\"string\"},\"opts\":{\"type\":\"object\",\"properties\":{}}}}')",
+    "INSERT INTO mcp_server_tools VALUES (2, 4, 'broken_schema', 'Bad', 'not json')",
+    "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)",
+    "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('grok', 'grok-3', 1)"
+  ],
+  "options": {}
+}

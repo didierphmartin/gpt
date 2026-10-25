@@ -1,0 +1,1 @@
+{"extends": "code_nodes", "description": "code_nodes as A2A: refused (code nodes are not supported by the A2A packaging)", "options": {"a2a": true}}

@@ -1,0 +1,1 @@
+{"extends": "playbooks", "description": "playbooks as A2A: refused (exits / from input)", "options": {"a2a": true}}

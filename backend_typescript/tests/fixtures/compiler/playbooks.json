@@ -1,0 +1,34 @@
+{
+  "description": "Playbook nodes: a fixed playbook with done/failed exits wired to two branches (bound Workday action, unbound actions, writes off) and a 'from input' playbook node running the robot's published copies (one baked, one skipped for having no text)",
+  "workflow": {"id": 70, "name": "Playbook desk", "user_id": "3"},
+  "user_id": "3",
+  "graph": {
+    "nodes": [
+      {"id": "1", "node_type": "start", "config": {"type": "start", "prompt": "{\"playbook\": \"time-off\", \"request\": \"5 days in May\"}"}},
+      {"id": "2", "node_type": "playbook", "config": {"type": "playbook", "name": "HR desk", "playbook": "Title: Time Off\n\nTrigger: PTO.\n\nInstructions:\n1. #Get PTO Balance for the requester.\n2. #Request Approval from the manager then #Resolve Request.\n\nTools used: Workday\n\nActions used: #Get PTO Balance; #Request Approval; #Resolve Request\n", "agent_provider": "gemini", "model": "gemini-2.5-pro", "settings": {"temperature": 0, "max_tokens": 3000, "thinking": "off"}, "exits": ["done", "failed"]}},
+      {"id": "3", "node_type": "", "config": {"type": "agent-template", "agent_name": "Escalation", "instructions": "Escalate the failed request.", "agent_provider": "kimi", "model": "kimi-k2-0905", "settings": {"temperature": 0.6}}},
+      {"id": "4", "node_type": "playbook", "config": {"type": "playbook", "name": "Run the job", "playbook_source": "input", "playbook_input_field": "playbook", "writes_enabled": true, "agent_provider": "claude"}},
+      {"id": "5", "node_type": "output", "config": {"type": "output"}}
+    ],
+    "edges": [
+      {"from": "1", "to": "2", "from_port": "output_1"},
+      {"from": "2", "to": "4", "from_port": "output_1"},
+      {"from": "2", "to": "3", "from_port": "output_2"},
+      {"from": "4", "to": "5", "from_port": "output_1"},
+      {"from": "3", "to": "5", "from_port": "output_1"}
+    ]
+  },
+  "sql": [
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (85, '3', 'Workday', 'http://localhost/mockstack/index.php/workday', 1)",
+    "INSERT INTO mcp_server_tools VALUES (1, 85, 'get_pto_balance', 'Get balances', '{\"type\":\"object\",\"properties\":{\"email\":{\"type\":\"string\"}}}')",
+    "INSERT INTO mcp_server_tools VALUES (2, 85, 'request_approval', 'Ask a manager', '{\"type\":\"object\",\"properties\":{\"manager\":{\"type\":\"string\"},\"days\":{\"type\":\"number\"}}}')",
+    "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)",
+    "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('gemini', 'gemini-2.5-flash', 1)",
+    "INSERT INTO users (id, email, first_name, last_name, kind) VALUES (900, 'robot@synergyai.invalid', 'SynergyAI', 'Operations', 'service')",
+    "INSERT INTO users (id, email, first_name, last_name, kind) VALUES (3, 'didier@example.com', 'Didier', 'Martin', 'user')",
+    "INSERT INTO playbooks VALUES (1, 900, 'time-off', 'Time Off', 'Title: Time Off\n\nTrigger: PTO.\n\nInstructions:\n1. #Get PTO Balance for the requester.\n2. #Request Approval from the manager.\n\nTools used: Workday\n\nActions used: #Get PTO Balance; #Request Approval\n', '2026-10-01 10:00:00', 3, '2026-10-01 10:00:00', NULL)",
+    "INSERT INTO playbooks VALUES (2, 900, 'empty', 'Empty', '', '2026-10-01 10:00:00', 3, '2026-10-01 10:00:00', NULL)",
+    "INSERT INTO playbooks VALUES (3, 900, 'reset-password', 'Reset password', 'Title: Reset password\n\nInstructions:\n1. #Lookup User in the directory.\n2. Post a message to the requester with the outcome.\n\nTools used: Okta\n\nActions used: #Lookup User\n', '2026-10-02 10:00:00', NULL, NULL, NULL)"
+  ],
+  "options": {}
+}

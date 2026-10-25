@@ -1,0 +1,27 @@
+{
+  "extends": "topology_unicode",
+  "description": "topology_unicode's Start documents copied into the modular package from the user's storage: a binary .docx (base64 entry), a same-named second document (index-prefixed), a local-storage one and a missing one left as they are",
+  "start_documents": {
+    "user_folder": "user_3",
+    "files": {
+      "docs/brief.docx": {"base64": "UEsDBBQAAAAIAP////8="},
+      "other/brief.docx": "plain text named .docx",
+      "notes.md": "# never read: storage local"
+    }
+  },
+  "graph": {
+    "nodes": [
+      {"id": "1", "node_type": "start", "config": {"type": "start", "prompt": "Summarize", "documents": [
+        {"name": "brief.docx", "path": "docs/brief.docx", "storage": "remote", "fullPath": "synergyaichatroot/user_3/docs/brief.docx", "localUri": "file:///x"},
+        {"name": "brief.docx", "path": "other/brief.docx"},
+        {"name": "notes.md", "path": "notes.md", "storage": "local"},
+        {"name": "gone.pdf", "path": "gone.pdf"},
+        {"name": "escape", "path": "../etc/passwd"}
+      ]}},
+      {"id": "2", "node_type": "", "config": {"type": "agent-template", "agent_name": "Summarizer", "instructions": "Summarize the documents.", "agent_provider": "claude"}},
+      {"id": "3", "node_type": "output", "config": {"type": "output"}}
+    ],
+    "edges": [{"from": "1", "to": "2"}, {"from": "2", "to": "3"}]
+  },
+  "options": {"modular": true}
+}

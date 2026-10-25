@@ -2,6 +2,7 @@ import { Kysely, sql } from 'kysely';
 import { DB } from '../db/types';
 import { WorkflowGraphAnalyzer } from './WorkflowGraphAnalyzer';
 import { CodeNodeEmit } from './CodeNodeEmit';
+import { copy, isOrdered, jsonDecodeAssoc } from './compiler/php';
 
 /**
  * The Start's mode as a compiled program bakes it (spec 2026-10-15 §2): the Start option's trigger node
@@ -69,7 +70,8 @@ export const StartTriggerFacts = {
    * args stay the code's ARGS only. Used by the event worker's schedule rows and the compiled DEFAULT_WATCH alike.
    */
   watchArgs(watchArgs: Record<string, any>, startArgs: Record<string, any>, passArgs: any[]): Record<string, any> {
-    const out: Record<string, any> = { ...watchArgs };
+    // PHP copies the array: keys keep their order (an ordered array from the compiler stays one).
+    const out: Record<string, any> = isOrdered(watchArgs) ? copy(watchArgs) : { ...watchArgs };
     const tag = startArgs?.tag ?? null;
     if (typeof tag === 'string' && tag !== '') {
       out.tag = tag;
@@ -112,14 +114,8 @@ export const StartTriggerFacts = {
     } catch {
       return null; // no schedules table, or one without the event_trigger column: no default
     }
-    let t: unknown = null;
-    if (typeof raw === 'string') {
-      try {
-        t = JSON.parse(raw);
-      } catch {
-        t = null;
-      }
-    }
+    // json_decode($raw, true): objects as ordered arrays (numeric-looking arg names keep their place).
+    const t: unknown = typeof raw === 'string' ? jsonDecodeAssoc(raw) : null;
     return isObj(t) && !Array.isArray(t) ? StartTriggerFacts.watchFromTrigger(t, slugs) : null;
   },
 
