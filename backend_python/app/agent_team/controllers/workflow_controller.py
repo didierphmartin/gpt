@@ -56,6 +56,7 @@ from app.agent_team.services.playbook_node_runner import PlaybookNodeRunner
 from app.agent_team.services.skill_tool_bridge import SkillToolBridge
 from app.agent_team.services.stream_context import StreamContext
 from app.agent_team.services.workflow_output_storage import WorkflowOutputStorage
+from app.agent_team.services.workflow_ref_resolver import UnresolvedRefsException, WorkflowRefResolver
 from app.agent_team.services.workflow_repository import WorkflowRepository
 from app.agent_team.services.workflow_run_log import WorkflowRunLog
 from app.agent_team.services.workflow_runner import WorkflowRunner
@@ -219,8 +220,26 @@ class WorkflowController:
     # POST /api/v1/workflows
     # ========================================================================
 
+    @staticmethod
+    def _graphParts(body: dict) -> tuple:
+        """`$graphData = $body['definition'] ?? $body['graph'] ?? []`, then its nodes (or steps) and edges."""
+        graphData = body.get('definition')
+        if graphData is None:
+            graphData = body.get('graph')
+        if graphData is None:
+            graphData = {}
+        nodes = graphData.get('nodes') if isinstance(graphData, dict) else None
+        if nodes is None:
+            nodes = graphData.get('steps') if isinstance(graphData, dict) else None
+        if nodes is None:
+            nodes = []
+        edges = graphData.get('edges') if isinstance(graphData, dict) else None
+        if edges is None:
+            edges = []
+        return nodes, edges
+
     def create(self, request) -> dict:
-        """PHP 128-225."""
+        """PHP 128-237."""
         userId = request['user_id'] if request.get('user_id') is not None else 0
         body = request['body'] if request.get('body') is not None else {}
 
@@ -233,6 +252,15 @@ class WorkflowController:
         hasGraph = (not php_empty(_nested_get(body, 'definition', 'nodes'))
                     or not php_empty(_nested_get(body, 'graph', 'nodes')))
         hasSteps = not php_empty(body.get('steps')) and is_php_array(body.get('steps'))
+
+        # Names -> ids before anything is inserted: an unknown name must not leave an empty workflow behind.
+        resolved = None
+        if hasGraph:
+            nodes, edges = self._graphParts(body)
+            try:
+                resolved = WorkflowRefResolver(self.db).resolve(php_intval(userId), nodes, edges)
+            except UnresolvedRefsException as e:
+                return {'success': False, 'error': 'unknown references', 'missing': e.missing, 'status_code': 422}
 
         try:
             workflow = Workflow()
@@ -284,7 +312,7 @@ class WorkflowController:
                 error_log(f'[WorkflowController] Saving graph with {len(nodes)} nodes and {len(edges)} edges')
 
                 try:
-                    self.graphRepository.saveGraph(created.getId(), nodes, edges)
+                    self.graphRepository.saveGraph(created.getId(), resolved['nodes'], resolved['edges'])
                     error_log('[WorkflowController] Graph saved successfully')
                 except Exception as e:  # noqa: BLE001
                     error_log(f'[WorkflowController] Error saving graph: {e}')
@@ -298,6 +326,8 @@ class WorkflowController:
                 'message': 'Workflow created successfully',
                 'status_code': 201,
             }
+        except UnresolvedRefsException as e:
+            return {'success': False, 'error': 'unknown references', 'missing': e.missing, 'status_code': 422}
         except Exception as e:  # noqa: BLE001
             return {'success': False, 'error': str(e), 'status_code': 500}
 
@@ -583,7 +613,8 @@ class WorkflowController:
                 error_log(f'[WorkflowController] Updating graph with {len(nodes)} nodes and {len(edges)} edges')
 
                 try:
-                    self.graphRepository.saveGraph(workflowId, nodes, edges)
+                    resolved = WorkflowRefResolver(self.db).resolve(php_intval(userId), nodes, edges)
+                    self.graphRepository.saveGraph(workflowId, resolved['nodes'], resolved['edges'])
                     error_log('[WorkflowController] Graph updated successfully')
                 except Exception as e:  # noqa: BLE001
                     error_log(f'[WorkflowController] Error updating graph: {e}')
@@ -597,6 +628,8 @@ class WorkflowController:
                 'message': 'Workflow updated successfully',
                 'status_code': 200,
             }
+        except UnresolvedRefsException as e:
+            return {'success': False, 'error': 'unknown references', 'missing': e.missing, 'status_code': 422}
         except Exception as e:  # noqa: BLE001
             return {'success': False, 'error': str(e), 'status_code': 500}
 
