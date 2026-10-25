@@ -27,6 +27,7 @@ import { StreamContext } from '../AgentTeam/StreamContext';
 import { SkillToolBridge } from '../AgentTeam/SkillToolBridge';
 import { WorkflowRunLog } from '../AgentTeam/WorkflowRunLog';
 import { WorkflowOutputStorage } from '../AgentTeam/WorkflowOutputStorage';
+import { WorkflowRefResolver, UnresolvedRefsException } from '../AgentTeam/WorkflowRefResolver';
 import { PlaybookNodeRunner } from '../AgentTeam/PlaybookNodeRunner';
 import { PlaybookSource } from '../AgentTeam/PlaybookSource';
 import { PlaybookOutcome } from '../AgentTeam/PlaybookOutcome';
@@ -105,6 +106,18 @@ export class WorkflowController {
     const hasGraph = !phpEmpty(body.definition?.nodes) || !phpEmpty(body.graph?.nodes);
     const hasSteps = !phpEmpty(body.steps) && phpIsArray(body.steps);
 
+    // Names -> ids before anything is inserted: an unknown name must not leave an empty workflow behind.
+    let resolved: { nodes: any[]; edges: any[] } | null = null;
+    if (hasGraph) {
+      const graphData = body.definition ?? body.graph ?? {};
+      try {
+        resolved = await new WorkflowRefResolver().resolve(userId, graphData.nodes ?? graphData.steps ?? [], graphData.edges ?? []);
+      } catch (e: any) {
+        if (!(e instanceof UnresolvedRefsException)) throw e;
+        return { success: false, error: 'unknown references', missing: e.missing, status_code: 422 };
+      }
+    }
+
     try {
       const workflow = hydrateWorkflow({});
       workflow.userId = userId;
@@ -136,12 +149,8 @@ export class WorkflowController {
 
       let created = await this.workflowRepository.create(workflow);
 
-      if (hasGraph) {
-        const graphData = body.definition ?? body.graph ?? {};
-        const nodes = graphData.nodes ?? graphData.steps ?? [];
-        const edges = graphData.edges ?? [];
-
-        await this.graphRepository.saveGraph(created.id as number, nodes, edges);
+      if (hasGraph && resolved !== null) {
+        await this.graphRepository.saveGraph(created.id as number, resolved.nodes, resolved.edges);
 
         created = (await this.workflowRepository.findById(created.id as number, true))!;
       }
@@ -405,7 +414,8 @@ export class WorkflowController {
         const nodes = graphData.nodes ?? graphData.steps ?? [];
         const edges = graphData.edges ?? [];
 
-        await this.graphRepository.saveGraph(workflowId, nodes, edges);
+        const resolved = await new WorkflowRefResolver().resolve(userId, nodes, edges);
+        await this.graphRepository.saveGraph(workflowId, resolved.nodes, resolved.edges);
 
         updated = (await this.workflowRepository.findById(workflowId, true))!;
       }
@@ -417,6 +427,9 @@ export class WorkflowController {
         status_code: 200,
       };
     } catch (e: any) {
+      if (e instanceof UnresolvedRefsException) {
+        return { success: false, error: 'unknown references', missing: e.missing, status_code: 422 };
+      }
       return { success: false, error: e?.message ?? '', status_code: 500 };
     }
   }
