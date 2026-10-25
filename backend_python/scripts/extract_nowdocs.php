@@ -79,8 +79,9 @@ for ($i = 0; $i < $n; $i++) {
         continue;
     }
     if (!preg_match("/^<<<\\s*'/", $t[1])) {
-        fwrite(STDERR, "interpolating heredoc at line {$t[2]} is not supported\n");
-        exit(1);
+        // An interpolating heredoc (<<<PY) is code, not a literal: the port builds it by hand.
+        fwrite(STDERR, "skipped interpolating heredoc at line {$t[2]} (port it by hand)\n");
+        continue;
     }
     $code = $t[1];
     for ($j = $i + 1; $j < $n; $j++) {
