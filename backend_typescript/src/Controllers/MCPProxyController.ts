@@ -28,7 +28,7 @@ export class MCPProxyController {
     const rawServerId = input.server_id ?? null;
     const serverId = rawServerId === null || rawServerId === '' ? null : Number(rawServerId);
     const serverUrl: string | null = input.server_url ?? null;
-    const userId = String(input.user_id ?? ctx.user_id ?? 'demo-user');
+    const userId = String(ctx.user_id ?? 'demo-user');
 
     switch (action) {
       case 'proxy':

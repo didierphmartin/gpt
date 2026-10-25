@@ -384,8 +384,8 @@ export class HumeToolController {
       };
     }
 
-    // Get user ID from session or input.
-    const userId = input.userId ?? ctx.user_id ?? 'demo-user';
+    // The authenticated caller; a body userId is ignored.
+    const userId = ctx.user_id ?? 'demo-user';
 
     // Check if function exists.
     if (!this.toolsManager.hasFunction(toolName)) {

@@ -20,8 +20,6 @@ function phpBoolVal(v: any): boolean {
  */
 export class MCPServerController {
   private resolveUserId(ctx: Ctx): string {
-    const q = (ctx.query as any)?.user_id;
-    if (q !== undefined && q !== null && String(q) !== '') return String(q);
     if (ctx.user_id != null) return String(ctx.user_id);
     return '';
   }
@@ -124,7 +122,7 @@ export class MCPServerController {
   /** POST /api/v1/mcp/servers */
   async create(ctx: Ctx): Promise<ControllerResult> {
     const input = ctx.body;
-    const userId = input.user_id ?? (ctx.user_id != null ? String(ctx.user_id) : 'demo-user');
+    const userId = ctx.user_id != null ? String(ctx.user_id) : 'demo-user';
     const name = String(input.name ?? '').trim();
     const url = String(input.url ?? '').trim();
     const description = String(input.description ?? '').trim();
@@ -152,7 +150,7 @@ export class MCPServerController {
   /** POST /api/v1/mcp/servers/update */
   async update(ctx: Ctx): Promise<ControllerResult> {
     const input = ctx.body;
-    const userId = input.user_id ?? (ctx.user_id != null ? String(ctx.user_id) : 'demo-user');
+    const userId = ctx.user_id != null ? String(ctx.user_id) : 'demo-user';
     const serverId = input.server_id ?? null;
     const name = String(input.name ?? '').trim();
     const url = String(input.url ?? '').trim();
@@ -180,7 +178,7 @@ export class MCPServerController {
   /** POST /api/v1/mcp/servers/toggle */
   async toggle(ctx: Ctx): Promise<ControllerResult> {
     const input = ctx.body;
-    const userId = input.user_id ?? (ctx.user_id != null ? String(ctx.user_id) : 'demo-user');
+    const userId = ctx.user_id != null ? String(ctx.user_id) : 'demo-user';
     const serverId = input.server_id ?? null;
     const enabled = input.enabled ?? true;
 
@@ -193,7 +191,7 @@ export class MCPServerController {
   /** DELETE /api/v1/mcp/servers?server_id= */
   async delete(ctx: Ctx): Promise<ControllerResult> {
     const serverId = (ctx.query as any)?.server_id ?? null;
-    const userId = (ctx.query as any)?.user_id ?? (ctx.user_id != null ? String(ctx.user_id) : 'demo-user');
+    const userId = ctx.user_id != null ? String(ctx.user_id) : 'demo-user';
 
     if (!serverId) return { status_code: 400, success: false, error: 'Server ID required' };
 
