@@ -182,8 +182,10 @@ test('testCommonAndApiAreByteIdenticalToTheModularPath', async () => {
   const modularFacts = await facts(graph, 'workflow');
   const modularGen: any = generator(graph, 'workflow');
   const modularFiles = byPath(await modularGen.generateModular(modularFacts));
-  assert.equal(swarmFiles['common.py'], modularFiles['common.py']);
-  assert.equal(swarmFiles['api.py'], modularGen.emitModularApi(modularFacts, LangGraphGenerator.modularLayout(modularFacts), false));
+  // Two generations can straddle a second: the "Generated:" stamp is not what this compares.
+  const unstamped = (code: string): string => code.replace(/^(\s*Generated:).*$/gm, '$1');
+  assert.equal(unstamped(swarmFiles['common.py']), unstamped(modularFiles['common.py']));
+  assert.equal(unstamped(swarmFiles['api.py']), unstamped(modularGen.emitModularApi(modularFacts, LangGraphGenerator.modularLayout(modularFacts), false)));
   assert.ok(modularFiles['api.py'].includes('@app.post("/listen")'));
   assert.ok(!swarmFiles['api.py'].includes('/listen'));
 });

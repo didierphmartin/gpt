@@ -150,8 +150,11 @@ def test_common_and_api_are_byte_identical_to_the_modular_path():
     modularGen = _generator(graph, 'workflow')
     modularFacts = _facts(graph, 'workflow')
     modularFiles = {f['path']: f['code'] for f in modularGen._generateModular(modularFacts)['files']}
-    assert modularFiles['common.py'] == swarmFiles['common.py']
-    assert modularGen._emitModularApi(modularFacts, LangGraphGenerator.modularLayout(modularFacts), False) == swarmFiles['api.py']
+    # Two generations can straddle a second: the "Generated:" stamp is not what this compares.
+    def unstamped(code: str) -> str:
+        return re.sub(r'^(\s*Generated:).*$', r'\1', code, flags=re.M)
+    assert unstamped(modularFiles['common.py']) == unstamped(swarmFiles['common.py'])
+    assert unstamped(modularGen._emitModularApi(modularFacts, LangGraphGenerator.modularLayout(modularFacts), False)) == unstamped(swarmFiles['api.py'])
     assert '@app.post("/listen")' in modularFiles['api.py']
     assert '/listen' not in swarmFiles['api.py']
 

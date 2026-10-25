@@ -266,12 +266,14 @@ class LangGraphSwarmGeneratorTest extends TestCase
             $modularFiles[$f['path']] = $f['code'];
         }
 
-        $this->assertSame($modularFiles['common.py'], $swarmFiles['common.py']);
+        // Two generations can straddle a second: the "Generated:" stamp is not what this compares.
+        $unstamped = static fn(string $code): string => preg_replace('/^(\s*Generated:).*$/m', '$1', $code);
+        $this->assertSame($unstamped($modularFiles['common.py']), $unstamped($swarmFiles['common.py']));
         // The modular api.py also listens (plan task 8: POST /listen, GET /live, --listen); a swarm's
         // workflow.py has no make_listener, so its api.py is the same emitter without the listen part.
         $api = new \ReflectionMethod($modularGen, 'emitModularApi');
         $layout = new \ReflectionMethod($modularGen, 'modularLayout');
-        $this->assertSame($api->invoke($modularGen, $modularFacts, $layout->invoke(null, $modularFacts), false), $swarmFiles['api.py']);
+        $this->assertSame($unstamped($api->invoke($modularGen, $modularFacts, $layout->invoke(null, $modularFacts), false)), $unstamped($swarmFiles['api.py']));
         $this->assertStringContainsString('@app.post("/listen")', $modularFiles['api.py']);
         $this->assertStringNotContainsString('/listen', $swarmFiles['api.py']);
     }
