@@ -1,0 +1,109 @@
+{
+ "description": "Several MCP servers (one per user, one global, an unused one, a disabled one, another user's): MCP_SERVER_SLUGS, header doc lines, .env.example",
+ "workflow": {
+  "id": 58,
+  "name": "Tools galore",
+  "user_id": "3"
+ },
+ "graph": {
+  "nodes": [
+   {
+    "id": "1",
+    "node_type": "start",
+    "config": {
+     "type": "start",
+     "prompt": "go"
+    }
+   },
+   {
+    "id": "2",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "Researcher",
+     "agent_type": "standard",
+     "instructions": "You are Researcher.",
+     "agent_provider": "claude",
+     "model": "claude-sonnet-4-5",
+     "tools": [
+      "mcp_search",
+      "mcp_get_news",
+      "fetch_url"
+     ],
+     "settings": {
+      "temperature": 0.7,
+      "max_tokens": 4096
+     },
+     "selectedTools": [
+      "mcp_search",
+      {
+       "name": "mcp_get_news"
+      }
+     ]
+    }
+   },
+   {
+    "id": "3",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "Mailer",
+     "agent_type": "standard",
+     "instructions": "You are Mailer.",
+     "agent_provider": "openai",
+     "model": "gpt-5.1",
+     "tools": [
+      "send_mail"
+     ],
+     "settings": {
+      "temperature": 0.7,
+      "max_tokens": 4096
+     }
+    }
+   },
+   {
+    "id": "4",
+    "node_type": "output",
+    "config": {
+     "type": "output"
+    }
+   }
+  ],
+  "edges": [
+   {
+    "from": "1",
+    "to": "2"
+   },
+   {
+    "from": "1",
+    "to": "3"
+   },
+   {
+    "from": "2",
+    "to": "4"
+   },
+   {
+    "from": "3",
+    "to": "4"
+   }
+  ]
+ },
+ "sql": [
+  "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (1, '3', 'Web Search', 'http://localhost:9001/mcp', 1)",
+  "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (2, NULL, 'News', 'http://localhost/news/', 1)",
+  "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (3, '3', 'Mail (Work)', 'http://localhost:8770', 1)",
+  "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (4, NULL, 'Unused', 'http://localhost:1/mcp', 1)",
+  "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (5, '3', 'Disabled', 'http://localhost:2/mcp', 0)",
+  "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (6, '4', 'Someone else', 'http://localhost:3/mcp', 1)",
+  "INSERT INTO mcp_server_tools VALUES (1, 1, 'search', 'Search the web', '{\"type\":\"object\",\"properties\":{\"q\":{\"type\":\"string\"},\"n\":{\"type\":\"integer\",\"default\":5}}}')",
+  "INSERT INTO mcp_server_tools VALUES (2, 2, 'get_news', 'News', '{}')",
+  "INSERT INTO mcp_server_tools VALUES (3, 3, 'send_mail', 'Send', '{\"type\":\"object\",\"properties\":{}}')",
+  "INSERT INTO mcp_server_tools VALUES (4, 4, 'unused', 'Unused', '{}')",
+  "INSERT INTO mcp_server_tools VALUES (5, 5, 'disabled', 'Disabled', '{}')",
+  "INSERT INTO mcp_server_tools VALUES (6, 6, 'theirs', 'Theirs', '{}')",
+  "INSERT INTO mcp_server_tools VALUES (7, 1, 'search_images', 'Images', 'not json')",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('deepseek', 'deepseek-v4-flash', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('gemini', 'gemini-2.5-pro', 1)"
+ ]
+}

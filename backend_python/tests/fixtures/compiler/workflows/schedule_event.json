@@ -1,0 +1,78 @@
+{
+ "description": "A cron schedule row and an event-trigger row (DEFAULT_CRON, DEFAULT_WATCH), an agent using the trigger's server, Start documents",
+ "workflow": {
+  "id": 54,
+  "name": "Scheduled digest",
+  "user_id": "3",
+  "output_storage_enabled": 1
+ },
+ "graph": {
+  "nodes": [
+   {
+    "id": "1",
+    "node_type": "start",
+    "config": {
+     "type": "start",
+     "prompt": "Daily digest",
+     "documents": [
+      {
+       "name": "brief.docx",
+       "path": "/Users/x/brief.docx"
+      },
+      {
+       "name": "notes.pdf",
+       "path": "docs/notes.pdf",
+       "fullPath": "/a/notes.pdf"
+      }
+     ]
+    }
+   },
+   {
+    "id": "2",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "Digest",
+     "agent_type": "standard",
+     "instructions": "Write a production-quality HTML report.",
+     "agent_provider": "claude",
+     "model": "claude-sonnet-4-5",
+     "tools": [
+      "mcp_poll_new_mail"
+     ],
+     "settings": {
+      "temperature": 0.7,
+      "max_tokens": 4096
+     }
+    }
+   },
+   {
+    "id": "3",
+    "node_type": "output",
+    "config": {
+     "type": "output"
+    }
+   }
+  ],
+  "edges": [
+   {
+    "from": "1",
+    "to": "2"
+   },
+   {
+    "from": "2",
+    "to": "3"
+   }
+  ]
+ },
+ "sql": [
+  "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (7, '3', 'Outlook', 'http://127.0.0.1:8770/mcp', 1)",
+  "INSERT INTO mcp_server_tools VALUES (1, 7, 'poll_new_mail', 'Poll', '{}')",
+  "INSERT INTO scheduled_workflows VALUES (1, 54, 'cron', '*/5 8-18 * * 1-5', 'pending', NULL)",
+  "INSERT INTO scheduled_workflows VALUES (2, 54, 'cron', '0 9 * * *', 'paused', NULL)",
+  "INSERT INTO scheduled_workflows VALUES (3, 54, 'event', NULL, 'pending', '{\"server\": \"Outlook\", \"tool\": \"wait_for_new\", \"args\": {\"folder\": \"Inbox\"}}')",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('deepseek', 'deepseek-v4-flash', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('gemini', 'gemini-2.5-pro', 1)"
+ ]
+}

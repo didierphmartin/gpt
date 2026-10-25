@@ -1,0 +1,74 @@
+{
+ "description": "Swarm refusals: a Dispatcher tag (named in the message)",
+ "workflow": {
+  "id": 56,
+  "name": "Bad swarm",
+  "user_id": "3",
+  "orchestration": "swarm"
+ },
+ "modes": [
+  "modular",
+  "single",
+  "a2a"
+ ],
+ "graph": {
+  "nodes": [
+   {
+    "id": "1",
+    "node_type": "start",
+    "config": {
+     "type": "start"
+    }
+   },
+   {
+    "id": "2",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "Router",
+     "agent_type": "dispatcher",
+     "instructions": "You are Router.",
+     "agent_provider": "claude",
+     "model": "claude-sonnet-4-5",
+     "tools": [],
+     "settings": {
+      "temperature": 0.7,
+      "max_tokens": 4096
+     }
+    }
+   },
+   {
+    "id": "3",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "Other",
+     "agent_type": "standard",
+     "instructions": "You are Other.",
+     "agent_provider": "claude",
+     "model": "claude-sonnet-4-5",
+     "tools": [],
+     "settings": {
+      "temperature": 0.7,
+      "max_tokens": 4096
+     }
+    }
+   }
+  ],
+  "edges": [
+   {
+    "from": "1",
+    "to": "2"
+   },
+   {
+    "from": "1",
+    "to": "3"
+   }
+  ]
+ },
+ "sql": [
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('deepseek', 'deepseek-v4-flash', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('gemini', 'gemini-2.5-pro', 1)"
+ ]
+}

@@ -1,0 +1,50 @@
+{
+ "description": "Compile errors: an unconfigured agent template (another unconnected node is dropped first)",
+ "workflow": {
+  "id": 60,
+  "name": "Broken",
+  "user_id": "3"
+ },
+ "modes": [
+  "single"
+ ],
+ "graph": {
+  "nodes": [
+   {
+    "id": "1",
+    "node_type": "start",
+    "config": {
+     "type": "start"
+    }
+   },
+   {
+    "id": "2",
+    "node_type": "agent-template",
+    "config": {
+     "type": "agent-template",
+     "isTemplate": true,
+     "name": "Empty slot"
+    }
+   },
+   {
+    "id": "3",
+    "node_type": "loader",
+    "config": {
+     "type": "loader",
+     "name": "Unconnected loader"
+    }
+   }
+  ],
+  "edges": [
+   {
+    "from": "1",
+    "to": "2"
+   }
+  ]
+ },
+ "sql": [
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('deepseek', 'deepseek-v4-flash', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('gemini', 'gemini-2.5-pro', 1)"
+ ]
+}

@@ -1,0 +1,41 @@
+{
+ "description": "Compile errors: a node type LangGraph does not run",
+ "workflow": {
+  "id": 61,
+  "name": "Loader flow",
+  "user_id": "3"
+ },
+ "modes": [
+  "single"
+ ],
+ "graph": {
+  "nodes": [
+   {
+    "id": "1",
+    "node_type": "start",
+    "config": {
+     "type": "start"
+    }
+   },
+   {
+    "id": "2",
+    "node_type": "loader",
+    "config": {
+     "type": "loader",
+     "name": "Files"
+    }
+   }
+  ],
+  "edges": [
+   {
+    "from": "1",
+    "to": "2"
+   }
+  ]
+ },
+ "sql": [
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('deepseek', 'deepseek-v4-flash', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('gemini', 'gemini-2.5-pro', 1)"
+ ]
+}
