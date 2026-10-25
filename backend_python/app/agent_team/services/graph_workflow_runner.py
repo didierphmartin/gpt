@@ -82,6 +82,7 @@ from app.agent_team.services.code_node_emit import CodeNodeEmit
 from app.agent_team.services.code_node_executor import CodeNodeExecutor
 from app.agent_team.services.code_node_step import CodeNodeStep
 from app.agent_team.services.dispatch_routing import DispatchRouting
+from app.agent_team.services.jev_router import JevRouter
 from app.agent_team.services.playbook_node_runner import PlaybookNodeRunner
 from app.agent_team.services.playbook_outcome import PlaybookOutcome
 from app.agent_team.services.playbook_source import PlaybookSource
@@ -96,10 +97,15 @@ from app.agent_team.services.workflow_schema_repository import WorkflowSchemaRep
 from app.config import PHP_BACKEND
 from app.exceptions import PricingUnavailableException
 from app.providers._http import SHARED_SSL_CONTEXT, headers_list_to_dict as _headers_list_to_dict
+from app.services.decision_key_resolver import DecisionKeyResolver
+from app.services.decision_routers import DecisionRouters
+from app.services.decision_usage import DecisionUsage
 from app.services.pricing_resolver import PricingResolver
+from app.services.usage_logger import UsageLogger
 from app.support.logger import error_log
 from app.support.phpcompat import (
     PHP_TRIM_CHARS,
+    is_numeric,
     is_php_array,
     mb_substr,
     php_array,
@@ -577,6 +583,12 @@ class GraphWorkflowRunner:
                 if self._applyRoute(currentNodeId, output, edges, queue, executedNodes):
                     continue
 
+                # A decision-model dispatcher that did not route: the run stops on
+                # that branch point, and its failure is the run's result.
+                if self._haltUnrouted(currentNodeId, output, edges, executedNodes):
+                    finalOutput = output.get('output')
+                    continue
+
                 # Check for parallel execution opportunity
                 nextNodeIds = self._getNextNodeIds(currentNodeId, edges)
                 parallelAgents = self._findAgentNodesInList(nextNodeIds, nodes, executedNodes)
@@ -777,6 +789,33 @@ class GraphWorkflowRunner:
             "skipped " + php_json_encode(unchosen)
         )
         return True
+
+    def _haltUnrouted(self, nodeId: int, output: dict, edges: list, executedNodes: list) -> bool:
+        """Decision-model dispatcher that did not route ('halt_branches'): mark every branch -- and
+        everything reachable solely through them -- as done without running it, so no child agent or
+        model is called. Only a decision-provider mode sets the flag; an LLM dispatcher that does not
+        route keeps its historical behaviour. Returns False (and touches nothing) otherwise."""
+        if php_empty(output.get('halt_branches')):
+            return False
+        branches = self._getNextNodeIds(nodeId, edges)
+        for skipId in DispatchRouting.skipSet(branches, edges, php_intval(nodeId)):
+            if skipId not in executedNodes:
+                executedNodes.append(skipId)
+        error_log(f"[GraphWorkflowRunner] Dispatcher {nodeId} did not route (decision model only); skipped "
+                  + php_json_encode(branches))
+        return True
+
+    def _makeDecisionRouter(self, resolved: dict, floor: float):
+        """The decision router for one dispatcher decision. A seam so tests can replace the HTTP
+        transport; production always talks to the real service."""
+        return DecisionRouters.make(resolved, floor)
+
+    def _recordDecisionUsage(self, userId: int, providerKey: str, model: str, out: dict) -> None:
+        """Test seam: where an answered decision call is written as usage."""
+        DecisionUsage.record(
+            UsageLogger(self.db, True, _coalesce(self.config.get('contexts_database'), self.config.get('database'))),
+            userId, providerKey, model, out,
+        )
 
     def _getNextNodeIds(self, nodeId: int, edges: list) -> list:
         """Get IDs of nodes connected from the given node (PHP 669-678)."""
@@ -1030,6 +1069,88 @@ class GraphWorkflowRunner:
         # Force run_skill_script on the FIRST agent turn.
         if not php_empty(skillScripts) and isinstance(skillDirName, str) and skillDirName != '':
             runContext['tool_choice'] = {'type': 'function', 'function': {'name': 'run_skill_script'}}
+
+        # Dispatcher routing mode (settings.routing_mode) -- always exactly one:
+        #   'llm'  -> the model only; no decision provider is consulted.
+        #   a key  -> that decision provider only (a saved 'jev' is the jev row's key); the model is
+        #             never called. When it cannot decide (unclear, below the minimum confidence, unknown
+        #             provider, not in the plan, no key, error, timeout) the run stops with "did not
+        #             route" and none of the branches run -- unless the form names an unclear branch
+        #             for a not-classified outcome.
+        #   unset  -> the first decision provider the user's plan allows, else the model.
+        # A decision model answers the dispatcher's CLOSED question with an answer constrained to the
+        # options supplied (see the PHP runner for the full rationale).
+        if dispatchTargets != []:
+            routingSettings = agent.getSettings() if isinstance(agent.getSettings(), dict) else {}
+            saved = php_trim(php_strval(_coalesce(routingSettings.get('routing_mode'), '')))
+            routingMode = saved if saved != '' else _coalesce(
+                DecisionKeyResolver.defaultProvider(self.db, userId), 'llm')
+            if routingMode != 'llm':
+                # Same clamp as DispatchController (browser path): [0,1], else the default.
+                floorSetting = _coalesce(routingSettings.get('min_confidence'), routingSettings.get('jev_min_confidence'))
+                floor = (max(0.0, min(1.0, php_floatval(floorSetting))) if is_numeric(floorSetting)
+                         else JevRouter.DEFAULT_CONFIDENCE_FLOOR)
+                # The key the plan allows (user row, package key, global row); none = "did not route".
+                resolved = DecisionKeyResolver.resolve(self.db, self.config, userId, routingMode)
+                router = self._makeDecisionRouter(resolved, floor) if resolved['key'] != '' else None
+                out = (router.route(task, dispatchTargets,
+                                    DispatchRouting.defaultInstructions(agent.getName(), php_strval(agent.getDescription()),
+                                                                        self.workflowName))
+                       if router is not None else DecisionRouters.unavailable(resolved, routingMode))
+                # The only place a decision call is written as usage (answered calls only).
+                resolvedRow = resolved.get('row') if isinstance(resolved.get('row'), dict) else {}
+                self._recordDecisionUsage(userId, routingMode, php_strval(_coalesce(resolvedRow.get('model'), '')), out)
+                conf = '%.2f' % out['confidence'] if out.get('confidence') is not None else '?'
+                outUsage = out.get('usage') if isinstance(out.get('usage'), dict) else {}
+                usage = {'input_tokens': php_intval(_coalesce(outUsage.get('input_tokens'), 0)),
+                         'output_tokens': php_intval(_coalesce(outUsage.get('output_tokens'), 0))}
+                if out['outcome'] == 'routed':
+                    target = out['target']
+                    # Same shape the LLM path returns below, minus notes: a decision model writes no
+                    # prose, so the child gets the task alone.
+                    self._nodeLog(node, 'info', 'routing',
+                                  f"{routingMode} routed to {target['name']} (confidence {conf}, "
+                                  f"{php_strval(out.get('ms'))}ms, no LLM turn)")
+                    return {
+                        'type': 'agent', 'agent_id': agentId, 'agent_name': agent.getName(), 'input': task,
+                        'output': task,
+                        'route': {'id': target['id'], 'name': target['name'], 'notes': ''},
+                        'success': True,
+                        'usage': usage,
+                        'provider': routingMode,
+                    }
+                why = f"{out['outcome']}: {php_strval(out.get('reason'))}"
+                # The log lines add the confidence, which a low-confidence reason already states.
+                whyLog = why + ('' if out['outcome'] == 'low_confidence' else f', confidence {conf}')
+                # Not classified (unclear / low confidence) goes to the branch the form names for it,
+                # when there is one: a normal route, not a fallback model.
+                unclear = DispatchRouting.unclearBranch(routingSettings, dispatchTargets, php_strval(out['outcome']))
+                if unclear is not None:
+                    self._nodeLog(node, 'info', 'routing',
+                                  f"{routingMode} did not classify ({whyLog}) — sent to the unclear branch {unclear['name']}")
+                    return {
+                        'type': 'agent', 'agent_id': agentId, 'agent_name': agent.getName(), 'input': task,
+                        'output': task,
+                        'route': {'id': unclear['id'], 'name': unclear['name'], 'notes': ''},
+                        'success': True,
+                        'usage': usage,
+                        'provider': routingMode,
+                    }
+                # No model fallback, no other provider: the run stops here and says why. A request no
+                # branch fits is a normal ending; anything else is an error.
+                notClassified = out['outcome'] in DispatchRouting.NOT_CLASSIFIED
+                self._nodeLog(node, 'info' if notClassified else 'error', 'routing',
+                              f"{routingMode} did not route ({whyLog}) — decision-model dispatcher, no model fallback")
+                return {
+                    'type': 'agent', 'agent_id': agentId, 'agent_name': agent.getName(), 'input': task,
+                    'output': ('Not classified' if notClassified else 'Error')
+                    + f': dispatcher "{agent.getName()}" did not route the request ({routingMode}: {why}).',
+                    'success': notClassified,
+                    'usage': usage,
+                    'provider': routingMode,
+                    # The run loop reads this: no branch may run (see _haltUnrouted).
+                    'halt_branches': True,
+                }
 
         # Dispatcher: declare route_to and force the call.
         if dispatchTargets != []:

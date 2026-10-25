@@ -1,5 +1,5 @@
 from app.services.decision_protocols import DECISION_PROTOCOLS, decision_protocol_catalog, env_stem
-from app.services.provider_kinds import router_row_error, decision_provider_list, dispatch_provider_list
+from app.services.provider_kinds import router_row_error, decision_provider_list
 
 ROWS = [
     {'provider_key': 'claude', 'api_format': 'anthropic', 'enabled': 1, 'sort_order': 0},
@@ -40,9 +40,18 @@ def test_decision_provider_list():
     assert out[0]['model'] == 'jev-latest'
 
 
-def test_dispatch_provider_list_is_not_routable_here():
-    out = dispatch_provider_list(ROWS, lambda k: True)
-    assert out['default'] is None
-    assert [p['key'] for p in out['providers']] == ['broken', 'acme', 'jev']
-    assert all(p['routable'] is False and p['reason'] == 'not supported on this backend' for p in out['providers'])
-    assert all(p['supported'] is False for p in out['providers'])
+def test_the_registry_names_each_adapter():
+    """DecisionProtocolsTest / OpenAIDecisionRouterTest::testItIsRegistered (adapter half)."""
+    from app.agent_team.services.decision_router import DecisionRouter
+    from app.agent_team.services.jev_router import JevRouter
+    from app.agent_team.services.openai_decision_router import OpenAIDecisionRouter
+    from app.services.decision_protocols import DecisionProtocols
+    assert DecisionProtocols.get('typesafe')['adapter'] is JevRouter
+    p = DecisionProtocols.get('openai')
+    assert p['adapter'] is OpenAIDecisionRouter
+    assert p['legacy_env'] is None, 'OPENAI_API_KEY is the chat key; the .env sync must never drop it'
+    assert issubclass(p['adapter'], DecisionRouter)
+    assert DecisionProtocols.get(None) is None
+    assert DecisionProtocols.get('nope') is None
+    assert DECISION_PROTOCOLS['typesafe']['url'] == JevRouter.URL and DECISION_PROTOCOLS['openai']['url'] == OpenAIDecisionRouter.URL
+    assert DECISION_PROTOCOLS['typesafe']['model'] == JevRouter.MODEL and DECISION_PROTOCOLS['openai']['model'] == OpenAIDecisionRouter.MODEL

@@ -65,29 +65,3 @@ def decision_provider_list(rows: list[dict], allowed) -> list[dict]:
             'console_url': protocol['console_url'],
         })
     return out
-
-
-def dispatch_provider_list(rows: list[dict], allowed) -> dict:
-    """GET /dispatch/providers: the rows, none routable (Python has no decision runtime)."""
-    providers = []
-    for row in _decision_rows(rows):
-        key = str(row['provider_key'])
-        protocol = _protocol_of(row)
-        stem = env_stem(key)
-        providers.append({
-            'key': key,
-            'label': str(row.get('display_name') or key),
-            'protocol': row.get('protocol'),
-            'model': str(row.get('model') or ''),
-            'default_url': (str(row.get('base_url') or '').strip() or protocol['url']) if protocol else '',
-            'allowed': bool(allowed(key)),
-            'has_key': False,
-            'source': 'none',
-            'routable': False,
-            'reason': 'not supported on this backend',
-            'key_env': f'{stem}_API_KEY',
-            'url_env': f'{stem}_BASE_URL',
-            'legacy_env': protocol['legacy_env'] if protocol else None,
-            'supported': False,
-        })
-    return {'default': None, 'providers': providers}

@@ -30,6 +30,26 @@ def _strtolower(s: str) -> str:
 class DispatchRouting:
     TOOL_NAME = 'route_to'
 
+    # Decision outcomes that mean "no branch fits", as opposed to a failure (no key, network).
+    NOT_CLASSIFIED = ('unclear', 'low_confidence')
+
+    @staticmethod
+    def unclearBranch(settings: dict, targets: list, outcome: str) -> dict | None:
+        """The branch a decision-model dispatcher sends what it could not classify to:
+        settings.unclear_branch (a branch NAME -- node ids change on every save), only for an
+        unclear/low_confidence outcome and only while that branch is still on the menu.
+        None = no such branch: the run stops there."""
+        if outcome not in DispatchRouting.NOT_CLASSIFIED:
+            return None
+        v = settings.get('unclear_branch') if isinstance(settings, dict) else None
+        name = php_trim(php_strval(v if v is not None else ''))
+        if name == '':
+            return None
+        for t in targets:
+            if t['name'] == name:
+                return t
+        return None
+
     @staticmethod
     def targets(nodeId: int, edges: list, nodes: dict) -> list:
         """Downstream agent and code nodes of nodeId as [{'id': int, 'name': str}, …] in edge order."""

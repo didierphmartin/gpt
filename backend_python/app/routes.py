@@ -180,8 +180,13 @@ ROUTES = [
     ('POST', '/api/v1/settings/provider/active', ('SettingsController', 'setActiveProvider')),
     ('DELETE', '/api/v1/settings/provider', ('SettingsController', 'deleteProvider')),
     ('GET', '/api/v1/settings/phone', ('SettingsController', 'getPhoneStatus')),
-    # Decision-model routing (list only; routing is not supported on this backend)
+    # Decision-model routing (browser run path; keys stay server-side)
     ('GET', '/api/v1/dispatch/providers', ('DispatchController', 'providers')),
+    ('POST', '/api/v1/dispatch/route', ('DispatchController', 'route')),
+    # Aliases for pages loaded before decision providers were generalised.
+    ('GET', '/api/v1/dispatch/jev/status', ('DispatchController', 'jevStatus')),
+    ('POST', '/api/v1/dispatch/jev', ('DispatchController', 'jevRoute')),
+    ('GET', '/api/v1/dispatch/{key}/status', ('DispatchController', 'status')),
     # Storage settings
     ('GET', '/api/v1/settings/storage', ('SettingsController', 'getStorageSettings')),
     ('POST', '/api/v1/settings/storage', ('SettingsController', 'saveStorageSettings')),
