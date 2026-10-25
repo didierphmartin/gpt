@@ -604,45 +604,31 @@ router.get('/api/v1/workflows/:id(\\d+)/generate-python', async (req: Request, r
   }
 });
 
-// Generate Google ADK Python (protected). Same raw-vs-JSON shape as generate-python.
-router.get('/api/v1/workflows/:id(\\d+)/generate-adk', async (req: Request, res: Response) => {
-  try {
-    const result = await workflows.generateAdk(buildCtx(req));
-    const status = (result.status_code as number) ?? 200;
-    if (result.raw_body !== undefined) {
-      res.status(status);
-      for (const [k, v] of Object.entries(result.headers ?? {})) res.setHeader(k, v as string);
-      res.end(result.raw_body);
-    } else {
-      const { status_code, ...body } = result;
-      void status_code;
-      res.status(status).json(body);
+// Generate Google ADK / Microsoft Agent Framework / NVIDIA NOOA Python (protected). Same raw-vs-JSON shape as
+// generate-python: ?download=1 and ?format=zip stream a raw body with their own headers.
+function compiledTargetRoute(segment: string, method: 'generateAdk' | 'generateMaf' | 'generateNooa') {
+  return async (req: Request, res: Response) => {
+    try {
+      const result = await workflows[method](buildCtx(req));
+      const status = (result.status_code as number) ?? 200;
+      if (result.raw_body !== undefined) {
+        res.status(status);
+        for (const [k, v] of Object.entries(result.headers ?? {})) res.setHeader(k, v as string);
+        res.end(result.raw_body);
+      } else {
+        const { status_code, ...body } = result;
+        void status_code;
+        res.status(status).json(body);
+      }
+    } catch (err: any) {
+      console.error(`[${segment}] unhandled`, err);
+      if (!res.headersSent) res.status(500).json({ success: false, error: err?.message ?? 'Internal error' });
     }
-  } catch (err: any) {
-    console.error('[generate-adk] unhandled', err);
-    if (!res.headersSent) res.status(500).json({ success: false, error: err?.message ?? 'Internal error' });
-  }
-});
-
-// Generate Microsoft Agent Framework Python (protected). Same raw-vs-JSON shape as generate-python.
-router.get('/api/v1/workflows/:id(\\d+)/generate-maf', async (req: Request, res: Response) => {
-  try {
-    const result = await workflows.generateMaf(buildCtx(req));
-    const status = (result.status_code as number) ?? 200;
-    if (result.raw_body !== undefined) {
-      res.status(status);
-      for (const [k, v] of Object.entries(result.headers ?? {})) res.setHeader(k, v as string);
-      res.end(result.raw_body);
-    } else {
-      const { status_code, ...body } = result;
-      void status_code;
-      res.status(status).json(body);
-    }
-  } catch (err: any) {
-    console.error('[generate-maf] unhandled', err);
-    if (!res.headersSent) res.status(500).json({ success: false, error: err?.message ?? 'Internal error' });
-  }
-});
+  };
+}
+router.get('/api/v1/workflows/:id(\\d+)/generate-adk', compiledTargetRoute('generate-adk', 'generateAdk'));
+router.get('/api/v1/workflows/:id(\\d+)/generate-maf', compiledTargetRoute('generate-maf', 'generateMaf'));
+router.get('/api/v1/workflows/:id(\\d+)/generate-nooa', compiledTargetRoute('generate-nooa', 'generateNooa'));
 
 // RAG ingestion (protected). compile = full standalone script; node-code = one node's (or the
 // ordered stages') Python view; save-script = persist a compiled script; store-find = retrieval

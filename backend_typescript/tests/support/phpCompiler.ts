@@ -50,6 +50,11 @@ export function phpCompile(fixture: string): { ok: boolean; result?: any; error?
   return run(['compile', fixturePath(fixture)]);
 }
 
+/** Every target's (langgraph, adk, maf, nooa) PHP generation of a fixture in every mode: {target: {mode: {ok, result} | {ok: false, error}}}. */
+export function phpTargets(fixture: string): any {
+  return run(['targets', fixturePath(fixture)]);
+}
+
 /** PHP's analyzeForEmit() facts for a fixture, workflow as a WorkflowView (as the TypeScript generator holds it). */
 export function phpFacts(fixture: string): any {
   const f = run(['facts', fixturePath(fixture)]);

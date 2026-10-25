@@ -6,6 +6,7 @@ import path from 'path';
 import './support/fakeDb';
 import { makeRunnerHarness } from './support/runnerHarness';
 import { WorkflowGraphAnalyzer } from '../src/AgentTeam/WorkflowGraphAnalyzer';
+import { GraphAnalyzer } from '../src/AgentTeam/compiler/GraphAnalyzer';
 import { WorkflowRunLog } from '../src/AgentTeam/WorkflowRunLog';
 import { GraphWorkflowRunner } from '../src/AgentTeam/GraphWorkflowRunner';
 
@@ -35,7 +36,7 @@ test('reachableGraph drops nodes Start does not reach', () => {
   assert.equal(out.edges.length, 2, 'the stray arrow goes with its node');
   assert.equal(out.workflow_id, 64);
   // The trimmed graph analyses without the "disconnected node" error.
-  assert.deepEqual(WorkflowGraphAnalyzer.analyzeGraph(out).order, ['1', '2', '3']);
+  assert.deepEqual(GraphAnalyzer.analyzeGraph(out).order, ['1', '2', '3']);
 });
 
 test('reachableGraph without a start is unchanged', () => {
@@ -50,7 +51,7 @@ test('typeOf: an empty node_type column falls back to config.type', () => {
 });
 
 test('analyzeGraph: two exits of one node linked to the same node are one connection', () => {
-  const a = WorkflowGraphAnalyzer.analyzeGraph({
+  const a = GraphAnalyzer.analyzeGraph({
     nodes: [{ id: 1, node_type: 'start' }, { id: 2, node_type: 'code' }, { id: 3, node_type: 'output' }],
     edges: [
       { from_node_id: 1, to_node_id: 2 },

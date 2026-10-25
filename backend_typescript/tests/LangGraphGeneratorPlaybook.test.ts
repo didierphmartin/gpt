@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { ADKGenerator } from '../src/AgentTeam/ADKGenerator';
 import { MAFGenerator } from '../src/AgentTeam/MAFGenerator';
 import { lgDb, lgGenerator, pyCompile, python3 } from './support/lgFixtures';
+import { NOOAGenerator } from '../src/AgentTeam/NOOAGenerator';   // after lgFixtures: it sets the DB env vars the pools read
 
 const noPy = python3() === null ? 'python3 not available' : false;
 
@@ -84,7 +85,7 @@ async function generate(graph: any, userId: string | null = '3', sqlStatements: 
       { getGraph: async () => graph },
       { findById: async () => null },
     ];
-    const gen: any = target === 'adk' ? new ADKGenerator(...repos) : new MAFGenerator(...repos);
+    const gen: any = target === 'adk' ? new ADKGenerator(...repos) : target === 'nooa' ? new NOOAGenerator(...repos) : new MAFGenerator(...repos);
     return (await gen.generate(44, userId))['code'];
   }
   const gen = lgGenerator({ sql: statements, workflow: WORKFLOW, graph });
@@ -195,16 +196,14 @@ function fixedExitsGraph(failedWired: boolean): any {
 }
 
 /**
- * The TypeScript ports of the other compile targets. ADK and MAF exist (src/AgentTeam/ADKGenerator.ts, MAFGenerator.ts)
- * but have no playbook-node support at all (PHP's ADKGenerator/MAFGenerator route playbook nodes through PlaybookEmit
- * and refuse "from input" / a wired "failed" exit; the TS ones never mention playbooks and compile such a graph);
- * NOOA has no TypeScript port.
+ * The TypeScript ports of the other compile targets. ADKGenerator.ts and MAFGenerator.ts are the faithful ports of
+ * their PHP generators (they route playbook nodes through PlaybookEmit and refuse "from input" / a wired "failed"
+ * exit); NOOAGenerator.ts refuses both, as PHP's does.
  */
-const NO_TS_PLAYBOOKS = 'TypeScript %s has no playbook-node support (PHP %s refuses through PlaybookEmit; the TS port compiles the graph)';
 const OTHER_TARGETS: Array<[string, string | false]> = [
-  ['adk', NO_TS_PLAYBOOKS.replace('%s', 'ADKGenerator').replace('%s', 'ADKGenerator')],
-  ['maf', NO_TS_PLAYBOOKS.replace('%s', 'MAFGenerator').replace('%s', 'MAFGenerator')],
-  ['nooa', 'no NOOAGenerator in the TypeScript backend (src/AgentTeam/NOOAGenerator.ts missing)'],
+  ['adk', false],   // ADKGenerator.ts is the faithful port (refuses through PlaybookEmit, as PHP)
+  ['maf', false],   // MAFGenerator.ts is the faithful port (refuses through PlaybookEmit, as PHP)
+  ['nooa', false],
 ];
 
 test('testWiredFailedExitRefusedOnOtherTargets', async (t) => {

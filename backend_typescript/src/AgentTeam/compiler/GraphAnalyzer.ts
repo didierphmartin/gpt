@@ -17,7 +17,8 @@ import {
  *  - analyze(workflowId, userId) / serverIndex(userId) / availableToolsById(userId): read the database
  *    (mcp_servers, mcp_server_tools, system_llm_settings) and the repositories.
  *
- * (The legacy src/AgentTeam/WorkflowGraphAnalyzer.ts stays as ADK/MAF read it.)
+ * Every compile target (LangGraph, ADK, MAF, NOOA) reads it; src/AgentTeam/WorkflowGraphAnalyzer.ts keeps only the
+ * runner's reachableGraph / typeOf.
  */
 
 /** What analyze() reads a workflow through (WorkflowRepository.findById). */
