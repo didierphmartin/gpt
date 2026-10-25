@@ -350,6 +350,22 @@ export class AuthController {
     return isServiceUser(await db.selectFrom('users').select('kind').where('id', '=', userId).executeTakeFirst());
   }
 
+  /**
+   * GET /api/v1/debug/auth (PHP debugAuth): what the auth middleware established for this request.
+   * PHP reports its PHP_VERSION under php_version; this backend reports its Node.js version there.
+   */
+  debugAuth(ctx: Ctx): ControllerResult {
+    const h = ctx.headers?.['Authorization'] ?? ctx.headers?.['authorization'] ?? '';
+    return {
+      success: true,
+      user_id: ctx.user_id ?? null,
+      authenticated: ctx.authenticated ?? false,
+      has_auth_header: Array.isArray(h) ? h.length > 0 : h !== '' && h !== '0',
+      php_version: process.version,
+      status_code: 200,
+    };
+  }
+
   private requireJwt(ctx: Ctx): ControllerResult | null {
     if (!ctx.user_id || ctx.auth_type !== 'jwt') return { status_code: 401, success: false, message: 'Authentication required' };
     return null;

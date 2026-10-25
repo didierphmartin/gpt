@@ -114,6 +114,9 @@ const uploadMw = multer({ storage: multer.memoryStorage(), limits: { fileSize: 6
 router.get('/', handle(() => ({ success: true, status: 'ok', service: 'gpt-backend-typescript' })));
 router.get('/api/v1', handle(() => ({ success: true, status: 'ok', service: 'gpt-backend-typescript' })));
 
+// Debug (protected; PHP marks it TEMPORARY): what the auth middleware established.
+router.get('/api/v1/debug/auth', handle((ctx) => auth.debugAuth(ctx)));
+
 // Models catalog (public)
 router.get('/api/v1/models/catalog', handle((ctx) => modelCatalog.get(ctx)));
 
@@ -204,7 +207,8 @@ router.delete('/api/v1/webauthn/register', handle((ctx) => webauthn.delete(ctx))
 // MCP App UI proxy (PUBLIC — in MiddlewareProcessor.PUBLIC_ROUTES). Serves raw HTML into an
 // iframe that cannot send an auth header, so it uses a raw handler (like generate-python) rather
 // than the JSON handle() wrapper. Mirrors MCPAppController.php / PHP route GET /api/v1/mcp/app.
-router.get('/api/v1/mcp/app', async (req: Request, res: Response) => {
+// GET /api/mcp-app.php is PHP's legacy path for the same handler (also public).
+const serveMcpApp = async (req: Request, res: Response) => {
   try {
     const result = await mcpApp.getResource(buildCtx(req));
     res.status(result.status_code ?? 200);
@@ -214,7 +218,9 @@ router.get('/api/v1/mcp/app', async (req: Request, res: Response) => {
     console.error('[mcp/app] unhandled', err);
     if (!res.headersSent) res.status(500).type('text/plain').end(err?.message ?? 'Internal error');
   }
-});
+};
+router.get('/api/v1/mcp/app', serveMcpApp);
+router.get('/api/mcp-app.php', serveMcpApp); // Legacy path
 
 // MCP JSON-RPC proxy (protected) — forwards frontend requests to configured MCP
 // servers (tools/call, resources/read for MCP-UI apps). Mirrors PHP POST /api/v1/mcp/proxy.

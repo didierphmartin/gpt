@@ -13,6 +13,7 @@ export class MiddlewareProcessor {
     { method: 'GET', pattern: /^\/api\/v1\/models\/catalog$/ },
     // MCP App UI proxy — serves HTML into an iframe that cannot send an auth header. Mirrors PHP.
     { method: 'GET', pattern: /^\/api\/v1\/mcp\/app$/ },
+    { method: 'GET', pattern: /^\/api\/mcp-app\.php$/ }, // Legacy path
     // WebAuthn biometric login — challenge + authenticate must be public (no token yet).
     { method: 'POST', pattern: /^\/api\/v1\/webauthn\/challenge$/ },
     { method: 'POST', pattern: /^\/api\/v1\/webauthn\/authenticate$/ },
