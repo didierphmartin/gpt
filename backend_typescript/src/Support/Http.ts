@@ -12,6 +12,8 @@ export interface Ctx {
   params: Record<string, string>;
   /** Remote peer address from the TCP socket — mirrors PHP $_SERVER['REMOTE_ADDR']. */
   remote_addr: string;
+  /** Set by the auth middleware (PHP $request['authenticated']): an identity was established. */
+  authenticated?: boolean;
 }
 
 /** A controller returns a plain object that IS the JSON body, optionally carrying status_code. */
@@ -28,6 +30,7 @@ export function buildCtx(req: Request): Ctx {
     auth_type: (req as any).auth_type ?? null,
     params: req.params as Record<string, string>,
     remote_addr: req.socket?.remoteAddress ?? '',
+    authenticated: (req as any).authenticated ?? false,
   };
 }
 

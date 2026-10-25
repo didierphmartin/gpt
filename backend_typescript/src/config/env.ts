@@ -80,6 +80,16 @@ export const config = {
     password: process.env.LOGIN_DB_PASS ?? '',
   } as DbConfig,
 
+  // The video-edit usage database read by the Video Editor admin pages (PHP
+  // config['video_editor_database'] from VE_DB_*). Optional: unset means 'not reachable'.
+  videoEditorDatabase: {
+    host: process.env.VE_DB_HOST ?? '',
+    port: intEnv('VE_DB_PORT', 3306),
+    database: process.env.VE_DB_NAME ?? '',
+    user: process.env.VE_DB_USER ?? '',
+    password: process.env.VE_DB_PASS ?? '',
+  } as DbConfig,
+
   // Scheduler cron token (PHP config['scheduler']['token']). Guards POST /api/v1/scheduler/run for
   // unauthenticated cron/external callers.
   scheduler: {

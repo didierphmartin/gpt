@@ -51,6 +51,8 @@ import { RolesController } from './Controllers/RolesController';
 import { RobotController } from './Controllers/RobotController';
 import { LoginAdminController } from './Controllers/LoginAdminController';
 import { SetupController } from './Controllers/SetupController';
+import { VideoEditorController } from './Controllers/VideoEditorController';
+import { RootController } from './Controllers/RootController';
 import { roleKeyPath, withRoleParam } from './Support/RoleKeyRoute';
 
 export const router = Router();
@@ -82,6 +84,8 @@ const activeWorkflows = new ActiveWorkflowController();
 const roles = new RolesController();
 const robot = new RobotController();
 const loginAdmin = new LoginAdminController();
+const videoEditor = new VideoEditorController();
+const root = new RootController();
 const setup = new SetupController();
 const workflows = new WorkflowController();
 const schedules = new ScheduledWorkflowController();
@@ -108,9 +112,12 @@ const agentMcp = new AgentMCPController();
 // matches ChatAttachmentController.MAX_BYTES; the controller returns the friendly 413 on its own check.
 const uploadMw = multer({ storage: multer.memoryStorage(), limits: { fileSize: 60 * 1024 * 1024 } });
 
-// Health (public). /api/v1 is the same health payload at the API root (PHP RootController alias).
-router.get('/', handle(() => ({ success: true, status: 'ok', service: 'gpt-backend-typescript' })));
-router.get('/api/v1', handle(() => ({ success: true, status: 'ok', service: 'gpt-backend-typescript' })));
+// Health (public). /api/v1 is the same payload at the API root (PHP RootController::index).
+router.get('/', handle(() => root.index()));
+router.get('/api/v1', handle(() => root.index()));
+
+// Debug (protected; PHP marks it TEMPORARY): what the auth middleware established.
+router.get('/api/v1/debug/auth', handle((ctx) => auth.debugAuth(ctx)));
 
 // Models catalog (public)
 router.get('/api/v1/models/catalog', handle((ctx) => modelCatalog.get(ctx)));
@@ -202,7 +209,8 @@ router.delete('/api/v1/webauthn/register', handle((ctx) => webauthn.delete(ctx))
 // MCP App UI proxy (PUBLIC — in MiddlewareProcessor.PUBLIC_ROUTES). Serves raw HTML into an
 // iframe that cannot send an auth header, so it uses a raw handler (like generate-python) rather
 // than the JSON handle() wrapper. Mirrors MCPAppController.php / PHP route GET /api/v1/mcp/app.
-router.get('/api/v1/mcp/app', async (req: Request, res: Response) => {
+// GET /api/mcp-app.php is PHP's legacy path for the same handler (also public).
+const serveMcpApp = async (req: Request, res: Response) => {
   try {
     const result = await mcpApp.getResource(buildCtx(req));
     res.status(result.status_code ?? 200);
@@ -212,7 +220,9 @@ router.get('/api/v1/mcp/app', async (req: Request, res: Response) => {
     console.error('[mcp/app] unhandled', err);
     if (!res.headersSent) res.status(500).type('text/plain').end(err?.message ?? 'Internal error');
   }
-});
+};
+router.get('/api/v1/mcp/app', serveMcpApp);
+router.get('/api/mcp-app.php', serveMcpApp); // Legacy path
 
 // MCP JSON-RPC proxy (protected) — forwards frontend requests to configured MCP
 // servers (tools/call, resources/read for MCP-UI apps). Mirrors PHP POST /api/v1/mcp/proxy.
@@ -312,6 +322,25 @@ router.get('/api/v1/admin/login/apps', handle((ctx) => loginAdmin.getApps(ctx)))
 router.get('/api/v1/admin/login/app-users', handle((ctx) => loginAdmin.getAppUsers(ctx)));
 router.post('/api/v1/admin/login/app-users/role', handle((ctx) => loginAdmin.setAppUserRole(ctx)));
 router.post('/api/v1/admin/login/app-users/add', handle((ctx) => loginAdmin.addAppMember(ctx)));
+
+// Video Editor admin (the gpt_admin "Video Editor" pages over the video-edit usage DB + the login
+// DB). Every endpoint is behind RequiresAdmin. Mirrors PHP routes.php.
+router.get('/api/v1/admin/video-editor/usage/stats', handle((ctx) => videoEditor.getUsageStats(ctx)));
+router.get('/api/v1/admin/video-editor/usage/summary', handle((ctx) => videoEditor.getUsageSummary(ctx)));
+router.get('/api/v1/admin/video-editor/usage/by-user', handle((ctx) => videoEditor.getUsageByUser(ctx)));
+router.get('/api/v1/admin/video-editor/transactions', handle((ctx) => videoEditor.getTransactions(ctx)));
+router.get('/api/v1/admin/video-editor/prices', handle((ctx) => videoEditor.getPrices(ctx)));
+router.post('/api/v1/admin/video-editor/prices', handle((ctx) => videoEditor.savePrice(ctx)));
+router.get('/api/v1/admin/video-editor/providers', handle((ctx) => videoEditor.getProviders(ctx)));
+router.post('/api/v1/admin/video-editor/providers', handle((ctx) => videoEditor.saveProvider(ctx)));
+router.get('/api/v1/admin/video-editor/models', handle((ctx) => videoEditor.getModels(ctx)));
+router.post('/api/v1/admin/video-editor/models', handle((ctx) => videoEditor.saveModel(ctx)));
+router.get('/api/v1/admin/video-editor/users', handle((ctx) => videoEditor.getUsers(ctx)));
+router.post('/api/v1/admin/video-editor/users/role', handle((ctx) => videoEditor.setUserRole(ctx)));
+router.get('/api/v1/admin/video-editor/packages', handle((ctx) => videoEditor.getPackages(ctx)));
+router.post('/api/v1/admin/video-editor/packages', handle((ctx) => videoEditor.savePackage(ctx)));
+router.get('/api/v1/admin/video-editor/user-override', handle((ctx) => videoEditor.getUserOverride(ctx)));
+router.post('/api/v1/admin/video-editor/user-override', handle((ctx) => videoEditor.saveUserOverride(ctx)));
 
 // Corporate first-run setup (public: before setup nobody can sign in — see PUBLIC_ROUTES).
 router.get('/api/v1/setup/status', handle((ctx) => setup.status(ctx)));

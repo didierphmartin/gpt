@@ -5,6 +5,9 @@ import { Ctx, ControllerResult } from '../Support/Http';
 import { ToolsManager } from '../Services/ToolsManager';
 import { ToolDefinition } from '../Contracts/FunctionExecutor';
 import { SearchFunctions } from '../Functions/SearchFunctions';
+import { WatchlistFunctions } from '../Functions/WatchlistFunctions';
+import { PortfolioFunctions } from '../Functions/PortfolioFunctions';
+import { AnalysisFunctions } from '../Functions/AnalysisFunctions';
 
 /**
  * HumeToolController — faithful TS mirror of src/Controllers/HumeToolController.php.
@@ -22,10 +25,8 @@ import { SearchFunctions } from '../Functions/SearchFunctions';
  *    env.ts is out of scope for this port), so the same values are read here from process.env:
  *    HUME_API_KEY, plus optional HUME_BASE_URL / HUME_CONFIG_ID overrides that default to the
  *    values PHP hardcodes. cleanup_orphaned_tools stays hardcoded false like ai_config.php.
- *  - Tool registry: PHP registers WatchlistFunctions + PortfolioFunctions (PDO-backed) and
- *    SearchFunctions + AnalysisFunctions (config-backed). Only Functions/SearchFunctions exists on
- *    the TS side so far (the same registry gap as ChatController/ToolsController), so fewer tools
- *    are listed/synced/executable until the remaining Functions/* classes are ported.
+ *  - Tool registry: WatchlistFunctions + PortfolioFunctions (DB-backed), SearchFunctions and
+ *    AnalysisFunctions (FMP_KEY), registered in PHP's order.
  *  - HumeToolSyncService (PHP src/Services/HumeToolSyncService.php) is used only by this
  *    controller, so it is ported inline below as a private class instead of a new Services file.
  *    Its methods unused by the controller (linkToolsToConfig, getStoredMappings) are omitted.
@@ -555,14 +556,13 @@ export class HumeToolController {
     }
   }
 
-  /**
-   * Initialize and register all functions. PHP registers Watchlist/Portfolio (PDO) and
-   * Search/Analysis (config) function sets; only SearchFunctions exists in TS so far
-   * (see header divergence note).
-   */
+  /** Initialize and register all functions, in PHP's order: Watchlist, Portfolio, Search, Analysis. */
   private initializeToolsManager(): ToolsManager {
     const toolsManager = new ToolsManager();
+    WatchlistFunctions.register(toolsManager);
+    PortfolioFunctions.register(toolsManager);
     SearchFunctions.register(toolsManager);
+    AnalysisFunctions.register(toolsManager);
     return toolsManager;
   }
 }

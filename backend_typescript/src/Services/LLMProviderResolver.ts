@@ -32,11 +32,15 @@ export class LLMProviderResolver {
   // the same budget as the visible answer, so too small a cap exhausts on reasoning and returns an
   // EMPTY content field ("no usable content"). PHP's GrokProvider defaults to 16384 for exactly this
   // reason; the generic TS default of 4096 is too small for Grok's reasoning models. Mirror PHP.
-  private static readonly OPENAI_COMPAT_DEFAULTS: Record<string, { base_url: string; chat_endpoint: string; max_tokens?: number }> = {
-    grok: { base_url: 'https://api.x.ai', chat_endpoint: '/v1/chat/completions', max_tokens: 16384 },
+  // model/temperature are the same classes' constructor defaults for a row that leaves them blank.
+  private static readonly OPENAI_COMPAT_DEFAULTS: Record<
+    string,
+    { base_url: string; chat_endpoint: string; max_tokens?: number; model: string; temperature: number }
+  > = {
+    grok: { base_url: 'https://api.x.ai', chat_endpoint: '/v1/chat/completions', max_tokens: 16384, model: 'grok-4-1-fast-reasoning', temperature: 0.7 },
     // DeepSeekProvider.php / KimiProvider.php vendor defaults (BASE_URL, CHAT_ENDPOINT, maxTokens).
-    deepseek: { base_url: 'https://api.deepseek.com', chat_endpoint: '/chat/completions', max_tokens: 8192 },
-    kimi: { base_url: 'https://api.moonshot.ai', chat_endpoint: '/v1/chat/completions', max_tokens: 32768 },
+    deepseek: { base_url: 'https://api.deepseek.com', chat_endpoint: '/chat/completions', max_tokens: 8192, model: 'deepseek-v4-pro', temperature: 0.7 },
+    kimi: { base_url: 'https://api.moonshot.ai', chat_endpoint: '/v1/chat/completions', max_tokens: 32768, model: 'kimi-k2.6', temperature: 0.6 },
   };
 
   static async getProviderConfig(provider: string): Promise<ProviderConfig | null> {
@@ -66,13 +70,17 @@ export class LLMProviderResolver {
     return {
       provider_key: row.provider_key,
       api_key: row.api_key ?? '',
-      model: row.model,
+      model: row.model || defaults?.model || row.model,
       base_url,
       chat_endpoint,
       api_format,
       max_tokens: row.max_tokens ?? defaults?.max_tokens ?? 4096,
-      temperature: Number(row.temperature ?? 0.7),
+      temperature: Number(row.temperature ?? defaults?.temperature ?? 0.7),
       system_prompt: row.system_prompt,
+      // PHP buildProviderFromDb: display_name when non-empty; streaming / supports_tools when set.
+      display_name: row.display_name || null,
+      streaming: row.streaming === null || row.streaming === undefined ? null : !!Number(row.streaming),
+      supports_tools: row.supports_tools === null || row.supports_tools === undefined ? null : !!Number(row.supports_tools),
     };
   }
 

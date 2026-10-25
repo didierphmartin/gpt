@@ -151,9 +151,8 @@ export class AgentRunner {
 
       const text = response.text ?? '';
       const usage = response.usage ?? {};
-      // ChatResult carries no functions_called list (the provider returns []); mirror PHP's
-      // $response['functions_called'] ?? [].
-      const functionsCalled: any[] = [];
+      // PHP: $response['functions_called'] ?? [] (the OpenAI-compatible providers report it).
+      const functionsCalled: any[] = response.functions_called ?? [];
 
       await this.completeExecution(executionId, { text, usage, tool_calls: functionsCalled }, responseTime);
 
@@ -177,6 +176,8 @@ export class AgentRunner {
         result.pending_client_tool_call = true;
         result.pending_tool_calls = response.pending_tool_calls ?? [];
         result.pending_assistant_text = text;
+        // DeepSeek thinking mode: the turn's reasoning, replayed with the tool result.
+        result.pending_assistant_reasoning = String(response.assistant_reasoning ?? '');
       }
 
       return result;
@@ -411,6 +412,11 @@ export class AgentRunner {
     if (runContext?.tool_choice) {
       opts.tool_choice = runContext.tool_choice;
     }
+
+    // Per-agent thinking switch ('on' | 'off'). Providers with a native thinking mode (DeepSeek V4,
+    // GLM, Kimi K2) honor it; others ignore it. Absent/'default' keeps each provider's own default.
+    const thinking = agent.settings && typeof agent.settings === 'object' ? (agent.settings as any).thinking : undefined;
+    if (thinking === 'on' || thinking === 'off') opts.thinking = thinking;
 
     return opts;
   }

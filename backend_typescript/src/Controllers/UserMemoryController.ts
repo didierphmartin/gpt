@@ -1,10 +1,12 @@
 import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { Ctx, ControllerResult } from '../Support/Http';
+import * as Memory from '../AgentTeam/UserMemoryRepository';
 
 /**
  * Mirrors src/AgentTeam/Controllers/UserMemoryController.php (+ its three repositories:
- * UserMemoryRepository, UserMemoryEventsRepository, UserMemorySettingsRepository, inlined here).
+ * UserMemoryRepository, UserMemoryEventsRepository, UserMemorySettingsRepository — the shared parts
+ * live in AgentTeam/UserMemoryRepository, also used by the chat path; the rest is inlined here).
  *
  * Two per-user markdown blocks — `memory` (project/env facts) and `user` (preferences) — plus an
  * audit log of every change and per-user auto-update settings.
@@ -47,33 +49,17 @@ export class UserMemoryController {
   }
 
   private async getBoth(userId: number): Promise<Record<string, string>> {
-    const rows = (await sql<{ scope: string; content: string }>`SELECT scope, content FROM user_memories WHERE user_id = ${userId}`.execute(db)).rows;
-    const out: Record<string, string> = { [UserMemoryController.SCOPE_MEMORY]: '', [UserMemoryController.SCOPE_USER]: '' };
-    for (const row of rows) out[row.scope] = String(row.content);
-    return out;
+    return Memory.getBoth(userId);
   }
 
   private async setScope(userId: number, scope: string, content: string): Promise<void> {
-    if (scope !== UserMemoryController.SCOPE_MEMORY && scope !== UserMemoryController.SCOPE_USER) {
-      throw new Error(`Invalid scope: ${scope}`);
-    }
-    const limit = this.budgetFor(scope);
-    // Truncate by Unicode code points (matches PHP mb_substr).
-    const cp = [...content];
-    const value = cp.length > limit ? cp.slice(0, limit).join('') : content;
-    await sql`
-      INSERT INTO user_memories (user_id, scope, content)
-      VALUES (${userId}, ${scope}, ${value})
-      ON DUPLICATE KEY UPDATE content = VALUES(content)`.execute(db);
+    await Memory.setScope(userId, scope, content);
   }
 
   // --- events repository ------------------------------------------------------------------
 
   private async logEvent(userId: number, scope: string, source: string, before: string, after: string, rationale: string | null = null, sessionId: string | null = null): Promise<void> {
-    if (before === after) return; // no-op change, no audit row
-    await sql`
-      INSERT INTO user_memory_events (user_id, scope, source, before_content, after_content, rationale, session_id)
-      VALUES (${userId}, ${scope}, ${source}, ${before}, ${after}, ${rationale}, ${sessionId})`.execute(db);
+    await Memory.logEvent(userId, scope, source, before, after, rationale, sessionId);
   }
 
   private async lastSource(userId: number, scope: string): Promise<string | null> {
@@ -98,9 +84,7 @@ export class UserMemoryController {
   // --- settings repository ----------------------------------------------------------------
 
   private async getSettings(userId: number): Promise<{ enabled: boolean; model: string }> {
-    const row = (await sql<{ auto_update_enabled: number; auto_update_model: string }>`SELECT auto_update_enabled, auto_update_model FROM user_memory_settings WHERE user_id = ${userId}`.execute(db)).rows[0];
-    if (!row) return { enabled: UserMemoryController.DEFAULT_ENABLED, model: UserMemoryController.DEFAULT_MODEL };
-    return { enabled: Boolean(row.auto_update_enabled), model: String(row.auto_update_model) };
+    return Memory.getSettings(userId);
   }
 
   private async setSettings(userId: number, enabled: boolean, model: string): Promise<void> {

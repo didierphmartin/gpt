@@ -17,11 +17,10 @@ interface TurnResult {
 }
 
 /**
- * OpenAI-compatible provider — serves openai / kimi / grok / deepseek (api_format='openai').
- * Plain text chat + the client-tool short-circuit (B3) + the server-tool recursive continuation
- * loop. Mirrors src/Providers/OpenAIProvider.php (chat + makeRequest + handleStreamingResponse +
- * handleToolCallsRecursive); the kimi/grok/deepseek classes extend it, overriding only the
- * progress labels.
+ * OpenAI provider. Plain text chat + the client-tool short-circuit (B3) + the server-tool recursive
+ * continuation loop. Mirrors src/Providers/OpenAIProvider.php (chat + makeRequest +
+ * handleStreamingResponse + handleToolCallsRecursive). Grok / Kimi / DeepSeek and the generic
+ * OpenAI-compatible rows have their own classes (see ProviderFactory), as in PHP.
  */
 export class OpenAIProvider extends LLMProvider {
   private static readonly CLIENT_SIDE_TOOL_NAMES = ['run_skill_script', 'discover_skill', 'Task', 'route_to'];
@@ -40,38 +39,6 @@ export class OpenAIProvider extends LLMProvider {
       processing_response: 'OpenAI: Processing OpenAI response...',
       ready: 'OpenAI: Response ready.',
     },
-    kimi: {
-      prefix: 'Kimi',
-      prepare: 'Kimi: Preparing request...',
-      connect: 'Kimi: Connecting to Kimi API...',
-      thinking: 'Kimi: Thinking...',
-      processing_response: 'Kimi: Processing response...',
-      ready: 'Kimi: Response ready.',
-    },
-    grok: {
-      prefix: 'Grok',
-      prepare: 'Grok: Preparing request...',
-      connect: 'Grok: Connecting to xAI API...',
-      thinking: 'Grok: Thinking...',
-      processing_response: 'Grok: Processing response...',
-      ready: 'Grok: Response ready.',
-    },
-    deepseek: {
-      prefix: 'Deepseek',
-      prepare: 'Deepseek: Preparing Deepseek request...',
-      connect: 'Deepseek: Connecting to Deepseek API...',
-      thinking: 'Deepseek: Thinking...',
-      processing_response: 'Deepseek: Processing Deepseek response...',
-      ready: 'Deepseek: Response ready.',
-    },
-    gamma4: {
-      prefix: 'Gamma4',
-      prepare: 'Gamma4: Preparing Gamma4 request...',
-      connect: 'Gamma4: Connecting to Gamma4 API...',
-      thinking: 'Gamma4: Thinking...',
-      processing_response: 'Gamma4: Processing Gamma4 response...',
-      ready: 'Gamma4: Response ready.',
-    },
   };
 
   private get progress() {
@@ -88,7 +55,6 @@ export class OpenAIProvider extends LLMProvider {
 
   // Vendor default unless the admin (system_llm_settings) or the user (their own key + endpoint)
   // points this provider at a gateway. Absolute URL: base_url + path keeps a gateway's path prefix.
-  // Grok/DeepSeek/Kimi get their vendor base from LLMProviderResolver's OPENAI_COMPAT_DEFAULTS.
   private endpoint(): string {
     const base = (this.config.base_url || 'https://api.openai.com').replace(/\/+$/, '');
     return base + (this.config.chat_endpoint || '/v1/chat/completions');
@@ -204,24 +170,6 @@ export class OpenAIProvider extends LLMProvider {
     if (!this.isReasoningModel(model)) body.temperature = this.config.temperature;
     if (/^gpt-5/.test(model) || this.isReasoningModel(model)) body.max_completion_tokens = this.config.max_tokens;
     else body.max_tokens = this.config.max_tokens;
-    // Kimi K2.6: thinking mode (temp 1.0) is INCOMPATIBLE with a forced tool_choice (the API 400s
-    // with "tool_choice 'specified' is incompatible with thinking enabled"). PHP's dedicated
-    // KimiProvider forces non-thinking sampling for K2 models; mirror it here (this provider serves
-    // kimi). thinking disabled, temp 0.6, top_p 0.95 — the exact values the K2.6 API requires.
-    if (model.startsWith('kimi-k2')) {
-      body.thinking = { type: 'disabled' };
-      body.temperature = 0.6;
-      body.top_p = 0.95;
-    }
-    // DeepSeek-V4 (deepseek-v4-*, and deepseek-flash, which replaced deepseek-v4-flash) is also a thinking model, and a FORCED tool_choice hits the same
-    // 400 ("Thinking mode does not support this tool_choice"). Mirror PHP's dedicated DeepSeekProvider,
-    // which disables V4 thinking for the tool-picking call: when a specific tool is forced (skill
-    // nodes force run_skill_script via SkillToolChoice), turn thinking off. Normal deepseek-v4 calls
-    // (tool_choice auto/absent) keep thinking on.
-    const forcedTool = toolChoice !== undefined && toolChoice !== null && toolChoice !== 'auto';
-    if ((model.startsWith('deepseek-v4') || model.startsWith('deepseek-flash')) && forcedTool) {
-      body.thinking = { type: 'disabled' };
-    }
     // o1/o3 don't support tools.
     if (toolDefs.length && !this.isReasoningModel(model)) {
       body.tools = this.convertToOpenAITools(toolDefs);
