@@ -2,13 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AgentRunner } from '../src/AgentTeam/AgentRunner';
 
-test('buildToolsForAgent returns the 3 delegation tools for a manager', () => {
+test('buildToolsForAgent returns the 4 delegation tools for a manager', () => {
   const runner = new AgentRunner();
   const manager = { id: 1, name: 'M', agentType: 'manager', canDelegateTo: [], enabled: true } as any;
   const mcpLoader: any = { getToolDefinitions: () => [] };
   const tools = (runner as any).buildToolsForAgent(manager, mcpLoader, null);
   const names = tools.map((t: any) => t.name).sort();
-  assert.deepEqual(names, ['complete_task', 'delegate_to_agent', 'list_available_agents']);
+  assert.deepEqual(names, ['complete_task', 'delegate_to_agent', 'list_available_agents', 'run_agents_parallel']);
 });
 
 test('buildToolsForAgent for a worker does not include delegation tools', () => {
