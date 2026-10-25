@@ -92,6 +92,15 @@ class FakeGenerator:
             raise self.raise_
         return dict(self.result)
 
+    # ADK / MAF / NOOA: the modular package and the A2A folder (WorkflowController::compiledTargetResponse).
+    def generatePackage(self, workflowId, userId=None):
+        self.generate_calls.append(('package', workflowId, userId))
+        return dict(self.result)
+
+    def generateA2A(self, workflowId, userId=None):
+        self.generate_calls.append(('a2a', workflowId, userId))
+        return dict(self.result)
+
 
 GENERATORS = [
     ('generatePython', 'LangGraphGenerator', True),
@@ -144,12 +153,12 @@ def test_default_mode_returns_json_data(monkeypatch, method, cls_name, has_a2a):
     assert gen.ctor_args == (c.db, c.workflowRepository, c.graphRepository, gen.ctor_args[3])
     if has_a2a:
         assert gen.generate_calls == [(42, '3', {'a2a': False, 'modular': False})]
-        # LangGraph: no skills root (the default), and the requesting user's Start document store.
-        assert gen.extra_args[0] is None
-        assert isinstance(gen.extra_args[1], StartDocumentStore)
-        assert gen.extra_args[1].userFolder == 'user_3'
     else:
         assert gen.generate_calls == [(42, '3', None)]
+    # Every target: no skills root (the default), and the requesting user's Start document store.
+    assert gen.extra_args[0] is None
+    assert isinstance(gen.extra_args[1], StartDocumentStore)
+    assert gen.extra_args[1].userFolder == 'user_3'
 
 
 # ============================================================================
@@ -300,3 +309,98 @@ def test_generate_python_zip_without_architecture_holds_the_script_only(monkeypa
     r = controller().generatePython(ctx(query={'format': 'zip', 'a2a': '1'}), id=42)
     assert r['headers']['Content-Disposition'] == 'attachment; filename="ingest_a2a.zip"'
     assert list(_zip_entries(r['raw_body'])) == ['ingest_langgraph/ingest_langgraph.py']
+
+
+# ============================================================================
+# generate-adk / -maf / -nooa: the code structure (WorkflowController::compiledTargetResponse)
+# ============================================================================
+
+COMPILED = [g for g in GENERATORS if not g[2]]
+
+
+def _with_target_result(monkeypatch, cls_name, result):
+    monkeypatch.setattr(f'app.agent_team.controllers.workflow_controller.{cls_name}', FakeGenerator)
+    orig_init = FakeGenerator.__init__
+
+    def init(self, *args):
+        orig_init(self, *args)
+        self.result = result
+
+    monkeypatch.setattr(FakeGenerator, '__init__', init)
+
+
+@pytest.mark.parametrize('query,call', [
+    ({'modular': '1'}, ('package', 42, '3')),
+    ({'package': '1'}, ('package', 42, '3')),
+    ({'package': 'yes'}, ('package', 42, '3')),     # !empty($q['package'])
+    ({'package': '0'}, (42, '3', None)),            # '0' is empty() in PHP
+    ({'a2a': '1'}, ('a2a', 42, '3')),
+    ({'a2a': '1', 'modular': '1'}, ('a2a', 42, '3')),   # A2A wins
+    ({'a2a': 'true'}, (42, '3', None)),             # only '1' switches a mode on
+])
+@pytest.mark.parametrize('method,cls_name,has_a2a', COMPILED)
+def test_compiled_target_mode_picks_the_generator_call(monkeypatch, method, cls_name, has_a2a, query, call):
+    _with_target_result(monkeypatch, cls_name, {'root': 'wf', 'files': []})
+    r = getattr(controller(), method)(ctx(query=query), id=42)
+    assert r == {'success': True, 'data': {'root': 'wf', 'files': []}, 'status_code': 200}
+    assert FakeGenerator.last_instance.generate_calls == [call]
+
+
+@pytest.mark.parametrize('method,cls_name,has_a2a', COMPILED)
+def test_compiled_target_package_ignores_download(monkeypatch, method, cls_name, has_a2a):
+    _with_target_result(monkeypatch, cls_name, {'root': 'wf', 'files': []})
+    r = getattr(controller(), method)(ctx(query={'modular': '1', 'download': '1'}), id=42)
+    assert r == {'success': True, 'data': {'root': 'wf', 'files': []}, 'status_code': 200}
+
+
+@pytest.mark.parametrize('mode_query,mode', [({}, 'single'), ({'modular': '1'}, 'modular'), ({'a2a': '1'}, 'a2a')])
+@pytest.mark.parametrize('method,cls_name,has_a2a', COMPILED)
+def test_compiled_target_zip_is_named_after_target_and_mode(monkeypatch, method, cls_name, has_a2a, mode_query, mode):
+    target = method[len('generate'):].lower()
+    result = ({'filename': f'demo_{target}.py', 'code': 'x', 'architecture': '# A\n'} if mode == 'single'
+              else {'root': f'demo_{target}' + ('_a2a' if mode == 'a2a' else ''), 'files': [{'path': 'workflow.py', 'code': 'w'}]})
+    _with_target_result(monkeypatch, cls_name, result)
+    r = getattr(controller(), method)(ctx(query={**mode_query, 'format': 'zip', 'download': '1'}), id=42)
+    assert r['headers']['Content-Type'] == 'application/zip'
+    assert r['headers']['Content-Disposition'] == f'attachment; filename="demo_{target}_{mode}.zip"'
+
+
+@pytest.mark.parametrize('method,cls_name,has_a2a', COMPILED)
+def test_compiled_target_exception_names_the_mode_and_returns_500(monkeypatch, method, cls_name, has_a2a):
+    class Raising(FakeGenerator):
+        def generatePackage(self, workflowId, userId=None):
+            raise RuntimeError('no package')
+
+    monkeypatch.setattr(f'app.agent_team.controllers.workflow_controller.{cls_name}', Raising)
+    r = getattr(controller(), method)(ctx(query={'modular': '1'}), id=42)
+    assert r == {'success': False, 'error': 'no package', 'status_code': 500}
+
+
+# ============================================================================
+# Port of backend/tests/Unit/Controllers/CompiledTargetZipExportTest.php: ADK, MAF and NOOA exported as a
+# zip in the chosen code structure, on the real generators (the dispatcher_demo compiler fixture).
+# ============================================================================
+
+def _demo_generator(target):
+    from tests.unit import compiler_fixtures as cf
+    fx = cf.load(cf.WORKFLOWS / 'dispatcher_demo.json')
+    return cf.generator(fx, target), int(fx['workflow']['id']), str(fx.get('user_id') or '3')
+
+
+@pytest.mark.parametrize('target', ['adk', 'maf', 'nooa'])
+def test_single_file_zip(target):
+    gen, wf, user = _demo_generator(target)
+    r = WorkflowController.langGraphZipResponse(gen.generate(wf, user), f'{target}_single')
+    assert r['headers']['Content-Disposition'] == f'attachment; filename="dispatcher_demo_{target}_single.zip"'
+    # the script and its ARCHITECTURE.md, as LangGraph's single-file zip
+    assert list(_zip_entries(r['raw_body'])) == [f'dispatcher_demo_{target}/dispatcher_demo_{target}.py',
+                                                 f'dispatcher_demo_{target}/ARCHITECTURE.md']
+
+
+@pytest.mark.parametrize('target', ['adk', 'maf', 'nooa'])
+def test_modular_zip_holds_the_package(target):
+    gen, wf, user = _demo_generator(target)
+    pkg = gen.generatePackage(wf, user)
+    r = WorkflowController.langGraphZipResponse(pkg, f'{target}_modular')
+    assert r['headers']['Content-Disposition'] == f'attachment; filename="dispatcher_demo_{target}_modular.zip"'
+    assert list(_zip_entries(r['raw_body'])) == [f"dispatcher_demo_{target}/{f['path']}" for f in pkg['files']]
