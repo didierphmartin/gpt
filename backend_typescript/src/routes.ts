@@ -21,6 +21,7 @@ import { UserMemoryController } from './Controllers/UserMemoryController';
 import { TeamController } from './Controllers/TeamController';
 import { AgentController } from './Controllers/AgentController';
 import { PlaybooksController } from './Controllers/PlaybooksController';
+import { PlaybookController } from './Controllers/PlaybookController';
 import { AutomationsController } from './Controllers/AutomationsController';
 import { WorkflowController } from './Controllers/WorkflowController';
 import { ScheduledWorkflowController } from './Controllers/ScheduledWorkflowController';
@@ -67,6 +68,7 @@ const userMemories = new UserMemoryController();
 const teams = new TeamController();
 const agents = new AgentController();
 const playbooks = new PlaybooksController();
+const playbookValidation = new PlaybookController();
 const automations = new AutomationsController();
 const roles = new RolesController();
 const robot = new RobotController();
@@ -385,6 +387,8 @@ router.delete('/api/v1/teams/:id(\\d+)', handle((ctx) => teams.destroy(ctx)));
 router.get('/api/v1/teams/:id(\\d+)/agents', handle((ctx) => teams.agents(ctx)));
 
 // Playbook collection (protected): CRUD + used-by; {id} routes are numeric only.
+// Registration-time validation (PlaybookController); the static path stays before the {id} routes.
+router.post('/api/v1/playbooks/validate', handle((ctx) => playbookValidation.validate(ctx)));
 router.get('/api/v1/playbooks', handle((ctx) => playbooks.index(ctx)));
 router.post('/api/v1/playbooks', handle((ctx) => playbooks.create(ctx)));
 router.get('/api/v1/playbooks/:id(\\d+)', handle((ctx) => playbooks.show(ctx)));
@@ -452,6 +456,14 @@ router.post('/api/v1/workflows', handle((ctx) => workflows.create(ctx)));
 router.post('/api/v1/workflows/tool-result', handle((ctx) => workflows.toolResult(ctx)));
 // A code node's call_tool from the editor (literal path, registered before the :id routes).
 router.post('/api/v1/workflows/code-node/tool-call', handle((ctx) => codeNode.toolCall(ctx)));
+// The editor runs one playbook node server-side (SSE).
+router.post('/api/v1/workflows/playbook-node/run', (req: Request, res: Response) => {
+  workflows.runPlaybookNode(req, res).catch((err) => {
+    console.error('[workflows/playbook-node/run] unhandled', err);
+    if (!res.headersSent) res.status(500).json({ success: false, error: err?.message ?? 'Internal error' });
+    else if (!res.writableEnded) res.end();
+  });
+});
 router.get('/api/v1/workflows/:id(\\d+)', handle((ctx) => workflows.show(ctx)));
 router.put('/api/v1/workflows/:id(\\d+)', handle((ctx) => workflows.update(ctx)));
 router.delete('/api/v1/workflows/:id(\\d+)', handle((ctx) => workflows.destroy(ctx)));

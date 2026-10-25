@@ -1,5 +1,6 @@
 import { sql } from 'kysely';
 import { db } from '../db/pools';
+import { PlaybookStore } from '../Playbook/PlaybookStore';
 
 /**
  * Faithful mirror of:
@@ -292,10 +293,35 @@ export class WorkflowGraphRepository {
     const rows = (
       await sql<any>`SELECT * FROM workflow_nodes WHERE workflow_id = ${workflowId} ORDER BY id`.execute(db)
     ).rows;
-    return rows.map((row) => {
+    const out = rows.map((row) => {
       row.config = decodeNodeConfig(row.config);
       return row;
     });
+
+    // Playbook nodes link to the collection: fill in the linked text for the workflow's owner, so every
+    // reader (runners, compilers, docs) keeps receiving config.playbook.
+    let owner: number | null = null;
+    const store = new PlaybookStore();
+    for (const row of out) {
+      const cfg = row.config;
+      if ((row.node_type ?? '') !== 'playbook' || cfg === null || typeof cfg !== 'object' || Array.isArray(cfg)
+        || cfg.playbook_id === undefined || cfg.playbook_id === null) {
+        continue;
+      }
+      if (owner === null) {
+        const o = (await sql<any>`SELECT user_id FROM agent_workflows WHERE id = ${workflowId}`.execute(db)).rows[0];
+        owner = phpIntval(o?.user_id ?? 0);
+      }
+      const pb = await store.get(owner, phpIntval(cfg.playbook_id));
+      if (pb === null) {
+        delete cfg.playbook;
+        cfg.playbook_missing = true;
+      } else {
+        delete cfg.playbook_missing;
+        cfg.playbook = pb.text;
+      }
+    }
+    return out;
   }
 
   /** Mirrors getNode(): a single node by id with `config` decoded (or [] when empty), else null. */
@@ -316,6 +342,11 @@ export class WorkflowGraphRepository {
     // Ensure type is stored in config too (redundancy), matching PHP.
     const config: any = nodeData.config ?? nodeData.data ?? {};
     if (config.type === undefined || config.type === null) config.type = nodeType;
+    // A linked playbook node stores only the link; the text and the missing flag are derived on read.
+    if (config.playbook_id !== undefined && config.playbook_id !== null) {
+      delete config.playbook;
+      delete config.playbook_missing;
+    }
     // agent_id must be null or a valid integer (FK); non-numeric strings like "node_3" → null.
     let agentId: any = nodeData.agent_id ?? null;
     if (agentId !== null && !phpIsNumeric(agentId)) agentId = null;
@@ -469,6 +500,11 @@ export class WorkflowGraphRepository {
     if (config === null || typeof config !== 'object') config = {};
     if (config.type === undefined || config.type === null) {
       config.type = nodeType;
+    }
+    // A linked playbook node stores only the link; the text and the missing flag are derived on read.
+    if (config.playbook_id !== undefined && config.playbook_id !== null) {
+      delete config.playbook;
+      delete config.playbook_missing;
     }
 
     let agentId: any = nodeData.agent_id ?? null;

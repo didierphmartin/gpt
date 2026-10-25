@@ -13,6 +13,8 @@ import {
 import { AgentRunner } from '../AgentTeam/AgentRunner';
 import { StreamContext } from '../AgentTeam/StreamContext';
 import { SSEStream } from '../Services/SseStream';
+import { PlaybookStore } from '../Playbook/PlaybookStore';
+import { PlaybookAgentTools } from '../AgentTeam/PlaybookAgentTools';
 
 /**
  * Mirrors src/AgentTeam/Controllers/AgentController.php (CRUD + ordering + tools + categories).
@@ -101,6 +103,23 @@ export class AgentController {
       return this.error('Invalid visibility. Must be: personal, workspace, or public', 400);
     }
 
+    // Playbook agents link to the collection (playbook_id); the text lives there. Tools are derived from
+    // the linked playbook's bound #Actions (PlaybookAgentTools). Only a playbook agent has a playbook.
+    if (agentType !== 'playbook') {
+      data.playbook_id = null;
+    }
+    if (data.playbook_id !== undefined && data.playbook_id !== null) {
+      const pb = await this.findPlaybook(userId, this.intval(data.playbook_id));
+      if (pb === null) {
+        return this.error('Playbook #' + this.intval(data.playbook_id) + ' not found', 404);
+      }
+      data.instructions = '';
+      data.tools = await PlaybookAgentTools.forUser(String(userId), pb.text);
+    } else if (agentType === 'playbook' && String(data.instructions ?? '').trim() !== '') {
+      // Not yet migrated: a playbook agent still carrying its own text.
+      data.tools = await PlaybookAgentTools.forUser(String(userId), String(data.instructions));
+    }
+
     const agent = hydrateAgent({
       user_id: userId,
       team_id: data.team_id ?? null,
@@ -114,6 +133,7 @@ export class AgentController {
       provider: data.provider ?? 'claude',
       model: data.model ?? null,
       instructions: data.instructions ?? '',
+      playbook_id: data.playbook_id !== undefined && data.playbook_id !== null ? this.intval(data.playbook_id) : null,
       tools: data.tools ?? [],
       visibility: visibility,
       settings: data.settings ?? [],
@@ -183,7 +203,30 @@ export class AgentController {
     if (isset('enabled')) agent.enabled = Boolean(data.enabled);
     if (isset('settings')) agent.settings = data.settings;
 
+    // Only a playbook agent has a playbook; a linked agent keeps its text in the collection only.
+    if (has('playbook_id') && data.playbook_id !== null && agent.agentType === 'playbook') {
+      if ((await this.findPlaybook(userId, this.intval(data.playbook_id))) === null) {
+        return this.error('Playbook #' + this.intval(data.playbook_id) + ' not found', 404);
+      }
+      agent.playbookId = this.intval(data.playbook_id);
+    } else if (has('playbook_id') && data.playbook_id === null) {
+      agent.playbookId = null;
+    }
+    if (agent.agentType !== 'playbook') agent.playbookId = null;
+    if (agent.playbookId !== null) agent.instructions = '';
+
     try {
+      // Playbook agents: keep the tool selection in step with the text.
+      if (agent.agentType === 'playbook') {
+        let text = String(agent.instructions ?? '');
+        if (agent.playbookId !== null) {
+          const pb = await this.findPlaybook(agent.userId, agent.playbookId);
+          text = pb?.text ?? '';
+        }
+        if (text.trim() !== '') {
+          agent.tools = await PlaybookAgentTools.forUser(String(agent.userId), text);
+        }
+      }
       const updated = await this.repository.update(agent);
       return {
         success: true,
@@ -199,8 +242,12 @@ export class AgentController {
     agent.category = category === null || category === '' ? null : String(category);
   }
 
+  private async findPlaybook(userId: number, id: number) {
+    return new PlaybookStore().get(userId, id);
+  }
+
   private setAgentType(agent: Agent, agentType: string): void {
-    if (!['standard', 'manager', 'worker'].includes(agentType)) {
+    if (!['standard', 'manager', 'worker', 'dispatcher', 'playbook'].includes(agentType)) {
       throw new Error(`Invalid agent type: ${agentType}`);
     }
     agent.agentType = agentType;

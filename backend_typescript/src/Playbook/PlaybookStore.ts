@@ -123,6 +123,16 @@ export class PlaybookStore {
     return r ? norm(r) : null;
   }
 
+  /** base when the user has no playbook with it, else base-2, base-3… (still at most 64 characters). */
+  async freeKey(userId: number, base: string): Promise<string> {
+    let key = base;
+    for (let i = 2; (await this.getByKey(userId, key)) !== null; i++) {
+      const suffix = `-${i}`;
+      key = base.slice(0, KEY_MAX - suffix.length).replace(/-+$/, '') + suffix;
+    }
+    return key;
+  }
+
   /** Create (id null) or update. The text must parse; the key defaults to the title's (create) or stays (update). */
   async save(userId: number, id: number | null, text: string, pkey: string | null): Promise<PlaybookRow> {
     const title = parseTitle(text);

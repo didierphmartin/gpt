@@ -27,6 +27,10 @@ import { StreamContext } from '../AgentTeam/StreamContext';
 import { SkillToolBridge } from '../AgentTeam/SkillToolBridge';
 import { WorkflowRunLog } from '../AgentTeam/WorkflowRunLog';
 import { WorkflowOutputStorage } from '../AgentTeam/WorkflowOutputStorage';
+import { PlaybookNodeRunner } from '../AgentTeam/PlaybookNodeRunner';
+import { PlaybookSource } from '../AgentTeam/PlaybookSource';
+import { PlaybookOutcome } from '../AgentTeam/PlaybookOutcome';
+import { PlaybookStore } from '../Playbook/PlaybookStore';
 
 /**
  * Mirrors src/AgentTeam/Controllers/WorkflowController.php — the management CRUD slice plus the
@@ -636,6 +640,91 @@ export class WorkflowController {
    * tool_call_id is 32-char random hex (~128 bits) so a forged POST can't collide with a real
    * pending call.
    */
+  /** Test seam: the runner a playbook node runs on. */
+  playbookRunnerFactory: () => PlaybookNodeRunner = () => new PlaybookNodeRunner();
+
+  /**
+   * POST /api/v1/workflows/playbook-node/run — the editor runs one playbook node (attended: gates go
+   * to the person at the editor), streamed as SSE: every interpreter event as `data:`, then
+   * `event: done` with {output, run_id, status, gate, exit} or `event: error`. A from-input node reads
+   * the robot's published copy named by the job; a linked node reads its playbook_id for its owner.
+   * Mirrors WorkflowController::runPlaybookNode.
+   */
+  async runPlaybookNode(req: Request, res: Response): Promise<void> {
+    const ctx = buildCtx(req);
+    const userId = Math.trunc(Number(ctx.user_id ?? 0)) || 0;
+    const body: any = ctx.body ?? {};
+
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (typeof (res as any).flushHeaders === 'function') (res as any).flushHeaders();
+
+    const write = (s: string) => {
+      if (!res.writableEnded) res.write(s);
+    };
+    const sseCallback = (event: Record<string, any>) => write('data: ' + JSON.stringify(event) + '\n\n');
+    const finish = (event: string, data: any) => {
+      write(`event: ${event}\n` + 'data: ' + JSON.stringify(data) + '\n\n');
+      if (!res.writableEnded) res.end();
+    };
+
+    if (!userId) {
+      finish('error', { error: 'Authentication required' });
+      return;
+    }
+
+    const nodeConfig: Record<string, any> = body.node_config !== null && typeof body.node_config === 'object' && !Array.isArray(body.node_config)
+      ? { ...body.node_config } : {};
+    const prompt = String(body.prompt ?? '');
+    // The first parent's text names the playbook and the job (as on the server engine); the prompt when absent.
+    const parentText = typeof body.parent_text === 'string' ? body.parent_text : prompt;
+
+    try {
+      const fromInput = PlaybookSource.isFromInput(nodeConfig);
+      let reason: string | null = null;
+      let result: Record<string, any> = {};
+      if (fromInput) {
+        // The playbook is named by the job in the request text (the robot's published copy).
+        const src = await PlaybookSource.fromInput(userId, nodeConfig, parentText);
+        if (src.ok) {
+          nodeConfig.playbook = src.text;
+          delete nodeConfig.playbook_id;
+        } else {
+          reason = src.reason;
+        }
+      } else if (nodeConfig.playbook_id !== undefined && nodeConfig.playbook_id !== null) {
+        // A node linked to the collection sends playbook_id; the text is read here, for its owner.
+        const pb = await new PlaybookStore().get(userId, phpIntval(nodeConfig.playbook_id));
+        if (pb === null) throw new Error(`Playbook #${nodeConfig.playbook_id} not found`);
+        nodeConfig.playbook = pb.text;
+      }
+      const hasExits = Array.isArray(nodeConfig.exits) ? nodeConfig.exits.length > 0
+        : nodeConfig.exits !== null && typeof nodeConfig.exits === 'object' && Object.keys(nodeConfig.exits).length > 0;
+      let transcript = '';
+      if (reason === null) {
+        try {
+          // Attended: gates go to the person at the editor.
+          result = await this.playbookRunnerFactory().run(userId, nodeConfig, prompt, sseCallback);
+          transcript = String(result.output ?? '');
+          reason = PlaybookOutcome.reason(String(result.status ?? ''), result.gate ?? null);
+        } catch (e) {
+          if (!hasExits) throw e;
+          reason = PlaybookOutcome.errorReason(e);
+        }
+      }
+      const out = PlaybookOutcome.nodeResult(reason, transcript, fromInput || hasExits ? PlaybookSource.jobLine(parentText) : null);
+      result.exit = out.exit;
+      // An old one-output node keeps its transcript as it was (no failure line, no exit routing).
+      if (hasExits || fromInput) result.output = out.text;
+      finish('done', result);
+    } catch (e: any) {
+      finish('error', { error: e?.message ?? String(e) });
+    }
+  }
+
   async toolResult(ctx: Ctx): Promise<ControllerResult> {
     // NB: PHP toolResult calls http_response_code(401/400) then returns an array WITHOUT a
     // 'status_code' key — so index.php's dispatcher resets the code to `$result['status_code'] ?? 200`

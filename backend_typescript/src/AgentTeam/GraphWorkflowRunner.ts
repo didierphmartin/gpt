@@ -29,6 +29,10 @@ import { DecisionUsage } from '../Services/DecisionUsage';
 import { config as envConfig } from '../config/env';
 import { CodeNodeStep } from './CodeNodeStep';
 import { CodeNodeExecutor } from './CodeNodeExecutor';
+import { CodeNodeEmit } from './CodeNodeEmit';
+import { PlaybookNodeRunner } from './PlaybookNodeRunner';
+import { PlaybookSource } from './PlaybookSource';
+import { PlaybookOutcome } from './PlaybookOutcome';
 
 /**
  * Faithful port of the start/agent/output execution paths of
@@ -67,8 +71,8 @@ import { CodeNodeExecutor } from './CodeNodeExecutor';
  *    WorkflowController.runEvents / GET /api/v1/workflows/runs/{runId}/events.
  *  - Node types: start/agent/output/code as PHP (code nodes via CodeNodeExecutor, the shared python
  *    harness; dispatcher agents route via DispatchRouting, with the model or a decision model);
- *    agent-template throws the same message; playbook nodes stop the run (no playbook interpreter
- *    in TS); anything else takes PHP's default branch ({type, output: null}).
+ *    agent-template throws the same message; playbook nodes run unattended through PlaybookNodeRunner
+ *    (done/failed exits); anything else takes PHP's default branch ({type, output: null}).
  *  - Attached documents (buildDocumentsContext): IMPLEMENTED. Reads locally-stored docs from
  *    the scratch-file reference / inline_documents map (both already threaded through run()'s
  *    parameters), and remote/cloud docs from the LOCAL-FILESYSTEM fallback path (matching
@@ -827,6 +831,57 @@ export class GraphWorkflowRunner {
     return { type: 'code', output: route.output, exit: route.exit, success: true, code_route: route };
   }
 
+  /**
+   * A playbook node, server-side and unattended (nobody can approve): resolved -> exit 'done', anything
+   * else -> exit 'failed' (PlaybookOutcome). With config.exits the node routes like a code node (port
+   * output_k -> k-th exit, CodeNodeEmit.exitTargets); without exits all children run and a failure fails
+   * the run. A from-input node, or one with exits, ends its output with "Job: <first parent's JSON>"
+   * (when that is a JSON object) for the complete and hand-back nodes.
+   */
+  private async executePlaybookNode(node: any, userId: number, userPrompt: string, edges: any[]): Promise<any> {
+    const cfg: Record<string, any> = node.config !== null && typeof node.config === 'object' && !Array.isArray(node.config) ? { ...node.config } : {};
+    const parents = CodeNodeStep.parents(phpIntval(node.id), edges, this.graphNodes, this.nodeOutputs);
+    const request = parents.length ? parents.map((p) => p.text).join('\n\n') : userPrompt;
+    const fromInput = PlaybookSource.isFromInput(cfg);
+    const parentText = String(parents[0]?.text ?? '');
+    let transcript = '';
+    let reason: string | null = null;
+    if (fromInput) {
+      const src = await PlaybookSource.fromInput(userId, cfg, parentText);
+      if (src.ok) cfg.playbook = src.text;
+      else reason = src.reason;
+    }
+    if (reason === null) {
+      try {
+        const res = await this.makePlaybookNodeRunner().run(userId, cfg, request, () => {}, true);
+        transcript = String(res.output);
+        reason = PlaybookOutcome.reason(String(res.status), res.gate ?? null);
+      } catch (e) {
+        reason = PlaybookOutcome.errorReason(e);
+      }
+    }
+    const exits = Array.isArray(cfg.exits) ? cfg.exits : (cfg.exits !== null && typeof cfg.exits === 'object' ? Object.values(cfg.exits) : []);
+    const hasExits = exits.length > 0;
+    const res = PlaybookOutcome.nodeResult(reason, transcript, fromInput || hasExits ? PlaybookSource.jobLine(parentText) : null);
+    if (!hasExits) {
+      if (reason !== null) throw new Error(`playbook node failed: ${reason}`);
+      return { type: 'playbook', output: res.text, success: true };
+    }
+    this.nodeLog(node, reason === null ? 'info' : 'error', 'done', 'playbook took exit ' + res.exit + (reason !== null ? `: ${reason}` : ''));
+    const targets = CodeNodeEmit.exitTargets(String(node.id), exits.map(String), edges, Object.keys(this.graphNodes));
+    const chosen = (targets[res.exit] ?? []).map(phpIntval);
+    const children = this.getNextNodeIds(phpIntval(node.id), edges).map(phpIntval);
+    return {
+      type: 'playbook', output: res.text, exit: res.exit, success: true,
+      code_route: { chosen, skip: children.filter((c) => !chosen.includes(c)) },
+    };
+  }
+
+  /** Test seam: the runner that runs a playbook node. */
+  protected makePlaybookNodeRunner(): PlaybookNodeRunner {
+    return new PlaybookNodeRunner(this.config);
+  }
+
   /** Test seam: the executor that runs a code node. */
   protected makeCodeNodeExecutor(): CodeNodeExecutor {
     return new CodeNodeExecutor(this.config);
@@ -854,11 +909,7 @@ export class GraphWorkflowRunner {
           'Unconfigured agent template node found. Please configure all agent nodes before running the workflow.'
         );
       case 'playbook':
-        // PHP runs playbook nodes server-side (PlaybookNodeRunner); the TypeScript backend has no
-        // playbook interpreter yet, so the run stops with a reason instead of passing null on.
-        throw new Error(
-          'Playbook nodes run only from the workflow editor or the PHP backend (the TypeScript backend has no playbook interpreter).'
-        );
+        return this.executePlaybookNode(node, userId, userPrompt, edges);
       case 'code':
         return this.executeCodeNode(node, userId, userPrompt, edges);
       case 'output':
@@ -1361,6 +1412,7 @@ export class GraphWorkflowRunner {
       provider: config.agent_provider ?? config.provider ?? 'openai',
       model: config.model ?? null,
       instructions,
+      playbookId: null,
       tools: config.tools ?? [],
       visibility: 'personal',
       enabled: true,

@@ -166,7 +166,7 @@ test('the Output takes a node once, and only through the exit it took', () => {
   assert.deepEqual(runner.executeOutputNode({ id: 3 }, edges), { type: 'output', output: 'stored' });
 });
 
-test('a playbook node stops the run with a reason instead of passing null on', async () => {
+test('a one-output playbook node whose playbook does not parse fails the run with the reason', async () => {
   const h = makeRunnerHarness({
     nodes: [
       { id: 1, node_type: 'start', config: {} },
@@ -178,7 +178,7 @@ test('a playbook node stops the run with a reason instead of passing null on', a
   try {
     const out = await h.runner.run({ id: 45, name: 'PB' }, 0, { prompt: 'go' });
     assert.equal(out.success, false);
-    assert.match(out.error, /Playbook nodes/);
+    assert.match(out.error, /^playbook node failed: error:Missing "Title:" and "Instructions:" section/);
     assert.equal(h.rows[0].status, 'failed');
   } finally {
     h.cleanup();

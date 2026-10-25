@@ -1,5 +1,6 @@
 import { sql } from 'kysely';
 import { db } from '../db/pools';
+import { PlaybookStore, keyFromTitle } from '../Playbook/PlaybookStore';
 
 /**
  * Faithful mirror of:
@@ -27,6 +28,8 @@ export interface Agent {
   provider: string;
   model: string | null;
   instructions: string;
+  /** The linked playbook (playbook agents). */
+  playbookId: number | null;
   tools: any; // array (or object) decoded from JSON
   visibility: string; // personal | workspace | public
   enabled: boolean;
@@ -112,6 +115,7 @@ export function hydrateAgent(data: any): Agent {
     provider: data.provider ?? 'claude',
     model: data.model ?? null,
     instructions: data.instructions ?? '',
+    playbookId: data.playbook_id !== undefined && data.playbook_id !== null ? phpIntval(data.playbook_id) : null,
     tools: decodeJson(data.tools ?? []),
     visibility: data.visibility ?? 'personal',
     enabled: Boolean(data.enabled ?? true),
@@ -137,6 +141,7 @@ export function agentToArray(a: Agent): Record<string, any> {
     provider: a.provider,
     model: a.model,
     instructions: a.instructions,
+    playbook_id: a.playbookId,
     tools: a.tools,
     visibility: a.visibility,
     enabled: a.enabled,
@@ -158,6 +163,7 @@ export function agentToApiArray(a: Agent): Record<string, any> {
     provider: a.provider,
     model: a.model,
     instructions: a.instructions,
+    playbook_id: a.playbookId,
     tools: a.tools,
     settings: a.settings,
     visibility: a.visibility,
@@ -380,12 +386,12 @@ export class AgentRepository {
       INSERT INTO agents (
         user_id, team_id, category, name, description,
         agent_type, parent_agent_id, can_delegate_to, display_order,
-        provider, model, instructions,
+        provider, model, instructions, playbook_id,
         tools, visibility, enabled, settings
       ) VALUES (
         ${data.user_id}, ${data.team_id}, ${data.category}, ${data.name}, ${data.description},
         ${data.agent_type}, ${data.parent_agent_id}, ${JSON.stringify(data.can_delegate_to)}, ${data.display_order},
-        ${data.provider}, ${data.model}, ${data.instructions},
+        ${data.provider}, ${data.model}, ${data.instructions}, ${data.playbook_id},
         ${JSON.stringify(data.tools)}, ${data.visibility}, ${data.enabled ? 1 : 0}, ${JSON.stringify(data.settings)}
       )`.execute(db);
 
@@ -409,6 +415,7 @@ export class AgentRepository {
         provider = ${data.provider},
         model = ${data.model},
         instructions = ${data.instructions},
+        playbook_id = ${data.playbook_id},
         tools = ${JSON.stringify(data.tools)},
         visibility = ${data.visibility},
         enabled = ${data.enabled ? 1 : 0},
@@ -514,6 +521,16 @@ export class AgentRepository {
     copy.userId = newUserId;
     copy.name = newName ?? original.name + ' (Copy)';
     copy.visibility = 'personal';
+
+    // A playbook is owner-scoped: a copy for another user gets its own copy of the text in their
+    // collection (key from the title, suffixed on a clash); the same owner keeps the link.
+    const pbId = original.playbookId;
+    if (pbId !== null && newUserId !== original.userId) {
+      const store = new PlaybookStore();
+      const pb = await store.get(original.userId, pbId);
+      copy.playbookId = pb === null ? null
+        : (await store.save(newUserId, null, pb.text, await store.freeKey(newUserId, keyFromTitle(pb.title)))).id;
+    }
 
     return this.create(copy);
   }
