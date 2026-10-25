@@ -66,6 +66,9 @@ class Workflow:
         # falls back — an unknown value must not change how a graph runs.
         self.orchestration: str = 'workflow'
 
+        # The automation that generated this workflow (None when hand-made); set by the automations API only.
+        self.automationId: int | None = None
+
         # Graph structure (normalized nodes/edges from database)
         self.graph: dict | None = None
 
@@ -100,6 +103,8 @@ class Workflow:
         o = php_strval(data.get('orchestration') if data.get('orchestration') is not None else 'workflow')
         self.orchestration = o if o in ('workflow', 'swarm') else 'workflow'
 
+        self.automationId = php_intval(data['automation_id']) if data.get('automation_id') is not None else None
+
         return self
 
     def toArray(self) -> dict:
@@ -118,6 +123,7 @@ class Workflow:
             'output_storage_enabled': self.outputStorageEnabled,
             'output_folder': self.outputFolder,
             'orchestration': self.orchestration,
+            'automation_id': self.automationId,
         }
 
         # Include graph if available
@@ -139,6 +145,7 @@ class Workflow:
             'output_storage_enabled': self.outputStorageEnabled,
             'output_folder': self.outputFolder,
             'orchestration': self.orchestration,
+            'automation_id': self.automationId,
             'schedule_enabled': self.isScheduleEnabled(),  # Computed from triggers
             'runtime_mode': self._detectRuntimeMode(),
         }

@@ -479,7 +479,7 @@ def test_workflow_to_array_key_order_no_graph():
     assert list(wf.toArray().keys()) == [
         'id', 'user_id', 'workspace_id', 'name', 'description', 'steps', 'triggers',
         'variables', 'enabled', 'created_at', 'updated_at', 'output_storage_enabled',
-        'output_folder', 'orchestration',
+        'output_folder', 'orchestration', 'automation_id',
     ]
 
 
@@ -496,7 +496,7 @@ def test_workflow_to_api_array_key_order_and_computed_fields():
     keys = list(wf.toApiArray().keys())
     assert keys == [
         'id', 'name', 'description', 'steps', 'triggers', 'variables', 'enabled',
-        'created_at', 'output_storage_enabled', 'output_folder', 'orchestration',
+        'created_at', 'output_storage_enabled', 'output_folder', 'orchestration', 'automation_id',
         'schedule_enabled', 'runtime_mode',
     ]
     assert wf.toApiArray()['runtime_mode'] == 'batch'

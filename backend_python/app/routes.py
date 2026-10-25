@@ -15,6 +15,7 @@ from app.agent_team.controllers.workflow_schema_controller import WorkflowSchema
 from app.controllers.admin_controller import AdminController
 from app.controllers.affiliate_controller import AffiliateController
 from app.controllers.auth_controller import AuthController
+from app.controllers.automations_controller import AutomationsController
 from app.controllers.chat_attachment_controller import ChatAttachmentController
 from app.controllers.chat_controller import ChatController
 from app.controllers.code_components_controller import CodeComponentsController
@@ -68,6 +69,7 @@ CONTROLLERS = {
     'AdminController': AdminController,
     'AffiliateController': AffiliateController,
     'AuthController': AuthController,
+    'AutomationsController': AutomationsController,
     'ChatAttachmentController': ChatAttachmentController,
     'ChatController': ChatController,
     'CodeComponentsController': CodeComponentsController,
@@ -436,6 +438,12 @@ ROUTES = [
     ('DELETE', '/api/v1/playbooks/{id:\\d+}', ('PlaybooksController', 'destroy')),
     ('GET', '/api/v1/playbooks/{id:\\d+}/used-by', ('PlaybooksController', 'usedBy')),
     ('POST', '/api/v1/playbooks/{id:\\d+}/publish', ('PlaybooksController', 'publish')),
+    # The automation record (SQL: schema/migrations/2026-10-20_automations.sql) and its drift check / dev-test install.
+    ('GET', '/api/v1/automations', ('AutomationsController', 'index')),
+    ('POST', '/api/v1/automations', ('AutomationsController', 'create')),
+    ('PUT', '/api/v1/automations/{id:\\d+}', ('AutomationsController', 'update')),
+    ('POST', '/api/v1/automations/{id:\\d+}/check', ('AutomationsController', 'check')),
+    ('POST', '/api/v1/automations/{id:\\d+}/install', ('AutomationsController', 'install')),
     # The code components collection (CodeComponentsController, over CodeComponentStore) and its Start option.
     ('GET', '/api/v1/code-components', ('CodeComponentsController', 'index')),
     ('POST', '/api/v1/code-components', ('CodeComponentsController', 'create')),
