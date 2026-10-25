@@ -67,9 +67,9 @@ function swarmWithDispatcherTag(): any {
 }
 
 /** Installs the database and returns the generator (PHP: new LangGraphGenerator(self::pdo(), ...)). */
-function generator(graph: any, orchestration = 'swarm', storage = false): LangGraphGenerator {
+function generator(graph: any, orchestration = 'swarm', storage = false, skillsRoot: string | null = null): LangGraphGenerator {
   pdo();
-  return makeGenerator({ workflow: { id: 90, name: 'Trip planning swarm', user_id: '3', output_storage_enabled: storage, orchestration }, graph });
+  return makeGenerator({ workflow: { id: 90, name: 'Trip planning swarm', user_id: '3', output_storage_enabled: storage, orchestration }, graph, skillsRoot });
 }
 
 /** Facts as analyzeForEmit() returns them (private). */
@@ -84,9 +84,9 @@ function byPath(manifest: any): Record<string, string> {
 }
 
 /** The generator's swarm emit path directly (skipping generate()'s option dispatch); path => code. */
-async function generateSwarm(graph: any, storage = false): Promise<Record<string, string>> {
+async function generateSwarm(graph: any, storage = false, skillsRoot: string | null = null): Promise<Record<string, string>> {
   const f = await facts(graph, 'swarm', storage);
-  const gen: any = generator(graph, 'swarm', storage);
+  const gen: any = generator(graph, 'swarm', storage, skillsRoot);
   return byPath(await gen.generateSwarm(f));
 }
 
@@ -137,6 +137,25 @@ test('testWorkflowUsesTheEntryAgentsDisplayNameAsDefaultActiveAgent', async () =
 test('testWorkflowCompilesTheGraphItBuilds', async () => {
   const files = await generateSwarm(twoAgentSwarm());
   assert.match(files['workflow.py'], /create_swarm\([\s\S]*?\)\.compile\(checkpointer=MemorySaver\(\)\)/);
+});
+
+/** A member's doc names its skills: a folder skill by its folder, an inline one as such -- never PHP's "Array". */
+test('testTheMemberDocNamesItsSkills', async () => {
+  const g = twoAgentSwarm();
+  g.nodes[1].config.bound_skill = { dir_name: 'html', name: 'HTML' };
+  g.nodes[2].config.skill_content = 'Answer in haiku.';
+  const root = mkdtempSync(path.join(tmpdir(), 'swarm-skills-'));
+  mkdirSync(path.join(root, 'html'));
+  writeFileSync(path.join(root, 'html', 'SKILL.md'), '---\nname: html\n---\n');
+  let files: Record<string, string>;
+  try {
+    files = await generateSwarm(g, false, root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+  assert.ok(files['agents/alice.py'].includes('  Skills: html'));
+  assert.ok(files['agents/bob.py'].includes('  Skills: inline skill'));
+  assert.ok(!(files['agents/alice.py'] + files['agents/bob.py']).includes('Array'));
 });
 
 test('testEachMemberGetsOneHandoffToolPerColleague', async () => {

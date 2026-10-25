@@ -2724,7 +2724,10 @@ def main() -> None:
         L.push(`  ${member['name']} -- node ${nid} in the workflow editor.`);
         L.push(`  Model:  ${s}`);
         L.push('  Tools:  ' + (truthy(member['tools']) ? implode(', ', member['tools']) : '(none)'));
-        L.push('  Skills: ' + (truthy(member['skills']) ? implode(', ', member['skills']) : '(none)'));
+        // The skills the compiled member runs (def), named by folder: the
+        // rewriter's raw bound_skill is an array, which implode() printed as "Array".
+        const skillLabels = ((def['skills'] ?? []) as any[]).map((sk: any) => (sk['dir'] !== undefined && sk['dir'] !== null) ? String(sk['dir']) : 'inline skill');
+        L.push('  Skills: ' + (skillLabels.length ? skillLabels.join(', ') : '(none)'));
         L.push('');
         L.push('COLLEAGUES  (this member\'s own handoffs -- what HANDOFFS below builds, not the canvas)');
         L.push('==========');

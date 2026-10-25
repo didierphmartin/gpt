@@ -103,7 +103,7 @@ class LangGraphSwarmGeneratorTest extends TestCase
         return $g;
     }
 
-    private static function generator(array $graph, string $orchestration = 'swarm', bool $storage = false): LangGraphGenerator
+    private static function generator(array $graph, string $orchestration = 'swarm', bool $storage = false, ?string $skillsRoot = null): LangGraphGenerator
     {
         $t = new self('x');
         $wfRepo = $t->createMock(WorkflowRepository::class);
@@ -115,7 +115,7 @@ class LangGraphSwarmGeneratorTest extends TestCase
         $graphRepo->method('getGraph')->willReturn($graph);
         $agentRepo = $t->createMock(AgentRepository::class);
         $agentRepo->method('findById')->willReturn(null);
-        return new LangGraphGenerator(self::pdo(), $wfRepo, $graphRepo, $agentRepo);
+        return new LangGraphGenerator(self::pdo(), $wfRepo, $graphRepo, $agentRepo, $skillsRoot);
     }
 
     /** Facts as analyzeForEmit() returns them (private): reached through reflection. */
@@ -162,9 +162,9 @@ class LangGraphSwarmGeneratorTest extends TestCase
         $this->assertStringContainsString('# Output storage (Output node setting): ON -> outputs/workflow/ in this folder (SYNERGYAI_OUTPUT_ROOT overrides)', $wf);
     }
 
-    private function generateSwarm(array $graph, bool $storage = false): array
+    private function generateSwarm(array $graph, bool $storage = false, ?string $skillsRoot = null): array
     {
-        $gen = self::generator($graph, 'swarm', $storage);
+        $gen = self::generator($graph, 'swarm', $storage, $skillsRoot);
         $m = new \ReflectionMethod($gen, 'generateSwarm');
         $m->setAccessible(true);
         $manifest = $m->invoke($gen, self::facts($graph, 'swarm', $storage));
@@ -201,6 +201,27 @@ class LangGraphSwarmGeneratorTest extends TestCase
     {
         $files = $this->generateSwarm(self::twoAgentSwarm());
         $this->assertMatchesRegularExpression('/create_swarm\(.*?\)\.compile\(checkpointer=MemorySaver\(\)\)/s', $files['workflow.py']);
+    }
+
+    /** A member's doc names its skills: a folder skill by its folder, an inline one as such -- never PHP's "Array". */
+    public function testTheMemberDocNamesItsSkills(): void
+    {
+        $g = self::twoAgentSwarm();
+        $g['nodes'][1]['config']['bound_skill'] = ['dir_name' => 'html', 'name' => 'HTML'];
+        $g['nodes'][2]['config']['skill_content'] = 'Answer in haiku.';
+        $root = sys_get_temp_dir() . '/swarm-skills-' . bin2hex(random_bytes(4));
+        mkdir($root . '/html', 0777, true);
+        file_put_contents($root . '/html/SKILL.md', "---\nname: html\n---\n");
+        try {
+            $files = $this->generateSwarm($g, false, $root);
+        } finally {
+            unlink($root . '/html/SKILL.md');
+            rmdir($root . '/html');
+            rmdir($root);
+        }
+        $this->assertStringContainsString('  Skills: html', $files['agents/alice.py']);
+        $this->assertStringContainsString('  Skills: inline skill', $files['agents/bob.py']);
+        $this->assertStringNotContainsString('Array', $files['agents/alice.py'] . $files['agents/bob.py']);
     }
 
     /** A three-member mesh gives each agent module exactly two create_handoff_tool() calls -- one per colleague, none for itself. */

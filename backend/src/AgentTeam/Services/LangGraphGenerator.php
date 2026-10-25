@@ -2898,7 +2898,13 @@ PY;
         $L[] = "  {$member['name']} -- node {$nid} in the workflow editor.";
         $L[] = "  Model:  {$s}";
         $L[] = '  Tools:  ' . ($member['tools'] ? implode(', ', $member['tools']) : '(none)');
-        $L[] = '  Skills: ' . ($member['skills'] ? implode(', ', $member['skills']) : '(none)');
+        // The skills the compiled member runs ($def), named by folder: the
+        // rewriter's raw bound_skill is an array, which implode() printed as "Array".
+        $skillLabels = array_map(
+            static fn(array $sk): string => isset($sk['dir']) ? (string) $sk['dir'] : 'inline skill',
+            $def['skills'] ?? []
+        );
+        $L[] = '  Skills: ' . ($skillLabels ? implode(', ', $skillLabels) : '(none)');
         $L[] = '';
         $L[] = "COLLEAGUES  (this member's own handoffs -- what HANDOFFS below builds, not the canvas)";
         $L[] = '==========';

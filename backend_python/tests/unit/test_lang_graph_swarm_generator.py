@@ -57,17 +57,17 @@ def _swarm_with_dispatcher_tag() -> dict:
     return g
 
 
-def _generator(graph: dict, orchestration: str = 'swarm', storage: bool = False) -> LangGraphGenerator:
+def _generator(graph: dict, orchestration: str = 'swarm', storage: bool = False, skillsRoot: str | None = None) -> LangGraphGenerator:
     wf = Workflow({'id': 90, 'name': 'Trip planning swarm', 'user_id': '3', 'output_storage_enabled': storage}).setOrchestration(orchestration)
-    return S.generator(_db(), graph, wf)
+    return S.generator(_db(), graph, wf, skillsRoot=skillsRoot)
 
 
 def _facts(graph: dict, orchestration: str = 'swarm', storage: bool = False) -> dict:
     return _generator(graph, orchestration, storage)._analyzeForEmit(90, '3')
 
 
-def _generate_swarm(graph: dict, storage: bool = False) -> dict:
-    gen = _generator(graph, 'swarm', storage)
+def _generate_swarm(graph: dict, storage: bool = False, skillsRoot: str | None = None) -> dict:
+    gen = _generator(graph, 'swarm', storage, skillsRoot)
     manifest = gen._generateSwarm(_facts(graph, 'swarm', storage))
     return {f['path']: f['code'] for f in manifest['files']}
 
@@ -111,6 +111,21 @@ def test_workflow_uses_the_entry_agents_display_name_as_default_active_agent():
 
 def test_workflow_compiles_the_graph_it_builds():
     assert re.search(r'create_swarm\(.*?\)\.compile\(checkpointer=MemorySaver\(\)\)', _generate_swarm(_two_agent_swarm())['workflow.py'], re.S)
+
+
+def test_the_member_doc_names_its_skills():
+    """A member's doc names its skills: a folder skill by its folder, an inline one as such -- never PHP's "Array"."""
+    g = _two_agent_swarm()
+    g['nodes'][1]['config']['bound_skill'] = {'dir_name': 'html', 'name': 'HTML'}
+    g['nodes'][2]['config']['skill_content'] = 'Answer in haiku.'
+    with tempfile.TemporaryDirectory() as root:
+        os.makedirs(os.path.join(root, 'html'))
+        with open(os.path.join(root, 'html', 'SKILL.md'), 'w') as fh:
+            fh.write('---\nname: html\n---\n')
+        files = _generate_swarm(g, skillsRoot=root)
+    assert '  Skills: html' in files['agents/alice.py']
+    assert '  Skills: inline skill' in files['agents/bob.py']
+    assert 'Array' not in files['agents/alice.py'] + files['agents/bob.py']
 
 
 def test_each_member_gets_one_handoff_tool_per_colleague():

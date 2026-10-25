@@ -596,7 +596,10 @@ class LangGraphLayouts:
         L.append(f"  {member['name']} -- node {nid} in the workflow editor.")
         L.append(f'  Model:  {s}')
         L.append('  Tools:  ' + (', '.join(_skill_str(t) for t in member['tools']) if member['tools'] else '(none)'))
-        L.append('  Skills: ' + (', '.join(_skill_str(x) for x in member['skills']) if member['skills'] else '(none)'))
+        # The skills the compiled member runs (d), named by folder: the
+        # rewriter's raw bound_skill is a dict, which PHP's implode() printed as "Array".
+        skillLabels = [php_strval(sk['dir']) if sk.get('dir') is not None else 'inline skill' for sk in (d.get('skills') or [])]
+        L.append('  Skills: ' + (', '.join(skillLabels) if skillLabels else '(none)'))
         L += ['', "COLLEAGUES  (this member's own handoffs -- what HANDOFFS below builds, not the canvas)", '==========']
         if member['handoffs']:
             for otherId in member['handoffs']:
@@ -1257,7 +1260,7 @@ def _with_first(d: dict, key: str, value) -> dict:
 
 
 def _skill_str(s) -> str:
-    """implode() of a member's skills: each a bound_skill value (a string, or an array -> "Array")."""
+    """implode() of a member's tools: each a string (an array would print as PHP's "Array")."""
     if isinstance(s, (dict, list)):
         return 'Array'
     return php_strval(s)
