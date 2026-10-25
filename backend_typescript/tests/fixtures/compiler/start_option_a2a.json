@@ -1,0 +1,1 @@
+{"extends": "start_option", "description": "start_option as A2A: refused (a Start option needs the single-file or modular format)", "options": {"a2a": true}}

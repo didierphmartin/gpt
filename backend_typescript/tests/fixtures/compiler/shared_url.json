@@ -1,0 +1,20 @@
+{
+  "description": "Two used MCP servers on one URL (two mailboxes on one Outlook MCP): refused",
+  "workflow": {"id": 90, "name": "Two mailboxes", "user_id": "3"},
+  "user_id": "3",
+  "graph": {
+    "nodes": [
+      {"id": "1", "node_type": "start", "config": {"type": "start", "prompt": "x"}},
+      {"id": "2", "node_type": "code", "config": {"type": "code", "name": "Read both", "code": "def run(input, call_tool):\n    return {'route': 'next', 'output': 'x'}\n", "mcp_servers": ["Outlook A", "Outlook B"]}},
+      {"id": "3", "node_type": "output", "config": {"type": "output"}}
+    ],
+    "edges": [{"from": "1", "to": "2"}, {"from": "2", "to": "3"}]
+  },
+  "sql": [
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (1, '3', 'Outlook A', 'http://127.0.0.1:8770/mcp', 1)",
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (2, '3', 'Outlook B', 'http://127.0.0.1:8770/mcp', 1)",
+    "INSERT INTO mcp_server_tools VALUES (1, 1, 'poll_new_mail', 'Poll', '{}')",
+    "INSERT INTO mcp_server_tools VALUES (2, 2, 'poll_new_mail', 'Poll', '{}')"
+  ],
+  "options": {}
+}

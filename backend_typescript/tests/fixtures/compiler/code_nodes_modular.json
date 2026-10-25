@@ -1,0 +1,1 @@
+{"extends": "code_nodes", "description": "code_nodes as a modular package (code/ files, code_harness.py)", "options": {"modular": true}}

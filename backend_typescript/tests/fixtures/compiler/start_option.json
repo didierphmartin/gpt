@@ -1,0 +1,28 @@
+{
+  "description": "A Start on a Start option (email trigger, code component 5) expanded by StartOptionGraph: watch mode, work exit, pass_args + tag baked into DEFAULT_WATCH, an agent on the new_mail exit, MCP headers doc lines",
+  "workflow": {"id": 64, "name": "Email prototype", "user_id": "3", "output_storage_enabled": true, "output_folder": "mail/answers"},
+  "user_id": "3",
+  "code_components": {
+    "5": {"name": "Outlook: get new email", "code": "def run(input, call_tool):\n    r = call_tool('outlook', 'poll_new_mail', {'folder': ARGS.get('folder', 'Inbox')})\n    if r.get('mail') is None:\n        return {'route': 'no_mail', 'output': None}\n    return {'route': 'new_mail', 'output': r['mail']}\n", "exits": ["new_mail", "no_mail"], "mcp_servers": ["Outlook"], "timeout_s": 30, "start_trigger": {"label": "Outlook: get new email", "work_exit": "new_mail", "pass_args": ["folder"], "watch": {"server": "Outlook", "tool": "wait_for_new", "args": {"folder": "Inbox", "timeout_s": 60}}}}
+  },
+  "graph": {
+    "nodes": [
+      {"id": "17", "workflow_id": 64, "node_type": "start", "pos_x": 10, "pos_y": 20, "config": {"type": "start", "start_option": 5, "start_args": {"folder": "Support", "tag": "triage", "unused": "x"}}},
+      {"id": "19", "workflow_id": 64, "node_type": "", "config": {"type": "agent-template", "agent_name": "Mail summarizer", "instructions": "Summarize the mail. Output only the HTML report, production-quality HTML.", "agent_provider": "claude", "tools": ["mcp_send_reply"], "settings": {"temperature": 0.2, "max_tokens": 8000}}},
+      {"id": "18", "workflow_id": 64, "node_type": "output", "config": {"type": "output"}}
+    ],
+    "edges": [
+      {"id": 1, "workflow_id": 64, "from_node_id": "17", "to_node_id": "19", "from_port": "output_1", "to_port": "input_1"},
+      {"id": 2, "workflow_id": 64, "from_node_id": "19", "to_node_id": "18", "from_port": "output_1", "to_port": "input_1"}
+    ]
+  },
+  "sql": [
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (7, '3', 'Outlook', 'http://127.0.0.1:8770/mcp', 1)",
+    "INSERT INTO mcp_server_tools VALUES (1, 7, 'poll_new_mail', 'Poll', '{}')",
+    "INSERT INTO mcp_server_tools VALUES (2, 7, 'wait_for_new', 'Wait', '{}')",
+    "INSERT INTO mcp_server_tools VALUES (3, 7, 'send_reply', 'Reply to a mail', '{\"type\":\"object\",\"properties\":{\"to\":{\"type\":\"string\"},\"body\":{\"type\":\"string\"},\"urgent\":{\"type\":\"boolean\",\"default\":false}}}')",
+    "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-6', 1)",
+    "INSERT INTO scheduled_workflows VALUES (1, 64, 'cron', 'pending', '*/5 * * * *', NULL)"
+  ],
+  "options": {}
+}

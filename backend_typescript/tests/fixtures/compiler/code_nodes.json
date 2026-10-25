@@ -1,0 +1,36 @@
+{
+  "description": "LangGraphGeneratorCodeNodeTest's graph plus a dispatcher whose menu holds a code node: code node with two exits on a user MCP server, two Output nodes, an agent with a global MCP tool and a tool that is not on any MCP server",
+  "workflow": {"id": 44, "name": "Dispatcher demo", "user_id": "3"},
+  "user_id": "3",
+  "graph": {
+    "nodes": [
+      {"id": "1", "node_type": "start", "config": {"type": "start", "prompt": "poll"}},
+      {"id": "2", "node_type": "code", "config": {"type": "code", "name": "Poll ServiceNow", "code": "def run(input, call_tool):\n    r = call_tool('servicenow', 'poll_jobs', {})\n    if r.get('job') is None:\n        return {'route': 'no_job', 'output': None}\n    return {'route': 'job', 'output': r['job']}\n", "exits": ["job", "no_job"], "mcp_servers": ["ServiceNow"], "timeout_s": 30, "args": {"queue": "ops", "limit": 5}}},
+      {"id": "6", "node_type": "", "config": {"type": "agent-template", "agent_name": "Router", "agent_type": "dispatcher", "instructions": "Route the job.", "agent_provider": "claude", "tools": [], "settings": {}}},
+      {"id": "7", "node_type": "code", "config": {"type": "code", "name": "Close job", "code": "def run(input, call_tool):\n    return {'route': 'next', 'output': input}\n", "mcp_servers": [], "timeout_s": 10}},
+      {"id": "8", "node_type": "", "config": {"type": "agent-template", "agent_name": "Reporter", "instructions": "Report the news.", "agent_provider": "claude", "tools": ["mcp_get_news", "mcp_not_a_server_tool"], "settings": {"max_tokens": 1024}}},
+      {"id": "3", "node_type": "output", "config": {"type": "output"}},
+      {"id": "4", "node_type": "output", "config": {"type": "output"}}
+    ],
+    "edges": [
+      {"from": "1", "to": "2", "from_port": "output_1"},
+      {"from": "2", "to": "6", "from_port": "output_1"},
+      {"from": "2", "to": "4", "from_port": "output_2"},
+      {"from": "6", "to": "7", "from_port": "output_1"},
+      {"from": "6", "to": "8", "from_port": "output_1"},
+      {"from": "7", "to": "3", "from_port": "output_1"},
+      {"from": "8", "to": "3", "from_port": "output_1"}
+    ]
+  },
+  "sql": [
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (85, '3', 'ServiceNow', 'http://localhost/servicenow/?profile=mock&toolset=jobs', 1)",
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (9, NULL, 'Global News', 'http://localhost/news/', 1)",
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (10, '99', 'Someone Else', 'http://localhost/other/', 1)",
+    "INSERT INTO mcp_server_tools VALUES (1, 85, 'poll_jobs', 'Poll', '{}')",
+    "INSERT INTO mcp_server_tools VALUES (3, 9, 'get_news', 'News', '{\"type\":\"object\",\"properties\":{\"topic\":{\"type\":\"string\",\"description\":\"A topic — e.g. AI\"},\"days\":{\"type\":\"integer\",\"default\":1.5}},\"required\":[\"topic\"]}')",
+    "INSERT INTO mcp_server_tools VALUES (4, 10, 'secret_tool', 'Not mine', '{}')",
+    "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-6', 1)",
+    "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('deepseek', 'deepseek-v4-flash', 1)"
+  ],
+  "options": {}
+}

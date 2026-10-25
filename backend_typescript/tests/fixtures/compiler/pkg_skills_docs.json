@@ -1,0 +1,198 @@
+{
+  "description": "LangGraphPackage port: skills with dependencies (one grouped), start documents, a code node, a dispatcher with decision providers, gemini/deepseek/kimi providers, MCP servers",
+  "workflow": {
+    "id": 61,
+    "name": "Report Builder: Q3 (draft)",
+    "user_id": "3",
+    "output_storage_enabled": true,
+    "output_folder": "q3"
+  },
+  "user_id": "3",
+  "graph": {
+    "nodes": [
+      {
+        "id": "1",
+        "node_type": "start",
+        "config": {
+          "type": "start",
+          "prompt": "Build the Q3 report",
+          "documents": [
+            {
+              "name": "brief.pdf",
+              "path": "docs/brief.pdf",
+              "fullPath": "/x/docs/brief.pdf"
+            },
+            {
+              "name": "notes.DOCX",
+              "path": "notes.DOCX"
+            },
+            {
+              "name": "data.xlsx"
+            },
+            {
+              "name": "deck.pptx",
+              "path": "a/deck.pptx"
+            },
+            {
+              "name": "readme.txt",
+              "path": "readme.txt"
+            }
+          ]
+        }
+      },
+      {
+        "id": "2",
+        "node_type": "code",
+        "config": {
+          "type": "code",
+          "name": "Fetch data!",
+          "code": "def run(input, call_tool):\n    return {'exit': 'next', 'output': input}\n",
+          "exits": [
+            "next"
+          ],
+          "timeout_s": 30
+        }
+      },
+      {
+        "id": "3",
+        "node_type": "",
+        "config": {
+          "type": "agent-template",
+          "agent_name": "Triage",
+          "agent_type": "dispatcher",
+          "instructions": "Route.",
+          "agent_provider": "claude",
+          "model": "claude-sonnet-4-5"
+        }
+      },
+      {
+        "id": "4",
+        "node_type": "",
+        "config": {
+          "type": "agent-template",
+          "agent_name": "Analyst",
+          "agent_type": "standard",
+          "instructions": "Analyse.",
+          "agent_provider": "gemini",
+          "model": "gemini-2.5-pro",
+          "tools": [
+            "mcp_search_docs"
+          ],
+          "bound_skill": {
+            "dir_name": "pdf-tools"
+          }
+        }
+      },
+      {
+        "id": "5",
+        "node_type": "",
+        "config": {
+          "type": "agent-template",
+          "agent_name": "Writer",
+          "agent_type": "standard",
+          "instructions": "Write.",
+          "agent_provider": "DeepSeek",
+          "model": "deepseek-chat",
+          "tools": [
+            "get_news"
+          ],
+          "bound_skill": {
+            "dir_name": "GEO/geo-report"
+          }
+        }
+      },
+      {
+        "id": "6",
+        "node_type": "",
+        "config": {
+          "type": "agent-template",
+          "agent_name": "Kimi helper",
+          "agent_type": "standard",
+          "instructions": "Help.",
+          "agent_provider": "kimi",
+          "model": "kimi-k2",
+          "bound_skill": {
+            "dir_name": "pdf-tools"
+          }
+        }
+      },
+      {
+        "id": "7",
+        "node_type": "output",
+        "config": {
+          "type": "output"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "1",
+        "to": "2"
+      },
+      {
+        "from": "2",
+        "to": "3"
+      },
+      {
+        "from": "3",
+        "to": "4"
+      },
+      {
+        "from": "3",
+        "to": "5"
+      },
+      {
+        "from": "4",
+        "to": "6"
+      },
+      {
+        "from": "5",
+        "to": "7"
+      },
+      {
+        "from": "6",
+        "to": "7"
+      }
+    ]
+  },
+  "sql": [
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (85, '3', 'Docs Server', 'http://docs.local/mcp', 1)",
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (9, NULL, 'News', 'http://localhost/news/', 1)",
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (12, '4', 'Other user', 'http://other/', 1)",
+    "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (13, NULL, 'Disabled', 'http://dis/', 0)",
+    "INSERT INTO mcp_server_tools VALUES (1, 85, 'search_docs', 'Search docs', '{\"type\":\"object\",\"properties\":{\"q\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\",\"default\":1.0}},\"required\":[\"q\"]}')",
+    "INSERT INTO mcp_server_tools VALUES (2, 9, 'get_news', 'News', NULL)",
+    "INSERT INTO mcp_server_tools VALUES (3, 12, 'other_tool', 'x', '{}')",
+    "INSERT INTO mcp_server_tools VALUES (4, 13, 'dis_tool', 'd', '{}')",
+    "INSERT INTO mcp_server_tools VALUES (5, 9, 'lookup', NULL, 'not json')",
+    "INSERT INTO mcp_server_tools VALUES (6, 9, '10', 'numeric tool', '{\"2\":1,\"1\":2}')",
+    "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)",
+    "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('Gemini', 'gemini-2.5-pro', 1)",
+    "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('deepseek', 'deepseek-chat', 1)",
+    "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('kimi', 'kimi-k2', 0)",
+    "INSERT INTO system_llm_settings (provider_key, display_name, model, base_url, api_format, protocol, enabled, sort_order) VALUES ('jev', 'Jev', 'jev-latest', NULL, 'router', 'typesafe', 1, 100)",
+    "INSERT INTO system_llm_settings (provider_key, display_name, model, base_url, api_format, protocol, enabled, sort_order) VALUES ('luna-gw.eu', 'Luna', '', 'https://gw.example/v1', 'router', 'openai', 1, 50)",
+    "INSERT INTO system_llm_settings (provider_key, display_name, model, base_url, api_format, protocol, enabled, sort_order) VALUES ('off', 'Off', 'x', NULL, 'router', 'typesafe', 0, 10)"
+  ],
+  "skills": {
+    "pdf-tools": {
+      "SKILL.md": "---\nname: pdf-tools\ndescription: PDF helpers\nDependencies: [pypdf, 'reportlab', \"markdown\", , httpx]\n---\nBody\ndependencies: ignored\n",
+      "scripts/make.py": "print('pdf')\n",
+      "README.txt": "readme\n",
+      ".env": "SECRET=1\n",
+      ".env.local": "X=1\n",
+      "notes/.hidden.txt": "hidden file\n",
+      ".git/HEAD": "ref\n",
+      "__pycache__/m.cpython-311.pyc": "x",
+      "scripts/old.pyc": "x",
+      "a/.DS_Store": "x",
+      "Z.txt": "upper\n",
+      "b.txt": "lower\n"
+    },
+    "GEO/geo-report": {
+      "SKILL.md": "---\r\nname: geo-report\r\ndependencies: requests, httpx ,  \"jinja2\"\r\n---\r\n",
+      "scripts/report.py": "print('geo')\n"
+    }
+  },
+  "options": {}
+}

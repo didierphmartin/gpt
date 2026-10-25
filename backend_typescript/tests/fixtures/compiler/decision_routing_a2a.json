@@ -1,0 +1,1 @@
+{"extends": "decision_routing", "description": "decision_routing as an A2A folder", "options": {"a2a": true}}

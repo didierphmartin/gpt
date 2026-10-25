@@ -1,0 +1,32 @@
+{
+  "description": "Two dispatchers: techBuddy (no routing mode: every decision provider, admin order) and Triage (routing_mode jev, catch-all branch, 0.85 floor, temperature 1, thinking on); a saved agent referenced by agent_id with JSON-string settings; decision rows for both protocols",
+  "workflow": {"id": 51, "name": "Decision routing", "user_id": "3"},
+  "user_id": "3",
+  "agents": {
+    "12": {"id": 12, "user_id": 3, "name": "Triage desk", "description": "sorts tickets", "agent_type": "dispatcher", "provider": "openai", "model": "gpt-5", "instructions": "", "tools": "[]", "settings": "{\"routing_mode\": \"jev\", \"unclear_branch\": \"Human resources\", \"min_confidence\": 0.85}"}
+  },
+  "graph": {
+    "nodes": [
+      {"id": "1", "node_type": "start", "config": {"type": "start", "prompt": "My laptop will not boot"}},
+      {"id": "2", "node_type": "", "config": {"type": "agent-template", "agent_name": "techBuddy", "agent_type": "dispatcher", "description": "the front desk", "instructions": "You are techBuddy.", "agent_provider": "claude", "model": "claude-sonnet-4-5", "tools": [], "settings": {"temperature": 0.7, "max_tokens": 4096}}},
+      {"id": "3", "node_type": "", "config": {"type": "agent-template", "agent_name": "IT claims", "agent_type": "standard", "description": "Laptops and VPN.", "instructions": "You are IT claims.", "agent_provider": "claude", "model": "claude-sonnet-4-5", "tools": [], "settings": {"temperature": 0.7, "max_tokens": 4096}}},
+      {"id": "4", "node_type": "", "config": {"type": "agent-template", "agent_name": "Human resources", "agent_type": "standard", "instructions": "You are Human resources.", "agent_provider": "claude", "model": "claude-sonnet-4-5", "tools": [], "settings": {"temperature": 0.7, "max_tokens": 4096}}},
+      {"id": "7", "node_type": "agent", "agent_id": 12, "config": {"type": "agent", "agent_id": 12, "agent_type": "dispatcher", "settings": {"temperature": 1, "max_tokens": 2000, "thinking": "on"}}},
+      {"id": "8", "node_type": "", "config": {"type": "agent-template", "agent_name": "Payroll", "instructions": "You answer payroll questions.", "agent_provider": "deepseek", "model": "", "tools": [], "settings": {"temperature": 0.3, "thinking": "off"}}},
+      {"id": "5", "node_type": "output", "config": {"type": "output"}}
+    ],
+    "edges": [
+      {"from": "1", "to": "2"}, {"from": "2", "to": "3"}, {"from": "2", "to": "7"},
+      {"from": "7", "to": "4"}, {"from": "7", "to": "8"},
+      {"from": "3", "to": "5"}, {"from": "4", "to": "5"}, {"from": "8", "to": "5"}
+    ]
+  },
+  "sql": [
+    "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)",
+    "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('deepseek', 'deepseek-v4-flash', 1)",
+    "INSERT INTO system_llm_settings (provider_key, display_name, model, base_url, api_format, protocol, enabled, sort_order) VALUES ('jev', 'Jev', 'jev-latest', NULL, 'router', 'typesafe', 1, 100)",
+    "INSERT INTO system_llm_settings (provider_key, display_name, model, base_url, api_format, protocol, enabled, sort_order) VALUES ('openai-decisions', 'OpenAI Decisions', '', 'https://gateway.example/v1/decide', 'router', 'openai', 1, 50)",
+    "INSERT INTO system_llm_settings (provider_key, display_name, model, base_url, api_format, protocol, enabled, sort_order) VALUES ('off-router', 'Disabled', 'x', NULL, 'router', 'typesafe', 0, 10)"
+  ],
+  "options": {}
+}

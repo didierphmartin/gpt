@@ -1,0 +1,1 @@
+{"extends": "decision_routing", "description": "decision_routing as a modular package", "options": {"modular": true}}
