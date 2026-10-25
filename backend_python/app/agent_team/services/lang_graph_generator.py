@@ -35,7 +35,7 @@ from app.playbook.playbook_store import PlaybookStore
 from app.services.decision_providers import DecisionProviders
 from app.services.robot_account import RobotAccount
 from app.support.logger import error_log
-from app.support.phpcompat import is_numeric, php_empty, php_floatval, php_intval, php_strval, php_trim
+from app.support.phpcompat import is_numeric, php_floatval, php_intval, php_strval, php_trim
 
 _PHP_TRIM = ' \t\n\r\x00\x0b'
 
