@@ -1,9 +1,5 @@
-"""Port of backend/tests/Unit/MafGeneratorCompileTest.php (Phase 6, Task 3).
-
-Passes against live PHP as-is (only structural py_compile assertions, no
-literal-string assertions affected by the generator rewrite the emit-test
-oracle predates).
-"""
+"""Port of backend/tests/Unit/MafGeneratorCompileTest.php: the emitted MAF script passes py_compile
+(the diamond analysis, with a skill, with an MCP tool)."""
 from __future__ import annotations
 
 import pathlib
