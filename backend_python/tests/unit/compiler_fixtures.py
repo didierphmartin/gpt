@@ -1,5 +1,5 @@
-"""The compiler fixtures (tests/fixtures/compiler/workflows/*.json), built for the Python LangGraph compiler
-exactly as tests/fixtures/compiler/php_compile.php builds them for the PHP one: an in-memory SQLite holding
+"""The compiler fixtures (tests/fixtures/compiler/workflows/*.json), built for a Python compiler (LangGraph,
+ADK, MAF, NOOA) exactly as tests/fixtures/compiler/php_compile.php builds them for the PHP one: an in-memory SQLite holding
 schema.sql plus the fixture's rows, and in-memory workflow / graph / agent repositories."""
 from __future__ import annotations
 
@@ -70,8 +70,31 @@ class FixtureAgentRepo:
         return Agent(row) if row is not None else None
 
 
-def generator(fx: dict) -> LangGraphGenerator:
-    return LangGraphGenerator(
+TARGETS = ('langgraph', 'adk', 'maf', 'nooa')
+
+
+def _generator_class(target: str):
+    if target == 'langgraph':
+        return LangGraphGenerator
+    if target == 'adk':
+        from app.agent_team.services.adk_generator import ADKGenerator
+        return ADKGenerator
+    if target == 'maf':
+        from app.agent_team.services.maf_generator import MAFGenerator
+        return MAFGenerator
+    if target == 'nooa':
+        from app.agent_team.services.nooa_generator import NOOAGenerator
+        return NOOAGenerator
+    raise ValueError(f'unknown target {target}')
+
+
+def modes(fx: dict, target: str = 'langgraph') -> list:
+    """LangGraph compiles the modes the fixture lists; ADK, MAF and NOOA always all three (php_compile.php)."""
+    return (fx.get('modes') or ['single', 'modular', 'a2a']) if target == 'langgraph' else ['single', 'modular', 'a2a']
+
+
+def generator(fx: dict, target: str = 'langgraph'):
+    return _generator_class(target)(
         fixture_db(fx.get('sql') or []),
         FixtureWorkflowRepo(fx['workflow']),
         FixtureGraphRepo(fx['graph'], fx.get('code_components') or {}),
@@ -83,13 +106,22 @@ def generator(fx: dict) -> LangGraphGenerator:
     )
 
 
-def compile_python(fx: dict) -> dict:
-    """{mode: generate() result | {'error': message}}, the PHP oracle's shape."""
+def compile_python(fx: dict, target: str = 'langgraph') -> dict:
+    """{mode: generate() result | {'error': message}}, the PHP oracle's shape. ADK, MAF and NOOA compile as
+    WorkflowController.compiledTargetResponse() does: generate(), generatePackage(), generateA2A()."""
     out = {}
-    for mode in fx.get('modes') or ['single', 'modular', 'a2a']:
+    wf_id, user = int(fx['workflow']['id']), str(fx.get('user_id') or '3')
+    for mode in modes(fx, target):
         try:
-            out[mode] = generator(fx).generate(int(fx['workflow']['id']), str(fx.get('user_id') or '3'),
-                                               {'a2a': mode == 'a2a', 'modular': mode == 'modular'})
+            gen = generator(fx, target)
+            if target == 'langgraph':
+                out[mode] = gen.generate(wf_id, user, {'a2a': mode == 'a2a', 'modular': mode == 'modular'})
+            elif mode == 'a2a':
+                out[mode] = gen.generateA2A(wf_id, user)
+            elif mode == 'modular':
+                out[mode] = gen.generatePackage(wf_id, user)
+            else:
+                out[mode] = gen.generate(wf_id, user)
         except Exception as e:  # noqa: BLE001 -- an error is a result to compare
             out[mode] = {'error': str(e)}
     return out
@@ -102,11 +134,11 @@ def php_binary() -> str | None:
     return None
 
 
-def compile_php(paths: list) -> dict:
-    """{fixture name: {mode: result}} from php_compile.php (raises when PHP fails)."""
+def compile_php(paths: list, target: str = 'langgraph') -> dict:
+    """{fixture name: {mode: result}} from php_compile.php --target=<target> (raises when PHP fails)."""
     php = php_binary()
     env = dict(os.environ, XDEBUG_MODE='off')
-    proc = subprocess.run([php, str(FIXTURES / 'php_compile.php'), *[str(p) for p in paths]],
+    proc = subprocess.run([php, str(FIXTURES / 'php_compile.php'), f'--target={target}', *[str(p) for p in paths]],
                           capture_output=True, text=True, env=env, timeout=600)
     if proc.returncode != 0:
         raise RuntimeError(f'php_compile.php failed ({proc.returncode}): {proc.stderr[-4000:]}')
