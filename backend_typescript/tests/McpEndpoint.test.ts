@@ -227,10 +227,10 @@ test('app proxy: falls back to /mcp when the URL as given is not JSON-RPC', asyn
 
 test('emitted MCP client (LangGraph/ADK/MAF) uses the same candidates rule', () => {
   const { execFileSync } = require('node:child_process') as typeof import('node:child_process');
-  const { mcpClientBlock } = require('../src/AgentTeam/pythonEmitHelpers') as typeof import('../src/AgentTeam/pythonEmitHelpers');
+  const { PythonEmitHelpers } = require('../src/AgentTeam/compiler/PythonEmitHelpers') as typeof import('../src/AgentTeam/compiler/PythonEmitHelpers');
   const src =
     "import json, sys, time, types\ntry:\n    import httpx\nexcept ImportError:\n    httpx = types.ModuleType('httpx')\n" +
-    mcpClientBlock() +
+    PythonEmitHelpers.mcpClientBlock() +
     '\nprint(json.dumps([_mcp_candidates("https://x.test"), _mcp_candidates("http://h/srv/"),' +
     ' _mcp_candidates("http://localhost/servicenow/?profile=mock&toolset=jobs"), _mcp_candidates("http://h/x?a=1#f"),' +
     ' _mcp_candidates("https://x.test/mcp/"), _mcp_candidates("http://h/s.php?k=1")]))';
