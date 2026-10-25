@@ -17,6 +17,7 @@ from app.controllers.affiliate_controller import AffiliateController
 from app.controllers.auth_controller import AuthController
 from app.controllers.chat_attachment_controller import ChatAttachmentController
 from app.controllers.chat_controller import ChatController
+from app.controllers.code_components_controller import CodeComponentsController
 from app.controllers.context_controller import ContextController
 from app.controllers.dispatch_controller import DispatchController
 from app.controllers.drive_controller import DriveController
@@ -69,6 +70,7 @@ CONTROLLERS = {
     'AuthController': AuthController,
     'ChatAttachmentController': ChatAttachmentController,
     'ChatController': ChatController,
+    'CodeComponentsController': CodeComponentsController,
     'ContextController': ContextController,
     'DispatchController': DispatchController,
     'DriveController': DriveController,
@@ -434,6 +436,16 @@ ROUTES = [
     ('DELETE', '/api/v1/playbooks/{id:\\d+}', ('PlaybooksController', 'destroy')),
     ('GET', '/api/v1/playbooks/{id:\\d+}/used-by', ('PlaybooksController', 'usedBy')),
     ('POST', '/api/v1/playbooks/{id:\\d+}/publish', ('PlaybooksController', 'publish')),
+    # The code components collection (CodeComponentsController, over CodeComponentStore) and its Start option.
+    ('GET', '/api/v1/code-components', ('CodeComponentsController', 'index')),
+    ('POST', '/api/v1/code-components', ('CodeComponentsController', 'create')),
+    ('GET', '/api/v1/code-components/{id:\\d+}', ('CodeComponentsController', 'show')),
+    ('PUT', '/api/v1/code-components/{id:\\d+}', ('CodeComponentsController', 'update')),
+    ('DELETE', '/api/v1/code-components/{id:\\d+}', ('CodeComponentsController', 'destroy')),
+    ('GET', '/api/v1/code-components/{id:\\d+}/used-by', ('CodeComponentsController', 'usedBy')),
+    ('PUT', '/api/v1/code-components/{id:\\d+}/start-option', ('CodeComponentsController', 'setStartOption')),
+    ('GET', '/api/v1/code-components/{id:\\d+}/start-option/impact', ('CodeComponentsController', 'startOptionImpact')),
+    ('DELETE', '/api/v1/code-components/{id:\\d+}/start-option', ('CodeComponentsController', 'clearStartOption')),
     ('GET', '/api/v1/robot', ('RobotController', 'show')),
     ('GET', '/api/v1/robot/playbooks', ('RobotController', 'playbooks')),
     ('DELETE', '/api/v1/robot/playbooks/{id:\\d+}', ('RobotController', 'unpublish')),

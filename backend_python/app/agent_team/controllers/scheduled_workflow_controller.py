@@ -17,6 +17,8 @@ from app.agent_team.services.active_workflow_service import ActiveWorkflowServic
 from app.agent_team.services.cron_expression import CronExpression
 from app.agent_team.services.scheduled_workflow_service import ScheduledWorkflowService
 from app.agent_team.services.workflow_repository import WorkflowRepository
+from app.code_component.code_component_error import CodeComponentError
+from app.code_component.code_component_store import CodeComponentStore
 from app.exceptions.invalid_argument import InvalidArgumentException
 from app.support.logger import error_log
 from app.support.phpcompat import php_coalesce, php_empty, php_intval, php_strval, php_trim
@@ -60,6 +62,11 @@ class ScheduledWorkflowController:
 
         if not userId:
             return {'success': False, 'error': 'Authentication required', 'status_code': 401}
+
+        try:   # a Start option names its component; the component supplies the event (spec §3)
+            body = CodeComponentStore(self.db).scheduleBody(php_intval(userId), body)
+        except CodeComponentError as e:
+            return {'success': False, 'error': str(e), 'kind': e.kind, 'status_code': e.status}
 
         if php_empty(body.get('workflow_id')):
             return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
@@ -146,6 +153,13 @@ class ScheduledWorkflowController:
 
         if not userId:
             return {'success': False, 'error': 'Authentication required', 'status_code': 401}
+
+        try:   # a Start option names its component; the component supplies the event (spec §3)
+            existingRow = self.scheduleService.findById(scheduleId) if not php_empty(body.get('trigger_component_id')) else None
+            body = CodeComponentStore(self.db).scheduleBody(
+                php_intval(userId), body, php_intval((existingRow or {}).get('workflow_id') or 0))
+        except CodeComponentError as e:
+            return {'success': False, 'error': str(e), 'kind': e.kind, 'status_code': e.status}
 
         # Validate repeat_type if provided
         if not php_empty(body.get('repeat_type')):

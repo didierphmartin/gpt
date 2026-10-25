@@ -62,6 +62,9 @@ class SqliteDb:
         self._autocommit()
         return cur.lastrowid
 
+    def inTransaction(self) -> bool:
+        return self._in_tx
+
     def begin(self):
         self.conn.commit()
         self._in_tx = True
