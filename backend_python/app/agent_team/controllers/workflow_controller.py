@@ -53,6 +53,8 @@ from app.agent_team.services.live_feed import LiveFeed, LiveStream
 from app.agent_team.services.maf_generator import MAFGenerator
 from app.agent_team.services.nooa_generator import NOOAGenerator
 from app.agent_team.services.playbook_node_runner import PlaybookNodeRunner
+from app.agent_team.services.playbook_outcome import PlaybookOutcome
+from app.agent_team.services.playbook_source import PlaybookSource
 from app.agent_team.services.skill_tool_bridge import SkillToolBridge
 from app.agent_team.services.stream_context import StreamContext
 from app.agent_team.services.workflow_output_storage import WorkflowOutputStorage
@@ -920,21 +922,52 @@ class WorkflowController:
             sse.send('error', {'error': 'Authentication required'})
             return None
 
-        nodeConfig = body.get('node_config') if isinstance(body.get('node_config'), dict) else {}
+        nodeConfig = dict(body.get('node_config')) if isinstance(body.get('node_config'), dict) else {}
         prompt = php_strval(body.get('prompt') if body.get('prompt') is not None else '')
+        # The first parent's text names the playbook and the job (as on the server engine); the prompt when absent.
+        parentText = body['parent_text'] if isinstance(body.get('parent_text'), str) else prompt
 
         def sseCallback(event: dict) -> None:
             sse.send_data(event)
 
         try:
-            # A node linked to the collection sends playbook_id; the text is read here, for its owner.
-            if nodeConfig.get('playbook_id') is not None:
+            fromInput = PlaybookSource.isFromInput(nodeConfig)
+            reason = None
+            result: dict = {}
+            if fromInput:
+                # The playbook is named by the job in the request text (the robot's published copy).
+                src = PlaybookSource.fromInput(self.db, userId, nodeConfig, parentText)
+                if src['ok']:
+                    nodeConfig['playbook'] = src['text']
+                    nodeConfig.pop('playbook_id', None)
+                else:
+                    reason = src['reason']
+            elif nodeConfig.get('playbook_id') is not None:
+                # A node linked to the collection sends playbook_id; the text is read here, for its owner.
                 pb = PlaybookStore(self.db).get(userId, php_intval(nodeConfig['playbook_id']))
                 if pb is None:
                     raise RuntimeError(f"Playbook #{nodeConfig['playbook_id']} not found")
-                nodeConfig = {**nodeConfig, 'playbook': pb['text']}
-            runner = PlaybookNodeRunner(self.config)
-            result = runner.run(userId, nodeConfig, prompt, sseCallback)
+                nodeConfig['playbook'] = pb['text']
+            hasExits = isinstance(nodeConfig.get('exits'), (list, dict)) and len(nodeConfig['exits']) > 0
+            transcript = ''
+            if reason is None:
+                try:
+                    runner = PlaybookNodeRunner(self.config)
+                    # Attended: gates go to the person at the editor.
+                    result = runner.run(userId, nodeConfig, prompt, sseCallback)
+                    transcript = php_strval(result.get('output') if result.get('output') is not None else '')
+                    reason = PlaybookOutcome.reason(php_strval(result.get('status') if result.get('status') is not None else ''),
+                                                    result.get('gate'))
+                except Exception as e:  # noqa: BLE001 -- PHP catch (\Throwable $e)
+                    if not hasExits:
+                        raise
+                    reason = PlaybookOutcome.errorReason(e)
+            res = PlaybookOutcome.nodeResult(reason, transcript,
+                                             PlaybookSource.jobLine(parentText) if fromInput or hasExits else None)
+            result['exit'] = res['exit']
+            # An old one-output node keeps its transcript as it was (no failure line, no exit routing).
+            if hasExits or fromInput:
+                result['output'] = res['text']
 
             sse.send('done', result)
         except Exception as e:  # noqa: BLE001 -- mirrors PHP `catch (\Throwable $e)`
