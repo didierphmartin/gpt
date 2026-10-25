@@ -1,7 +1,9 @@
 import { Ctx } from '../Support/Http';
 import { config } from '../config/env';
 import { ScheduledWorkflowService } from '../AgentTeam/ScheduledWorkflowService';
-import { WorkflowRepository, phpIntval } from '../AgentTeam/WorkflowRepository';
+import { WorkflowRepository } from '../AgentTeam/WorkflowRepository';
+import { ScheduleTick } from '../AgentTeam/ScheduleTick';
+import { ActiveWorkflowService } from '../AgentTeam/ActiveWorkflowService';
 import { GraphWorkflowRunner } from '../AgentTeam/GraphWorkflowRunner';
 import { WorkflowRunner } from '../AgentTeam/WorkflowRunner';
 
@@ -107,96 +109,24 @@ export class SchedulerController {
   }
 
   /**
-   * Execute the scheduler logic — mirrors SchedulerController::executeScheduler().
+   * Execute the scheduler logic -- mirrors SchedulerController::executeScheduler(): one ScheduleTick over
+   * the due rows of the active schedule-mode workflows (claim, drain, mark completed/failed).
    */
   private async executeScheduler(): Promise<Record<string, any>> {
     const workflowRepository = new WorkflowRepository();
-    const graphRepository = workflowRepository.graphRepository;
-
-    // The TS runners are self-contained: GraphWorkflowRunner(config) builds its own
-    // AgentRepository/AgentRunner/graph repository; WorkflowRunner() takes no args.
-    const graphWorkflowRunner = new GraphWorkflowRunner(config);
-    const workflowRunner = new WorkflowRunner();
-
-    // Get due schedules
-    const dueSchedules = await this.scheduleService.getDueSchedules();
-
-    const results: Record<string, any> = {
-      timestamp: phpDateYmdHis(new Date()),
-      due_count: dueSchedules.length,
-      executed: [] as any[],
-      failed: [] as any[],
-    };
-
-    for (const schedule of dueSchedules) {
-      const scheduleId = phpIntval(schedule.id);
-      const workflowId = phpIntval(schedule.workflow_id);
-      const userId = phpIntval(schedule.user_id);
-      const inputPrompt = schedule.input_prompt;
-
-      try {
-        // Mark as running
-        await this.scheduleService.markRunning(scheduleId);
-
-        // Load workflow
-        const workflow = await workflowRepository.findById(workflowId);
-
-        if (!workflow) {
-          throw new Error(`Workflow #${workflowId} not found`);
-        }
-
-        if (!workflow.enabled) {
-          throw new Error(`Workflow #${workflowId} is disabled`);
-        }
-
-        // Prepare input variables
-        const inputVariables: any = {};
-        if (inputPrompt) {
-          inputVariables.user_prompt = inputPrompt;
-          inputVariables.prompt = inputPrompt;
-        }
-
-        // Check if graph-based workflow
-        const nodes = await graphRepository.getNodes(workflowId);
-        const isGraphWorkflow = Array.isArray(nodes) && nodes.length > 0;
-
-        // Execute workflow
-        const result = isGraphWorkflow
-          ? await graphWorkflowRunner.run(workflow, userId, inputVariables)
-          : await workflowRunner.run(workflow, userId, inputVariables);
-
-        if (result.success) {
-          await this.scheduleService.markCompleted(scheduleId);
-          results.executed.push({
-            schedule_id: scheduleId,
-            workflow_id: workflowId,
-            workflow_name: schedule.workflow_name,
-            execution_id: result.execution_id ?? null,
-          });
-        } else {
-          throw new Error(result.error ?? 'Workflow execution failed');
-        }
-      } catch (e: any) {
-        const errorMessage = e?.message;
-        await this.scheduleService.markFailed(scheduleId, errorMessage);
-
-        results.failed.push({
-          schedule_id: scheduleId,
-          workflow_id: workflowId,
-          workflow_name: schedule.workflow_name ?? 'Unknown',
-          error: errorMessage,
-        });
-
-        console.error(
-          `Scheduled workflow failed: Schedule #${scheduleId}, Workflow #${workflowId}: ${errorMessage}`
-        );
-      }
+    const tick = new ScheduleTick(
+      this.scheduleService,
+      ScheduleTick.workflowRunner(workflowRepository, workflowRepository.graphRepository, new GraphWorkflowRunner(config), new WorkflowRunner()),
+    );
+    // A missing active_workflows table (not migrated yet) must not break the tick: then nothing is due, never every schedule.
+    let activeWorkflowIds: number[];
+    try {
+      activeWorkflowIds = await new ActiveWorkflowService().scheduleWorkflowIds();
+    } catch (e: any) {
+      console.error('Scheduler: active workflows unavailable, running none: ' + (e?.message ?? e));
+      activeWorkflowIds = [];
     }
-
-    results.executed_count = results.executed.length;
-    results.failed_count = results.failed.length;
-
-    return results;
+    return tick.run(activeWorkflowIds);
   }
 }
 

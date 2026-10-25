@@ -1,5 +1,7 @@
 import { Ctx, ControllerResult } from '../Support/Http';
-import { ScheduledWorkflowService } from '../AgentTeam/ScheduledWorkflowService';
+import { ScheduledWorkflowService, ScheduleInputError } from '../AgentTeam/ScheduledWorkflowService';
+import { CronExpression } from '../AgentTeam/CronExpression';
+import { ActiveWorkflowService } from '../AgentTeam/ActiveWorkflowService';
 import { WorkflowRepository, phpEmpty, phpIntval } from '../AgentTeam/WorkflowRepository';
 import { CodeComponentStore } from '../CodeComponent/CodeComponentStore';
 import { CodeComponentError } from '../CodeComponent/CodeComponentError';
@@ -16,6 +18,9 @@ import { CodeComponentError } from '../CodeComponent/CodeComponentError';
  * $workflow->getUserId()); show/update/delete/pause/resume rely on the service's own user_id
  * scoping / ownership checks.
  */
+const phpTrim = (s: string) => s.replace(/^[ \t\n\r\0\x0B]+|[ \t\n\r\0\x0B]+$/g, '');
+const phpStr = (v: any) => (v === null || v === undefined || v === false ? '' : v === true ? '1' : String(v));
+
 export class ScheduledWorkflowController {
   private scheduleService = new ScheduledWorkflowService();
   private workflowRepository = new WorkflowRepository();
@@ -82,13 +87,23 @@ export class ScheduledWorkflowController {
     }
 
     // Validate repeat_type if provided
-    const validRepeatTypes = ['none', 'hourly', 'daily', 'weekly', 'monthly'];
+    const validRepeatTypes = ScheduledWorkflowService.REPEAT_TYPES;
     if (!phpEmpty(body.repeat_type) && !validRepeatTypes.includes(body.repeat_type)) {
       return {
         success: false,
         error: 'Invalid repeat type. Must be one of: ' + validRepeatTypes.join(', '),
         status_code: 400,
       };
+    }
+    if ((body.repeat_type ?? '') === 'cron' && !CronExpression.isValid(phpTrim(phpStr(body.cron ?? '')))) {
+      return { success: false, error: 'Invalid cron expression', status_code: 400 };
+    }
+    if ((body.repeat_type ?? '') === 'event') {
+      try {
+        ScheduledWorkflowService.eventTrigger(body.event_trigger ?? null);
+      } catch (e: any) {
+        return { success: false, error: e?.message ?? '', status_code: 400 };
+      }
     }
 
     try {
@@ -99,8 +114,12 @@ export class ScheduledWorkflowController {
         scheduled_time: body.scheduled_time,
         repeat_type: body.repeat_type ?? 'none',
         repeat_interval: phpIntval(body.repeat_interval ?? 1),
+        cron: body.cron ?? null,
+        event_trigger: body.event_trigger ?? null,
+        trigger_component_id: body.trigger_component_id ?? null,
       });
 
+      await this.sweepActive();
       return {
         success: true,
         data: schedule,
@@ -154,9 +173,18 @@ export class ScheduledWorkflowController {
 
     // Validate repeat_type if provided
     if (!phpEmpty(body.repeat_type)) {
-      const validRepeatTypes = ['none', 'hourly', 'daily', 'weekly', 'monthly'];
-      if (!validRepeatTypes.includes(body.repeat_type)) {
+      if (!ScheduledWorkflowService.REPEAT_TYPES.includes(body.repeat_type)) {
         return { success: false, error: 'Invalid repeat type', status_code: 400 };
+      }
+    }
+
+    // Effective cron after this update: a cron schedule must carry a valid, ever-firing expression.
+    if ((body.repeat_type ?? null) === 'cron' || Object.prototype.hasOwnProperty.call(body, 'cron')) {
+      const existing = await this.scheduleService.findById(id);
+      const effType = body.repeat_type ?? (existing?.repeat_type ?? 'none');
+      const effCron = phpTrim(phpStr(body.cron ?? existing?.cron ?? ''));
+      if (effType === 'cron' && !CronExpression.isValid(effCron)) {
+        return { success: false, error: 'Invalid cron expression', status_code: 400 };
       }
     }
 
@@ -167,6 +195,7 @@ export class ScheduledWorkflowController {
         return { success: false, error: 'Schedule not found', status_code: 404 };
       }
 
+      await this.sweepActive();
       return {
         success: true,
         data: schedule,
@@ -174,6 +203,9 @@ export class ScheduledWorkflowController {
         status_code: 200,
       };
     } catch (e: any) {
+      if (e instanceof ScheduleInputError) { // e.g. an event schedule without a usable trigger
+        return { success: false, error: e.message, status_code: 400 };
+      }
       return { success: false, error: e?.message ?? '', status_code: 500 };
     }
   }
@@ -194,6 +226,7 @@ export class ScheduledWorkflowController {
         return { success: false, error: 'Schedule not found', status_code: 404 };
       }
 
+      await this.sweepActive();
       return { success: true, message: 'Schedule deleted successfully', status_code: 200 };
     } catch (e: any) {
       return { success: false, error: e?.message ?? '', status_code: 500 };
@@ -220,6 +253,7 @@ export class ScheduledWorkflowController {
         };
       }
 
+      await this.sweepActive();
       return { success: true, message: 'Schedule paused successfully', status_code: 200 };
     } catch (e: any) {
       return { success: false, error: e?.message ?? '', status_code: 500 };
@@ -246,9 +280,19 @@ export class ScheduledWorkflowController {
         };
       }
 
+      await this.sweepActive();
       return { success: true, message: 'Schedule resumed successfully', status_code: 200 };
     } catch (e: any) {
       return { success: false, error: e?.message ?? '', status_code: 500 };
+    }
+  }
+
+  /** The active-workflow sweep after a schedule write; never fails the write it follows (the event worker sweeps every 5 s too). */
+  private async sweepActive(): Promise<void> {
+    try {
+      await new ActiveWorkflowService().sweep();
+    } catch (e: any) {
+      console.error('[ActiveWorkflow] sweep failed: ' + (e?.message ?? e));
     }
   }
 

@@ -36,6 +36,9 @@ import { AppKeyController } from './Controllers/AppKeyController';
 import { WebAuthnController } from './Controllers/WebAuthnController';
 import { AffiliateController } from './Controllers/AffiliateController';
 import { SchedulerController } from './Controllers/SchedulerController';
+import { ActiveWorkflowController } from './Controllers/ActiveWorkflowController';
+import { ActiveWorkflowService } from './AgentTeam/ActiveWorkflowService';
+import { CodeComponentStore } from './CodeComponent/CodeComponentStore';
 import { TracesController } from './Controllers/TracesController';
 import { HealController } from './Controllers/HealController';
 import { VoiceController } from './Controllers/VoiceController';
@@ -73,7 +76,9 @@ const agents = new AgentController();
 const playbooks = new PlaybooksController();
 const playbookValidation = new PlaybookController();
 const automations = new AutomationsController();
-const codeComponents = new CodeComponentsController();
+// Removing a Start option sweeps the active workflows (CodeComponentsController::clearStartOption).
+const codeComponents = new CodeComponentsController(new CodeComponentStore(), async () => { await new ActiveWorkflowService().sweep(); });
+const activeWorkflows = new ActiveWorkflowController();
 const roles = new RolesController();
 const robot = new RobotController();
 const loginAdmin = new LoginAdminController();
@@ -488,6 +493,20 @@ router.post('/api/v1/workflows', handle((ctx) => workflows.create(ctx)));
 router.post('/api/v1/workflows/tool-result', handle((ctx) => workflows.toolResult(ctx)));
 // A code node's call_tool from the editor (literal path, registered before the :id routes).
 router.post('/api/v1/workflows/code-node/tool-call', handle((ctx) => codeNode.toolCall(ctx)));
+// Run the caller's workflow named in the body (literal path, before the :id routes).
+router.post('/api/v1/workflows/run', handle((ctx) => workflows.runByName(ctx)));
+// The workflow the event worker runs (one per user): show, activate (▶ on Start), deactivate.
+router.get('/api/v1/workflows/active', handle((ctx) => activeWorkflows.show(ctx)));
+router.post('/api/v1/workflows/:id(\\d+)/activate', handle((ctx) => activeWorkflows.activate(ctx)));
+router.delete('/api/v1/workflows/:id(\\d+)/activate', handle((ctx) => activeWorkflows.deactivate(ctx)));
+// The live overlay (SSE): the workflow's run events, its active row, pings, then bye with the cursor.
+router.get('/api/v1/workflows/:id(\\d+)/live', (req: Request, res: Response) => {
+  workflows.live(req, res).catch((err) => {
+    console.error('[workflows/live] unhandled', err);
+    if (!res.headersSent) res.status(500).json({ success: false, error: err?.message ?? 'Internal error' });
+    else if (!res.writableEnded) res.end();
+  });
+});
 // The editor runs one playbook node server-side (SSE).
 router.post('/api/v1/workflows/playbook-node/run', (req: Request, res: Response) => {
   workflows.runPlaybookNode(req, res).catch((err) => {

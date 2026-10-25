@@ -104,6 +104,14 @@ npm run dev               # tsx watch on http://localhost:3001
 npm run typecheck         # tsc --noEmit
 ```
 
+Scheduler and event worker (twins of `../backend/scheduler/run-scheduled-workflows.php` and
+`../backend/bin/event-worker.php`; run one backend's worker, not both):
+```bash
+npm run scheduler         # one scheduler tick (cron, every minute)
+npm run event-worker      # long-running: active workflows' events + the schedule tick
+# built: node dist/bin/run-scheduled-workflows.js | node dist/bin/event-worker.js | node dist/bin/run-schedule.js <id>
+```
+
 Point the frontend at it for the implemented flows:
 ```js
 localStorage.setItem('API_BASE_URL', 'http://localhost:3001/api/v1'); location.reload();

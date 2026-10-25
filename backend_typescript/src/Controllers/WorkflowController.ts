@@ -29,6 +29,9 @@ import { WorkflowRunLog } from '../AgentTeam/WorkflowRunLog';
 import { WorkflowOutputStorage } from '../AgentTeam/WorkflowOutputStorage';
 import { WorkflowRefResolver, UnresolvedRefsException } from '../AgentTeam/WorkflowRefResolver';
 import { PlaybookNodeRunner } from '../AgentTeam/PlaybookNodeRunner';
+import { ActiveWorkflowService } from '../AgentTeam/ActiveWorkflowService';
+import { LiveFeed, LiveStream } from '../AgentTeam/LiveFeed';
+import { config as appConfig } from '../config/env';
 import { PlaybookSource } from '../AgentTeam/PlaybookSource';
 import { PlaybookOutcome } from '../AgentTeam/PlaybookOutcome';
 import { PlaybookStore } from '../Playbook/PlaybookStore';
@@ -43,7 +46,7 @@ import { PlaybookStore } from '../Playbook/PlaybookStore';
  *   written to local disk under storage/node-documents/ — see the method doc for the universalFS
  *   divergence).
  *
- * DEFERRED (NOT ported / NOT routed): runByName.
+ * Also runByName (POST /workflows/run) and live (GET /workflows/{id}/live, the live overlay's SSE).
  *
  * `executions` only needs a plain SELECT from agent_workflow_executions (mirrored in
  * WorkflowRepository.getExecutionHistory) — the WorkflowRunner is NOT pulled in.
@@ -764,6 +767,73 @@ export class WorkflowController {
    * Mirrors WorkflowController::run(): validation order, app-key scope gate, graph-vs-steps branch,
    * and the status_code = success ? 200 : 500 convention.
    */
+  /**
+   * POST /api/v1/workflows/run — run the caller's workflow named body.workflow (exact name), as run() does.
+   * Mirrors WorkflowController::runByName.
+   */
+  async runByName(ctx: Ctx): Promise<ControllerResult> {
+    const userId = this.getUserId(ctx);
+    const body: any = ctx.body ?? {};
+    const name = String(body.workflow ?? '').replace(/^[ \t\n\r\0\x0B]+|[ \t\n\r\0\x0B]+$/g, '');
+    if (!userId) {
+      return { success: false, error: 'Authentication required', status_code: 401 };
+    }
+    if (name === '') {
+      return { success: false, error: 'A "workflow" name is required', status_code: 400 };
+    }
+    const row = (await sql<any>`SELECT id FROM agent_workflows WHERE user_id = ${userId} AND name = ${name} LIMIT 1`.execute(db)).rows[0];
+    if (!row) {
+      return { success: false, error: `No workflow named "${name}" found for this account`, status_code: 404 };
+    }
+    return this.run({ ...ctx, params: { ...(ctx.params ?? {}), id: String(phpIntval(row.id)) } });
+  }
+
+  /** Test seam: the live overlay's clock, sleep and connection length. */
+  liveClock = { now: () => Date.now() / 1000, sleep: (s: number) => new Promise<void>((r) => setTimeout(r, s * 1000)), maxSeconds: 50.0 };
+
+  /**
+   * GET /api/v1/workflows/{id}/live — the live overlay: the workflow's run events after ?cursor, the user's
+   * active row every 5 s, a ping every 15 s, then "bye" with the cursor (LiveFeed + LiveStream).
+   * Mirrors WorkflowController::live.
+   */
+  async live(req: Request, res: Response): Promise<void> {
+    const ctx = buildCtx(req);
+    const userId = this.getUserId(ctx);
+    const workflowId = this.getWorkflowId(ctx);
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (typeof (res as any).flushHeaders === 'function') (res as any).flushHeaders();
+    let aborted = false;
+    req.on?.('close', () => { aborted = true; });
+    const emit = (event: string, data: Record<string, any>) => {
+      if (res.writableEnded) return;
+      res.write(event === 'ping' ? ': ping\n\n' : `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    };
+    try {
+      if (!userId || !workflowId || !(await this.workflowRepository.canUserAccess(userId, workflowId))) {
+        emit('error', { error: userId ? 'Workflow not found or access denied' : 'Authentication required' });
+        return;
+      }
+      const log = new WorkflowRunLog(WorkflowRunLog.defaultDir(appConfig));
+      const active = new ActiveWorkflowService();
+      const cursor = typeof ctx.query?.cursor === 'string' ? ctx.query.cursor : null;
+      await LiveStream.run(
+        (c) => LiveFeed.next(log, workflowId, c),
+        () => active.get(userId),
+        emit,
+        this.liveClock.sleep,
+        this.liveClock.now,
+        () => aborted || res.writableEnded,
+        cursor === '' ? null : cursor,
+        this.liveClock.maxSeconds,
+      );
+    } finally {
+      if (!res.writableEnded) res.end();
+    }
+  }
+
   async run(ctx: Ctx): Promise<ControllerResult> {
     const userId = this.getUserId(ctx);
     const workflowId = this.getWorkflowId(ctx);
