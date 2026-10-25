@@ -102,11 +102,13 @@ export class PlaybookStore {
   constructor(private readonly ex: Kysely<DB> = db) {}
 
   async list(userId: number): Promise<any[]> {
-    const rows = (await sql<any>`SELECT ${COLS} FROM playbooks WHERE user_id = ${userId} ORDER BY title`.execute(this.ex)).rows.map(norm);
+    // automation_id: the automation that manages the playbook (null = none); save_playbook_agent checks it on a key clash.
+    const rows = (await sql<any>`SELECT ${COLS}, automation_id FROM playbooks WHERE user_id = ${userId} ORDER BY title`.execute(this.ex)).rows.map(norm);
     const out: any[] = [];
     for (const r of rows) {
       const used = await this.usedBy(userId, r.id);
-      out.push({ ...r, used_by: used.agents.length + used.nodes.length });
+      const automationId = (r as any).automation_id;
+      out.push({ ...r, automation_id: automationId === null || automationId === undefined ? null : Number(automationId), used_by: used.agents.length + used.nodes.length });
     }
     return out;
   }

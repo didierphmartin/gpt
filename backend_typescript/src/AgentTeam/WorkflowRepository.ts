@@ -33,6 +33,8 @@ export interface Workflow {
   outputStorageEnabled: any;
   outputFolder: string | null;
   orchestration: string;
+  /** The automation that generated this workflow (null when hand-made); set by the automations API only. */
+  automationId: number | null;
   graph: any | null; // {nodes, edges} when loaded, else null
 }
 
@@ -138,6 +140,7 @@ export function hydrateWorkflow(data: any): Workflow {
     // handing control to one another ('swarm'). Anything else falls back —
     // an unknown value must not change how a graph runs.
     orchestration: normalizeOrchestration(data.orchestration),
+    automationId: data.automation_id !== undefined && data.automation_id !== null ? phpIntval(data.automation_id) : null,
     graph: null,
   };
 }
@@ -188,6 +191,7 @@ export function workflowToArray(w: Workflow): Record<string, any> {
     output_storage_enabled: w.outputStorageEnabled,
     output_folder: w.outputFolder,
     orchestration: w.orchestration,
+    automation_id: w.automationId,
   };
   if (w.graph !== null) {
     data.graph = w.graph;
@@ -209,6 +213,7 @@ export function workflowToApiArray(w: Workflow): Record<string, any> {
     output_storage_enabled: w.outputStorageEnabled,
     output_folder: w.outputFolder,
     orchestration: w.orchestration,
+    automation_id: w.automationId,
     schedule_enabled: isScheduleEnabled(w),
     runtime_mode: detectRuntimeMode(w),
   };

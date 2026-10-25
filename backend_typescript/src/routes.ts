@@ -21,6 +21,7 @@ import { UserMemoryController } from './Controllers/UserMemoryController';
 import { TeamController } from './Controllers/TeamController';
 import { AgentController } from './Controllers/AgentController';
 import { PlaybooksController } from './Controllers/PlaybooksController';
+import { AutomationsController } from './Controllers/AutomationsController';
 import { WorkflowController } from './Controllers/WorkflowController';
 import { ScheduledWorkflowController } from './Controllers/ScheduledWorkflowController';
 import { WorkflowSchemaController } from './Controllers/WorkflowSchemaController';
@@ -66,6 +67,7 @@ const userMemories = new UserMemoryController();
 const teams = new TeamController();
 const agents = new AgentController();
 const playbooks = new PlaybooksController();
+const automations = new AutomationsController();
 const roles = new RolesController();
 const robot = new RobotController();
 const workflows = new WorkflowController();
@@ -390,6 +392,13 @@ router.put('/api/v1/playbooks/:id(\\d+)', handle((ctx) => playbooks.update(ctx))
 router.delete('/api/v1/playbooks/:id(\\d+)', handle((ctx) => playbooks.destroy(ctx)));
 router.get('/api/v1/playbooks/:id(\\d+)/used-by', handle((ctx) => playbooks.usedBy(ctx)));
 router.post('/api/v1/playbooks/:id(\\d+)/publish', handle((ctx) => playbooks.publish(ctx)));
+
+// The automation record (SQL: schema/migrations/2026-10-20_automations.sql) and its drift check / dev-test install (protected).
+router.get('/api/v1/automations', handle((ctx) => automations.index(ctx)));
+router.post('/api/v1/automations', handle((ctx) => automations.create(ctx)));
+router.put('/api/v1/automations/:id(\\d+)', handle((ctx) => automations.update(ctx)));
+router.post('/api/v1/automations/:id(\\d+)/check', handle((ctx) => automations.check(ctx)));
+router.post('/api/v1/automations/:id(\\d+)/install', handle((ctx) => automations.install(ctx)));
 
 // The robot (protected): status, its published playbooks, unpublish.
 router.get('/api/v1/robot', handle((ctx) => robot.show(ctx)));

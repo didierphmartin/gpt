@@ -124,7 +124,7 @@ export class ChatController {
   private sanitizeClientTools(raw: any): Array<{ name: string; description?: string; input_schema?: any }> {
     if (!Array.isArray(raw)) return [];
     return raw.filter(
-      (t) => t && typeof t === 'object' && typeof t.name === 'string' && /^(?:webmcp_|route_to$|save_playbook_agent$)/.test(t.name) && t.input_schema && typeof t.input_schema === 'object',
+      (t) => t && typeof t === 'object' && typeof t.name === 'string' && /^(?:webmcp_|route_to$|save_playbook_agent$|save_workflow$|save_automation$|install_automation$)/.test(t.name) && t.input_schema && typeof t.input_schema === 'object',
     );
   }
 
