@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 
+from app.controllers.requires_admin import require_admin
 from app.services.package_resolver import PackageResolver
 from app.services.role_store import RoleStore
 from app.support.phpcompat import is_numeric, php_bool, ucfirst
@@ -21,14 +22,14 @@ class PackageController:
                 'updated_at': package['updated_at']}
 
     def adminList(self, request) -> dict:
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         return {'success': True, 'packages': [self._with_role_info(self.resolver.loadPackage(row['role']), row)
                                               for row in RoleStore(self.db).list()]}
 
     def adminGet(self, request, role=None) -> dict:
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         role = self._role_key(request, role)
@@ -38,7 +39,7 @@ class PackageController:
         return {'success': True, 'package': self._with_role_info(self.resolver.loadPackage(role), row)}
 
     def adminUpdate(self, request, role=None) -> dict:
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         role = self._role_key(request, role)
@@ -73,15 +74,6 @@ class PackageController:
         package['name'] = row['name'] if row.get('name') is not None else ucfirst(str(package['role']))
         package['builtin'] = php_bool(row.get('builtin') if row.get('builtin') is not None else False)
         return package
-
-    def _require_admin(self, request) -> dict | None:
-        uid = request.get('user_id')
-        if not uid:
-            return {'success': False, 'error': 'Authentication required', 'status_code': 401}
-        user = self.db.fetch_one('SELECT role FROM users WHERE id = :id LIMIT 1', {':id': uid})
-        if not user or (user.get('role') or '') != 'admin':
-            return {'success': False, 'error': 'Admin access required', 'status_code': 403}
-        return None
 
     @staticmethod
     def _validate_capabilities(caps) -> str | None:

@@ -15,7 +15,7 @@ import pytest
 
 import app.controllers.admin_controller as admin_mod
 from app.controllers.admin_controller import AdminController, _filter_validate_url, _strip_tags
-from tests.unit.test_admin_controller import CONFIG, FakeDb as BaseFakeDb, ctx, sqls
+from tests.unit.test_admin_controller import CONFIG, FakeDb as BaseFakeDb, ctx, is_guard_lookup, sqls
 
 
 class FakeDb(BaseFakeDb):
@@ -118,6 +118,8 @@ def test_get_usage_stats_sql_and_rounding():
 def test_get_usage_stats_db_error():
     class Boom(FakeDb):
         def fetch_one(self, sql, params=None):
+            if is_guard_lookup(sql, params):
+                return {'role': 'admin'}
             raise RuntimeError('db down')
     r = c(Boom()).getUsageStats(ctx())
     assert r == {'success': False, 'error': 'db down', 'status_code': 500}

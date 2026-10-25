@@ -7,10 +7,8 @@ Handles system-wide settings including:
 - Default provider settings
 - Migration from config file to database
 
-Admin gating: `_require_admin` is this controller's OWN copy of the check
-(PHP has no shared helper — PackageController/VideoEditorController/
-LoginAdminController/AffiliateController each carry a byte-identical copy of
-the same three branches; see PHP grep in the task brief).
+Admin gating: every endpoint calls the shared `require_admin`
+(app/controllers/requires_admin.py, the twin of PHP's RequiresAdmin trait).
 
 No runtime DDL (constraints.md): PHP's `ensurePriceColumnsExist()`
 (SystemSettingsController.php:41-54) issues `ALTER TABLE ... ADD COLUMN`
@@ -28,6 +26,7 @@ from __future__ import annotations
 import json
 
 from app.controllers.model_catalog_controller import CATALOG_PATH
+from app.controllers.requires_admin import require_admin
 from app.services.decision_protocols import DECISION_PROTOCOLS, decision_protocol_catalog
 from app.services.provider_kinds import ROUTER_FORMAT, router_row_error
 from app.support.db_presence import DbPresence
@@ -148,24 +147,10 @@ class SystemSettingsController:
         self._presence.column('system_llm_settings', 'price_input_per_1m')
         self._presence.column('system_llm_settings', 'price_output_per_1m')
 
-    # ─── admin gate (php:60-86) ──────────────────────────────────────────
-
-    def _require_admin(self, request) -> dict | None:
-        user_id = request.get('user_id')
-        if not user_id:
-            return {'success': False, 'error': 'Authentication required', 'status_code': 401}
-
-        user = self.db.fetch_one('SELECT role FROM users WHERE id = :user_id', {':user_id': user_id})
-
-        if not user or user.get('role') != 'admin':
-            return {'success': False, 'error': 'Admin access required', 'status_code': 403}
-
-        return None
-
     # ─── getLLMProviders (php:92-141) ───────────────────────────────────
 
     def getLLMProviders(self, request) -> dict:
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
 
@@ -310,7 +295,7 @@ class SystemSettingsController:
     # ─── getLLMProvider (php:294-349) ───────────────────────────────────
 
     def getLLMProvider(self, request, key=None) -> dict:
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
 
@@ -350,7 +335,7 @@ class SystemSettingsController:
     # ─── saveLLMProvider (php:354-485) ──────────────────────────────────
 
     def saveLLMProvider(self, request) -> dict:
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
 
@@ -488,7 +473,7 @@ class SystemSettingsController:
 
     def decisionProtocols(self, request) -> dict:
         """GET /admin/decision-protocols: the protocols a decision provider row may name."""
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         return {'success': True, 'protocols': decision_protocol_catalog(), 'status_code': 200}
@@ -496,7 +481,7 @@ class SystemSettingsController:
     # ─── deleteLLMProvider (php:490-534) ────────────────────────────────
 
     def deleteLLMProvider(self, request, key=None) -> dict:
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
 
@@ -520,7 +505,7 @@ class SystemSettingsController:
     # ─── seedFromConfig (php:540-592) ───────────────────────────────────
 
     def seedFromConfig(self, request) -> dict:
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
 
@@ -622,7 +607,7 @@ class SystemSettingsController:
     # ─── toggleProvider (php:674-727) ───────────────────────────────────
 
     def toggleProvider(self, request) -> dict:
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
 

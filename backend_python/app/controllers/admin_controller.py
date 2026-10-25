@@ -6,13 +6,12 @@ costs (global), and exchange-rate methods (routes.php 192-196, 228-246) to
 the SAME class below the marker near the end of this file — keep that
 section boundary intact.
 
-No admin-role gate: unlike AffiliateController/PackageController/
-VideoEditorController/SystemSettingsController/LoginAdminController (each of
-which checks `($user['role'] ?? '') !== 'admin'` and returns 403 'Admin
-access required'), AdminController.php has NO such check anywhere in its
-~3750 lines — every method here is reachable by any authenticated JWT user
-(gpt_admin's frontend is the only gate). Verified by grep across the whole
-PHP file. Ported verbatim: this class adds none either.
+Admin-role gate: every endpoint starts with the shared `require_admin`
+(app/controllers/requires_admin.py, the twin of PHP's RequiresAdmin trait):
+401 'Authentication required' without a user, 403 'Admin access required'
+unless users.role is 'admin', re-read on each request. The JWT carries only
+`sub`, so authentication alone used to let any signed-in user reach these
+routes (PHP 3f9eda2).
 """
 from __future__ import annotations
 
@@ -24,6 +23,7 @@ from pathlib import Path
 import httpx
 
 from app.controllers.auth_controller import password_hash
+from app.controllers.requires_admin import require_admin
 from app.providers._http import SHARED_SSL_CONTEXT
 from app.services.package_resolver import PackageResolver
 from app.services.robot_account import RobotAccount
@@ -87,12 +87,20 @@ class AdminController:
     # ─── users (AdminController.php:30-312; routes.php 175-180) ────────────
 
     def listUsers(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         sql = ("SELECT id, email, first_name, last_name, role, provider, plan, app_key_prefix,"
                " app_key_created_at, created_at, updated_at FROM users WHERE kind <> 'service' ORDER BY id")
         users = self.db.fetch_all(sql)
         return {'success': True, 'users': users, 'status_code': 200}
 
     def getUser(self, request, userId: int) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         if userId <= 0:
             return {'success': False, 'error': 'Invalid user ID', 'status_code': 400}
 
@@ -106,6 +114,10 @@ class AdminController:
         return {'success': True, 'user': user, 'status_code': 200}
 
     def getUserAccount(self, request, userId: int) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         if userId <= 0:
             return {'success': False, 'error': 'Invalid user ID', 'status_code': 400}
 
@@ -168,6 +180,10 @@ class AdminController:
             return {'success': False, 'error': str(e), 'status_code': 500}
 
     def createUser(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         input_ = request['body']
 
         firstName = php_trim(input_.get('first_name') if input_.get('first_name') is not None else '')
@@ -201,6 +217,10 @@ class AdminController:
         return {'success': True, 'message': 'User created', 'user_id': php_intval(newUserId), 'status_code': 200}
 
     def updateUser(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         input_ = request['body']
 
         userId = php_intval(input_.get('user_id') if input_.get('user_id') is not None else 0)
@@ -242,6 +262,10 @@ class AdminController:
         return {'success': True, 'message': 'User updated', 'status_code': 200}
 
     def deleteUser(self, request, userId: int) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         if userId <= 0:
             return {'success': False, 'error': 'Invalid user ID', 'status_code': 400}
 
@@ -274,6 +298,10 @@ class AdminController:
     #     routes.php 181-185) ────────────────────────────────────────────────
 
     def getProviderSettings(self, request, userId: int) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         if userId <= 0:
             return {'success': False, 'error': 'Invalid user ID', 'status_code': 400}
 
@@ -332,6 +360,10 @@ class AdminController:
         }
 
     def saveProvider(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         input_ = request['body']
 
         userId = php_intval(input_.get('user_id') if input_.get('user_id') is not None else 0)
@@ -392,6 +424,10 @@ class AdminController:
         return {'success': True, 'message': f"Provider '{provider}' saved", 'status_code': 200}
 
     def toggleProviderEnabled(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         input_ = request['body']
 
         userId = php_intval(input_.get('user_id') if input_.get('user_id') is not None else 0)
@@ -434,6 +470,10 @@ class AdminController:
                 'status_code': 200}
 
     def toggleCategoryEnabled(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         input_ = request['body']
 
         userId = php_intval(input_.get('user_id') if input_.get('user_id') is not None else 0)
@@ -472,6 +512,10 @@ class AdminController:
                 'status_code': 200}
 
     def deleteProvider(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         input_ = request['body']
 
         userId = php_intval(input_.get('user_id') if input_.get('user_id') is not None else 0)
@@ -497,6 +541,10 @@ class AdminController:
     # ─── per-user costs (AdminController.php:2830-3023; routes.php 186) ────
 
     def getUserCosts(self, request, userId: int) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         if userId <= 0:
             return {'success': False, 'error': 'Invalid user ID', 'status_code': 400}
 
@@ -639,6 +687,10 @@ class AdminController:
     # ─── per-user LLM API keys (AdminController.php:692-961; routes.php 187-189) ─
 
     def getApiKeys(self, request, userId: int) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         if userId <= 0:
             return {'success': False, 'error': 'Invalid user ID', 'status_code': 400}
 
@@ -734,6 +786,10 @@ class AdminController:
         return {'success': True, 'user_id': userId, 'keys': keys, 'status_code': 200}
 
     def saveApiKeys(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         input_ = request['body']
 
         userId = php_intval(input_.get('user_id') if input_.get('user_id') is not None else 0)
@@ -823,6 +879,10 @@ class AdminController:
         return {'success': True, 'message': f'Saved {savedCount} API key(s)', 'status_code': 200}
 
     def deleteApiKey(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         input_ = request['body']
 
         userId = php_intval(input_.get('user_id') if input_.get('user_id') is not None else 0)
@@ -859,6 +919,10 @@ class AdminController:
     #     routes.php 192-196) ────────────────────────────────────────────────
 
     def getUsageStats(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         try:
             query = request['query'] if request.get('query') is not None else {}
             period = query['period'] if query.get('period') is not None else 'month'
@@ -971,6 +1035,10 @@ class AdminController:
             return {'success': False, 'error': str(e), 'status_code': 500}
 
     def getUsageByUser(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         try:
             query = request['query'] if request.get('query') is not None else {}
             period = query['period'] if query.get('period') is not None else 'month'
@@ -1044,6 +1112,10 @@ class AdminController:
             return {'success': False, 'error': str(e), 'status_code': 500}
 
     def getUserUsageDetail(self, request, userId: int) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         try:
             query = request['query'] if request.get('query') is not None else {}
             period = query['period'] if query.get('period') is not None else 'month'
@@ -1165,6 +1237,10 @@ class AdminController:
             return {'success': False, 'error': str(e), 'status_code': 500}
 
     def getUsageTransactions(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         try:
             query = request['query'] if request.get('query') is not None else {}
             provider = query.get('provider')
@@ -1264,6 +1340,10 @@ class AdminController:
             return {'success': False, 'error': str(e), 'status_code': 500}
 
     def getToolStats(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         try:
             query = request['query'] if request.get('query') is not None else {}
             period = query['period'] if query.get('period') is not None else 'month'
@@ -1564,6 +1644,10 @@ class AdminController:
     #     routes.php 228-233) ───────────────────────────────────────────────
 
     def listMCPServers(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         try:
             self.ensureMCPSchema()
             query = request['query'] if request.get('query') is not None else {}
@@ -1681,6 +1765,10 @@ class AdminController:
         return headerList, php_json_encode(raw)
 
     def createMCPServer(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         try:
             self.ensureMCPSchema()
             input_ = request['body']
@@ -1736,6 +1824,10 @@ class AdminController:
             return {'success': False, 'error': str(e), 'status_code': 500}
 
     def updateMCPServer(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         try:
             input_ = request['body']
             serverId = php_intval(input_['server_id'] if input_.get('server_id') is not None else 0)
@@ -1787,6 +1879,10 @@ class AdminController:
             return {'success': False, 'error': str(e), 'status_code': 500}
 
     def toggleMCPServer(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         try:
             input_ = request['body']
             serverId = php_intval(input_['server_id'] if input_.get('server_id') is not None else 0)
@@ -1808,6 +1904,10 @@ class AdminController:
             return {'success': False, 'error': str(e), 'status_code': 500}
 
     def deleteMCPServer(self, request, serverId: int) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         try:
             if not serverId:
                 return {'success': False, 'error': 'Server ID is required', 'status_code': 400}
@@ -1824,6 +1924,10 @@ class AdminController:
             return {'success': False, 'error': str(e), 'status_code': 500}
 
     def refreshMCPServerTools(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         try:
             input_ = request['body']
             serverId = php_intval(input_['server_id'] if input_.get('server_id') is not None else 0)
@@ -2018,6 +2122,10 @@ class AdminController:
     #     routes.php 235-238) — cascade: package → admin override → user pref ─
 
     def getUserMCPServers(self, request, userId: int) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         try:
             resolver = PackageResolver(self.db)
             packageAllowlist = resolver.allowedMcpServers(userId)  # None = allow all
@@ -2072,6 +2180,10 @@ class AdminController:
             return {'success': False, 'error': str(e), 'status_code': 500}
 
     def setUserMCPOverride(self, request, userId: int, serverId: int) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         try:
             body = request['body'] if request.get('body') is not None else {}
             if 'allowed' not in body:
@@ -2096,6 +2208,10 @@ class AdminController:
             return {'success': False, 'error': str(e), 'status_code': 500}
 
     def clearUserMCPOverride(self, request, userId: int, serverId: int) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         try:
             rowcount = self.db.execute(
                 "DELETE FROM user_mcp_overrides WHERE user_id = ? AND server_id = ?", [userId, serverId])
@@ -2107,6 +2223,10 @@ class AdminController:
     # ─── costs management (AdminController.php:2608-3376; routes.php 240-244) ─
 
     def getCosts(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         try:
             self.ensureCostsTableExists()
             rows = self.db.fetch_all("SELECT * FROM provider_costs ORDER BY category, provider")
@@ -2137,6 +2257,10 @@ class AdminController:
             return {'success': False, 'error': str(e), 'status_code': 500}
 
     def refreshAllCosts(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         try:
             self.ensureCostsTableExists()
 
@@ -2180,6 +2304,10 @@ class AdminController:
             return {'success': False, 'error': str(e), 'status_code': 500}
 
     def refreshProviderCosts(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         try:
             input_ = request['body']
             category = input_['category'] if input_.get('category') is not None else ''
@@ -2354,6 +2482,10 @@ class AdminController:
     # ─── exchange rates (AdminController.php:3218-3371; routes.php 245-246) ──
 
     def getExchangeRates(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         try:
             self.ensureExchangeRatesTableExists()
             rows = self.db.fetch_all("SELECT * FROM exchange_rates ORDER BY currency")
@@ -2371,6 +2503,10 @@ class AdminController:
             return {'success': False, 'error': str(e), 'status_code': 500}
 
     def refreshExchangeRates(self, request) -> dict:
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         try:
             self.ensureExchangeRatesTableExists()
 

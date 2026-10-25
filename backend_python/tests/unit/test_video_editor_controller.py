@@ -71,8 +71,9 @@ def ctx(query=None, body=None, user_id=3):
 
 
 def controller(admin_db_rows=None, config=CONFIG):
-    """admin_db_rows feeds self.db.fetch_one('SELECT role...') in call order."""
-    primary = FakeDb(one=admin_db_rows if admin_db_rows is not None else [{'role': 'admin'}])
+    """admin_db_rows feeds self.db.fetch_one('SELECT role...') in call order; by default the
+    caller is an admin for every call (all routes are admin-gated)."""
+    primary = FakeDb(one=admin_db_rows if admin_db_rows is not None else [{'role': 'admin'}] * 20)
     return VideoEditorController(primary, config), primary
 
 
@@ -96,15 +97,17 @@ def test_require_admin_no_user_row():
     assert c.getUsers(ctx())['error'] == 'Admin access required'
 
 
-def test_ungated_endpoints_proceed_without_user_id(monkeypatch):
-    # getUsageStats has NO requireAdmin call in PHP (VideoEditorController.php:112) — unlike
-    # getTransactions/getProviders/etc. Must still work with no authenticated user.
-    ve = FakeDb(one=[{'generations': 0, 'cost': '0', 'tokens_in': 0, 'tokens_out': 0, 'users': 0}],
-                all=[[], []])
-    patch_connect(monkeypatch, ve=ve)
+@pytest.mark.parametrize('method', ['getUsageStats', 'getUsageByUser', 'getUsageSummary', 'getPrices', 'savePrice'])
+def test_usage_and_price_routes_are_admin_gated(method):
+    # These five had no requireAdmin call until PHP 3f9eda2: usage figures and pricing were
+    # readable (and prices writable) by any authenticated user.
+    c, primary = controller(admin_db_rows=[{'role': 'user'}])
+    assert getattr(c, method)(ctx()) == {
+        'success': False, 'error': 'Admin access required', 'status_code': 403}
+    assert primary.calls == [('fetch_one', 'SELECT role FROM users WHERE id = :id LIMIT 1', {':id': 3})]
     c, _ = controller()
-    r = c.getUsageStats(ctx(user_id=None))
-    assert r['success'] is True
+    assert getattr(c, method)(ctx(user_id=None)) == {
+        'success': False, 'error': 'Authentication required', 'status_code': 401}
 
 
 # ─── secondary DB unreachable ───────────────────────────────────────────────
@@ -187,10 +190,10 @@ def test_cleanup_closes_connection_on_exception():
 
     c._close_connections = spy
 
-    def boom(request):
+    def boom():
         raise RuntimeError('boom')
 
-    c._require_admin = boom
+    c._ve = boom   # raises after the admin gate has passed
     with pytest.raises(RuntimeError):
         c.getTransactions(ctx())
     assert closed_calls == [1]   # _cleanup's finally runs even when the route raises

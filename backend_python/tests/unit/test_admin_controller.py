@@ -11,6 +11,15 @@ from app.controllers.auth_controller import password_hash, password_verify
 CONFIG = {'auth': {'jwt_secret': 'test-jwt-secret'}}
 
 
+# The caller of every request below: an admin, with an id no test uses for anything else, so the
+# require_admin guard's role lookup can be told apart from PackageResolver's (same SQL).
+CALLER_ID = 9001
+
+
+def is_guard_lookup(sql, params):
+    return sql == 'SELECT role FROM users WHERE id = :id LIMIT 1' and params == {':id': CALLER_ID}
+
+
 class FakeDb:
     """Records every non-presence statement so tests can assert SQL byte-for-byte."""
 
@@ -41,6 +50,10 @@ class FakeDb:
         return self.all_.pop(0) if self.all_ else []
 
     def fetch_one(self, sql, params=None):
+        if is_guard_lookup(sql, params):
+            # The require_admin guard's lookup is kept out of `calls` so the SQL assertions below
+            # describe the endpoint's own statements; test_admin_authorization.py covers the guard.
+            return {'role': 'admin'}
         self.calls.append((sql, params))
         return self.one.pop(0) if self.one else None
 
@@ -54,7 +67,7 @@ class FakeDb:
 
 
 def ctx(body=None, query=None):
-    return {'body': body if body is not None else {}, 'query': query or {}}
+    return {'body': body if body is not None else {}, 'query': query or {}, 'user_id': CALLER_ID}
 
 
 def c(db=None, config=None):
@@ -153,6 +166,8 @@ def test_get_user_account_computes_free_quota_percent():
 def test_get_user_account_catches_exception_as_500():
     class Boom(FakeDb):
         def fetch_one(self, sql, params=None):
+            if is_guard_lookup(sql, params):
+                return {'role': 'admin'}
             raise RuntimeError('db exploded')
     r = c(Boom()).getUserAccount(ctx(), 3)
     assert r == {'success': False, 'error': 'db exploded', 'status_code': 500}
@@ -613,6 +628,8 @@ def test_get_api_keys_drops_enabled_when_column_absent():
 def test_get_api_keys_survives_package_lookup_failure():
     class Boom(FakeDb):
         def fetch_one(self, sql, params=None):
+            if is_guard_lookup(sql, params):
+                return {'role': 'admin'}
             raise RuntimeError('packages table gone')
     db = Boom(all_=[[]])
     r = c(db).getApiKeys(ctx(), 3)

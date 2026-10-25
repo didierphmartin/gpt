@@ -113,7 +113,7 @@ def test_requires_admin_role():
     db = FakeDb(one=[{'role': 'user'}])
     r = c(db).getLLMProviders(ctx())
     assert r == {'success': False, 'error': 'Admin access required', 'status_code': 403}
-    assert db.calls == [('SELECT role FROM users WHERE id = :user_id', {':user_id': 3})]
+    assert db.calls == [('SELECT role FROM users WHERE id = :id LIMIT 1', {':id': 3})]
 
 
 def test_requires_admin_role_when_user_missing():

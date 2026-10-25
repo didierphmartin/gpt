@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import re
 
+from app.controllers.requires_admin import require_admin
 from app.db import Db
 from app.support.db_cleanup import close_db, close_secondary_connections as _cleanup
 from app.support.logger import error_log
@@ -80,17 +81,6 @@ class VideoEditorController:
         self.config = config
         self._cache: dict[str, Db | None] = {}
         self._ve_app_id_cache = _NOTSET
-
-    # ─── admin gate (mirrors PackageController._require_admin) ─────────────
-
-    def _require_admin(self, request) -> dict | None:
-        user_id = request.get('user_id')
-        if not user_id:
-            return {'success': False, 'error': 'Authentication required', 'status_code': 401}
-        user = self.db.fetch_one('SELECT role FROM users WHERE id = :id LIMIT 1', {':id': user_id})
-        if not user or (user.get('role') or '') != 'admin':
-            return {'success': False, 'error': 'Admin access required', 'status_code': 403}
-        return None
 
     # ─── secondary connections ──────────────────────────────────────────────
 
@@ -169,6 +159,10 @@ class VideoEditorController:
     @_cleanup
     def getUsageStats(self, request) -> dict:
         """GET /api/v1/admin/video-editor/usage/stats?days=30 — totals, by model, daily trend."""
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         ve = self._ve()
         if not ve:
             return {'success': False, 'available': False, 'message': 'Video-edit usage DB not reachable'}
@@ -196,6 +190,10 @@ class VideoEditorController:
     @_cleanup
     def getUsageByUser(self, request) -> dict:
         """GET /api/v1/admin/video-editor/usage/by-user?days=30 — per-user consumption + names."""
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         ve = self._ve()
         if not ve:
             return {'success': False, 'available': False, 'users': []}
@@ -220,7 +218,7 @@ class VideoEditorController:
     def getTransactions(self, request) -> dict:
         """GET /api/v1/admin/video-editor/transactions?user_id=&month=YYYY-MM&days=&all=1&page=&per_page=
         Row-level generation transactions, newest first, paged."""
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         ve = self._ve()
@@ -270,6 +268,10 @@ class VideoEditorController:
         """GET /api/v1/admin/video-editor/usage/summary — per-kind cost/generation totals
         bucketed today / this week (ISO, since Monday) / this month (calendar) / all time,
         plus a last-30-day by-model breakdown."""
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         ve = self._ve()
         if not ve:
             return {'success': False, 'available': False, 'message': 'Video-edit usage DB not reachable'}
@@ -331,6 +333,10 @@ class VideoEditorController:
     @_cleanup
     def getPrices(self, request) -> dict:
         """GET /api/v1/admin/video-editor/prices — the editable price table."""
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         ve = self._ve()
         if not ve:
             return {'success': False, 'prices': []}
@@ -344,6 +350,10 @@ class VideoEditorController:
     @_cleanup
     def savePrice(self, request) -> dict:
         """POST /api/v1/admin/video-editor/prices — upsert one model's rate."""
+        err = require_admin(self.db, request)
+        if err:
+            return err
+
         ve = self._ve()
         if not ve:
             return {'success': False, 'message': 'DB not reachable'}
@@ -365,7 +375,7 @@ class VideoEditorController:
     def getProviders(self, request) -> dict:
         """GET /api/v1/admin/video-editor/providers — provider credentials (key MASKED:
         only has_key is returned, never the secret)."""
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         ve = self._ve()
@@ -421,7 +431,7 @@ class VideoEditorController:
     def saveProvider(self, request) -> dict:
         """POST /api/v1/admin/video-editor/providers — upsert a provider. A blank/omitted
         api_key leaves the stored key untouched (so editing never wipes the secret)."""
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         ve = self._ve()
@@ -486,7 +496,7 @@ class VideoEditorController:
     @_cleanup
     def getModels(self, request) -> dict:
         """GET /api/v1/admin/video-editor/models — the model catalog (per provider)."""
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         ve = self._ve()
@@ -505,7 +515,7 @@ class VideoEditorController:
     @_cleanup
     def saveModel(self, request) -> dict:
         """POST /api/v1/admin/video-editor/models — upsert one model."""
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         ve = self._ve()
@@ -532,7 +542,7 @@ class VideoEditorController:
     def getUserOverride(self, request) -> dict:
         """GET /api/v1/admin/video-editor/user-override?user_id= — a user's capability
         override + which providers have a BYO key (keys are masked)."""
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         ve = self._ve()
@@ -562,7 +572,7 @@ class VideoEditorController:
         """POST /api/v1/admin/video-editor/user-override — upsert a user's override.
         Body: { user_id, capabilities: {...}|null, byo_keys: {provider: key} }.
         A blank BYO value keeps the existing key; "__clear__" removes it."""
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         ve = self._ve()
@@ -607,7 +617,7 @@ class VideoEditorController:
     @_cleanup
     def getPackages(self, request) -> dict:
         """GET /api/v1/admin/video-editor/packages — role → capabilities (video-edit DB)."""
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         ve = self._ve()
@@ -627,7 +637,7 @@ class VideoEditorController:
     def savePackage(self, request) -> dict:
         """POST /api/v1/admin/video-editor/packages — upsert one role's capabilities.
         Body: { role, capabilities: {...} }."""
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         ve = self._ve()
@@ -657,7 +667,7 @@ class VideoEditorController:
         """GET /api/v1/admin/video-editor/users?q= — login users + their video-edit role.
         User names come from the login DB; roles live in the video-edit DB (app_user_roles),
         so no cross-DB grant is needed."""
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         login = self._login()
@@ -698,7 +708,7 @@ class VideoEditorController:
         """POST /api/v1/admin/video-editor/users/role — set (or clear) a user's video-edit role.
         Body: { user_id, role }. An empty/"none" role revokes. Stored in the CENTRALIZED
         login DB (login.app_user_roles keyed by registered_apps.id)."""
-        err = self._require_admin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         login = self._login()

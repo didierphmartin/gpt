@@ -14,6 +14,7 @@ Conversion (any authenticated caller / selling app): POST /api/v1/affiliate/conv
 from __future__ import annotations
 
 from app.controllers.auth_controller import password_hash
+from app.controllers.requires_admin import require_admin
 from app.services.affiliate_support import AffiliateCommission as _AffiliateCommission
 from app.services.affiliate_support import AffiliateRepository as _AffiliateRepository
 from app.services.affiliate_support import AffiliateSupport as _AffiliateSupport
@@ -29,13 +30,13 @@ class AffiliateController:
     # ===== Admin: affiliates ==============================================
 
     def adminList(self, request) -> dict:
-        err = self._requireAdmin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         return {'success': True, 'affiliates': self.repo.listAffiliates()}
 
     def adminGet(self, request, id: int) -> dict:
-        err = self._requireAdmin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         affiliate = self.repo.findAffiliate(id)
@@ -48,7 +49,7 @@ class AffiliateController:
         }
 
     def adminCreate(self, request) -> dict:
-        err = self._requireAdmin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         body = request.get('body') or {}
@@ -109,7 +110,7 @@ class AffiliateController:
         }
 
     def adminDelete(self, request, id: int) -> dict:
-        err = self._requireAdmin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         affiliate = self.repo.findAffiliate(id)
@@ -133,7 +134,7 @@ class AffiliateController:
     # ===== Admin: accounts ================================================
 
     def adminAddAccount(self, request, id: int) -> dict:
-        err = self._requireAdmin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         if not self.repo.findAffiliate(id):
@@ -150,7 +151,7 @@ class AffiliateController:
         return {'success': True}
 
     def adminUpdateAccount(self, request, id: int, productId: int) -> dict:
-        err = self._requireAdmin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         if not self.repo.findAffiliate(id):
@@ -164,7 +165,7 @@ class AffiliateController:
         return {'success': True}
 
     def adminDeleteAccount(self, request, id: int, productId: int) -> dict:
-        err = self._requireAdmin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         self.repo.deleteAccount(id, productId)
@@ -173,7 +174,7 @@ class AffiliateController:
     # ===== Admin: transactions ============================================
 
     def adminTransactions(self, request, id: int) -> dict:
-        err = self._requireAdmin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         if not self.repo.findAffiliate(id):
@@ -181,7 +182,7 @@ class AffiliateController:
         return self._transactionsPayload(id)
 
     def adminMarkPaid(self, request, id: int, saleId: int) -> dict:
-        err = self._requireAdmin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         updated = self.repo.markSalePaid(id, saleId)
@@ -190,13 +191,13 @@ class AffiliateController:
     # ===== Admin: products ================================================
 
     def adminListProducts(self, request) -> dict:
-        err = self._requireAdmin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         return {'success': True, 'products': self.repo.listProducts()}
 
     def adminCreateProduct(self, request) -> dict:
-        err = self._requireAdmin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         p = self._validateProduct(request.get('body') or {})
@@ -206,7 +207,7 @@ class AffiliateController:
         return {'success': True, 'product_id': pid}
 
     def adminUpdateProduct(self, request, id: int) -> dict:
-        err = self._requireAdmin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         if not self.repo.findProduct(id):
@@ -218,7 +219,7 @@ class AffiliateController:
         return {'success': True}
 
     def adminDeleteProduct(self, request, id: int) -> dict:
-        err = self._requireAdmin(request)
+        err = require_admin(self.db, request)
         if err:
             return err
         self.repo.deleteProduct(id)
@@ -354,15 +355,6 @@ class AffiliateController:
             'currency': currency,
             'active': 0 if php_empty(body.get('active')) else 1,
         }
-
-    def _requireAdmin(self, request) -> dict | None:
-        userId = request.get('user_id')
-        if not userId:
-            return {'success': False, 'error': 'Authentication required', 'status_code': 401}
-        user = self.db.fetch_one('SELECT role FROM users WHERE id = :id LIMIT 1', {':id': userId})
-        if not user or (user.get('role') or '') != 'admin':
-            return {'success': False, 'error': 'Admin access required', 'status_code': 403}
-        return None
 
     def _requireAffiliate(self, request) -> dict:
         """Returns the affiliate row for the authenticated user, or an error dict."""
