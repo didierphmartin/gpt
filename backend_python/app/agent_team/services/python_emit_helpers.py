@@ -5,7 +5,7 @@ Task 2/3 of this port) ADKGenerator. All methods are pure static; no DB or
 state dependencies.
 
 Methods moved verbatim from LangGraphGenerator (PHP docblock, lines 15-19):
-  - jsonToPython()            PHP value -> Python literal (True/False/None)
+  - jsonToPython()            lives in compiler_php.json_to_python (PHP's array semantics)
   - mcpClientBlock()          MCP JSON-RPC client Python functions
   - skillDepsBlock()          SKILLS_DIR globals + _ensure_skill_deps Python function
   - documentConverterBlock()  _convert_doc_to_markdown() Python function
@@ -27,7 +27,6 @@ import re
 import unicodedata
 
 from app.support.phpcompat import php_coalesce as _coalesce, php_date, php_empty, php_intval, php_strval, php_trim
-from app.support.phpjson import dumps_pretty
 
 # PHP `preg_match('/\((\S+)\)$/', $p, $m)` (no `/u` modifier -> ASCII \S, not
 # PCRE_UCP -- re.ASCII mirrors that).
@@ -77,7 +76,7 @@ def _phpFloatToken(v: float) -> str:
     """PHP `json_encode((float) $v)` under `serialize_precision=-1` (the
     effective runtime precision at these call sites -- see
     `_jsonEncodeUnescapedUnicode` docstring below, and
-    `jsonToPython`/`dumps_pretty(float_formatter=...)` for the pretty-print
+    `compiler_php.json_encode`/`json_to_python` for the pretty-print
     path). Python's `json.dumps`/`repr(float)` formatting disagrees with
     PHP's `json_encode()` on two axes, both fixed here:
 
@@ -512,65 +511,6 @@ from app.agent_team.services.compiler_text.python_emit_helpers import (  # noqa:
 class PythonEmitHelpers:
     """Static-only class -- every method is `@staticmethod`, matching the PHP
     class (PHP 24-756: `class PythonEmitHelpers { public static function ... }`)."""
-
-    @staticmethod
-    def jsonToPython(value, forceObject: bool = False) -> str:
-        """PHP 35-47.
-
-        json_encode() produces 'true'/'false'/'null', not valid Python. This
-        converts to 'True'/'False'/'None'. Uses dumps_pretty() (4-space
-        indent, matching Python's own json.dumps(indent=4) output and PHP's
-        JSON_PRETTY_PRINT byte-for-byte -- see phpjson.dumps_pretty docstring)
-        with unescaped unicode AND unescaped slashes (JSON_UNESCAPED_UNICODE
-        | JSON_UNESCAPED_SLASHES), matching the PHP call's flags exactly,
-        and `float_formatter=_phpFloatToken` so every float leaf (e.g. a
-        node's `temperature` inside TOOL_CATALOG/MCP_SERVERS/NODE_TYPES/
-        EDGES/playbook-policy payloads) renders using PHP's
-        `json_encode()`/`serialize_precision=-1` rules -- NOT Python's
-        `json.dumps`/`repr()` rules, which disagree on whole-number floats
-        ("1.0" vs PHP's "1") and on the decimal/exponential threshold
-        (Python: 1e16 -> "1e+16"; PHP: "10000000000000000") -- see
-        `_phpFloatToken`'s docstring for the verified threshold rule.
-
-        `forceObject`: PHP `(object) $value` casts an array to stdClass so an
-        EMPTY PHP array encodes as `{}` instead of `[]`, and a list-shaped
-        array encodes as an object with string-numeric keys instead of a JSON
-        array. Python already distinguishes dict (object) from list (array)
-        at the value level, so the only case this needs to act on is a caller
-        passing a `list` (Python's PHP-array-shaped default for an empty/
-        list-shaped array) with forceObject=True: re-key it "0","1","2",...
-        exactly like PHP's (object) cast would, so it renders as an object.
-
-        Without `forceObject`, PHP's own `json_encode` has the SAME
-        array/object ambiguity in reverse: an EMPTY PHP array -- even one a
-        caller builds and fills with string keys when non-empty, e.g.
-        ADKGenerator.php:892's `$nodeNames[(string) $nid] = ...` -- still
-        encodes as JSON `[]` when it happens to end up empty, because PHP
-        cannot tell "empty associative array" from "empty list" without an
-        explicit `(object)` cast (only ADKGenerator.php:893's call site
-        omits `forceObject`, so an empty `$nodeNames` renders
-        `NODE_NAMES = []`, not `{}` -- verified against a live PHP
-        generate-adk response for a workflow with no agent nodes, 2026-09-07).
-        A caller here that built the equivalent Python value as a `dict`
-        (the natural port of "assoc array, string keys when non-empty") must
-        match that: an empty dict with forceObject=False renders `[]`, same
-        as an empty list would.
-
-        NOTE (ported verbatim, not fixed): PHP replaces the LITERAL substrings
-        ': true' / ': false' / ': null' -- so a bare boolean/null that is a
-        plain array ELEMENT (no preceding "key: ") is NOT rewritten and would
-        stay invalid Python. This is the PHP source's own behaviour; every
-        current call site passes an object/dict-shaped value.
-        """
-        if forceObject and isinstance(value, list):
-            value = {str(i): v for i, v in enumerate(value)}
-        elif not forceObject and isinstance(value, dict) and not value:
-            value = []
-        raw = dumps_pretty(value, unescaped=True, float_formatter=_phpFloatToken)
-        raw = raw.replace(': true', ': True')
-        raw = raw.replace(': false', ': False')
-        raw = raw.replace(': null', ': None')
-        return raw
 
     @staticmethod
     def pyStr(s: str) -> str:
