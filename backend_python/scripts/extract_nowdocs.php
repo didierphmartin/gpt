@@ -79,8 +79,12 @@ for ($i = 0; $i < $n; $i++) {
         continue;
     }
     if (!preg_match("/^<<<\\s*'/", $t[1])) {
-        fwrite(STDERR, "interpolating heredoc at line {$t[2]} is not supported\n");
-        exit(1);
+        // An interpolating heredoc is not a constant: the port builds it itself. Skip to its end.
+        fwrite(STDERR, "skipped interpolating heredoc at line {$t[2]}\n");
+        for ($j = $i + 1; $j < $n && !(is_array($tokens[$j]) && $tokens[$j][0] === T_END_HEREDOC); $j++) {
+        }
+        $i = $j;
+        continue;
     }
     $code = $t[1];
     for ($j = $i + 1; $j < $n; $j++) {
