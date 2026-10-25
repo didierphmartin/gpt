@@ -24,7 +24,7 @@ interface TurnResult {
  * progress labels.
  */
 export class OpenAIProvider extends LLMProvider {
-  private static readonly CLIENT_SIDE_TOOL_NAMES = ['run_skill_script', 'discover_skill', 'Task'];
+  private static readonly CLIENT_SIDE_TOOL_NAMES = ['run_skill_script', 'discover_skill', 'Task', 'route_to'];
   private static readonly MAX_RECURSION_DEPTH = 10;
 
   // Per-provider progress strings, captured verbatim from the live PHP wire.

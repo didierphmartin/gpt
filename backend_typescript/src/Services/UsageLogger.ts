@@ -40,6 +40,8 @@ export interface ChatUsageData {
   mcp_calls_count?: number;
   session_id?: string | null;
   conversation_id?: string | null;
+  /** Stored JSON-encoded (PHP: request_metadata, when an array). */
+  request_metadata?: Record<string, any> | null;
 }
 
 /** Insert one token-based usage row + roll up the balance ledger. Mirrors UsageLogger::logTransaction. */
@@ -79,7 +81,7 @@ export async function logChatTransaction(data: ChatUsageData): Promise<number | 
         ${promptTokens}, ${completionTokens}, ${totalTokens}, ${costUsd},
         ${data.response_time_ms ?? null}, ${status}, ${errorMessage},
         ${data.function_calls_count ?? 0}, ${null}, ${data.mcp_calls_count ?? 0}, ${null},
-        ${null},
+        ${data.request_metadata && typeof data.request_metadata === 'object' ? JSON.stringify(data.request_metadata) : null},
         ${0}, ${null}, ${null}, ${null}
       )`.execute(db);
 

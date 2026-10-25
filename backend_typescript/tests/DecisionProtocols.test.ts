@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DECISION_PROTOCOLS, decisionProtocolCatalog, envStem } from '../src/Services/DecisionProtocols';
-import { routerRowError, decisionProviderList, dispatchProviderList } from '../src/Services/ProviderKinds';
+import { routerRowError, decisionProviderList } from '../src/Services/ProviderKinds';
 
 const rows = [
   { provider_key: 'claude', api_format: 'anthropic', enabled: 1, sort_order: 0 },
@@ -44,13 +44,4 @@ test('decision_providers: allowed usable rows in admin order', () => {
   assert.deepEqual(list.map((d) => d.key), ['acme']);
   assert.equal(list[0].default_url, 'https://gw/acme');
   assert.equal(list[0].model, 'jev-latest');
-});
-
-test('/dispatch/providers says routing is not supported here', () => {
-  const out = dispatchProviderList(rows, () => true);
-  assert.equal(out.default, null);
-  assert.deepEqual(out.providers.map((p) => p.key), ['broken', 'acme', 'jev']);
-  assert.ok(out.providers.every((p) => p.routable === false && p.reason === 'not supported on this backend'));
-  assert.ok(out.providers.every((p) => p.supported === false), 'the form greys these out');
-  assert.equal(out.providers[1].key_env, 'ACME_API_KEY');
 });

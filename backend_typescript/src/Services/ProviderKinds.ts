@@ -82,29 +82,3 @@ export function decisionProviderList(rows: Row[], allowed: (key: string) => bool
   }
   return out;
 }
-
-/** GET /dispatch/providers: the rows, none routable (TS has no decision runtime). */
-export function dispatchProviderList(rows: Row[], allowed: (key: string) => boolean) {
-  const providers = decisionRows(rows).map((row) => {
-    const key = String(row.provider_key);
-    const protocol = protocolOf(row);
-    const stem = envStem(key);
-    return {
-      key,
-      label: String(row.display_name || key),
-      protocol: row.protocol ?? null,
-      model: String(row.model ?? ''),
-      default_url: protocol ? String(row.base_url ?? '').trim() || protocol.url : '',
-      allowed: allowed(key),
-      has_key: false,
-      source: 'none',
-      routable: false,
-      reason: 'not supported on this backend',
-      key_env: `${stem}_API_KEY`,
-      url_env: `${stem}_BASE_URL`,
-      legacy_env: protocol?.legacy_env ?? null,
-      supported: false,
-    };
-  });
-  return { default: null, providers };
-}

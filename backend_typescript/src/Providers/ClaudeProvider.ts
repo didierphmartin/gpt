@@ -23,7 +23,7 @@ interface TurnResult {
  * (makeStreamingRequest + handleToolUseRecursive).
  */
 export class ClaudeProvider extends LLMProvider {
-  private static readonly CLIENT_SIDE_TOOL_NAMES = ['run_skill_script', 'discover_skill', 'Task'];
+  private static readonly CLIENT_SIDE_TOOL_NAMES = ['run_skill_script', 'discover_skill', 'Task', 'route_to'];
   private static readonly MAX_RECURSION_DEPTH = 10;
 
   // Vendor default unless the admin (system_llm_settings) or the user (their own key + endpoint)

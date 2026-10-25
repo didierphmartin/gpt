@@ -15,7 +15,7 @@ interface GeminiFnCall {
  * function-call loop + the client-tool short-circuit (B3) are mirrored here.
  */
 export class GeminiProvider extends LLMProvider {
-  private static readonly CLIENT_SIDE_TOOL_NAMES = ['run_skill_script', 'discover_skill', 'Task'];
+  private static readonly CLIENT_SIDE_TOOL_NAMES = ['run_skill_script', 'discover_skill', 'Task', 'route_to'];
   private static readonly MAX_RECURSION_DEPTH = 10;
 
   private isClientSide(name: string, opts: ChatOptions): boolean {

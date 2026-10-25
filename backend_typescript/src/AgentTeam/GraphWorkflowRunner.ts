@@ -21,6 +21,12 @@ import { WorkflowOutputStorage } from './WorkflowOutputStorage';
 import { ExecutionTraceStore } from './ExecutionTraceStore';
 import { SessionSearchService } from './SessionSearchService';
 import { WorkflowGraphAnalyzer } from './WorkflowGraphAnalyzer';
+import { DispatchRouting, DispatchTarget } from './DispatchRouting';
+import { DecisionOutcome, DecisionRouter, DEFAULT_CONFIDENCE_FLOOR } from './DecisionRouter';
+import { DecisionKeyResolver, ResolvedDecisionKey } from '../Services/DecisionKeyResolver';
+import { DecisionRouters } from '../Services/DecisionRouters';
+import { DecisionUsage } from '../Services/DecisionUsage';
+import { config as envConfig } from '../config/env';
 
 /**
  * Faithful port of the start/agent/output execution paths of
@@ -122,6 +128,13 @@ function phpIntval(v: any): number {
   if (typeof v === 'number') return Math.trunc(v);
   const n = parseInt(String(v), 10);
   return Number.isNaN(n) ? 0 : n;
+}
+
+/** PHP is_numeric(): a number, or a numeric string (surrounding whitespace allowed). */
+function isPhpNumeric(v: any): boolean {
+  if (typeof v === 'number') return Number.isFinite(v);
+  if (typeof v !== 'string') return false;
+  return /^\s*[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?\s*$/.test(v);
 }
 
 function round2(ms: number): number {
@@ -469,6 +482,8 @@ export class GraphWorkflowRunner {
           input_tokens: inputTokens,
           output_tokens: outputTokens,
           cost_usd: await this.computeNodeCost(output.provider ?? null, inputTokens, outputTokens),
+          // A dispatcher's choice, so a viewer of the run log (the live overlay) can fade the other links.
+          route: output.route ?? null,
         });
 
         if ((output.type ?? '') === 'agent') {
@@ -486,6 +501,18 @@ export class GraphWorkflowRunner {
         if (node.node_type === 'output') {
           finalOutput = this.collectFinalOutput(currentNodeId);
           continue; // don't queue nodes after output
+        }
+
+        // Dispatcher routing: one chosen branch, siblings skipped.
+        if (this.applyRoute(currentNodeId, output, edges, queue, executedNodes)) {
+          continue;
+        }
+
+        // A decision-model dispatcher that did not route: the run stops on that branch point, and
+        // its failure is the run's result.
+        if (this.haltUnrouted(currentNodeId, output, edges, executedNodes)) {
+          finalOutput = output.output ?? null;
+          continue;
         }
 
         // Implicit parallelism: multiple outgoing edges to agent nodes.
@@ -650,6 +677,41 @@ export class GraphWorkflowRunner {
     return indexed;
   }
 
+  /**
+   * Dispatcher routing (see DispatchRouting): when a node's output carries a 'route', queue ONLY
+   * the chosen target and mark the unchosen branches — and everything reachable solely through
+   * them — as done, so a merge node downstream is not blocked waiting for a branch that never
+   * runs. Returns false (and touches nothing) for ordinary outputs.
+   */
+  private applyRoute(nodeId: number, output: any, edges: any[], queue: number[], executedNodes: number[]): boolean {
+    const route = output?.route ?? null;
+    if (route === null || typeof route !== 'object' || route.id === undefined || route.id === null) return false;
+    const chosen = phpIntval(route.id);
+    const unchosen = this.getNextNodeIds(nodeId, edges).filter((id) => id !== chosen);
+    for (const skipId of DispatchRouting.skipSet(unchosen, edges, nodeId)) {
+      if (!executedNodes.includes(skipId)) executedNodes.push(skipId);
+    }
+    if (!queue.includes(chosen) && !executedNodes.includes(chosen)) queue.push(chosen);
+    console.error(`[GraphWorkflowRunner] Dispatcher ${nodeId} routed to ${chosen} (${route.name}); skipped ${JSON.stringify(unchosen)}`);
+    return true;
+  }
+
+  /**
+   * Decision-model dispatcher that did not route ('halt_branches'): mark every branch -- and
+   * everything reachable solely through them -- as done without running it, so no child agent or
+   * model is called. Only a decision-provider mode sets the flag; an LLM dispatcher that does not
+   * route keeps its historical behaviour. Returns false (and touches nothing) otherwise.
+   */
+  private haltUnrouted(nodeId: number, output: any, edges: any[], executedNodes: number[]): boolean {
+    if (phpEmpty(output?.halt_branches)) return false;
+    const branches = this.getNextNodeIds(nodeId, edges);
+    for (const skipId of DispatchRouting.skipSet(branches, edges, nodeId)) {
+      if (!executedNodes.includes(skipId)) executedNodes.push(skipId);
+    }
+    console.error(`[GraphWorkflowRunner] Dispatcher ${nodeId} did not route (decision model only); skipped ${JSON.stringify(branches)}`);
+    return true;
+  }
+
   private getNextNodeIds(nodeId: number, edges: any[]): number[] {
     const nextIds: number[] = [];
     for (const edge of edges) {
@@ -785,6 +847,37 @@ export class GraphWorkflowRunner {
       throw new Error('Agent node has no agent_id and no inline configuration');
     }
 
+    // A blank node must not inherit the user's conversation persona (the chat fallback): give it a
+    // minimal role prompt instead.
+    if (String(agent.instructions ?? '').trim() === '') {
+      agent = {
+        ...agent,
+        instructions: DispatchRouting.defaultInstructions(agent.name, String(agent.description ?? ''), this.workflowName),
+      };
+    }
+    // The node a dispatcher routed to is told so (and not to re-route).
+    const routedBy = DispatchRouting.routedBy(phpIntval(node.id), edges, this.nodeOutputs);
+    if (routedBy !== null) {
+      agent = {
+        ...agent,
+        instructions:
+          rtrim(String(agent.instructions ?? '')) + '\n\n' + DispatchRouting.routedPrompt(agent.name, routedBy.from, routedBy.notes),
+      };
+    }
+
+    // Dispatcher agents: outgoing edges are a MENU of branches the model picks from by name, never
+    // a parallel fan-out (batch twin of the voice runner's handoff_to). Append the routing rules to
+    // the instructions; the route_to tool is declared with the extra tools.
+    let dispatchTargets: DispatchTarget[] = [];
+    if (agent.agentType === 'dispatcher') {
+      dispatchTargets = DispatchRouting.targets(phpIntval(node.id), edges, this.graphNodes);
+      if (dispatchTargets.length > 0) {
+        agent = { ...agent, instructions: rtrim(String(agent.instructions ?? '')) + '\n\n' + DispatchRouting.promptBlock(dispatchTargets) };
+      } else {
+        console.error(`[GraphWorkflowRunner] Dispatcher node ${node.id} has no downstream agent — running as a plain agent.`);
+      }
+    }
+
     const mergeStrategy = config.merge_strategy ?? 'labeled';
     let context = this.buildContextForNode(node.id, edges, executedNodes, mergeStrategy);
 
@@ -834,8 +927,64 @@ export class GraphWorkflowRunner {
       runContext.tool_choice = { type: 'function', function: { name: 'run_skill_script' } };
     }
 
+    // Dispatcher routing mode (settings.routing_mode) -- always exactly one:
+    //   'llm'  -> the model only; no decision provider is consulted.
+    //   a key  -> that decision provider only (a saved 'jev' is the jev row's key); the model is
+    //             never called. When it cannot decide (unclear, below the minimum confidence,
+    //             unknown provider, not in the plan, no key, error, timeout) the run stops with
+    //             "did not route" and none of the branches run.
+    //   unset  -> (absent on dispatchers saved before the setting existed) resolved here: the
+    //             first decision provider the user's plan allows, else the model. There is no
+    //             hybrid state and no fallback to another provider or to the model.
+    // It decides ONLY when it is sure: 'unclear' and 'low_confidence' are not routes, and with a
+    // decision model they stop the run (or go to the unclear branch) rather than route on a guess.
+    if (dispatchTargets.length > 0) {
+      const decided = await this.routeWithDecisionModel(node, agent, agentId, userId, task, dispatchTargets);
+      if (decided !== null) return decided;
+    }
+
+    // Dispatcher: declare route_to and force the call so the model cannot answer in prose and skip
+    // the routing. Grok/DeepSeek ignore the specific-function form, so they get bare 'required'.
+    if (dispatchTargets.length > 0) {
+      runContext.extra_tools.push(DispatchRouting.toolDefinition(dispatchTargets));
+      runContext.tool_choice = ['grok', 'deepseek'].includes(String(agent.provider ?? '').toLowerCase())
+        ? 'required'
+        : { type: 'function', function: { name: DispatchRouting.TOOL_NAME } };
+    }
+
     this.nodeLog(node, 'info', 'llm', NodeLogFormat.callingProvider(agent.provider, agent.model));
     const result = await this.runAgentWithClientToolBridge(agent, task, [], userId, runContext, node);
+
+    // Dispatcher: the provider short-circuited on route_to (a client-side tool name); resolve the
+    // choice here. The chosen agent receives the dispatcher's ORIGINAL input plus the notes — not
+    // the dispatcher's prose — the batch analog of transferring the caller.
+    if (dispatchTargets.length > 0) {
+      if (result.success === false) {
+        // The LLM call itself failed — say so, not "did not route".
+        const err = String(result.error ?? 'agent execution failed');
+        this.nodeLog(node, 'error', 'llm', err);
+        return {
+          type: 'agent', agent_id: agentId, agent_name: agent.name, input: task,
+          output: `Error: ${err}`, success: false, usage: result.usage ?? null, provider: agent.provider,
+        };
+      }
+      const route = DispatchRouting.resolve(result.pending_tool_calls ?? [], dispatchTargets);
+      if (route === null) {
+        const names = dispatchTargets.map((t) => t.name).join(', ');
+        this.nodeLog(node, 'error', 'routing', `dispatcher did not call route_to with one of: ${names}`);
+        return {
+          type: 'agent', agent_id: agentId, agent_name: agent.name, input: task,
+          output: `Error: dispatcher "${agent.name}" did not route the request. Expected a route_to call with target in [${names}].`,
+          success: false, usage: result.usage ?? null, provider: agent.provider,
+        };
+      }
+      this.nodeLog(node, 'info', 'routing', `routed to ${route.name}` + (route.notes !== '' ? ` — ${route.notes}` : ''));
+      return {
+        type: 'agent', agent_id: agentId, agent_name: agent.name, input: task,
+        output: task + (route.notes !== '' ? `\n\n## Dispatcher notes\n${route.notes}` : ''),
+        route, success: true, usage: result.usage ?? null, provider: agent.provider,
+      };
+    }
 
     const rawOutput = result.text ?? result.output ?? '';
     this.nodeLog(node, 'info', 'analysis', 'generating final output');
@@ -862,6 +1011,110 @@ export class GraphWorkflowRunner {
       usage: result.usage ?? null,
       provider: agent.provider,
     };
+  }
+
+  /**
+   * The decision-model half of executeAgentNode (PHP keeps it inline there): null when the
+   * dispatcher routes with the model ('llm', or unset with no decision provider in the plan), else
+   * the node's result -- routed, sent to the unclear branch, or stopped ('halt_branches').
+   */
+  private async routeWithDecisionModel(
+    node: any,
+    agent: Agent,
+    agentId: any,
+    userId: number,
+    task: string,
+    dispatchTargets: DispatchTarget[]
+  ): Promise<Record<string, any> | null> {
+    const routingSettings: Record<string, any> =
+      agent.settings !== null && typeof agent.settings === 'object' && !Array.isArray(agent.settings) ? agent.settings : {};
+    const saved = String(routingSettings.routing_mode ?? '').trim();
+    // 'llm' = the model; any other value names a decision provider (a saved 'jev' is the jev
+    // row's key); unset = the first decision provider the plan allows, else the model.
+    const routingMode = saved !== '' ? saved : (await DecisionKeyResolver.defaultProvider(userId)) ?? 'llm';
+    if (routingMode === 'llm') return null;
+
+    // Same clamp as DispatchController (browser path): [0,1], else the default.
+    const floorSetting = routingSettings.min_confidence ?? routingSettings.jev_min_confidence ?? null;
+    const floor = isPhpNumeric(floorSetting)
+      ? Math.max(0, Math.min(1, Number(String(floorSetting).trim())))
+      : DEFAULT_CONFIDENCE_FLOOR;
+    // The key the plan allows (user row, package key, global row); none = "did not route", with
+    // the reason saying why.
+    const resolved = await DecisionKeyResolver.resolve(userId, routingMode, this.decisionSecret());
+    const router = resolved.key !== '' ? this.makeDecisionRouter(resolved, floor) : null;
+    const out: DecisionOutcome =
+      router !== null
+        ? await router.route(task, dispatchTargets,
+            DispatchRouting.defaultInstructions(agent.name, String(agent.description ?? ''), this.workflowName))
+        : DecisionRouters.unavailable(resolved, routingMode);
+    // The only place a decision call is written as usage (answered calls only).
+    await this.recordDecisionUsage(userId, routingMode, String(resolved.row?.model ?? ''), out);
+    const conf = out.confidence !== null ? out.confidence.toFixed(2) : '?';
+    const usage = {
+      input_tokens: Math.trunc(Number(out.usage?.input_tokens ?? 0)) || 0,
+      output_tokens: Math.trunc(Number(out.usage?.output_tokens ?? 0)) || 0,
+    };
+    if (out.outcome === 'routed' && out.target) {
+      const target = out.target;
+      // Same shape the LLM path returns, minus notes: a decision model writes no prose, so the
+      // child gets the task alone.
+      this.nodeLog(node, 'info', 'routing', `${routingMode} routed to ${target.name} (confidence ${conf}, ${out.ms}ms, no LLM turn)`);
+      return {
+        type: 'agent', agent_id: agentId, agent_name: agent.name, input: task,
+        output: task,
+        route: { id: target.id, name: target.name, notes: '' },
+        success: true,
+        usage,
+        provider: routingMode,
+      };
+    }
+    const why = `${out.outcome}: ${out.reason}`;
+    // The log lines add the confidence, which a low-confidence reason already states.
+    const whyLog = why + (out.outcome === 'low_confidence' ? '' : `, confidence ${conf}`);
+    // Not classified (unclear / low confidence) goes to the branch the form names for it, when
+    // there is one: a normal route, not a fallback model.
+    const unclear = DispatchRouting.unclearBranch(routingSettings, dispatchTargets, String(out.outcome));
+    if (unclear !== null) {
+      this.nodeLog(node, 'info', 'routing', `${routingMode} did not classify (${whyLog}) — sent to the unclear branch ${unclear.name}`);
+      return {
+        type: 'agent', agent_id: agentId, agent_name: agent.name, input: task,
+        output: task,
+        route: { id: unclear.id, name: unclear.name, notes: '' },
+        success: true,
+        usage,
+        provider: routingMode,
+      };
+    }
+    // No model fallback, no other provider: the run stops here and says why. A request no branch
+    // fits is a normal ending; anything else is an error.
+    const notClassified = DispatchRouting.NOT_CLASSIFIED.includes(out.outcome);
+    this.nodeLog(node, notClassified ? 'info' : 'error', 'routing',
+      `${routingMode} did not route (${whyLog}) — decision-model dispatcher, no model fallback`);
+    return {
+      type: 'agent', agent_id: agentId, agent_name: agent.name, input: task,
+      output: `${notClassified ? 'Not classified' : 'Error'}: dispatcher "${agent.name}" did not route the request (${routingMode}: ${why}).`,
+      success: notClassified,
+      usage,
+      provider: routingMode,
+      // The run loop reads this: no branch may run (see haltUnrouted).
+      halt_branches: true,
+    };
+  }
+
+  /** The user-key encryption secret (PHP ApiKeyCrypto::secret: auth.jwt_secret). */
+  private decisionSecret(): string {
+    return String(this.config?.auth?.jwt_secret ?? envConfig.auth.jwtSecret);
+  }
+
+  /** The decision router for one dispatcher decision. A seam so tests can replace the HTTP transport. */
+  protected makeDecisionRouter(resolved: ResolvedDecisionKey, floor: number): DecisionRouter | null {
+    return DecisionRouters.make(resolved, floor);
+  }
+
+  /** Test seam: where an answered decision call is written as usage. */
+  protected async recordDecisionUsage(userId: number, providerKey: string, model: string, out: DecisionOutcome): Promise<void> {
+    await DecisionUsage.record(null, userId, providerKey, model, out);
   }
 
   /**
@@ -894,6 +1147,10 @@ export class GraphWorkflowRunner {
       const pending = result.pending_tool_calls ?? [];
       if (!pending.length || typeof pending[0] !== 'object') {
         // pending_client_tool_call set but no usable tool_calls payload — abort round-trip.
+        return result;
+      }
+      // route_to is resolved by executeAgentNode (DispatchRouting), not the browser.
+      if ((pending[0]?.name ?? '') === DispatchRouting.TOOL_NAME) {
         return result;
       }
       if (round === MAX_ROUNDS) {

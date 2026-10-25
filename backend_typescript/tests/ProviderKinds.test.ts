@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chatProviderRows, dispatchProviderList, isRouterRow, routerRowError } from '../src/Services/ProviderKinds';
+import { chatProviderRows, isRouterRow, routerRowError } from '../src/Services/ProviderKinds';
+import { DecisionProviders } from '../src/Services/DecisionProviders';
 
 const rows = [
   { provider_key: 'claude', api_format: 'anthropic' },
@@ -26,7 +27,5 @@ test('an Object.prototype name is not a registered protocol', () => {
   assert.match(routerRowError({ ...base, protocol: 'constructor' })!, /needs a protocol: one of typesafe/);
   assert.match(routerRowError({ ...base, protocol: 'toString' })!, /needs a protocol/);
   const row = { provider_key: 'acme', api_format: 'router', protocol: 'constructor', enabled: 1, base_url: 'https://gw/acme' };
-  const [p] = dispatchProviderList([row], () => true).providers;
-  assert.equal(p.legacy_env, null, 'no protocol entry for constructor');
-  assert.equal(p.default_url, '');
+  assert.equal(DecisionProviders.protocolOf(row), null, 'no protocol entry for constructor');
 });

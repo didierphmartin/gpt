@@ -107,6 +107,11 @@ router.post('/api/v1/fetch-url', handle((ctx) => urlFetch.fetch(ctx)));
 // Providers (protected) — the provider picker's data source
 router.get('/api/v1/providers', handle((ctx) => providers.list(ctx)));
 router.get('/api/v1/dispatch/providers', handle((ctx) => dispatch.providers(ctx)));
+router.post('/api/v1/dispatch/route', handle((ctx) => dispatch.route(ctx)));
+// Aliases kept for pages loaded before the rename (registered before /{key}/status, as in PHP).
+router.get('/api/v1/dispatch/jev/status', handle((ctx) => dispatch.jevStatus(ctx)));
+router.post('/api/v1/dispatch/jev', handle((ctx) => dispatch.jevRoute(ctx)));
+router.get('/api/v1/dispatch/:key/status', handle((ctx) => dispatch.status(ctx)));
 router.get('/api/v1/tools', handle((ctx) => tools.list(ctx)));
 // Direct tool execution (workflow realtime runner) + intent classification (voice realtime).
 router.post('/api/v1/tools/execute', handle((ctx) => tools.execute(ctx)));
