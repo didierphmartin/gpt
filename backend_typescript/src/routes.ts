@@ -52,6 +52,7 @@ import { RobotController } from './Controllers/RobotController';
 import { LoginAdminController } from './Controllers/LoginAdminController';
 import { SetupController } from './Controllers/SetupController';
 import { VideoEditorController } from './Controllers/VideoEditorController';
+import { RootController } from './Controllers/RootController';
 import { roleKeyPath, withRoleParam } from './Support/RoleKeyRoute';
 
 export const router = Router();
@@ -84,6 +85,7 @@ const roles = new RolesController();
 const robot = new RobotController();
 const loginAdmin = new LoginAdminController();
 const videoEditor = new VideoEditorController();
+const root = new RootController();
 const setup = new SetupController();
 const workflows = new WorkflowController();
 const schedules = new ScheduledWorkflowController();
@@ -110,9 +112,9 @@ const agentMcp = new AgentMCPController();
 // matches ChatAttachmentController.MAX_BYTES; the controller returns the friendly 413 on its own check.
 const uploadMw = multer({ storage: multer.memoryStorage(), limits: { fileSize: 60 * 1024 * 1024 } });
 
-// Health (public). /api/v1 is the same health payload at the API root (PHP RootController alias).
-router.get('/', handle(() => ({ success: true, status: 'ok', service: 'gpt-backend-typescript' })));
-router.get('/api/v1', handle(() => ({ success: true, status: 'ok', service: 'gpt-backend-typescript' })));
+// Health (public). /api/v1 is the same payload at the API root (PHP RootController::index).
+router.get('/', handle(() => root.index()));
+router.get('/api/v1', handle(() => root.index()));
 
 // Debug (protected; PHP marks it TEMPORARY): what the auth middleware established.
 router.get('/api/v1/debug/auth', handle((ctx) => auth.debugAuth(ctx)));

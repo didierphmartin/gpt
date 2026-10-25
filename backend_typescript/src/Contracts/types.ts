@@ -37,6 +37,8 @@ export interface ChatOptions {
   client_tools?: ClientTool[];
   client_tool_names?: string[];
   user_id?: number | null;
+  /** The user's memory block (UserMemoryRepository.buildMemoryBlock), appended after the persona. */
+  memory_context?: string;
   /** SKILL.md body for a chip-dragged skill — appended to the system prompt (mirrors PHP). */
   skill_content?: string;
   /** Single active skill (chip override) — its run_skill_script tool is forced via tool_choice. */

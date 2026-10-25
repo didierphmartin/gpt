@@ -14,6 +14,9 @@ import { FunctionExecutor } from '../Contracts/FunctionExecutor';
 import { LLMProvider } from '../Contracts/LLMProvider';
 import { ChatOptions, ChatResult, SkillMetadata, AvailableSkill } from '../Contracts/types';
 import { AttachmentDispatcher } from '../Services/AttachmentDispatcher';
+import { buildMemoryBlock } from '../AgentTeam/UserMemoryRepository';
+import { MemoryAutoUpdater } from '../AgentTeam/MemoryAutoUpdater';
+import { phpBool, uniqid } from '../Playbook/php';
 
 /**
  * Event-renaming SSE adapter for the /verify and /compare panes. The TS providers emit generic
@@ -284,12 +287,12 @@ export class ChatController {
     const systemPrompt = opts.system_prompt ?? '';
     const chars = systemPrompt.length + messages.reduce((n, m) => n + m.content.length, 0)
       + JSON.stringify(serverTools).length + JSON.stringify(opts.client_tools ?? []).length
-      + (opts.skill_content ?? '').length;
+      + (opts.memory_context ?? '').length + (opts.skill_content ?? '').length;
     return {
       provider, model, max_tokens: limits.max_tokens, temperature: limits.temperature,
       system_prompt: systemPrompt,
-      memory_included: false, // the TS chat path injects no memory
-      memory_context: '',
+      memory_included: !!opts.memory_context,
+      memory_context: opts.memory_context ?? '',
       skill_included: !!(opts.skill_content && opts.skill_content.length),
       skill_content: opts.skill_content ?? '',
       messages, tools, estimated_tokens: Math.ceil(chars / 4),
@@ -349,7 +352,7 @@ export class ChatController {
     return impl;
   }
 
-  private async handleStreamingChat(req: Request, res: Response, provider: string | null, opts: ChatOptions): Promise<void> {
+  private async handleStreamingChat(req: Request, res: Response, provider: string | null, opts: ChatOptions): Promise<ChatResult | null> {
     const sse = new SSEStream(res);
     sse.start();
     res.on('close', () => {
@@ -375,7 +378,7 @@ export class ChatController {
 
       const providerResp: Record<string, any> = {
         text: result.text, usage: result.usage, model: result.model, provider: result.provider,
-        functions_called: [], mcp_tools_called: [], mcp_calls_count: 0,
+        functions_called: result.functions_called ?? [], mcp_tools_called: result.mcp_tools_called ?? [], mcp_calls_count: result.mcp_calls_count ?? 0,
       };
       const controllerResp: Record<string, any> = { success: true, text: result.text, usage: result.usage, provider: result.provider };
       // Conversations' View Context asks for what was actually sent (return_context).
@@ -418,8 +421,9 @@ export class ChatController {
 
       sse.send('complete', { status: 'done' });
       sse.end();
+      return result;
     } catch (e: any) {
-      if (e?.message === 'CLIENT_ABORTED') return;
+      if (e?.message === 'CLIENT_ABORTED') return null;
       const raw = e?.message ?? 'Unknown error';
       const code = this.providerErrorStatus(raw) ?? 500;
       try {
@@ -429,10 +433,11 @@ export class ChatController {
         /* connection gone */
       }
       sse.end();
+      return null;
     }
   }
 
-  private async handleRegularChat(res: Response, provider: string | null, opts: ChatOptions, returnContext = false): Promise<void> {
+  private async handleRegularChat(res: Response, provider: string | null, opts: ChatOptions, returnContext = false): Promise<ChatResult | null> {
     const started = Date.now();
     try {
       const impl = await this.resolveProvider(provider, opts.user_id ?? null, { max_tokens: opts.max_tokens, temperature: opts.temperature, tools: opts.tools });
@@ -471,12 +476,14 @@ export class ChatController {
         status: 'success',
         function_calls_count: result.usage?.function_calls ?? 0,
       });
+      return result;
     } catch (e: any) {
       // Percolate the upstream provider's status (e.g. 429 rate-limit) instead of masking as 500,
       // and humanize the message. A non-provider error (real bug) has no extractable code → 500.
       const raw = e?.message ?? 'Unknown error';
       const status = this.providerErrorStatus(raw) ?? 500;
       res.status(status).json({ success: false, error: this.humanizeProviderError(raw) });
+      return null;
     }
   }
 
@@ -805,10 +812,39 @@ export class ChatController {
       return;
     }
 
-    if (body.streaming === true) {
-      await this.handleStreamingChat(req, res, provider, opts);
-    } else {
-      await this.handleRegularChat(res, provider, opts, body.return_context === true);
+    // Optional 'memory' flag (default true): the user's memory block is appended to the system
+    // prompt, and the post-response auto-updater runs. API callers (e.g. AI-Dialog) and workflow
+    // nodes send memory:false.
+    const includeMemory = Object.prototype.hasOwnProperty.call(body, 'memory') ? phpBool(body.memory) : true;
+    const userId = typeof ctx.user_id === 'number' ? ctx.user_id : null;
+    if (includeMemory && userId !== null) {
+      const block = await buildMemoryBlock(userId);
+      if (block !== '') opts.memory_context = block;
+    }
+
+    const result = body.streaming === true
+      ? await this.handleStreamingChat(req, res, provider, opts)
+      : await this.handleRegularChat(res, provider, opts, body.return_context === true);
+
+    // Post-response tail: failures never affect the user (the response is already sent).
+    if (includeMemory && userId !== null && result && result.text) {
+      await this.runMemoryAutoUpdater(userId, opts.message ?? '', result.text);
+    }
+  }
+
+  /** PHP's post-response MemoryAutoUpdater run, with the resolved Claude config (or ANTHROPIC_API_KEY). */
+  private async runMemoryAutoUpdater(userId: number, message: string, text: string): Promise<void> {
+    try {
+      const claude = await LLMProviderResolver.getProviderConfig('claude').catch(() => null);
+      const apiKey = claude?.api_key || process.env.ANTHROPIC_API_KEY || '';
+      if (apiKey === '') {
+        console.error('[ChatController] MemoryAutoUpdater skipped: no Claude API key in merged config or ANTHROPIC_API_KEY env');
+        return;
+      }
+      const sessionId = 'chat_' + uniqid() + '.' + String(Math.floor(Math.random() * 1e8)).padStart(8, '0');
+      await new MemoryAutoUpdater(apiKey, claude?.base_url ?? '', claude?.chat_endpoint ?? '').run(userId, sessionId, message, text);
+    } catch (e: any) {
+      console.error('[ChatController] MemoryAutoUpdater failed: ' + (e?.message ?? e));
     }
   }
 

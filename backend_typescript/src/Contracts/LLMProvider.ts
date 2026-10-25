@@ -31,7 +31,11 @@ export abstract class LLMProvider {
     const persona =
       (opts.system_prompt && opts.system_prompt.trim() !== '' ? opts.system_prompt : this.config.system_prompt) ?? '';
     let systemPrompt = datePrefix + '\n\n' + persona.replace(/^\s+/, '');
-    // Active Skill (chip-dragged SKILL.md body) — appended after the persona, mirroring PHP.
+    // The user's memory block (options.memory_context), then the Active Skill (chip-dragged
+    // SKILL.md body) — appended after the persona, mirroring PHP.
+    if (opts.memory_context) {
+      systemPrompt = systemPrompt.replace(/\s+$/, '') + '\n\n' + opts.memory_context;
+    }
     if (opts.skill_content && opts.skill_content !== '') {
       systemPrompt = systemPrompt.replace(/\s+$/, '') + '\n\n' + opts.skill_content;
     }

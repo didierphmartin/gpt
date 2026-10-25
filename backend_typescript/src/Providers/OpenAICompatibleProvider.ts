@@ -195,6 +195,7 @@ export abstract class OpenAICompatibleProvider extends LLMProvider {
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const persona = opts.system_prompt && opts.system_prompt.trim() !== '' ? opts.system_prompt : this.defaultSystemPrompt();
     let systemPrompt = `Current date: ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} (${days[d.getDay()]}).` + '\n\n' + persona.replace(/^\s+/, '');
+    if (opts.memory_context) systemPrompt = systemPrompt.replace(/\s+$/, '') + '\n\n' + opts.memory_context;
     if (opts.skill_content) systemPrompt = systemPrompt.replace(/\s+$/, '') + '\n\n' + opts.skill_content;
     return systemPrompt;
   }
