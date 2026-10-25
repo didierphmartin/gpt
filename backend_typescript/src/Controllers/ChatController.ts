@@ -441,6 +441,7 @@ export class ChatController {
       if (result.pending_client_tool_call) {
         body.pending_client_tool_call = true;
         body.pending_tool_calls = result.pending_tool_calls;
+        if (result.assistant_reasoning) body.assistant_reasoning = result.assistant_reasoning;
       }
       // Workflow nodes ask for the context they sent (Context tab). Mirrors
       // ChatController::buildLlmContextSnapshot.

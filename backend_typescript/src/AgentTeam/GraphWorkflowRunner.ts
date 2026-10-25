@@ -1373,7 +1373,14 @@ export class GraphWorkflowRunner {
         assistantToolCall.thought_signature = call.thought_signature;
       }
       history.push({ role: 'user', content: currentTask });
-      history.push({ role: 'assistant', content: assistantText, tool_calls: [assistantToolCall] });
+      // DeepSeek thinking mode needs the turn's reasoning_content replayed (no-op for others).
+      const assistantReasoning = String(result.pending_assistant_reasoning ?? '');
+      history.push({
+        role: 'assistant',
+        ...(assistantReasoning !== '' ? { reasoning_content: assistantReasoning } : {}),
+        content: assistantText,
+        tool_calls: [assistantToolCall],
+      });
       history.push({
         role: 'tool',
         tool_call_id: toolCallId,

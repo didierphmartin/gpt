@@ -55,6 +55,8 @@ export interface ChatOptions {
   image_attachments?: NativeAttachment[];
   /** PDF attachments for native dispatch on capable providers (from AttachmentDispatcher). */
   pdf_attachments?: NativeAttachment[];
+  /** Per-agent thinking switch (agent settings.thinking): 'on' | 'off'; absent = provider default. */
+  thinking?: 'on' | 'off';
 }
 
 export interface ChatUsage {
@@ -79,6 +81,12 @@ export interface ChatResult {
    * is visible instead of looking like a clean completion.
    */
   finish_reason?: string | null;
+  /** Server tools the provider ran this turn (PHP functions_called / mcp_tools_called / mcp_calls_count). */
+  functions_called?: string[];
+  mcp_tools_called?: string[];
+  mcp_calls_count?: number;
+  /** DeepSeek thinking mode: the pending tool-call turn's reasoning, replayed on the continuation. */
+  assistant_reasoning?: string;
 }
 
 /** Runtime config for one provider, resolved from system_llm_settings. */
@@ -92,4 +100,8 @@ export interface ProviderConfig {
   max_tokens: number;
   temperature: number;
   system_prompt: string | null;
+  /** system_llm_settings.display_name / streaming / supports_tools (null/absent = the provider's default). */
+  display_name?: string | null;
+  streaming?: boolean | null;
+  supports_tools?: boolean | null;
 }
