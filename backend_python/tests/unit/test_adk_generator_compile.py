@@ -1,38 +1,37 @@
-"""Port of backend/tests/Unit/AdkGeneratorCompileTest.php (Phase 6, Task 3).
-
-py_compile gate + golden fixture. The golden fixture
-(tests/fixtures/adk_diamond.golden.py) was captured from a LIVE PHP
-`ADKGenerator::emitAdk()` run against the diamond fixture (frozen clock:
-2026-09-07 19:11:18 Europe/Berlin) -- the PHP oracle's own committed golden
-predates `PythonEmitHelpers::workflowDocBlock()` and is permanently stale
-(its own `testDiamondMatchesGolden` currently FAILS against live PHP; see
-the Task 3 report), so per the stale-oracle rule this port pins live PHP
-behaviour with a freshly-captured golden instead of the stale one.
-"""
+"""Port of backend/tests/Unit/AdkGeneratorCompileTest.php: emitAdk() always produces syntactically valid
+Python (py_compile gate, skipped without python3 on PATH as in PHP), and the diamond fixture matches the
+committed golden byte for byte (tests/fixtures/adk_diamond.golden.py, a copy of PHP's
+backend/tests/fixtures/adk_diamond.golden.py; the analysis pins generated_at as PHP's does)."""
 from __future__ import annotations
 
 import pathlib
+import re
+import shutil
 import subprocess
-import sys
 import tempfile
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 import pytest
 
 from app.agent_team.services.adk_generator import ADKGenerator
 from app.agent_team.services.workflow_graph_analyzer import WorkflowGraphAnalyzer
-from app.support import phpcompat
 
 FIXTURES_DIR = pathlib.Path(__file__).resolve().parent.parent / 'fixtures'
 
 
+def _python3() -> str:
+    py = shutil.which('python3')
+    if py is None:
+        pytest.skip('python3 not found on PATH -- skipping py_compile gate')
+    return py
+
+
 def _py_compile(code: str, suffix: str = 'test') -> tuple[int, str]:
+    py = _python3()
     with tempfile.NamedTemporaryFile(mode='w', suffix=f'_{suffix}.py', delete=False) as f:
         f.write(code)
         path = f.name
     try:
-        proc = subprocess.run([sys.executable, '-m', 'py_compile', path], capture_output=True, text=True)
+        proc = subprocess.run([py, '-m', 'py_compile', path], capture_output=True, text=True)
         return proc.returncode, (proc.stdout + proc.stderr)
     finally:
         pathlib.Path(path).unlink(missing_ok=True)
@@ -54,6 +53,7 @@ def _diamond_analyzed() -> dict:
     base = WorkflowGraphAnalyzer.analyzeGraph(graph)
     base.update({
         'workflow': {'id': 1, 'name': 'diamond'},
+        'generated_at': '2026-01-01 00:00:00 UTC',
         'usedCatalog': {}, 'usedServers': {},
         'startPrompt': 'GO', 'startDocuments': [],
         'agents': {
@@ -121,23 +121,14 @@ def test_diamond_fixture_compiles():
     assert rc == 0, f"Diamond fixture failed py_compile:\n{out}"
 
 
-def test_diamond_matches_golden(monkeypatch):
+def test_diamond_matches_golden():
     golden_path = FIXTURES_DIR / 'adk_diamond.golden.py'
     if not golden_path.exists():
         pytest.skip(f"Golden fixture not found at {golden_path}")
-
-    # Freeze the clock to the moment the golden was captured (Europe/Berlin,
-    # matching the PHP oracle's date.timezone) so the "Generated:" line
-    # reproduces byte-for-byte.
-    frozen = datetime(2026, 9, 7, 19, 11, 18, tzinfo=ZoneInfo('Europe/Berlin'))
-    monkeypatch.setattr(phpcompat, '_now', lambda tz: frozen)
-
     code = ADKGenerator.emitAdk(_diamond_analyzed())
-    golden = golden_path.read_text()
-    assert code == golden, (
-        'emitAdk() output diverged from adk_diamond.golden.py -- regenerate '
-        'the golden if the emitter change was intentional.'
-    )
+    assert code == golden_path.read_text(encoding='utf-8'), (
+        'emitAdk() output diverged from adk_diamond.golden.py -- regenerate the golden (from PHP) '
+        'if the emitter change was intentional.')
 
 
 def test_full_featured_fixture_compiles():
@@ -150,8 +141,8 @@ def test_full_featured_fixture_compiles():
     assert 'FunctionTool(' in code
     assert 'temperature=0.5' in code
     assert 'max_output_tokens=2048' in code
-    assert '_make_model("claude", "claude-sonnet-4-6"' in code
-    assert '_make_model("gemini", "gemini-2.5-pro"' in code
+    assert '_make_model("claude", "claude-sonnet-4-6", thinking=' in code
+    assert '_make_model("gemini", "gemini-2.5-pro", thinking=' in code
 
     rc, out = _py_compile(code, 'full_featured')
     assert rc == 0, f"Full-featured fixture failed py_compile:\n{out}"
@@ -187,7 +178,7 @@ def test_with_start_documents_compiles():
     code = ADKGenerator.emitAdk(a)
 
     assert 'def _convert_doc_to_markdown(' in code
-    assert 'START_DOCUMENTS = [' in code
+    assert re.search(r'START_DOCUMENTS = \[', code)
     assert '"path": "/uploads/reports/report.pdf"' in code
     assert 'if START_DOCUMENTS:' in code
 
