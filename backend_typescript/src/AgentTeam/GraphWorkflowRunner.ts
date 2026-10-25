@@ -27,6 +27,8 @@ import { DecisionKeyResolver, ResolvedDecisionKey } from '../Services/DecisionKe
 import { DecisionRouters } from '../Services/DecisionRouters';
 import { DecisionUsage } from '../Services/DecisionUsage';
 import { config as envConfig } from '../config/env';
+import { CodeNodeStep } from './CodeNodeStep';
+import { CodeNodeExecutor } from './CodeNodeExecutor';
 
 /**
  * Faithful port of the start/agent/output execution paths of
@@ -63,8 +65,10 @@ import { config as envConfig } from '../config/env';
  *    is appended to storage/workflow-runs/{runId}.jsonl BEFORE the SSE emit, exactly like PHP's
  *    GraphWorkflowRunner::emitNodeEvent/emitWorkflowEvent (lines ~194/236). Read back via
  *    WorkflowController.runEvents / GET /api/v1/workflows/runs/{runId}/events.
- *  - Node types other than start/agent/output: handled exactly as PHP (default branch → {type,output:null});
- *    agent-template throws the same message.
+ *  - Node types: start/agent/output/code as PHP (code nodes via CodeNodeExecutor, the shared python
+ *    harness; dispatcher agents route via DispatchRouting, with the model or a decision model);
+ *    agent-template throws the same message; playbook nodes stop the run (no playbook interpreter
+ *    in TS); anything else takes PHP's default branch ({type, output: null}).
  *  - Attached documents (buildDocumentsContext): IMPLEMENTED. Reads locally-stored docs from
  *    the scratch-file reference / inline_documents map (both already threaded through run()'s
  *    parameters), and remote/cloud docs from the LOCAL-FILESYSTEM fallback path (matching
@@ -503,6 +507,19 @@ export class GraphWorkflowRunner {
           continue; // don't queue nodes after output
         }
 
+        // Code node: continue on the exit it took; the other exits' branches are skipped.
+        if (output.code_route !== undefined && output.code_route !== null) {
+          for (const skipId of DispatchRouting.skipSet(output.code_route.skip, edges, currentNodeId)) {
+            if (!executedNodes.includes(skipId)) executedNodes.push(skipId);
+          }
+          this.routedTo[currentNodeId] = output.code_route.chosen.map(phpIntval);
+          for (const nextId of output.code_route.chosen) {
+            if (!queue.includes(nextId) && !executedNodes.includes(nextId)) queue.push(nextId);
+          }
+          delete this.nodeOutputs[currentNodeId].code_route;
+          continue;
+        }
+
         // Dispatcher routing: one chosen branch, siblings skipped.
         if (this.applyRoute(currentNodeId, output, edges, queue, executedNodes)) {
           continue;
@@ -558,7 +575,32 @@ export class GraphWorkflowRunner {
 
       const responseTime = Date.now() - startTime;
 
-      await this.completeExecution(this.executionId, this.nodeOutputs, responseTime);
+      // A poll that found nothing (a code node ran, no work node did) leaves no trace: no execution
+      // row, no run log. An error exit or a failed code node is never quiet.
+      const summary = CodeNodeStep.summarize(this.nodeOutputs, edges, nodes);
+      if (summary.quiet) {
+        await sql`DELETE FROM agent_workflow_executions WHERE id = ${this.executionId}`.execute(db);
+        try {
+          fs.unlinkSync(this.runLog.pathFor(this.runId));
+        } catch {
+          /* @unlink */
+        }
+        // An attached browser still needs the end of the run; it is not persisted.
+        this.streamContext?.emit({
+          type: 'workflow_complete', workflow_id: workflow.id, workflow_name: workflow.name, timestamp: Date.now() / 1000,
+          success: true, quiet: true, execution_id: null, output: null,
+        });
+        return {
+          success: true, quiet: true, drain: false, execution_id: null, output: null,
+          node_outputs: this.nodeOutputs, nodes_executed: executedNodes.length,
+        };
+      }
+
+      // Complete execution. A run in which a code node took its error exit keeps its row with the
+      // error recorded, but is neither saved to output storage nor archived as a chat (it would be
+      // one more chat per tick while a mailbox is down).
+      const errorExits = CodeNodeStep.errorExits(this.nodeOutputs, nodes, executedNodes);
+      await this.completeExecution(this.executionId, this.nodeOutputs, responseTime, errorExits.length ? errorExits.join('; ') : null);
 
       this.emitWorkflowEvent('workflow_complete', workflow, {
         execution_id: this.executionId,
@@ -574,45 +616,49 @@ export class GraphWorkflowRunner {
 
       // Save output to storage if enabled. WorkflowOutputStorage.saveOutput() itself re-checks
       // workflow.output_storage_enabled (via a fresh DB read), so — mirroring PHP exactly — this is
-      // called unconditionally here and is best-effort (errors are swallowed, never fail the run).
+      // called for every run without an error exit and is best-effort (errors are swallowed).
       let storageSaveResult: Record<string, any> | null = null;
-      try {
-        storageSaveResult = await this.outputStorage.saveOutput(workflow.id as number, userId, {
-          execution_id: this.executionId,
-          workflow_id: workflow.id,
-          workflow_name: workflow.name,
-          timestamp: phpDateC(new Date()),
-          response_time_ms: round2(responseTime),
-          nodes_executed: executedNodes.length,
-          output: finalOutput,
-          node_outputs: this.nodeOutputs,
-          input_variables: inputVariables,
-        });
+      if (errorExits.length === 0) {
+        try {
+          storageSaveResult = await this.outputStorage.saveOutput(workflow.id as number, userId, {
+            execution_id: this.executionId,
+            workflow_id: workflow.id,
+            workflow_name: workflow.name,
+            timestamp: phpDateC(new Date()),
+            response_time_ms: round2(responseTime),
+            nodes_executed: executedNodes.length,
+            output: finalOutput,
+            node_outputs: this.nodeOutputs,
+            input_variables: inputVariables,
+          });
 
-        if (storageSaveResult?.success) {
-          console.error('[GraphWorkflowRunner] Output saved to storage: ' + (storageSaveResult.path ?? 'unknown'));
+          if (storageSaveResult?.success) {
+            console.error('[GraphWorkflowRunner] Output saved to storage: ' + (storageSaveResult.path ?? 'unknown'));
+          }
+        } catch (e: any) {
+          console.error('[GraphWorkflowRunner] Failed to save output to storage: ' + (e?.message ?? String(e)));
         }
-      } catch (e: any) {
-        console.error('[GraphWorkflowRunner] Failed to save output to storage: ' + (e?.message ?? String(e)));
-      }
 
-      // Archive the run into conversation_contexts so it shows up in the chat sidebar and is
-      // searchable via session_search. This is best-effort — a failure here never fails the workflow.
-      try {
-        await this.archiveRunToConversationContexts(
-          userId,
-          workflow.id as number,
-          String(workflow.name ?? ''),
-          userPrompt,
-          finalOutput ?? '',
-          executedNodes
-        );
-      } catch (e: any) {
-        console.error('[GraphWorkflowRunner] Archive to conversation_contexts failed: ' + (e?.message ?? String(e)));
+        // Archive the run into conversation_contexts so it shows up in the chat sidebar and is
+        // searchable via session_search. This is best-effort — a failure here never fails the workflow.
+        try {
+          await this.archiveRunToConversationContexts(
+            userId,
+            workflow.id as number,
+            String(workflow.name ?? ''),
+            userPrompt,
+            finalOutput ?? '',
+            executedNodes
+          );
+        } catch (e: any) {
+          console.error('[GraphWorkflowRunner] Archive to conversation_contexts failed: ' + (e?.message ?? String(e)));
+        }
       }
 
       return {
         success: true,
+        quiet: false,
+        drain: summary.drain,
         execution_id: this.executionId,
         workflow: { id: workflow.id, name: workflow.name },
         output: finalOutput,
@@ -743,6 +789,49 @@ export class GraphWorkflowRunner {
   // node execution
   // ========================================================================
 
+  /** Why this runner cannot execute a node of nodeType, or null when it can. */
+  static unsupportedNodeMessage(nodeType: string, config: Record<string, any> = {}): string | null {
+    switch (nodeType) {
+      case 'code':
+        return CodeNodeExecutor.enabled(config)
+          ? null
+          : 'Code nodes are switched off on this server (CODE_NODES_SERVER_SIDE=0); run from the editor or a compiled workflow.';
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * A code node, server-side: the shared harness via CodeNodeExecutor. Its nodeOutputs entry always
+   * carries 'exit' and 'success' (CodeNodeStep.summarize reads them); a failed run is recorded there
+   * before the run fails, and an error exit is logged as an error.
+   */
+  private async executeCodeNode(node: any, userId: number, userPrompt: string, edges: any[]): Promise<any> {
+    const msg = GraphWorkflowRunner.unsupportedNodeMessage('code', this.config);
+    if (msg) throw new Error(msg);
+    const nodeId = phpIntval(node.id);
+    const parents = CodeNodeStep.parents(nodeId, edges, this.graphNodes, this.nodeOutputs);
+    const run = await this.makeCodeNodeExecutor().run(node, edges, Object.keys(this.graphNodes), String(userId), parents, userPrompt);
+    const res = run.result;
+    for (const c of res.tool_calls ?? []) {
+      this.nodeLog(node, 'info', 'tool', `${c.server}.${c.tool} ok=${c.ok ? 'true' : 'false'} (${c.ms} ms)`);
+    }
+    const route = CodeNodeStep.routeAfter(run.data, res, this.getNextNodeIds(nodeId, edges));
+    if (!route.success) {
+      this.nodeOutputs[nodeId] = { type: 'code', output: route.output, exit: null, success: false };
+      throw new Error(`code node '${run.data.display}' failed: ` + (res.error ?? 'unknown'));
+    }
+    if (route.exit === 'error') {
+      this.nodeLog(node, 'error', 'done', `code node '${run.data.display}' took its error exit: ` + CodeNodeStep.reason(route.output));
+    }
+    return { type: 'code', output: route.output, exit: route.exit, success: true, code_route: route };
+  }
+
+  /** Test seam: the executor that runs a code node. */
+  protected makeCodeNodeExecutor(): CodeNodeExecutor {
+    return new CodeNodeExecutor(this.config);
+  }
+
   private async executeNode(
     node: any,
     userId: number,
@@ -770,6 +859,8 @@ export class GraphWorkflowRunner {
         throw new Error(
           'Playbook nodes run only from the workflow editor or the PHP backend (the TypeScript backend has no playbook interpreter).'
         );
+      case 'code':
+        return this.executeCodeNode(node, userId, userPrompt, edges);
       case 'output':
         return this.executeOutputNode(node, edges);
       default:

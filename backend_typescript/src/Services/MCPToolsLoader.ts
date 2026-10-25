@@ -222,6 +222,26 @@ export class MCPToolsLoader {
     return { formatted: this.formatToolResult(result), raw: result };
   }
 
+  /**
+   * The raw MCP result (content, structuredContent and isError kept, {} kept as {}), for code
+   * nodes. Mirrors MCPToolsLoader::executeToolRaw.
+   */
+  async executeToolRaw(toolName: string, args: any): Promise<{ error: true; message: string } | { error: false; raw: any }> {
+    const prefixed = toolName.startsWith('mcp_') ? toolName : 'mcp_' + toolName;
+    const tool = this.tools.get(prefixed);
+    if (!tool) return { error: true, message: `MCP tool '${toolName}' not found` };
+    const { formatted, raw } = await this.callMCPServer(tool.server_url, tool.original_name, args ?? {}, tool.server_headers);
+    if (raw === null || typeof raw !== 'object') {
+      return { error: true, message: String(formatted?.message ?? 'MCP call failed') };
+    }
+    if (raw.error !== undefined && raw.error !== null && raw.content === undefined) {
+      // a JSON-RPC error object, not a tool result
+      const msg = raw.error !== null && typeof raw.error === 'object' ? raw.error.message ?? 'MCP error' : String(raw.error);
+      return { error: true, message: String(msg) };
+    }
+    return { error: false, raw };
+  }
+
   async executeTool(toolName: string, args: any): Promise<any> {
     const tool = this.tools.get(toolName) ?? this.tools.get('mcp_' + toolName);
     if (!tool) return { error: true, message: `MCP tool '${toolName}' not found` };

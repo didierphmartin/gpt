@@ -8,6 +8,7 @@ import { PromptLibraryController } from './Controllers/PromptLibraryController';
 import { ChatController } from './Controllers/ChatController';
 import { ProviderController } from './Controllers/ProviderController';
 import { DispatchController } from './Controllers/DispatchController';
+import { CodeNodeController } from './Controllers/CodeNodeController';
 import { ToolsController } from './Controllers/ToolsController';
 import { ContextController } from './Controllers/ContextController';
 import { MCPServerController } from './Controllers/MCPServerController';
@@ -52,6 +53,7 @@ const prompts = new PromptLibraryController();
 const chat = new ChatController();
 const providers = new ProviderController();
 const dispatch = new DispatchController();
+const codeNode = new CodeNodeController();
 const tools = new ToolsController();
 const contexts = new ContextController();
 const mcpServers = new MCPServerController();
@@ -439,6 +441,8 @@ router.post('/api/v1/workflows', handle((ctx) => workflows.create(ctx)));
 // literal segment (won't match :id(\d+)) but keep it with the workflow literals, registered before
 // the :id param routes so it can never be shadowed.
 router.post('/api/v1/workflows/tool-result', handle((ctx) => workflows.toolResult(ctx)));
+// A code node's call_tool from the editor (literal path, registered before the :id routes).
+router.post('/api/v1/workflows/code-node/tool-call', handle((ctx) => codeNode.toolCall(ctx)));
 router.get('/api/v1/workflows/:id(\\d+)', handle((ctx) => workflows.show(ctx)));
 router.put('/api/v1/workflows/:id(\\d+)', handle((ctx) => workflows.update(ctx)));
 router.delete('/api/v1/workflows/:id(\\d+)', handle((ctx) => workflows.destroy(ctx)));
