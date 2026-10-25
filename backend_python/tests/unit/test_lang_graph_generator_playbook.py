@@ -61,7 +61,7 @@ def _robot_db():
     return database
 
 
-OTHER_TARGETS = ('adk',)   # PHP: adk, maf, nooa -- each joins once its port is PHP-faithful
+OTHER_TARGETS = ('adk', 'maf', 'nooa')
 
 
 def _target_class(target: str):

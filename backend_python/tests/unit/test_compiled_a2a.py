@@ -20,7 +20,7 @@ def _generator(target: str):
 
 
 # PHP: adk, maf, nooa -- each target joins once its Python port is PHP-faithful.
-TARGETS = ('adk',)
+TARGETS = ('adk', 'maf', 'nooa')
 
 
 def test_layout_gives_one_server_per_node_on_consecutive_ports():

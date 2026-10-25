@@ -21,7 +21,7 @@ def _generator_class(target: str):
 
 
 # PHP: adk, maf, nooa -- each target joins once its Python port is PHP-faithful.
-TARGETS = ('adk',)
+TARGETS = ('adk', 'maf', 'nooa')
 CASES = [(t, m) for t in TARGETS for m in ('single', 'modular', 'a2a')]
 
 

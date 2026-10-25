@@ -1,8 +1,8 @@
 """Port of backend/tests/Unit/NOOAPackageTest.php and the NOOA cases of CompiledArchitectureDocTest.php.
 
-The "Dispatcher demo" workflow (Start -> techBuddy (dispatcher) -> IT claims | Human resources -> Output) of
-PHP's tests/Unit/Support/DispatcherDemoFixture, built as a compiler fixture (compiler_fixtures: an in-memory
-SQLite database, never a configured one).
+The "Dispatcher demo" workflow (Start -> techBuddy (dispatcher) -> IT claims | Human resources -> Output) in
+an in-memory SQLite read through the real repositories (compiled_target_support, the port of PHP's
+tests/Unit/Support/DispatcherDemoFixture) -- never a configured database.
 """
 from __future__ import annotations
 
@@ -11,45 +11,21 @@ import re
 import pytest
 
 from app.agent_team.services.nooa_generator import NOOAGenerator
-from tests.unit import compiler_fixtures as cf
+from tests.unit import compiled_target_support as demo
 from tests.unit import lg_support as S
 
 
-def _agent(name: str, typ: str = 'standard') -> dict:
-    return {'type': 'agent-template', 'agent_name': name, 'agent_type': typ,
-            'instructions': f'You are {name}.', 'agent_provider': 'deepseek', 'model': '', 'tools': []}
-
-
-_WF = 44
-_FX = {
-    'workflow': {'id': _WF, 'user_id': 3, 'name': 'Dispatcher demo', 'description': 'Routes a request to IT or HR',
-                 'steps': '[]', 'orchestration': 'workflow'},
-    'graph': {
-        'nodes': [{'id': str(i), 'drawflow_node_id': str(i), 'node_type': t, 'config': c} for i, (t, c) in {
-            1: ('start', {'type': 'start', 'prompt': 'My laptop will not boot.'}),
-            2: ('agent', _agent('techBuddy', 'dispatcher')),
-            3: ('agent', _agent('IT claims')),
-            4: ('agent', _agent('Human resources')),
-            5: ('output', {'type': 'output'}),
-        }.items()],
-        'edges': [{'from': str(a), 'to': str(b)} for a, b in [(1, 2), (2, 3), (2, 4), (3, 5), (4, 5)]],
-    },
-    'sql': ["INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('deepseek', 'deepseek-chat', 1)",
-            "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-6', 1)"],
-}
-
-
 def _compile(mode: str) -> dict:
-    gen = cf.generator(_FX, 'nooa')
+    gen = demo.generator(NOOAGenerator, demo.pdo())
     if mode == 'single':
-        return gen.generate(_WF)
+        return gen.generate(demo.WORKFLOW_ID)
     if mode == 'modular':
-        return gen.generatePackage(_WF)
-    return gen.generateA2A(_WF)
+        return gen.generatePackage(demo.WORKFLOW_ID)
+    return gen.generateA2A(demo.WORKFLOW_ID)
 
 
 def _files() -> dict:
-    return {f['path']: f['code'] for f in _compile('modular')['files']}
+    return demo.package_files(NOOAGenerator)
 
 
 def test_exposes_the_contract():
@@ -64,9 +40,11 @@ def test_emits_the_package_files():
 
 
 def test_swarm_is_still_refused():
-    """Spec §9: NOOA is batch-only, permanently. The refusal fires from workflowRepo.findById() alone."""
-    gen = NOOAGenerator(S.db(), S.WfRepo({'id': 1, 'user_id': '1', 'name': 'Swarm Fixture', 'orchestration': 'swarm'}),
-                        S.GraphRepo({'nodes': [], 'edges': []}), S.AgentRepo())
+    """Spec §9: NOOA is batch-only, permanently. The refusal fires from workflowRepo.findById() alone: one
+    agent_workflows row with orchestration='swarm', read back through a real WorkflowRepository."""
+    db = S.db('CREATE TABLE agent_workflows (id INTEGER PRIMARY KEY, user_id TEXT, name TEXT, orchestration TEXT)',
+              "INSERT INTO agent_workflows (id, user_id, name, orchestration) VALUES (1, '1', 'Swarm Fixture', 'swarm')")
+    gen = demo.generator(NOOAGenerator, db)
     with pytest.raises(RuntimeError, match='NOOA cannot compile'):
         gen.generate(1)
 

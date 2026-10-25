@@ -1,20 +1,19 @@
 """Port of backend/tests/Unit/MAFPackageTest.php: the MAF package's workflow.py contract.
 
-PHP builds its "Dispatcher demo" (Start -> techBuddy dispatcher -> IT claims | Human resources -> Output) in
-an in-memory SQLite (Support/DispatcherDemoFixture); here it is the compiler fixture of the same shape
-(tests/fixtures/compiler/workflows/dispatcher_demo.json), compiled with generatePackage().
+The "Dispatcher demo" (Start -> techBuddy dispatcher -> IT claims | Human resources -> Output) in an
+in-memory SQLite read through the real repositories (compiled_target_support, the port of PHP's
+Support/DispatcherDemoFixture), compiled with generatePackage().
 """
 from __future__ import annotations
 
 import re
 
-from tests.unit import compiler_fixtures as cf
+from app.agent_team.services.maf_generator import MAFGenerator
+from tests.unit import compiled_target_support as demo
 
 
 def _files() -> dict:
-    fx = cf.load(cf.WORKFLOWS / 'dispatcher_demo.json')
-    pkg = cf.generator(fx, 'maf').generatePackage(int(fx['workflow']['id']), str(fx.get('user_id') or '3'))
-    return {f['path']: f['code'] for f in pkg['files']}
+    return demo.package_files(MAFGenerator)
 
 
 def _run_workflow_body(wf: str) -> str:
