@@ -1,0 +1,118 @@
+{
+ "description": "A swarm: Start fans out to three agents (tools, a bound skill), one Output; modular only",
+ "workflow": {
+  "id": 55,
+  "name": "Support swarm",
+  "user_id": "3",
+  "orchestration": "swarm"
+ },
+ "graph": {
+  "nodes": [
+   {
+    "id": "1",
+    "node_type": "start",
+    "config": {
+     "type": "start",
+     "prompt": "My laptop is broken"
+    }
+   },
+   {
+    "id": "10",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "Help desk",
+     "agent_type": "standard",
+     "instructions": "First-line support for every request.\nBe brief.",
+     "agent_provider": "claude",
+     "model": "claude-sonnet-4-5",
+     "tools": [
+      "mcp_get_news"
+     ],
+     "settings": {
+      "temperature": 0.7,
+      "max_tokens": 4096
+     }
+    }
+   },
+   {
+    "id": "2",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "Hardware",
+     "agent_type": "standard",
+     "instructions": "Laptops, screens — and docks.",
+     "agent_provider": "claude",
+     "model": "claude-sonnet-4-5",
+     "tools": [],
+     "settings": {
+      "temperature": 0.7,
+      "max_tokens": 4096
+     },
+     "bound_skill": {
+      "dir_name": "html"
+     }
+    }
+   },
+   {
+    "id": "3",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "Accounts",
+     "agent_type": "standard",
+     "instructions": "You are Accounts.",
+     "agent_provider": "deepseek",
+     "model": "deepseek-v4-flash",
+     "tools": [],
+     "settings": {
+      "temperature": 0.7,
+      "max_tokens": 4096
+     }
+    }
+   },
+   {
+    "id": "4",
+    "node_type": "output",
+    "config": {
+     "type": "output"
+    }
+   }
+  ],
+  "edges": [
+   {
+    "from": "1",
+    "to": "10"
+   },
+   {
+    "from": "1",
+    "to": "2"
+   },
+   {
+    "from": "1",
+    "to": "3"
+   },
+   {
+    "from": "10",
+    "to": "4"
+   },
+   {
+    "from": "2",
+    "to": "4"
+   },
+   {
+    "from": "3",
+    "to": "4"
+   }
+  ]
+ },
+ "sql": [
+  "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (9, NULL, 'News', 'http://localhost/news/', 1)",
+  "INSERT INTO mcp_server_tools VALUES (2, 9, 'get_news', 'News', '{}')",
+  "INSERT INTO scheduled_workflows VALUES (1, 55, 'cron', '0 * * * *', 'pending', NULL)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('deepseek', 'deepseek-v4-flash', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('gemini', 'gemini-2.5-pro', 1)"
+ ]
+}

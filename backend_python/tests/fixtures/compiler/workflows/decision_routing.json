@@ -1,0 +1,235 @@
+{
+ "description": "Dispatchers: one on a named decision provider with min_confidence and a catch-all branch, one unset (every decision row), one on the model; saved agent records by agent_id",
+ "workflow": {
+  "id": 57,
+  "name": "Routing lab",
+  "user_id": "3"
+ },
+ "graph": {
+  "nodes": [
+   {
+    "id": "1",
+    "node_type": "start",
+    "config": {
+     "type": "start",
+     "prompt": "Route me"
+    }
+   },
+   {
+    "id": "2",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "Front door",
+     "agent_type": "dispatcher",
+     "instructions": "You are Front door.",
+     "agent_provider": "claude",
+     "model": "claude-sonnet-4-5",
+     "tools": [],
+     "settings": {
+      "temperature": 0.3,
+      "max_tokens": 1000,
+      "routing_mode": "jev",
+      "min_confidence": "0.85",
+      "unclear_branch": "Fallback"
+     }
+    }
+   },
+   {
+    "id": "3",
+    "node_type": "agent",
+    "agent_id": 12,
+    "config": {
+     "type": "agent"
+    }
+   },
+   {
+    "id": "4",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "Fallback",
+     "agent_type": "standard",
+     "instructions": "",
+     "agent_provider": "claude",
+     "model": "claude-sonnet-4-5",
+     "tools": [],
+     "settings": {
+      "temperature": 0.7,
+      "max_tokens": 4096
+     }
+    }
+   },
+   {
+    "id": "5",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "Billing",
+     "agent_type": "dispatcher",
+     "instructions": "",
+     "agent_provider": "claude",
+     "model": "claude-sonnet-4-5",
+     "tools": [],
+     "settings": {
+      "jev_min_confidence": 2
+     },
+     "description": "routes billing"
+    }
+   },
+   {
+    "id": "6",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "Invoices",
+     "agent_type": "standard",
+     "instructions": "You are Invoices.",
+     "agent_provider": "claude",
+     "model": "claude-sonnet-4-5",
+     "tools": [],
+     "settings": {
+      "temperature": 0.7,
+      "max_tokens": 4096
+     }
+    }
+   },
+   {
+    "id": "7",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "Refunds",
+     "agent_type": "standard",
+     "instructions": "You are Refunds.",
+     "agent_provider": "claude",
+     "model": "claude-sonnet-4-5",
+     "tools": [],
+     "settings": {
+      "routing_mode": "llm"
+     }
+    }
+   },
+   {
+    "id": "8",
+    "node_type": "agent",
+    "config": {
+     "type": "agent",
+     "agent_id": "13",
+     "agent_name": "Model router"
+    }
+   },
+   {
+    "id": "9",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "Leaf",
+     "agent_type": "standard",
+     "instructions": "You are Leaf.",
+     "agent_provider": "claude",
+     "model": "claude-sonnet-4-5",
+     "tools": [],
+     "settings": {
+      "temperature": 0.7,
+      "max_tokens": 4096
+     }
+    }
+   },
+   {
+    "id": "10",
+    "node_type": "output",
+    "config": {
+     "type": "output"
+    }
+   }
+  ],
+  "edges": [
+   {
+    "from": "1",
+    "to": "2"
+   },
+   {
+    "from": "2",
+    "to": "3"
+   },
+   {
+    "from": "2",
+    "to": "4"
+   },
+   {
+    "from": "3",
+    "to": "5"
+   },
+   {
+    "from": "5",
+    "to": "6"
+   },
+   {
+    "from": "5",
+    "to": "7"
+   },
+   {
+    "from": "4",
+    "to": "8"
+   },
+   {
+    "from": "8",
+    "to": "9"
+   },
+   {
+    "from": "8",
+    "to": "10"
+   },
+   {
+    "from": "6",
+    "to": "10"
+   },
+   {
+    "from": "7",
+    "to": "10"
+   },
+   {
+    "from": "9",
+    "to": "10"
+   }
+  ]
+ },
+ "agents": {
+  "12": {
+   "id": 12,
+   "user_id": 3,
+   "name": "Support lead",
+   "description": "the support lead",
+   "agent_type": "standard",
+   "provider": "openai",
+   "model": "gpt-5",
+   "instructions": "Lead the support desk.",
+   "tools": "[\"mcp_get_news\"]",
+   "settings": "{\"routing_mode\": \"\"}"
+  },
+  "13": {
+   "id": 13,
+   "user_id": 3,
+   "name": "Saved router",
+   "description": "routes by model",
+   "agent_type": "dispatcher",
+   "provider": "kimi",
+   "model": "kimi-k2",
+   "instructions": "",
+   "tools": "[]",
+   "settings": "{\"routing_mode\": \"llm\", \"min_confidence\": 0.5, \"unclear_branch\": \"Leaf\"}"
+  }
+ },
+ "sql": [
+  "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (9, NULL, 'News', 'http://localhost/news/', 1)",
+  "INSERT INTO mcp_server_tools VALUES (2, 9, 'get_news', 'News', '{}')",
+  "INSERT INTO system_llm_settings (provider_key, display_name, model, base_url, api_format, protocol, enabled, sort_order) VALUES ('jev', 'Jev', 'jev-latest', NULL, 'router', 'typesafe', 1, 100)",
+  "INSERT INTO system_llm_settings (provider_key, display_name, model, base_url, api_format, protocol, enabled, sort_order) VALUES ('luna-eu', 'Luna', '', 'https://gw.example/v1 ', 'router', 'openai', 1, 50)",
+  "INSERT INTO system_llm_settings (provider_key, display_name, model, base_url, api_format, protocol, enabled, sort_order) VALUES ('off', 'Off', 'x', NULL, 'router', 'typesafe', 0, 10)",
+  "INSERT INTO system_llm_settings (provider_key, display_name, model, base_url, api_format, protocol, enabled, sort_order) VALUES ('bad', 'Bad', 'x', NULL, 'router', 'nope', 1, 20)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('deepseek', 'deepseek-v4-flash', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('gemini', 'gemini-2.5-pro', 1)"
+ ]
+}

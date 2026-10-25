@@ -38,9 +38,12 @@ source and the frontend's FormData.append('file', file) call
 """
 from __future__ import annotations
 
+import base64
+import io
 import os
 import re
 import time
+import zipfile
 
 from app.agent_team.models.workflow import Workflow
 from app.agent_team.services.active_workflow_service import ActiveWorkflowService
@@ -56,6 +59,7 @@ from app.agent_team.services.playbook_node_runner import PlaybookNodeRunner
 from app.agent_team.services.playbook_outcome import PlaybookOutcome
 from app.agent_team.services.playbook_source import PlaybookSource
 from app.agent_team.services.skill_tool_bridge import SkillToolBridge
+from app.agent_team.services.start_document_store import StartDocumentStore
 from app.agent_team.services.stream_context import StreamContext
 from app.agent_team.services.workflow_output_storage import WorkflowOutputStorage
 from app.agent_team.services.workflow_ref_resolver import UnresolvedRefsException, WorkflowRefResolver
@@ -338,16 +342,21 @@ class WorkflowController:
     # ========================================================================
 
     def generatePython(self, request, id: int = 0) -> dict:
-        """PHP 240-293.
+        """GET /api/v1/workflows/{id}/generate-python: the workflow compiled for LangGraph.
 
         Query parameters:
-          - ?a2a=1: Multi-file A2A manifest mode. Returns {root, files: [...]} (always JSON).
-          - ?download=1: In single-file mode, return raw Python (text/x-python). Ignored in A2A mode.
+          - ?a2a=1: multi-file A2A manifest {root, files: [{path, code}, ...], architecture} (always JSON).
+          - ?modular=1: multi-file "agents in separate files" package, same manifest shape as A2A.
+          - ?download=1: single-file mode only, the raw Python (text/x-python).
+          - ?format=zip: the same generation for the chosen mode as one zip ("<workflow>_<mode>.zip",
+            ARCHITECTURE.md included); wins over download=1.
+        Single-file default: {filename, code, architecture}.
         """
         userId = request['user_id'] if request.get('user_id') is not None else 0
         workflowId = php_intval(id)
         query = request['query'] if request.get('query') is not None else {}
         download = (query.get('download') if query.get('download') is not None else '0') == '1'
+        zip_ = (query.get('format') if query.get('format') is not None else '') == 'zip'
 
         if not userId:
             return {'success': False, 'error': 'Authentication required', 'status_code': 401}
@@ -359,10 +368,21 @@ class WorkflowController:
                 return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
 
             agentRepo = AgentRepository(self.db)
-            gen = LangGraphGenerator(self.db, self.workflowRepository, self.graphRepository, agentRepo)
+            # A packaged Start document is copied only from this user's own document storage.
+            storagePath = self.config.get('storage_path')
+            docStore = StartDocumentStore(
+                self.getUserStorageFolder(php_intval(userId)),
+                lambda: self.getUniversalFSAdapter(php_intval(userId)),
+                storagePath if storagePath is not None else str(PHP_BACKEND.parent / 'storage'),
+            )
+            gen = LangGraphGenerator(self.db, self.workflowRepository, self.graphRepository, agentRepo, None, docStore)
             a2a = (query.get('a2a') if query.get('a2a') is not None else '0') == '1'
-            result = gen.generate(workflowId, php_strval(userId), {'a2a': a2a})
-            if a2a:
+            # A2A wins if both are set: the two are mutually exclusive in the editor's form.
+            modular = not a2a and (query.get('modular') if query.get('modular') is not None else '0') == '1'
+            result = gen.generate(workflowId, php_strval(userId), {'a2a': a2a, 'modular': modular})
+            if zip_:
+                return self.langGraphZipResponse(result, 'a2a' if a2a else ('modular' if modular else 'single'))
+            if a2a or modular:
                 # Multi-file output: always JSON (the editor writes the folder itself).
                 return {'success': True, 'data': result, 'status_code': 200}
 
@@ -378,9 +398,43 @@ class WorkflowController:
                 }
 
             return {'success': True, 'data': result, 'status_code': 200}
-        except Exception as e:  # noqa: BLE001 -- mirrors PHP `catch (\Throwable $e)`
+        except Exception as e:  # noqa: BLE001 -- mirrors the PHP catch (Throwable)
             error_log(f'[WorkflowController] generatePython failed: {e}')
             return {'success': False, 'error': str(e), 'status_code': 500}
+
+    @staticmethod
+    def langGraphZipResponse(result: dict, mode: str) -> dict:
+        """The Export download: one generation result as a zip whose entries all sit under one folder -- the
+        result's root for a package, the script's own name for a single file -- with ARCHITECTURE.md beside
+        the code. Named after the workflow and the mode: "<workflow>_<mode>.zip"."""
+        if 'files' in result:
+            folder = result['root']
+            files = result['files']
+        else:
+            folder = re.sub(r'\.py$', '', result['filename'])
+            files = [{'path': result['filename'], 'code': result['code']}]
+            if result.get('architecture') is not None:   # none for an ingestion pipeline
+                files.append({'path': 'ARCHITECTURE.md', 'code': result['architecture']})
+        # "dispatcher_demo_modular_swarm" / "dispatcher_demo_langgraph" -> "dispatcher_demo"
+        slug = re.sub(r'_(langgraph|modular|a2a|adk|maf|nooa)(_a2a)?(_swarm)?$', '', folder)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for f in files:
+                # A binary file (a skill's image, a Start document) travels base64-encoded.
+                data = (base64.b64decode(f['code']) if (f.get('encoding') or '') == 'base64'
+                        else f['code'].encode('utf-8'))
+                zf.writestr(f"{folder}/{f['path']}", data)
+        data = buf.getvalue()
+        return {
+            'success': True,
+            'raw_body': data,
+            'headers': {
+                'Content-Type': 'application/zip',
+                'Content-Disposition': f'attachment; filename="{slug}_{mode}.zip"',
+                'Content-Length': str(len(data)),
+            },
+            'status_code': 200,
+        }
 
     # ========================================================================
     # GET /api/v1/workflows/{id}/generate-adk

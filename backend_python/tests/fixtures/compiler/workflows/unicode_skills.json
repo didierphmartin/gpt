@@ -1,0 +1,110 @@
+{
+ "description": "Accented / em-dash names (slugs, byte-wise padding), a skill folder with a script, an inline skill, thinking on, an HTML nudge, an empty workflow name",
+ "workflow": {
+  "id": 62,
+  "name": "Rédacteur — Revue “Q3”",
+  "user_id": "3"
+ },
+ "graph": {
+  "nodes": [
+   {
+    "id": "1",
+    "node_type": "start",
+    "config": {
+     "type": "start",
+     "prompt": "Écris le rapport — vite"
+    }
+   },
+   {
+    "id": "2",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "Rédacteur",
+     "agent_type": "standard",
+     "instructions": "Output only the HTML <!DOCTYPE html> page.",
+     "agent_provider": "claude",
+     "model": "claude-sonnet-4-5",
+     "tools": [],
+     "settings": {
+      "temperature": 0.6000000000000001,
+      "max_tokens": 32000,
+      "thinking": "on"
+     },
+     "bound_skill": {
+      "dir_name": "lgtest"
+     }
+    }
+   },
+   {
+    "id": "3",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "2024 Réview!",
+     "agent_type": "standard",
+     "instructions": "You are 2024 Réview!.",
+     "agent_provider": "claude",
+     "model": "claude-sonnet-4-5",
+     "tools": [],
+     "settings": {
+      "temperature": 0.7,
+      "max_tokens": 4096
+     },
+     "skill_content": "Inline skill text"
+    }
+   },
+   {
+    "id": "4",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "2024 Review",
+     "agent_type": "standard",
+     "instructions": "self-contained page with <style> blocks",
+     "agent_provider": "claude",
+     "model": "claude-sonnet-4-5",
+     "tools": [],
+     "settings": {
+      "temperature": 0.7,
+      "max_tokens": 4096
+     }
+    }
+   },
+   {
+    "id": "5",
+    "node_type": "output",
+    "config": {
+     "type": "output"
+    }
+   }
+  ],
+  "edges": [
+   {
+    "from": "1",
+    "to": "2"
+   },
+   {
+    "from": "2",
+    "to": "3"
+   },
+   {
+    "from": "2",
+    "to": "4"
+   },
+   {
+    "from": "3",
+    "to": "5"
+   },
+   {
+    "from": "4",
+    "to": "5"
+   }
+  ]
+ },
+ "sql": [
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('deepseek', 'deepseek-v4-flash', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('gemini', 'gemini-2.5-pro', 1)"
+ ]
+}

@@ -1,0 +1,152 @@
+{
+ "description": "Code nodes: exits wired to an agent and an Output, call_tool servers with a query URL, a dispatcher menu with a code child, storage ON with a folder",
+ "workflow": {
+  "id": 51,
+  "name": "Job poller",
+  "user_id": "3",
+  "output_storage_enabled": 1,
+  "output_folder": "/tmp/jobs out"
+ },
+ "graph": {
+  "nodes": [
+   {
+    "id": "1",
+    "node_type": "start",
+    "config": {
+     "type": "start",
+     "prompt": "poll \"now\"\\n please\ttab"
+    }
+   },
+   {
+    "id": "2",
+    "node_type": "code",
+    "config": {
+     "type": "code",
+     "name": "Poll ServiceNow",
+     "code": "def run(input, call_tool):\n    r = call_tool('servicenow', 'poll_jobs', {})\n    if r.get('job') is None:\n        return {'route': 'no_job', 'output': None}\n    return {'route': 'job', 'output': r['job']}\n",
+     "exits": [
+      "job",
+      "no_job"
+     ],
+     "mcp_servers": [
+      "ServiceNow"
+     ],
+     "timeout_s": 30,
+     "args": {
+      "queue": "IT",
+      "limit": 5
+     }
+    }
+   },
+   {
+    "id": "3",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "Triage",
+     "agent_type": "dispatcher",
+     "instructions": "You are Triage.",
+     "agent_provider": "claude",
+     "model": "claude-sonnet-4-5",
+     "tools": [
+      "mcp_get_news"
+     ],
+     "settings": {
+      "temperature": 0.7,
+      "max_tokens": 4096
+     }
+    }
+   },
+   {
+    "id": "4",
+    "node_type": "code",
+    "config": {
+     "type": "code",
+     "name": "Format",
+     "code": "def run(input, call_tool):\n    return {'route': 'next', 'output': str(input)}\n"
+    }
+   },
+   {
+    "id": "5",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "Writer",
+     "agent_type": "standard",
+     "instructions": "You are Writer.",
+     "agent_provider": "gemini",
+     "model": "",
+     "tools": [
+      {
+       "name": "mcp_get_news"
+      },
+      {
+       "tool_name": "not_a_tool"
+      }
+     ],
+     "settings": {
+      "temperature": 1,
+      "max_tokens": "2048",
+      "thinking": "off"
+     }
+    }
+   },
+   {
+    "id": "6",
+    "node_type": "output",
+    "config": {
+     "type": "output"
+    }
+   },
+   {
+    "id": "7",
+    "node_type": "output",
+    "config": {
+     "type": "output"
+    }
+   }
+  ],
+  "edges": [
+   {
+    "from": "1",
+    "to": "2",
+    "from_port": "output_1"
+   },
+   {
+    "from": "2",
+    "to": "3",
+    "from_port": "output_1"
+   },
+   {
+    "from": "2",
+    "to": "7",
+    "from_port": "output_2"
+   },
+   {
+    "from": "3",
+    "to": "4"
+   },
+   {
+    "from": "3",
+    "to": "5"
+   },
+   {
+    "from": "4",
+    "to": "6"
+   },
+   {
+    "from": "5",
+    "to": "6"
+   }
+  ]
+ },
+ "sql": [
+  "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (85, '3', 'ServiceNow', 'http://localhost/servicenow/?profile=mock&toolset=jobs', 1)",
+  "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (9, NULL, 'Global News', 'http://localhost/news/', 1)",
+  "INSERT INTO mcp_server_tools VALUES (1, 85, 'poll_jobs', 'Poll', '{}')",
+  "INSERT INTO mcp_server_tools VALUES (3, 9, 'get_news', 'News — latest', '{\"type\":\"object\",\"properties\":{\"q\":{\"type\":\"string\",\"description\":\"a/b\"}},\"required\":[\"q\"]}')",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('deepseek', 'deepseek-v4-flash', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('gemini', 'gemini-2.5-pro', 1)"
+ ]
+}

@@ -1,0 +1,117 @@
+{
+ "description": "Edge cases: an empty workflow name, edge aliases (source/target, from_node_id), a doubled edge, an unconnected node, a configured agent template by agent_id (record missing / present), string sampling settings, a node Start config under data",
+ "workflow": {
+  "id": 63,
+  "name": "",
+  "user_id": "3",
+  "output_storage_enabled": 0
+ },
+ "graph": {
+  "nodes": [
+   {
+    "id": "1",
+    "node_type": "start",
+    "data": {
+     "prompt": "from data"
+    },
+    "config": null
+   },
+   {
+    "id": "2",
+    "node_type": "agent-template",
+    "agent_id": 99,
+    "config": {
+     "type": "agent-template"
+    }
+   },
+   {
+    "id": "3",
+    "node_type": "agent-template",
+    "config": {
+     "type": "agent-template",
+     "agent_id": 12,
+     "settings": {
+      "temperature": "0.5",
+      "max_tokens": "1500.7"
+     }
+    }
+   },
+   {
+    "id": "4",
+    "node_type": "agent",
+    "config": {
+     "type": "agent",
+     "name": "By name",
+     "systemPrompt": "Use \"quotes\" and \\backslashes\\ and \"\"\"triple\"\"\".",
+     "llm_provider": "grok",
+     "tools": "not a list"
+    }
+   },
+   {
+    "id": "5",
+    "node_type": "output",
+    "config": {
+     "type": "output"
+    }
+   },
+   {
+    "id": "6",
+    "node_type": "agent",
+    "config": {
+     "type": "agent",
+     "agent_name": "Orphan"
+    }
+   }
+  ],
+  "edges": [
+   {
+    "source": "1",
+    "target": "2"
+   },
+   {
+    "from_node_id": "1",
+    "to_node_id": "3"
+   },
+   {
+    "from": "1",
+    "to": "3"
+   },
+   {
+    "from": "2",
+    "to": "4"
+   },
+   {
+    "from": "3",
+    "to": "4"
+   },
+   {
+    "from": "4",
+    "to": "5"
+   },
+   {
+    "from": "6",
+    "to": "5"
+   }
+  ]
+ },
+ "agents": {
+  "12": {
+   "id": 12,
+   "user_id": 3,
+   "name": "Saved writer",
+   "description": "",
+   "agent_type": "standard",
+   "provider": "",
+   "model": "",
+   "instructions": "Write well.",
+   "tools": "[{\"name\": \"mcp_get_news\"}, \"fetch\"]",
+   "settings": "not json"
+  }
+ },
+ "sql": [
+  "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (9, NULL, 'News', 'http://localhost/news/', 1)",
+  "INSERT INTO mcp_server_tools VALUES (2, 9, 'get_news', 'News', '{}')",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('grok', 'grok-4', 1)"
+ ]
+}

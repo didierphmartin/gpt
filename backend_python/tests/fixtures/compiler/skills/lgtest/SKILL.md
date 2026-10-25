@@ -1,0 +1,4 @@
+---
+name: lgtest
+---
+Fixture skill.

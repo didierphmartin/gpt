@@ -50,9 +50,9 @@ def test_skill_deps_block_unchanged():
 def test_document_converter_block_unchanged():
     """PHP testDocumentConverterBlockUnchanged (lines 42-51)."""
     block = PythonEmitHelpers.documentConverterBlock()
-    assert len(block.encode('utf-8')) == 5127, 'documentConverterBlock byte length changed'
+    assert len(block.encode('utf-8')) == 5500, 'documentConverterBlock byte length changed'
     assert hashlib.sha256(block.encode('utf-8')).hexdigest() == (
-        '0d4241548ff1d929cc88d083501cb8e1d9df126b719bc258d2f1cca7400c8dd1'
+        'a1bdc4bfe79b93a46c2ae6ca526fd4bac3ca1281576caa4f3643f344e60fc7bf'
     ), 'documentConverterBlock content changed -- this alters generated Python for both generators'
 
 

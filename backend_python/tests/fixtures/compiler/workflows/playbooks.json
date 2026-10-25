@@ -1,0 +1,109 @@
+{
+ "description": "Playbook nodes: a fixed one with done/failed exits, a \"from input\" one baking the robot's published playbooks (one fails to bind)",
+ "workflow": {
+  "id": 52,
+  "name": "HR desk",
+  "user_id": "3"
+ },
+ "graph": {
+  "nodes": [
+   {
+    "id": "1",
+    "node_type": "start",
+    "config": {
+     "type": "start",
+     "prompt": "{\"playbook\": \"time-off\"}"
+    }
+   },
+   {
+    "id": "2",
+    "node_type": "playbook",
+    "config": {
+     "type": "playbook",
+     "name": "Time off",
+     "playbook": "Title: Time Off\n\nTrigger: PTO.\n\nInstructions:\n1. #Get PTO Balance for the requester.\n2. #Request Approval from the manager then #Resolve Request.\n\nTools used: Workday\n\nActions used: #Get PTO Balance; #Request Approval; #Resolve Request\n",
+     "writes_enabled": true,
+     "exits": [
+      "done",
+      "failed"
+     ],
+     "settings": {
+      "temperature": 0.2,
+      "max_tokens": 8000,
+      "thinking": "on"
+     }
+    }
+   },
+   {
+    "id": "3",
+    "node_type": "agent",
+    "config": {
+     "type": "agent-template",
+     "agent_name": "Escalation",
+     "agent_type": "standard",
+     "instructions": "You are Escalation.",
+     "agent_provider": "claude",
+     "model": "claude-sonnet-4-5",
+     "tools": [],
+     "settings": {
+      "temperature": 0.7,
+      "max_tokens": 4096
+     }
+    }
+   },
+   {
+    "id": "4",
+    "node_type": "playbook",
+    "config": {
+     "type": "playbook",
+     "name": "Run requested",
+     "playbook_source": "input",
+     "playbook_input_field": "pb",
+     "agent_provider": "deepseek"
+    }
+   },
+   {
+    "id": "5",
+    "node_type": "output",
+    "config": {
+     "type": "output"
+    }
+   }
+  ],
+  "edges": [
+   {
+    "from": "1",
+    "to": "2"
+   },
+   {
+    "from": "2",
+    "to": "4",
+    "from_port": "output_1"
+   },
+   {
+    "from": "2",
+    "to": "3",
+    "from_port": "output_2"
+   },
+   {
+    "from": "4",
+    "to": "5"
+   },
+   {
+    "from": "3",
+    "to": "5"
+   }
+  ]
+ },
+ "sql": [
+  "INSERT INTO mcp_servers (id, user_id, name, url, enabled) VALUES (85, '3', 'Workday', 'http://localhost/mockstack/index.php/workday', 1)",
+  "INSERT INTO mcp_server_tools VALUES (1, 85, 'get_pto_balance', 'Get balances', '{\"type\":\"object\",\"properties\":{\"email\":{\"type\":\"string\"}}}')",
+  "INSERT INTO users (id, kind, email, first_name, last_name) VALUES (90, 'service', 'robot@x', 'Ro', 'Bot')",
+  "INSERT INTO playbooks (id, user_id, pkey, title, text) VALUES (1, 90, 'time-off', 'Time off', 'Title: Time Off\n\nTrigger: PTO.\n\nInstructions:\n1. #Get PTO Balance for the requester.\n2. #Request Approval from the manager then #Resolve Request.\n\nTools used: Workday\n\nActions used: #Get PTO Balance; #Request Approval; #Resolve Request\n')",
+  "INSERT INTO playbooks (id, user_id, pkey, title, text) VALUES (2, 90, 'laptop', 'Laptop', 'Title: Laptop \"Refresh\" — Ops\n\nDomain: IT\n\nTrigger: laptop.\n\nInstructions:\n1. #Order Laptop for the requester (\\\\ path C:\\new).\n2. #Notify Requester then #Resolve Request.\n\"\"\"quoted\"\"\" block.\n\nTools used: Procurement\n\nActions used: #Order Laptop; #Notify Requester; #Resolve Request\n')",
+  "INSERT INTO playbooks (id, user_id, pkey, title, text) VALUES (3, 90, 'broken', 'Broken', 'Title: Broken\n\nInstructions:\n1. #Get PTO Balance via workday.missing_tool\n\nActions used: #Get PTO Balance\n')",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('deepseek', 'deepseek-v4-flash', 1)",
+  "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('gemini', 'gemini-2.5-pro', 1)"
+ ]
+}
