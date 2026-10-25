@@ -49,6 +49,14 @@ def _no_glow_delay(monkeypatch):
     monkeypatch.setattr(_gwr_module, '_sleep', lambda seconds: None)
 
 
+@pytest.fixture(autouse=True)
+def _runs_in_tmp(monkeypatch, tmp_path):
+    """run() writes a run log and the workflow's current-run pointer (WorkflowRunLog.markCurrent):
+    keep both out of the real backend/storage/workflow-runs, where the live overlay reads them."""
+    from app.agent_team.services import workflow_run_log
+    monkeypatch.setattr(workflow_run_log, '_DEFAULT_BASE_DIR', str(tmp_path / 'workflow-runs'))
+
+
 # ---------------------------------------------------------------------------
 # Fakes
 # ---------------------------------------------------------------------------

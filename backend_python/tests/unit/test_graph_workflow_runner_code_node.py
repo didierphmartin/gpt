@@ -127,6 +127,9 @@ def test_a_poll_that_found_work_runs_the_exit_and_asks_to_drain(env):
     assert len(rows) == 1
     assert rows[0]['status'] == 'completed'
     assert len(_run_logs(env)) == 1
+    runId = WorkflowRunLog(env['runs']).current(44)
+    assert re.match(r'^[a-f0-9]{32}$', str(runId)), 'the workflow points at its run'
+    assert os.path.isfile(env['runs'] + '/' + runId + '.jsonl')
 
 
 def test_work_beside_the_poll_does_not_drain(env):

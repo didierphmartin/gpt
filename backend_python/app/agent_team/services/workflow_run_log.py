@@ -92,6 +92,38 @@ class WorkflowRunLog:
         except Exception as e:  # noqa: BLE001 -- mirrors PHP `catch (\Throwable $e)`
             error_log(f'[WorkflowRunLog] append failed for runId={run_id}: {e}')
 
+    def dir(self) -> str:
+        return self.baseDir
+
+    def markCurrent(self, workflowId: int, runId: str) -> None:
+        """The workflow's latest run, read by the live overlay (LiveFeed); temp file + rename,
+        so a reader never sees half a run id."""
+        if not self._isValidRunId(runId):
+            return
+        if not os.path.isdir(self.baseDir):
+            try:
+                os.makedirs(self.baseDir, mode=0o775, exist_ok=True)
+            except OSError:
+                pass
+        tmp = f'{self.baseDir}/wf-{workflowId}.current.{os.getpid()}'
+        try:
+            with open(tmp, 'w', encoding='utf-8') as fh:
+                fh.write(runId)
+        except OSError:
+            return
+        try:
+            os.rename(tmp, f'{self.baseDir}/wf-{workflowId}.current')
+        except OSError:
+            pass
+
+    def current(self, workflowId: int) -> str | None:
+        try:
+            with open(f'{self.baseDir}/wf-{workflowId}.current', encoding='utf-8') as fh:
+                id_ = fh.read().strip(' \t\n\r\0\x0b')
+        except OSError:
+            return None
+        return id_ if self._isValidRunId(id_) else None
+
     def read(self, run_id: str) -> list | None:
         """PHP 61-78. None for an invalid id or a run that was never
         written; otherwise the list of decoded JSON events, skipping any

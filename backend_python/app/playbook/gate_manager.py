@@ -23,10 +23,12 @@ class GateManager:
         'await_message': {'kind': 'await_message', 'asked_of': 'requester', 'status': 'awaiting_requester'},
     }
 
-    def __init__(self, state: PlaybookRunState, bridge: GateBridgeInterface, timeoutMs: int = 900000):
+    def __init__(self, state: PlaybookRunState, bridge: GateBridgeInterface, timeoutMs: int = 900000,
+                 unattended: bool = False):
         self.state = state
         self.bridge = bridge
         self.timeoutMs = timeoutMs
+        self.unattended = unattended
 
     def definitions(self) -> list:
         """PHP 29-108."""
@@ -115,6 +117,15 @@ class GateManager:
             return {'ok': False, 'error': f'Unknown gate: {name}'}
 
         gateId = self.state.gateOpen(runId, leg, mapping['kind'], args, mapping['asked_of'])
+
+        # Unattended (server-side runner, compiled --watch): never wait and never
+        # auto-approve. Close the gate and hand the run off; the interpreter ends
+        # the leg on gate_ended_leg.
+        if self.unattended:
+            self.state.gateClose(gateId, {'decision': 'unattended'}, '')
+            self.state.setStatus(runId, 'handed_off')
+            return {'ok': False, 'gate_ended_leg': True, 'unattended': True, 'kind': mapping['kind']}
+
         self.state.setStatus(runId, mapping['status'])
 
         # Human gates can block for minutes; the remote DB drops idle

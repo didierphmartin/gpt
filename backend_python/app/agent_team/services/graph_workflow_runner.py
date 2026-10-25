@@ -78,9 +78,14 @@ import httpx
 
 from app.agent_team.models.agent import Agent
 from app.agent_team.models.workflow import Workflow
+from app.agent_team.services.code_node_emit import CodeNodeEmit
 from app.agent_team.services.code_node_executor import CodeNodeExecutor
 from app.agent_team.services.code_node_step import CodeNodeStep
 from app.agent_team.services.dispatch_routing import DispatchRouting
+from app.agent_team.services.playbook_node_runner import PlaybookNodeRunner
+from app.agent_team.services.playbook_outcome import PlaybookOutcome
+from app.agent_team.services.playbook_source import PlaybookSource
+from app.agent_team.services.workflow_graph_analyzer import WorkflowGraphAnalyzer
 from app.agent_team.services.execution_trace_store import ExecutionTraceStore
 from app.agent_team.services.prompt_template_processor import PromptTemplateProcessor
 from app.agent_team.services.session_search_service import SessionSearchService
@@ -191,7 +196,10 @@ class NodeLogFormat:
 
 
 class GraphWorkflowRunner:
-    def __init__(self, db, agentRepository, agentRunner: Any, graphRepository, config: dict | None = None):
+    def __init__(self, db, agentRepository, agentRunner: Any, graphRepository, config: dict | None = None,
+                 playbookRunnerFactory=None):
+        """playbookRunnerFactory: fn() -> PlaybookNodeRunner (tests build one with fakes)."""
+        self.playbookRunnerFactory = playbookRunnerFactory
         self.db = db
         self.traceStore = ExecutionTraceStore(db)
         self.agentRepository = agentRepository
@@ -405,7 +413,11 @@ class GraphWorkflowRunner:
                 'documents': _coalesce(startCfg.get('documents'), []),
             }
 
-            graph = self.graphRepository.getGraph(workflow.getId())
+            # Get all nodes and edges for traversal -- only what Start reaches: an
+            # unconnected canvas node is not part of the workflow, and as a parent of
+            # a reached node it would hold that node's merge wait forever.
+            graph = GraphWorkflowRunner.configuredTemplatesAsAgents(
+                WorkflowGraphAnalyzer.reachableGraph(self.graphRepository.getGraph(workflow.getId())))
             nodes = self._indexNodesById(graph['nodes'])
             self.graphNodes = nodes
             self.workflowName = php_strval(workflow.getName())
@@ -416,6 +428,8 @@ class GraphWorkflowRunner:
                 'execution_id': self.executionId,
                 'total_nodes': len(nodes),
             })
+            # The live overlay follows this workflow's latest run (LiveFeed).
+            self.runLog.markCurrent(php_intval(workflow.getId()), self.runId)
 
             self._emitNodeEvent('node_start', startNode, {'input': userPrompt})
             _sleep(0.3)  # 300ms delay so the active glow is visible before completion
@@ -529,6 +543,8 @@ class GraphWorkflowRunner:
                     'input_tokens': inputTokens,
                     'output_tokens': outputTokens,
                     'cost_usd': self._computeNodeCost(output.get('provider'), inputTokens, outputTokens),
+                    # A dispatcher's choice, so a viewer of the run log (the live overlay) can fade the other links.
+                    'route': output.get('route'),
                 })
 
                 # Phase 0: record an execution trace for agent nodes.
@@ -792,15 +808,37 @@ class GraphWorkflowRunner:
                 "Unconfigured agent template node found. Please configure all agent nodes before running the workflow."
             )
         if nodeType == 'playbook':
-            raise RuntimeError(
-                "Playbook nodes run only from the workflow editor's browser run path "
-                "(server-side durable runs arrive in slice 1c)."
-            )
+            return self._executePlaybookNode(node, userId, userPrompt, edges)
         if nodeType == 'code':
             return self._executeCodeNode(node, userId, userPrompt, edges)
         if nodeType == 'output':
             return self._executeOutputNode(node, edges, executedNodes)
         return {'type': nodeType, 'output': None}
+
+    @staticmethod
+    def configuredTemplatesAsAgents(graph: dict) -> dict:
+        """An agent-template node set up on the canvas -- linked to a saved agent, or defined in the node
+        (agent_name, instructions or a skill; a dispatcher keeps its type, provider and routing in config) --
+        runs as an agent, as it does in the editor's browser run. One never set up (isTemplate, or nothing
+        filled in) keeps its type and stops the run in executeNode."""
+        nodes = graph.get('nodes') if graph.get('nodes') is not None else []
+        out = None
+        for i, n in enumerate(nodes):
+            c = n.get('config') if isinstance(n.get('config'), dict) else {}
+            if WorkflowGraphAnalyzer.typeOf(n) != 'agent-template' or c.get('isTemplate') is True:
+                continue
+            agentId = n.get('agent_id') if php_bool(n.get('agent_id')) else c.get('agent_id')
+            inline = (php_trim(php_strval(_coalesce(c.get('agent_name'), ''))) != ''
+                      or php_trim(php_strval(_coalesce(c.get('instructions'), ''))) != ''
+                      or php_trim(php_strval(_coalesce(c.get('skill_content'), ''))) != ''
+                      or not php_empty(c.get('bound_skill')))
+            if not php_bool(agentId) and not inline:
+                continue
+            if out is None:
+                out = dict(graph)
+                out['nodes'] = list(nodes)
+            out['nodes'][i] = {**n, 'node_type': 'agent', 'agent_id': agentId if php_bool(agentId) else None}
+        return out if out is not None else graph
 
     @staticmethod
     def unsupportedNodeMessage(nodeType: str, config: dict | None = None) -> str | None:
@@ -1385,6 +1423,53 @@ class GraphWorkflowRunner:
             error_log(f"[GraphWorkflowRunner] Output schema id {schemaId} not found or not owned by user {userId}")
 
         return None
+
+    def _executePlaybookNode(self, node: dict, userId: int, userPrompt: str, edges: list) -> dict:
+        """A playbook node, server-side and unattended (nobody can approve): resolved -> exit 'done', anything
+        else -> exit 'failed' (PlaybookOutcome). With config.exits the node routes like a code node (port
+        output_k -> k-th exit, CodeNodeEmit.exitTargets); without exits it behaves as before: all children run,
+        a failure fails the run. A from-input node, or one with exits, ends its output with
+        "Job: <first parent's JSON>" (when that is a JSON object) for the complete and hand-back nodes."""
+        cfg = dict(node['config']) if isinstance(node.get('config'), dict) else {}
+        nodeId = php_intval(node.get('id'))
+        parents = CodeNodeStep.parents(nodeId, edges, self.graphNodes, self.nodeOutputs)
+        request = '\n\n'.join(p['text'] for p in parents) if parents else userPrompt
+        fromInput = PlaybookSource.isFromInput(cfg)
+        parentText = php_strval(parents[0]['text']) if parents else ''
+        transcript = ''
+        reason = None
+        if fromInput:
+            src = PlaybookSource.fromInput(self.db, userId, cfg, parentText)
+            if src['ok']:
+                cfg['playbook'] = src['text']
+            else:
+                reason = src['reason']
+        if reason is None:
+            try:
+                runner = self.playbookRunnerFactory() if self.playbookRunnerFactory is not None \
+                    else PlaybookNodeRunner(self.config)
+                res = runner.run(userId, cfg, request, lambda ev: None, True)
+                transcript = php_strval(res['output'])
+                reason = PlaybookOutcome.reason(php_strval(res['status']), res.get('gate'))
+            except Exception as e:  # noqa: BLE001 -- mirrors PHP catch (\Throwable $e)
+                reason = PlaybookOutcome.errorReason(e)
+        hasExits = isinstance(cfg.get('exits'), (list, dict)) and len(cfg['exits']) > 0
+        result = PlaybookOutcome.nodeResult(reason, transcript,
+                                            PlaybookSource.jobLine(parentText) if fromInput or hasExits else None)
+        exit_ = result['exit']
+        text = result['text']
+        if not hasExits:
+            if reason is not None:
+                raise RuntimeError(f'playbook node failed: {reason}')
+            return {'type': 'playbook', 'output': text, 'success': True}
+        self._nodeLog(node, 'info' if reason is None else 'error', 'done',
+                      'playbook took exit ' + exit_ + (f': {reason}' if reason is not None else ''))
+        exits = list(cfg['exits'].values()) if isinstance(cfg['exits'], dict) else list(cfg['exits'])
+        targets = CodeNodeEmit.exitTargets(php_strval(node.get('id')), exits, edges, list(self.graphNodes.keys()))
+        chosen = [php_intval(t) for t in (targets.get(exit_) or [])]
+        children = [php_intval(c) for c in self._getNextNodeIds(nodeId, edges)]
+        return {'type': 'playbook', 'output': text, 'exit': exit_, 'success': True,
+                'code_route': {'chosen': chosen, 'skip': [c for c in children if c not in chosen]}}
 
     def _executeCodeNode(self, node: dict, userId: int, userPrompt: str, edges: list) -> dict:
         """A code node, server-side: the shared harness via CodeNodeExecutor (spec 2026-10-07 §4).

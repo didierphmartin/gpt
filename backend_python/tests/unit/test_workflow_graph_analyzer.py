@@ -96,3 +96,27 @@ def test_legacy_inline_skill_content_becomes_inline_entry():
 def test_no_skill_yields_empty_list():
     """PHP testNoSkillYieldsEmptyList (lines 94-97)."""
     assert WorkflowGraphAnalyzer.skillsFromConfig({'type': 'agent'}) == []
+
+
+def test_reachable_graph_drops_nodes_start_does_not_reach():
+    """PHP testReachableGraphDropsNodesStartDoesNotReach: a node left unconnected on the canvas is not part of the workflow."""
+    graph = {'nodes': [
+        {'id': 1, 'node_type': 'start'}, {'id': 2, 'node_type': 'agent'},
+        {'id': 3, 'node_type': 'output'}, {'id': 9, 'node_type': 'agent'},   # 9: kept on the canvas
+    ], 'edges': [
+        {'from_node_id': 1, 'to_node_id': 2}, {'from_node_id': 2, 'to_node_id': 3},
+        {'from_node_id': 9, 'to_node_id': 3},   # a stray arrow into the flow
+    ], 'workflow_id': 64}
+
+    out = WorkflowGraphAnalyzer.reachableGraph(graph)
+
+    assert [n['id'] for n in out['nodes']] == [1, 2, 3]
+    assert len(out['edges']) == 2, 'the stray arrow goes with its node'
+    assert out['workflow_id'] == 64
+    # The trimmed graph analyses without the "disconnected node" error.
+    assert WorkflowGraphAnalyzer.analyzeGraph(out)['order'] == ['1', '2', '3']
+
+
+def test_reachable_graph_without_a_start_is_unchanged():
+    graph = {'nodes': [{'id': 1, 'node_type': 'agent'}], 'edges': []}
+    assert WorkflowGraphAnalyzer.reachableGraph(graph) == graph

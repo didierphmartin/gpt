@@ -110,6 +110,23 @@ def test_approval_timeout_returns_timeout_guidance_and_closes_gate(pb_state, pb_
     assert pb_state.getRun(id_)['status'] == 'running'
 
 
+def test_unattended_gate_ends_leg_without_asking(pb_state, pb_db):
+    """GateManagerTest::testUnattendedGateEndsLegWithoutAsking."""
+    id_ = pb_state.createRun(1, _doc(), {'id': 'req1'}, {})
+    bridge = FakeGateBridge([])
+    gm = GateManager(pb_state, bridge, unattended=True)
+
+    result = gm.execute(id_, 0, 'request_approval', {'summary': 'x'})
+
+    assert result['gate_ended_leg'] is True
+    assert result['kind'] == 'approval'
+    assert bridge.calls == []
+    assert pb_state.getRun(id_)['status'] == 'handed_off'
+    row = _gate_row(pb_db, _last_gate_id(pb_db, id_))
+    assert row['closed_at'] is not None
+    assert json.loads(row['decision']) == {'decision': 'unattended'}
+
+
 def test_sensitive_form_field_is_redacted_in_stored_decision_but_intact_in_return(pb_state, pb_db):
     id_ = pb_state.createRun(1, _doc(), {'id': 'req1'}, {})
     answer = {'password': 'hunter2', 'username': 'bob', 'actor': 'req1'}

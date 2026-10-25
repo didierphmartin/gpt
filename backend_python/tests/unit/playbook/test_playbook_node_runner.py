@@ -130,3 +130,74 @@ def test_render_transcript_gate_reason_present_appends_the_dash_reason_suffix():
     out = PlaybookNodeRunner.renderTranscript(
         'T', [_gate_request_event({'team_or_person': 'Alice', 'reason': 'needs sign-off'})], '', 1, 'resolved')
     assert 'Alice — needs sign-off' in out
+
+
+# ---------------------------------------------------------------------------
+# Unattended mode (PlaybookNodeRunnerTest::testUnattended*): no human present,
+# any gate ends the run as handed_off.
+# ---------------------------------------------------------------------------
+
+def _run_unattended(rounds, db, runs_dir, llm=None):
+    llm = llm or _scripted_llm(rounds)
+    runner = PlaybookNodeRunner(
+        config={'workflow_runs_dir': runs_dir},
+        llmFactory=lambda nodeConfig: llm,
+        mcpFactory=lambda db_, userId: FakeMcpExecutor(),
+        bridgeFactory=lambda emit_: FakeNodeRunnerBridge(emit_),
+        pdoFactory=lambda: db,
+    )
+    return runner.run(1, {'playbook': _simple_playbook()}, 'Please help me.', lambda e: None, unattended=True)
+
+
+def test_unattended_run_stops_at_first_gate(tmp_path):
+    db = make_sqlite_db()
+    calls = {'n': 0}
+    inner = _scripted_llm([
+        [{'name': 'request_approval', 'arguments': {'approver': 'boss', 'question': 'OK to proceed?'}}],
+        [{'name': 'resolve_request', 'arguments': {'outcome': 'success', 'summary': 'done'}}],
+    ])
+
+    def llm(m, t):
+        calls['n'] += 1
+        return inner(m, t)
+
+    result = _run_unattended(None, db, str(tmp_path), llm)
+    assert result['status'] == 'handed_off'
+    assert result['gate'] == 'approval'
+    assert calls['n'] == 1
+
+
+def test_unattended_gate_then_resolve_in_same_turn_stays_handed_off(tmp_path):
+    db = make_sqlite_db()
+    result = _run_unattended([
+        [{'name': 'request_approval', 'arguments': {'approver': 'boss', 'question': 'OK to proceed?'}},
+         {'name': 'resolve_request', 'arguments': {'outcome': 'success', 'summary': 'done'}}],
+    ], db, str(tmp_path))
+    assert result['status'] == 'handed_off'
+    assert result['gate'] == 'approval'
+    row = db.fetch_one(f"SELECT status, resolved_at FROM playbook_runs WHERE id = {result['run_id']}")
+    assert row['status'] == 'handed_off'
+
+
+def test_unattended_gate_skips_the_rest_of_the_turn(tmp_path):
+    db = make_sqlite_db()
+    result = _run_unattended([
+        [{'name': 'request_approval', 'arguments': {'approver': 'boss', 'question': 'OK to proceed?'}},
+         {'name': 'leave_internal_note', 'arguments': {'text': 'SHOULD-NOT-RUN'}},
+         {'name': 'send_direct_message', 'arguments': {'text': 'SHOULD-NOT-SEND'}}],
+    ], db, str(tmp_path))
+    assert result['status'] == 'handed_off'
+    assert db.fetch_column("SELECT COUNT(*) FROM playbook_run_notes WHERE text LIKE '%SHOULD-NOT-RUN%'")[0] == 0
+    assert db.fetch_column("SELECT COUNT(*) FROM playbook_run_messages WHERE text LIKE '%SHOULD-NOT-SEND%'")[0] == 0
+    assert 'SHOULD-NOT-RUN' not in result['output']
+
+
+def test_unattended_first_gate_wins(tmp_path):
+    db = make_sqlite_db()
+    result = _run_unattended([
+        [{'name': 'prompt_handoff', 'arguments': {'reason': 'needs a human'}},
+         {'name': 'request_approval', 'arguments': {'approver': 'boss', 'question': 'OK?'}}],
+    ], db, str(tmp_path))
+    assert result['status'] == 'handed_off'
+    assert result['gate'] == 'handoff'
+    assert db.fetch_column('SELECT kind FROM playbook_run_gates') == ['handoff']

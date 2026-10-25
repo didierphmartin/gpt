@@ -75,11 +75,28 @@ class PlaybookInterpreter:
             messages.append(self._buildAssistantMessage(text, toolCalls))
 
             terminal = False
+            handedOff = False   # an unattended gate handed the run off: nothing else runs
             summary = ''   # resolve_request's summary: the run's answer, not the turn's narration
             for toolCall in toolCalls:
                 name = str(toolCall['name'])
                 # PHP: `(array)($toolCall['arguments'] ?? [])` (PlaybookInterpreter.php:88).
                 args = php_array_cast(toolCall.get('arguments'))
+
+                if handedOff:
+                    # Unattended hand-off: the remaining calls of this turn are never
+                    # executed, but each still gets a tool message so the history
+                    # stays well-formed (every tool_call answered).
+                    skipped = {'ok': False, 'error': 'the run was handed off at a gate'}
+                    self.transcript.append(runId, {
+                        'type': 'tool_skipped', 'leg': leg, 'round': round_, 'name': name, 'result': skipped,
+                    })
+                    messages.append({
+                        'role': 'tool',
+                        'tool_call_id': toolCall.get('id') if toolCall.get('id') is not None else php_uniqid('tc_'),
+                        'name': name,
+                        'content': _json_dumps(skipped),
+                    })
+                    continue
 
                 self.transcript.append(runId, {
                     'type': 'tool_call', 'leg': leg, 'round': round_, 'name': name, 'args': args,
@@ -111,6 +128,9 @@ class PlaybookInterpreter:
 
                 if result.get('terminal') is True or result.get('gate_ended_leg') is True:
                     terminal = True
+                if result.get('unattended') is True:
+                    handedOff = True
+                    continue
                 if name == 'resolve_request':
                     summary = str(args.get('summary') or '').strip() if isinstance(args, dict) else ''
 
