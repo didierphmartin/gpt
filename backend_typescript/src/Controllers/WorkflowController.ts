@@ -19,6 +19,8 @@ import {
 } from '../AgentTeam/WorkflowRepository';
 import { AgentRepository } from '../AgentTeam/AgentRepository';
 import { LangGraphGenerator } from '../AgentTeam/LangGraphGenerator';
+import { StartDocumentStore } from '../AgentTeam/compiler/StartDocumentStore';
+import { zipFiles } from '../AgentTeam/compiler/ZipWriter';
 import { ADKGenerator } from '../AgentTeam/ADKGenerator';
 import { MAFGenerator } from '../AgentTeam/MAFGenerator';
 import { GraphWorkflowRunner } from '../AgentTeam/GraphWorkflowRunner';
@@ -171,16 +173,22 @@ export class WorkflowController {
 
   /**
    * GET /api/v1/workflows/{id}/generate-python
-   * Generate a standalone LangGraph Python script from the workflow.
+   * Generate a standalone LangGraph Python program from the workflow (mirrors
+   * WorkflowController::generatePython).
    *
-   * The route decides raw-vs-JSON: on download success this returns a `raw_body` (Buffer) +
-   * `headers`; otherwise the JSON `{success, data:{filename, code}}` shape. Auth/validation/error
-   * order and messages mirror the PHP method exactly.
+   * Query parameters:
+   *   - ?a2a=1: multi-file A2A manifest {root, files: [{path, code}, ...], architecture} (always JSON).
+   *   - ?modular=1: multi-file "agents in separate files" package, same manifest shape (a2a wins if both).
+   *   - ?download=1: single-file mode only, the raw Python (text/x-python).
+   *   - ?format=zip: the same generation as one zip "<workflow>_<mode>.zip" (wins over download=1).
+   * Otherwise: {success, data: {filename, code, architecture}}.
    */
   async generatePython(ctx: Ctx): Promise<ControllerResult> {
     const userId = this.getUserId(ctx);
     const workflowId = this.getWorkflowId(ctx);
-    const download = ((ctx.query as any)?.download ?? '0') === '1';
+    const q: any = ctx.query ?? {};
+    const download = (q.download ?? '0') === '1';
+    const zip = (q.format ?? '') === 'zip';
 
     if (!userId) {
       return { success: false, error: 'Authentication required', status_code: 401 };
@@ -195,13 +203,26 @@ export class WorkflowController {
       }
 
       const agentRepo = new AgentRepository();
-      const gen = new LangGraphGenerator(this.workflowRepository, this.graphRepository, agentRepo);
-      const result = await gen.generate(workflowId, String(userId));
+      // A packaged Start document is copied only from this user's own document storage (where
+      // uploadNodeDocument writes it: the local node-documents root, see its PORTING DIVERGENCE note).
+      const docStore = new StartDocumentStore(await this.getUserStorageFolder(userId), null, WorkflowController.NODE_DOCS_LOCAL_ROOT);
+      const gen = new LangGraphGenerator(this.workflowRepository, this.graphRepository, agentRepo, null, docStore);
+      const a2a = (q.a2a ?? '0') === '1';
+      // A2A wins if both are set: the two are mutually exclusive in the editor's form.
+      const modular = !a2a && (q.modular ?? '0') === '1';
+      const result: any = await gen.generate(workflowId, String(userId), { a2a, modular });
+      if (zip) {
+        return WorkflowController.langGraphZipResponse(result, a2a ? 'a2a' : modular ? 'modular' : 'single');
+      }
+      if (a2a || modular) {
+        // Multi-file output: always JSON (the editor writes the folder itself).
+        return { success: true, data: result, status_code: 200 };
+      }
 
       if (download) {
         return {
           success: true,
-          raw_body: result.code, // Buffer — streamed raw by the route
+          raw_body: result.code,
           headers: {
             'Content-Type': 'text/x-python; charset=utf-8',
             'Content-Disposition': 'attachment; filename="' + result.filename + '"',
@@ -210,14 +231,51 @@ export class WorkflowController {
         };
       }
 
-      return {
-        success: true,
-        data: { filename: result.filename, code: result.code.toString('utf8') },
-        status_code: 200,
-      };
+      return { success: true, data: result, status_code: 200 };
     } catch (e: any) {
+      console.error('[WorkflowController] generatePython failed: ' + (e?.message ?? e));
       return { success: false, error: e?.message ?? '', status_code: 500 };
     }
+  }
+
+  /**
+   * The Export download (mirrors WorkflowController::langGraphZipResponse): one generation result as a zip
+   * whose entries all sit under one folder -- the result's root for a package, the script's own name for a
+   * single file -- with ARCHITECTURE.md beside the code. Named "<workflow>_<mode>.zip".
+   */
+  static langGraphZipResponse(result: any, mode: string): ControllerResult {
+    let folder: string;
+    let files: Array<{ path: string; code: string; encoding?: string }>;
+    if (result.files !== undefined) {
+      folder = result.root;
+      files = result.files;
+    } else {
+      folder = String(result.filename).replace(/\.py$/, '');
+      files = [{ path: result.filename, code: result.code }];
+      if ((result.architecture ?? null) !== null) {
+        // none for an ingestion pipeline
+        files.push({ path: 'ARCHITECTURE.md', code: result.architecture });
+      }
+    }
+    // "dispatcher_demo_modular_swarm" / "dispatcher_demo_langgraph" -> "dispatcher_demo"
+    const slug = folder.replace(/_(langgraph|modular|a2a|adk|maf|nooa)(_a2a)?(_swarm)?$/, '');
+    const bytes = zipFiles(
+      files.map((f) => ({
+        name: `${folder}/${f.path}`,
+        // A binary file (a skill's image, a Start document) travels base64-encoded.
+        data: (f.encoding ?? '') === 'base64' ? Buffer.from(f.code, 'base64') : Buffer.from(f.code, 'utf8'),
+      })),
+    );
+    return {
+      success: true,
+      raw_body: bytes,
+      headers: {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': `attachment; filename="${slug}_${mode}.zip"`,
+        'Content-Length': String(bytes.length),
+      },
+      status_code: 200,
+    };
   }
 
   /**
