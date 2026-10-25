@@ -1,7 +1,7 @@
 /**
- * Port of the LangGraph parts of backend/tests/Unit/GeneratedDocParityTest.php: the generated script documents
- * itself (PROVENANCE, GRAPH NODES, GRAPH EDGES, EXECUTION ORDER, DATA FLOW, TO RUN, a comment block per node).
- * The ADK / MAF / NOOA halves of each test are not ported here (those generators are other targets).
+ * Port of backend/tests/Unit/GeneratedDocParityTest.php: every compile target (LangGraph, ADK, MAF, NOOA) documents
+ * the generated script the same way (PROVENANCE, GRAPH NODES, GRAPH EDGES, EXECUTION ORDER, DATA FLOW, TO RUN, a
+ * comment block per node), runs playbook and dispatcher nodes, and defines every global it references.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,6 +9,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { GraphAnalyzer } from '../src/AgentTeam/compiler/GraphAnalyzer';
+import { ADKGenerator } from '../src/AgentTeam/ADKGenerator';
+import { MAFGenerator } from '../src/AgentTeam/MAFGenerator';
+import { NOOAGenerator } from '../src/AgentTeam/NOOAGenerator';
 import { execLines, makeGenerator, python3, sqlite } from './support/lgFixturesB';
 
 const NO_PY = python3() === null ? 'python3 not available' : false;
@@ -50,11 +53,16 @@ function pdo(): void {
   ]);
 }
 
-/** target => generated code (LangGraph only in this port). */
+/** target => generated code. */
 async function generateAll(): Promise<Record<string, string>> {
   pdo();
   const gen = makeGenerator({ workflow: { id: 44, name: 'Dispatcher demo', user_id: '3' }, graph: graph() });
-  return { LangGraph: ((await gen.generate(44, '3')) as any).code };
+  const out: Record<string, string> = { LangGraph: ((await gen.generate(44, '3')) as any).code };
+  const repos = [(gen as any).workflowRepo, (gen as any).graphRepo, (gen as any).agentRepo] as const;
+  for (const [label, Cls] of [['ADK', ADKGenerator], ['MAF', MAFGenerator], ['NOOA', NOOAGenerator]] as const) {
+    out[label] = ((await new (Cls as any)(...repos).generate(44, '3')) as any).code;
+  }
+  return out;
 }
 
 function withTempPy(code: string, fn: (file: string) => void): void {
@@ -105,7 +113,8 @@ test('testPlaybookAndDispatcherSupportIsStatedHonestly', async () => {
   const lg = all.LangGraph;
   assert.ok(lg.includes('playbook "Time Off", 1 bound / 0 unbound action(s), writes ON'));
   assert.ok(lg.includes('(dispatcher: only the chosen one runs)'));
-  for (const t of ['LangGraph']) {
+  // Both node kinds now run on every target, and none of them may still claim otherwise.
+  for (const t of ['LangGraph', 'ADK', 'MAF', 'NOOA']) {
     const code = all[t];
     assert.ok(!code.includes('NOT RUN BY THIS TARGET'), t);
     assert.ok(!code.includes('menu NOT honoured by this target'), t);
@@ -113,11 +122,28 @@ test('testPlaybookAndDispatcherSupportIsStatedHonestly', async () => {
     assert.ok(code.includes('PLAYBOOK_GATE_MODE'), `${t}: the playbook gates must be reachable`);
     assert.ok(code.includes('DEEPSEEK_API_KEY'), `${t}: the playbook node's provider key belongs in the run notes`);
   }
+  // The three ported targets carry the shared interpreter verbatim; LangGraph calls it through its own node machinery.
+  for (const t of ['ADK', 'MAF', 'NOOA']) {
+    assert.ok(all[t].includes('async def run_playbook_node('), t);
+    assert.ok(all[t].includes('PLAYBOOKS = {'), t);
+    assert.ok(all[t].includes('pip install langchain-core langgraph'), `${t}: the interpreter's requirement must be stated`);
+  }
 });
 
 test('testEveryTargetRoutesTheDispatcherMenu', async () => {
   const all = await generateAll();
   assert.ok(all.LangGraph.includes('add_conditional_edges'));
+  // ADK: the menu is nested under the dispatcher, so the children are NOT layer members.
+  const adk = all.ADK;
+  assert.ok(adk.includes('_DispatcherAgent('));
+  assert.ok(adk.includes('IT claims'));
+  assert.ok(!adk.includes('ParallelAgent(name="layer_2"'));
+  // MAF: the edges stay drawn; the choice travels in the message.
+  assert.ok(all.MAF.includes('DispatcherNodeExecutor('));
+  assert.ok(all.MAF.includes('route_to'));
+  // NOOA: the dispatcher's choice is the only child its routes let run (GRAPH driver).
+  assert.ok(all.NOOA.includes('run_dispatcher('));
+  assert.ok(all.NOOA.includes('routes[nid] = {chosen} if chosen else set()'));
 });
 
 /** No target may reference a module global it never defines (a NameError py_compile does not catch). */
