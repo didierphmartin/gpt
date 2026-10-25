@@ -13,11 +13,17 @@ byWorkflow. No private helpers in the PHP source for this class.
 """
 from __future__ import annotations
 
+from app.agent_team.services.active_workflow_service import ActiveWorkflowService
+from app.agent_team.services.cron_expression import CronExpression
 from app.agent_team.services.scheduled_workflow_service import ScheduledWorkflowService
 from app.agent_team.services.workflow_repository import WorkflowRepository
-from app.support.phpcompat import php_empty, php_intval
+from app.code_component.code_component_error import CodeComponentError
+from app.code_component.code_component_store import CodeComponentStore
+from app.exceptions.invalid_argument import InvalidArgumentException
+from app.support.logger import error_log
+from app.support.phpcompat import php_coalesce, php_empty, php_intval, php_strval, php_trim
 
-_VALID_REPEAT_TYPES = ('none', 'hourly', 'daily', 'weekly', 'monthly')
+_VALID_REPEAT_TYPES = ScheduledWorkflowService.REPEAT_TYPES
 
 
 class ScheduledWorkflowController:
@@ -57,6 +63,11 @@ class ScheduledWorkflowController:
         if not userId:
             return {'success': False, 'error': 'Authentication required', 'status_code': 401}
 
+        try:   # a Start option names its component; the component supplies the event (spec §3)
+            body = CodeComponentStore(self.db).scheduleBody(php_intval(userId), body)
+        except CodeComponentError as e:
+            return {'success': False, 'error': str(e), 'kind': e.kind, 'status_code': e.status}
+
         if php_empty(body.get('workflow_id')):
             return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
 
@@ -76,6 +87,14 @@ class ScheduledWorkflowController:
                 'error': 'Invalid repeat type. Must be one of: ' + ', '.join(_VALID_REPEAT_TYPES),
                 'status_code': 400,
             }
+        if (php_coalesce(body.get('repeat_type'), '') == 'cron'
+                and not CronExpression.isValid(php_trim(php_strval(php_coalesce(body.get('cron'), ''))))):
+            return {'success': False, 'error': 'Invalid cron expression', 'status_code': 400}
+        if php_coalesce(body.get('repeat_type'), '') == 'event':
+            try:
+                ScheduledWorkflowService.eventTrigger(body.get('event_trigger'))
+            except InvalidArgumentException as e:
+                return {'success': False, 'error': str(e), 'status_code': 400}
 
         try:
             schedule = self.scheduleService.create({
@@ -85,8 +104,12 @@ class ScheduledWorkflowController:
                 'scheduled_time': body['scheduled_time'],
                 'repeat_type': body['repeat_type'] if body.get('repeat_type') is not None else 'none',
                 'repeat_interval': php_intval(body['repeat_interval']) if body.get('repeat_interval') is not None else 1,
+                'cron': body.get('cron'),
+                'event_trigger': body.get('event_trigger'),
+                'trigger_component_id': body.get('trigger_component_id'),
             })
 
+            self._sweepActive()
             return {
                 'success': True,
                 'data': schedule,
@@ -131,10 +154,25 @@ class ScheduledWorkflowController:
         if not userId:
             return {'success': False, 'error': 'Authentication required', 'status_code': 401}
 
+        try:   # a Start option names its component; the component supplies the event (spec §3)
+            existingRow = self.scheduleService.findById(scheduleId) if not php_empty(body.get('trigger_component_id')) else None
+            body = CodeComponentStore(self.db).scheduleBody(
+                php_intval(userId), body, php_intval((existingRow or {}).get('workflow_id') or 0))
+        except CodeComponentError as e:
+            return {'success': False, 'error': str(e), 'kind': e.kind, 'status_code': e.status}
+
         # Validate repeat_type if provided
         if not php_empty(body.get('repeat_type')):
             if body['repeat_type'] not in _VALID_REPEAT_TYPES:
                 return {'success': False, 'error': 'Invalid repeat type', 'status_code': 400}
+
+        # Effective cron after this update: a cron schedule must carry a valid, ever-firing expression.
+        if body.get('repeat_type') == 'cron' or 'cron' in body:
+            existing = self.scheduleService.findById(scheduleId) or {}
+            effType = php_coalesce(body.get('repeat_type'), existing.get('repeat_type'), 'none')
+            effCron = php_trim(php_strval(php_coalesce(body.get('cron'), existing.get('cron'), '')))
+            if effType == 'cron' and not CronExpression.isValid(effCron):
+                return {'success': False, 'error': 'Invalid cron expression', 'status_code': 400}
 
         try:
             schedule = self.scheduleService.update(scheduleId, userId, body)
@@ -142,12 +180,15 @@ class ScheduledWorkflowController:
             if not schedule:
                 return {'success': False, 'error': 'Schedule not found', 'status_code': 404}
 
+            self._sweepActive()
             return {
                 'success': True,
                 'data': schedule,
                 'message': 'Schedule updated successfully',
                 'status_code': 200,
             }
+        except InvalidArgumentException as e:   # e.g. an event schedule without a usable trigger
+            return {'success': False, 'error': str(e), 'status_code': 400}
         except Exception as e:  # noqa: BLE001
             return {'success': False, 'error': str(e), 'status_code': 500}
 
@@ -169,6 +210,7 @@ class ScheduledWorkflowController:
             if not deleted:
                 return {'success': False, 'error': 'Schedule not found', 'status_code': 404}
 
+            self._sweepActive()
             return {'success': True, 'message': 'Schedule deleted successfully', 'status_code': 200}
         except Exception as e:  # noqa: BLE001
             return {'success': False, 'error': str(e), 'status_code': 500}
@@ -195,6 +237,7 @@ class ScheduledWorkflowController:
                     'status_code': 404,
                 }
 
+            self._sweepActive()
             return {'success': True, 'message': 'Schedule paused successfully', 'status_code': 200}
         except Exception as e:  # noqa: BLE001
             return {'success': False, 'error': str(e), 'status_code': 500}
@@ -221,9 +264,18 @@ class ScheduledWorkflowController:
                     'status_code': 404,
                 }
 
+            self._sweepActive()
             return {'success': True, 'message': 'Schedule resumed successfully', 'status_code': 200}
         except Exception as e:  # noqa: BLE001
             return {'success': False, 'error': str(e), 'status_code': 500}
+
+    def _sweepActive(self) -> None:
+        """A schedule write may change the workflow's input mode: an active workflow whose mode changed is
+        deactivated (spec 2026-10-14 event-worker §2)."""
+        try:   # never fails the write it follows: the write already happened, and the event worker sweeps every 5 s
+            ActiveWorkflowService(self.db).sweep()
+        except Exception as e:  # noqa: BLE001 -- PHP catch (\Throwable)
+            error_log(f'[ActiveWorkflow] sweep failed: {e}')
 
     # ========================================================================
     # GET /api/v1/schedules/stats

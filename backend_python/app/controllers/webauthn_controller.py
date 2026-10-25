@@ -5,6 +5,7 @@ import re
 import secrets
 
 from app.controllers.auth_controller import generate_tokens
+from app.services import edition
 from app.support.logger import error_log
 from app.support.phpcompat import b64url_encode, php_empty, php_now
 
@@ -83,6 +84,9 @@ class WebAuthnController:
         return {'success': True, 'message': 'Credential registered successfully', 'status_code': 200}
 
     def authenticate(self, request) -> dict:
+        refused = edition.refuse_local_sign_in(self.config)
+        if refused:
+            return refused
         b = request['body']
         credential_id = b.get('credential_id', '') or ''
         authenticator_data = b.get('authenticator_data', '') or ''

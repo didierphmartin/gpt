@@ -72,6 +72,10 @@ class Db:
                 cur.close()
                 raise
 
+    def inTransaction(self) -> bool:
+        """PDO::inTransaction(): the server's SERVER_STATUS_IN_TRANS flag from the last reply."""
+        return bool(getattr(self._conn, 'server_status', 0) & 1)
+
     def begin(self): self._conn.begin()
     def commit(self): self._conn.commit()
     def rollback(self): self._conn.rollback()

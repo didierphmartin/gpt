@@ -111,7 +111,9 @@ class WorkflowGraphAnalyzer:
         for e in edges:
             from_ = php_strval(_coalesce(e.get('from'), e.get('from_node_id'), e.get('source')))
             to_ = php_strval(_coalesce(e.get('to'), e.get('to_node_id'), e.get('target')))
-            if from_ == '' or to_ == '' or from_ not in byId or to_ not in byId:
+            # Two exits of one node linked to the same node are one connection here (which exit leads
+            # where is read from the raw edges: CodeNodeEmit.exitTargets).
+            if from_ == '' or to_ == '' or from_ not in byId or to_ not in byId or to_ in children[from_]:
                 continue
             norm.append({'from': from_, 'to': to_})
             children[from_].append(to_)
@@ -320,7 +322,7 @@ class WorkflowGraphAnalyzer:
                 d['dispatch'] = list(dispatch_raw.values()) if isinstance(dispatch_raw, dict) else list(dispatch_raw)
             elif t in ('agent', 'agent-template') and php_strval(c.get('agent_type')) == 'dispatcher':
                 filtered = [ch for ch in (children.get(id_) or [])
-                            if WorkflowGraphAnalyzer.typeOf(byId.get(ch) or {}) in ('agent', 'agent-template', 'playbook')]
+                            if WorkflowGraphAnalyzer.typeOf(byId.get(ch) or {}) in ('agent', 'agent-template', 'playbook', 'code')]
                 d['dispatch'] = [nameOf(ch) for ch in filtered]
 
             if t == 'playbook':
@@ -368,7 +370,8 @@ class WorkflowGraphAnalyzer:
         wf = self.workflowRepo.findById(workflowId)
         if not wf:
             raise RuntimeError('Workflow not found')
-        graph = self.graphRepo.getGraph(workflowId)
+        # Only what Start reaches is the workflow: unconnected canvas nodes stay out.
+        graph = self.reachableGraph(self.graphRepo.getGraph(workflowId))
         base = self.analyzeGraph(graph)
 
         # Build the agents map -- only agent/agent-template nodes.

@@ -25,6 +25,8 @@ import httpx
 from app.controllers.auth_controller import password_hash
 from app.controllers.requires_admin import require_admin
 from app.providers._http import SHARED_SSL_CONTEXT
+from app.services import edition
+from app.services.login_accounts import LoginAccounts
 from app.services.package_resolver import PackageResolver
 from app.services.robot_account import RobotAccount
 from app.services.role_store import RoleStore
@@ -78,11 +80,26 @@ def _strip_tags(html: str) -> str:
 # (Phase 7 final-review wave, B1); every call site below uses that name.
 
 
+_NOT_GIVEN = object()
+
+
 class AdminController:
-    def __init__(self, db, config):
+    def __init__(self, db, config, accounts=_NOT_GIVEN):
         self.db = db
         self.config = config
         self._presence = DbPresence(db, 'AdminController')
+        # The login service's accounts (corporate only); injected for tests, else from config on first use.
+        self._accountsInjected = accounts is not _NOT_GIVEN
+        self._accounts = None if accounts is _NOT_GIVEN else accounts
+
+    def _loginAccounts(self):
+        """Only on a corporate install; raises if the login database is unreachable."""
+        if not edition.is_corporate(self.config):
+            return None
+        if not self._accountsInjected:
+            self._accounts = LoginAccounts.fromConfig(self.config)
+            self._accountsInjected = True
+        return self._accounts
 
     # ─── users (AdminController.php:30-312; routes.php 175-180) ────────────
 
@@ -188,7 +205,7 @@ class AdminController:
 
         firstName = php_trim(input_.get('first_name') if input_.get('first_name') is not None else '')
         lastName = php_trim(input_.get('last_name') if input_.get('last_name') is not None else '')
-        email = php_trim(input_.get('email') if input_.get('email') is not None else '')
+        email = php_trim(input_.get('email') if input_.get('email') is not None else '').lower()
         password = input_.get('password') if input_.get('password') is not None else ''
         role = input_.get('role') if input_.get('role') is not None else 'user'
 
@@ -204,15 +221,39 @@ class AdminController:
 
         hashedPassword = password_hash(php_strval(password))
 
-        sql = ("INSERT INTO users (email, password, first_name, last_name, role, provider, created_at, updated_at)"
-               " VALUES (:email, :password, :first_name, :last_name, :role, 'email', NOW(), NOW())")
-        newUserId = self.db.insert(sql, {
-            ':email': email,
-            ':password': hashedPassword,
-            ':first_name': firstName,
-            ':last_name': lastName,
-            ':role': role,
-        })
+        # Corporate: the login service holds the credential, gpt holds the role.
+        try:
+            accounts = self._loginAccounts()
+        except Exception:  # noqa: BLE001 -- PHP catch (\Throwable)
+            return {'success': False, 'error': 'The login service database is not reachable', 'status_code': 503}
+        if edition.is_corporate(self.config) and accounts is None:
+            return {'success': False, 'error': 'The login service is not configured', 'status_code': 503}
+
+        loginRowExisted = False
+        if accounts is not None:
+            # Refuse before writing anything if a gpt user already owns this email -- otherwise upsertVerified
+            # would overwrite an existing login credential and the later gpt INSERT would fail on the UNIQUE
+            # email constraint, which would then delete the login row we just clobbered.
+            if self.db.fetch_one('SELECT 1 FROM users WHERE email = :email', {':email': email}):
+                return {'success': False, 'error': 'A user with that email already exists', 'status_code': 409}
+            loginRowExisted = accounts.exists(email)
+            accounts.upsertVerified(email, password_hash(php_strval(password)), firstName, lastName)
+
+        sql = ("INSERT INTO users (email, password, first_name, last_name, role, provider, email_verified, created_at, updated_at)"
+               " VALUES (:email, :password, :first_name, :last_name, :role, 'email', :verified, NOW(), NOW())")
+        try:
+            newUserId = self.db.insert(sql, {
+                ':email': email,
+                ':password': None if accounts is not None else hashedPassword,
+                ':first_name': firstName,
+                ':last_name': lastName,
+                ':role': role,
+                ':verified': 1 if accounts is not None else 0,
+            })
+        except BaseException:
+            if accounts is not None and not loginRowExisted:
+                accounts.delete(email)   # don't leave a login account with no gpt account
+            raise
 
         return {'success': True, 'message': 'User created', 'user_id': php_intval(newUserId), 'status_code': 200}
 
@@ -226,7 +267,7 @@ class AdminController:
         userId = php_intval(input_.get('user_id') if input_.get('user_id') is not None else 0)
         firstName = php_trim(input_.get('first_name') if input_.get('first_name') is not None else '')
         lastName = php_trim(input_.get('last_name') if input_.get('last_name') is not None else '')
-        email = php_trim(input_.get('email') if input_.get('email') is not None else '')
+        email = php_trim(input_.get('email') if input_.get('email') is not None else '').lower()
         password = input_.get('password') if input_.get('password') is not None else ''
         role = input_.get('role')
 
@@ -244,6 +285,25 @@ class AdminController:
 
         if role == RobotAccount.ROLE:
             return self._robot_role_refusal()
+
+        if role is not None and role != 'admin' and self._isLastAdmin(userId):
+            return self._lastAdminRefusal()
+
+        try:
+            accounts = self._loginAccounts()
+        except Exception:  # noqa: BLE001 -- PHP catch (\Throwable)
+            return {'success': False, 'error': 'The login service database is not reachable', 'status_code': 503}
+        if accounts is not None:
+            current = self.db.fetch_one('SELECT email FROM users WHERE id = :id', {':id': userId})
+            currentEmail = php_strval(current['email'] if current else '').lower()
+            # sso_exchange matches the login account to the gpt account by email.
+            if currentEmail != email.lower():
+                return {'success': False,
+                        'error': 'The email of an account cannot be changed on a corporate installation',
+                        'status_code': 400}
+            if not php_empty(password):
+                accounts.setPassword(currentEmail, password_hash(php_strval(password)))
+            password = ''   # gpt keeps no password on a corporate install
 
         fields = ['email = :email', 'first_name = :first_name', 'last_name = :last_name', 'updated_at = NOW()']
         params = {':id': userId, ':email': email, ':first_name': firstName, ':last_name': lastName}
@@ -272,6 +332,19 @@ class AdminController:
         if self._is_service_user(userId):
             return self._user_not_found()
 
+        if self._isLastAdmin(userId):
+            return self._lastAdminRefusal()
+
+        try:
+            accounts = self._loginAccounts()
+        except Exception:  # noqa: BLE001 -- PHP catch (\Throwable)
+            return {'success': False, 'error': 'The login service database is not reachable', 'status_code': 503}
+        if accounts is not None:
+            row = self.db.fetch_one('SELECT email FROM users WHERE id = :id', {':id': userId})
+            emailToDelete = php_strval(row['email'] if row else '')
+            if emailToDelete != '':
+                accounts.delete(emailToDelete)
+
         sql = 'DELETE FROM users WHERE id = :id'
         rowcount = self.db.execute(sql, {':id': userId})
 
@@ -279,6 +352,19 @@ class AdminController:
             return {'success': False, 'error': 'User not found', 'status_code': 404}
 
         return {'success': True, 'message': 'User deleted', 'status_code': 200}
+
+    def _isLastAdmin(self, userId: int) -> bool:
+        """Whether userId is the only admin. Removing or demoting it would leave nobody able to administer the
+        install (and on corporate, would once have reopened first-run setup)."""
+        row = self.db.fetch_one('SELECT role FROM users WHERE id = :id', {':id': userId})
+        if not row or row.get('role') != 'admin':
+            return False
+        n = self.db.fetch_column("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+        return php_intval(n[0] if n else 0) == 1
+
+    @staticmethod
+    def _lastAdminRefusal() -> dict:
+        return {'success': False, 'error': 'The last administrator cannot be removed or demoted', 'status_code': 409}
 
     def _is_service_user(self, userId: int) -> bool:
         """The robot's service row is not a managed account: it answers as an unknown user."""

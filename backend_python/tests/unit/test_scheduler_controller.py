@@ -42,16 +42,20 @@ class FakeScheduleService:
         self.due = []
         self.stats = {'total': 0}
 
-    def getDueSchedules(self):
-        self.calls.append(('getDueSchedules',))
+    def getDueSchedules(self, workflowIds=None):
+        self.calls.append(('getDueSchedules',) if workflowIds is None else ('getDueSchedules', workflowIds))
         return self.due
+
+    def claim(self, id):
+        self.calls.append(('claim', id))
+        return True
+
+    def touchRunning(self, id):
+        self.calls.append(('touchRunning', id))
 
     def getStats(self, userId):
         self.calls.append(('getStats', userId))
         return self.stats
-
-    def markRunning(self, id):
-        self.calls.append(('markRunning', id))
 
     def markCompleted(self, id):
         self.calls.append(('markCompleted', id))
@@ -290,6 +294,10 @@ def _patch_stack(monkeypatch, workflow_repo, graph_runner_cls=None, workflow_run
     monkeypatch.setattr(sc_mod, 'AgentRunner', lambda *a, **k: object())
     monkeypatch.setattr(sc_mod, 'GraphWorkflowRunner', graph_runner_cls or FakeRunner)
     monkeypatch.setattr(sc_mod, 'WorkflowRunner', workflow_runner_cls or FakeRunner)
+    # The tick runs only the active schedule-mode workflows (ActiveWorkflowService.scheduleWorkflowIds).
+    ids = sorted(workflow_repo.workflows) or [99]
+    monkeypatch.setattr(sc_mod, 'ActiveWorkflowService',
+                        lambda db: type('A', (), {'scheduleWorkflowIds': lambda self: ids})())
 
 
 def test_execute_scheduler_graph_success_and_step_failure_sequencing(monkeypatch):
@@ -322,10 +330,10 @@ def test_execute_scheduler_graph_success_and_step_failure_sequencing(monkeypatch
     assert step_runner.calls[0][2] == {}  # falsy input_prompt -> no vars set
 
     assert fake.calls == [
-        ('getDueSchedules',),
-        ('markRunning', 1),
+        ('getDueSchedules', [10, 20]),
+        ('claim', 1), ('touchRunning', 1),
         ('markCompleted', 1),
-        ('markRunning', 2),
+        ('claim', 2), ('touchRunning', 2),
         ('markFailed', 2, 'nope'),
     ]
 
@@ -351,7 +359,8 @@ def test_execute_scheduler_workflow_not_found(monkeypatch):
 
     results = c._executeScheduler()
 
-    assert fake.calls == [('getDueSchedules',), ('markRunning', 1), ('markFailed', 1, 'Workflow #99 not found')]
+    assert fake.calls == [('getDueSchedules', [99]), ('claim', 1), ('touchRunning', 1),
+                          ('markFailed', 1, 'Workflow #99 not found')]
     assert results['failed'] == [
         {'schedule_id': 1, 'workflow_id': 99, 'workflow_name': 'Unknown', 'error': 'Workflow #99 not found'},
     ]
@@ -367,7 +376,8 @@ def test_execute_scheduler_workflow_disabled(monkeypatch):
 
     results = c._executeScheduler()
 
-    assert fake.calls == [('getDueSchedules',), ('markRunning', 1), ('markFailed', 1, 'Workflow #5 is disabled')]
+    assert fake.calls == [('getDueSchedules', [5]), ('claim', 1), ('touchRunning', 1),
+                          ('markFailed', 1, 'Workflow #5 is disabled')]
     assert results['failed'][0]['error'] == 'Workflow #5 is disabled'
 
 
@@ -383,8 +393,22 @@ def test_execute_scheduler_runner_raises(monkeypatch):
 
     results = c._executeScheduler()
 
-    assert fake.calls == [('getDueSchedules',), ('markRunning', 1), ('markFailed', 1, 'runner exploded')]
+    assert fake.calls == [('getDueSchedules', [5]), ('claim', 1), ('touchRunning', 1),
+                          ('markFailed', 1, 'runner exploded')]
     assert results['failed'][0]['error'] == 'runner exploded'
+
+
+def test_execute_scheduler_missing_active_table_runs_nothing(monkeypatch):
+    wf_repo = FakeWorkflowRepo(workflows={5: FakeWorkflow(enabled=True)})
+    _patch_stack(monkeypatch, wf_repo)
+
+    def boom(db):
+        raise RuntimeError('no such table: active_workflows')
+    monkeypatch.setattr(sc_mod, 'ActiveWorkflowService', boom)
+    c, fake = controller()
+    fake.due = [{'id': 1, 'workflow_id': 5, 'user_id': 3, 'input_prompt': None, 'workflow_name': 'X'}]
+    c._executeScheduler()
+    assert fake.calls[0] == ('getDueSchedules', [])
 
 
 def test_execute_scheduler_sets_assistant_for_cleanup(monkeypatch):

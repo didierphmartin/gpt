@@ -575,11 +575,32 @@ def test_runPlaybookNode_success_sends_round_events_then_named_done_frame(monkey
     request['sse'] = sse
     c.runPlaybookNode(request)
     assert sse.sent_data == [{'type': 'round', 'leg': 0}]
-    assert sse.sent == [('done', {'output': 'done', 'run_id': 1, 'status': 'completed'})]
+    # PHP adds the node's exit (PlaybookOutcome): any status but 'resolved' takes 'failed'; a one-output node
+    # keeps its transcript as it was.
+    assert sse.sent == [('done', {'output': 'done', 'run_id': 1, 'status': 'completed', 'exit': 'failed'})]
     userId, nodeConfig, requestText = FakePlaybookNodeRunner.last_instance.run_calls[0]
     assert userId == 3
     assert nodeConfig == {'playbook': 'x'}
     assert requestText == 'hi'
+
+
+def test_runPlaybookNode_with_exits_routes_a_failure_to_the_failed_exit(monkeypatch):
+    def raising_ctor(config):
+        runner = FakePlaybookNodeRunner(config)
+        runner.raise_ = RuntimeError('leg failed')
+        return runner
+
+    monkeypatch.setattr(
+        'app.agent_team.controllers.workflow_controller.PlaybookNodeRunner', raising_ctor)
+    c = controller()
+    sse = FakeSse()
+    request = ctx(body={'node_config': {'playbook': 'x', 'exits': ['done', 'failed']}, 'prompt': 'hi'})
+    request['sse'] = sse
+    c.runPlaybookNode(request)
+    event, data = sse.sent[0]
+    assert event == 'done'
+    assert data['exit'] == 'failed'
+    assert 'leg failed' in data['output']
 
 
 def test_runPlaybookNode_exception_sends_named_error_frame(monkeypatch):

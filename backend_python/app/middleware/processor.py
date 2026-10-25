@@ -21,6 +21,9 @@ PUBLIC_ROUTES = [
     {'pattern': '/api/v1/webauthn/challenge', 'methods': ['POST']},
     {'pattern': '/api/v1/webauthn/authenticate', 'methods': ['POST']},
     {'pattern': '/api/v1/models/catalog', 'methods': ['GET']},
+    # Corporate first-run setup; createAdmin refuses once an admin exists.
+    {'pattern': '/api/v1/setup/status', 'methods': ['GET']},
+    {'pattern': '/api/v1/setup/admin', 'methods': ['POST']},
     {'pattern': '/', 'methods': ['GET']},
 ]
 

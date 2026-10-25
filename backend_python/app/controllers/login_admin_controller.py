@@ -13,6 +13,7 @@ Phase 1: Overview stats + Users CRUD.
 from __future__ import annotations
 
 from app.db import Db
+from app.services import edition
 from app.support.db_cleanup import close_db, close_secondary_connections as _cleanup
 from app.support.logger import error_log
 from app.support.phpcompat import (
@@ -52,6 +53,14 @@ class LoginAdminController:
         if not self._adminRow(request):
             return {'success': False, 'error': 'Admin access required', 'status_code': 403}
         return None
+
+    def _refuseWriteOnCorporate(self) -> dict | None:
+        """On a corporate install AdminController (the Users screen) is the only writer of the login database:
+        it keeps each login row in step with its gpt row. Checked before any database access."""
+        if not edition.is_corporate(self.config):
+            return None
+        return {'success': False, 'error': 'Manage accounts from the Users screen on this installation',
+                'status_code': 403}
 
     def _login(self) -> Db | None:
         """Connection to the login DB, or None if unconfigured/unreachable."""
@@ -154,6 +163,9 @@ class LoginAdminController:
     @_cleanup
     def createUser(self, request) -> dict:
         """Create a user (no password; provider=email)."""
+        refused = self._refuseWriteOnCorporate()
+        if refused:
+            return refused
         err = self._requireAdmin(request)
         if err:
             return err
@@ -183,6 +195,9 @@ class LoginAdminController:
     def updateUser(self, request) -> dict:
         """Edit account fields (profile / verification). Roles are per-app
         (app_user_roles), not editable here."""
+        refused = self._refuseWriteOnCorporate()
+        if refused:
+            return refused
         err = self._requireAdmin(request)
         if err:
             return err
@@ -220,6 +235,9 @@ class LoginAdminController:
     @_cleanup
     def deleteUser(self, request) -> dict:
         """Delete a user + their passkeys. An admin cannot delete their own account."""
+        refused = self._refuseWriteOnCorporate()
+        if refused:
+            return refused
         err = self._requireAdmin(request)
         if err:
             return err
@@ -326,6 +344,9 @@ class LoginAdminController:
     def setAppUserRole(self, request) -> dict:
         """Set/clear a user's role for one app. Body: { app, user_id, role }.
         Empty/"none" role revokes access."""
+        refused = self._refuseWriteOnCorporate()
+        if refused:
+            return refused
         err = self._requireAdmin(request)
         if err:
             return err
@@ -366,6 +387,9 @@ class LoginAdminController:
         new. Writes both `users` (auth-only, no password — completed via
         reset/social/passkey) and `app_user_roles`.
         Body: { app, email, first_name?, last_name?, role }."""
+        refused = self._refuseWriteOnCorporate()
+        if refused:
+            return refused
         err = self._requireAdmin(request)
         if err:
             return err

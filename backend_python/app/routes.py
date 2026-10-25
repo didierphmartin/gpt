@@ -1,5 +1,6 @@
 """Route table — mirrors backend/src/routes.php (same order, same handler names).
 Rows for controllers not yet ported are added phase by phase."""
+from app.agent_team.controllers.active_workflow_controller import ActiveWorkflowController
 from app.agent_team.controllers.agent_controller import AgentController
 from app.agent_team.controllers.agent_mcp_controller import AgentMCPController
 from app.agent_team.controllers.app_key_controller import AppKeyController
@@ -14,8 +15,10 @@ from app.agent_team.controllers.workflow_schema_controller import WorkflowSchema
 from app.controllers.admin_controller import AdminController
 from app.controllers.affiliate_controller import AffiliateController
 from app.controllers.auth_controller import AuthController
+from app.controllers.automations_controller import AutomationsController
 from app.controllers.chat_attachment_controller import ChatAttachmentController
 from app.controllers.chat_controller import ChatController
+from app.controllers.code_components_controller import CodeComponentsController
 from app.controllers.context_controller import ContextController
 from app.controllers.dispatch_controller import DispatchController
 from app.controllers.drive_controller import DriveController
@@ -38,6 +41,7 @@ from app.controllers.robot_controller import RobotController
 from app.controllers.roles_controller import RolesController
 from app.controllers.root_controller import RootController
 from app.controllers.settings_controller import SettingsController
+from app.controllers.setup_controller import SetupController
 from app.controllers.system_settings_controller import SystemSettingsController
 from app.controllers.tools_controller import ToolsController
 from app.controllers.traces_controller import TracesController
@@ -51,6 +55,7 @@ from app.controllers.webauthn_controller import WebAuthnController
 # PHP-prefixed key 'AgentTeam:<ClassName>' so the registry mirrors routes.php's
 # ['AgentTeam:UserMemoryController', 'show'] handler literals.
 CONTROLLERS = {
+    'AgentTeam:ActiveWorkflowController': ActiveWorkflowController,
     'AgentTeam:AgentController': AgentController,
     'AgentTeam:AgentMCPController': AgentMCPController,
     'AgentTeam:AppKeyController': AppKeyController,
@@ -65,8 +70,10 @@ CONTROLLERS = {
     'AdminController': AdminController,
     'AffiliateController': AffiliateController,
     'AuthController': AuthController,
+    'AutomationsController': AutomationsController,
     'ChatAttachmentController': ChatAttachmentController,
     'ChatController': ChatController,
+    'CodeComponentsController': CodeComponentsController,
     'ContextController': ContextController,
     'DispatchController': DispatchController,
     'DriveController': DriveController,
@@ -89,6 +96,7 @@ CONTROLLERS = {
     'RolesController': RolesController,
     'RootController': RootController,
     'SettingsController': SettingsController,
+    'SetupController': SetupController,
     'SystemSettingsController': SystemSettingsController,
     'ToolsController': ToolsController,
     'TracesController': TracesController,
@@ -335,6 +343,9 @@ ROUTES = [
     ('GET', '/api/v1/admin/login/app-users', ('LoginAdminController', 'getAppUsers')),
     ('POST', '/api/v1/admin/login/app-users/role', ('LoginAdminController', 'setAppUserRole')),
     ('POST', '/api/v1/admin/login/app-users/add', ('LoginAdminController', 'addAppMember')),
+    # Corporate first-run setup (public: before setup nobody can sign in).
+    ('GET', '/api/v1/setup/status', ('SetupController', 'status')),
+    ('POST', '/api/v1/setup/admin', ('SetupController', 'createAdmin')),
     # WEBAUTHN
     ('POST', '/api/v1/webauthn/challenge', ('WebAuthnController', 'challenge')),
     ('POST', '/api/v1/webauthn/register', ('WebAuthnController', 'register')),
@@ -404,6 +415,7 @@ ROUTES = [
     ('GET', '/api/v1/workflows/{id:\\d+}/generate-maf', ('AgentTeam:WorkflowController', 'generateMaf')),
     ('GET', '/api/v1/workflows/{id:\\d+}/generate-nooa', ('AgentTeam:WorkflowController', 'generateNooa')),
     ('GET', '/api/v1/workflows/{id:\\d+}/executions', ('AgentTeam:WorkflowController', 'executions')),
+    ('GET', '/api/v1/workflows/{id:\\d+}/live', ('AgentTeam:WorkflowController', 'live')),
     ('GET', '/api/v1/workflows/runs/{runId:[a-f0-9]{32}}/events', ('AgentTeam:WorkflowController', 'runEvents')),
     ('POST', '/api/v1/workflows/{id:\\d+}/toggle', ('AgentTeam:WorkflowController', 'toggle')),
     ('POST', '/api/v1/workflows/{id:\\d+}/duplicate', ('AgentTeam:WorkflowController', 'duplicate')),
@@ -431,6 +443,22 @@ ROUTES = [
     ('DELETE', '/api/v1/playbooks/{id:\\d+}', ('PlaybooksController', 'destroy')),
     ('GET', '/api/v1/playbooks/{id:\\d+}/used-by', ('PlaybooksController', 'usedBy')),
     ('POST', '/api/v1/playbooks/{id:\\d+}/publish', ('PlaybooksController', 'publish')),
+    # The automation record (SQL: schema/migrations/2026-10-20_automations.sql) and its drift check / dev-test install.
+    ('GET', '/api/v1/automations', ('AutomationsController', 'index')),
+    ('POST', '/api/v1/automations', ('AutomationsController', 'create')),
+    ('PUT', '/api/v1/automations/{id:\\d+}', ('AutomationsController', 'update')),
+    ('POST', '/api/v1/automations/{id:\\d+}/check', ('AutomationsController', 'check')),
+    ('POST', '/api/v1/automations/{id:\\d+}/install', ('AutomationsController', 'install')),
+    # The code components collection (CodeComponentsController, over CodeComponentStore) and its Start option.
+    ('GET', '/api/v1/code-components', ('CodeComponentsController', 'index')),
+    ('POST', '/api/v1/code-components', ('CodeComponentsController', 'create')),
+    ('GET', '/api/v1/code-components/{id:\\d+}', ('CodeComponentsController', 'show')),
+    ('PUT', '/api/v1/code-components/{id:\\d+}', ('CodeComponentsController', 'update')),
+    ('DELETE', '/api/v1/code-components/{id:\\d+}', ('CodeComponentsController', 'destroy')),
+    ('GET', '/api/v1/code-components/{id:\\d+}/used-by', ('CodeComponentsController', 'usedBy')),
+    ('PUT', '/api/v1/code-components/{id:\\d+}/start-option', ('CodeComponentsController', 'setStartOption')),
+    ('GET', '/api/v1/code-components/{id:\\d+}/start-option/impact', ('CodeComponentsController', 'startOptionImpact')),
+    ('DELETE', '/api/v1/code-components/{id:\\d+}/start-option', ('CodeComponentsController', 'clearStartOption')),
     ('GET', '/api/v1/robot', ('RobotController', 'show')),
     ('GET', '/api/v1/robot/playbooks', ('RobotController', 'playbooks')),
     ('DELETE', '/api/v1/robot/playbooks/{id:\\d+}', ('RobotController', 'unpublish')),
@@ -471,6 +499,9 @@ ROUTES = [
     ('POST', '/api/v1/schedules/{id:\\d+}/pause', ('AgentTeam:ScheduledWorkflowController', 'pause')),
     ('POST', '/api/v1/schedules/{id:\\d+}/resume', ('AgentTeam:ScheduledWorkflowController', 'resume')),
     ('GET', '/api/v1/workflows/{id:\\d+}/schedules', ('AgentTeam:ScheduledWorkflowController', 'byWorkflow')),
+    ('GET', '/api/v1/workflows/active', ('AgentTeam:ActiveWorkflowController', 'show')),
+    ('POST', '/api/v1/workflows/{id:\\d+}/activate', ('AgentTeam:ActiveWorkflowController', 'activate')),
+    ('DELETE', '/api/v1/workflows/{id:\\d+}/activate', ('AgentTeam:ActiveWorkflowController', 'deactivate')),
     # SCHEDULER (routes.php:464-465. `/scheduler/run` is public — see
     # app/middleware/processor.py PUBLIC_ROUTES.)
     ('POST', '/api/v1/scheduler/run', ('AgentTeam:SchedulerController', 'run')),

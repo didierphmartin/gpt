@@ -40,19 +40,25 @@ from __future__ import annotations
 
 import os
 import re
+import time
 
 from app.agent_team.models.workflow import Workflow
+from app.agent_team.services.active_workflow_service import ActiveWorkflowService
 from app.agent_team.services.adk_generator import ADKGenerator
 from app.agent_team.services.agent_repository import AgentRepository
 from app.agent_team.services.agent_runner import AgentRunner
 from app.agent_team.services.graph_workflow_runner import GraphWorkflowRunner
 from app.agent_team.services.lang_graph_generator import LangGraphGenerator
+from app.agent_team.services.live_feed import LiveFeed, LiveStream
 from app.agent_team.services.maf_generator import MAFGenerator
 from app.agent_team.services.nooa_generator import NOOAGenerator
 from app.agent_team.services.playbook_node_runner import PlaybookNodeRunner
+from app.agent_team.services.playbook_outcome import PlaybookOutcome
+from app.agent_team.services.playbook_source import PlaybookSource
 from app.agent_team.services.skill_tool_bridge import SkillToolBridge
 from app.agent_team.services.stream_context import StreamContext
 from app.agent_team.services.workflow_output_storage import WorkflowOutputStorage
+from app.agent_team.services.workflow_ref_resolver import UnresolvedRefsException, WorkflowRefResolver
 from app.agent_team.services.workflow_repository import WorkflowRepository
 from app.agent_team.services.workflow_run_log import WorkflowRunLog
 from app.agent_team.services.workflow_runner import WorkflowRunner
@@ -216,8 +222,26 @@ class WorkflowController:
     # POST /api/v1/workflows
     # ========================================================================
 
+    @staticmethod
+    def _graphParts(body: dict) -> tuple:
+        """`$graphData = $body['definition'] ?? $body['graph'] ?? []`, then its nodes (or steps) and edges."""
+        graphData = body.get('definition')
+        if graphData is None:
+            graphData = body.get('graph')
+        if graphData is None:
+            graphData = {}
+        nodes = graphData.get('nodes') if isinstance(graphData, dict) else None
+        if nodes is None:
+            nodes = graphData.get('steps') if isinstance(graphData, dict) else None
+        if nodes is None:
+            nodes = []
+        edges = graphData.get('edges') if isinstance(graphData, dict) else None
+        if edges is None:
+            edges = []
+        return nodes, edges
+
     def create(self, request) -> dict:
-        """PHP 128-225."""
+        """PHP 128-237."""
         userId = request['user_id'] if request.get('user_id') is not None else 0
         body = request['body'] if request.get('body') is not None else {}
 
@@ -230,6 +254,15 @@ class WorkflowController:
         hasGraph = (not php_empty(_nested_get(body, 'definition', 'nodes'))
                     or not php_empty(_nested_get(body, 'graph', 'nodes')))
         hasSteps = not php_empty(body.get('steps')) and is_php_array(body.get('steps'))
+
+        # Names -> ids before anything is inserted: an unknown name must not leave an empty workflow behind.
+        resolved = None
+        if hasGraph:
+            nodes, edges = self._graphParts(body)
+            try:
+                resolved = WorkflowRefResolver(self.db).resolve(php_intval(userId), nodes, edges)
+            except UnresolvedRefsException as e:
+                return {'success': False, 'error': 'unknown references', 'missing': e.missing, 'status_code': 422}
 
         try:
             workflow = Workflow()
@@ -281,7 +314,7 @@ class WorkflowController:
                 error_log(f'[WorkflowController] Saving graph with {len(nodes)} nodes and {len(edges)} edges')
 
                 try:
-                    self.graphRepository.saveGraph(created.getId(), nodes, edges)
+                    self.graphRepository.saveGraph(created.getId(), resolved['nodes'], resolved['edges'])
                     error_log('[WorkflowController] Graph saved successfully')
                 except Exception as e:  # noqa: BLE001
                     error_log(f'[WorkflowController] Error saving graph: {e}')
@@ -295,6 +328,8 @@ class WorkflowController:
                 'message': 'Workflow created successfully',
                 'status_code': 201,
             }
+        except UnresolvedRefsException as e:
+            return {'success': False, 'error': 'unknown references', 'missing': e.missing, 'status_code': 422}
         except Exception as e:  # noqa: BLE001
             return {'success': False, 'error': str(e), 'status_code': 500}
 
@@ -580,7 +615,8 @@ class WorkflowController:
                 error_log(f'[WorkflowController] Updating graph with {len(nodes)} nodes and {len(edges)} edges')
 
                 try:
-                    self.graphRepository.saveGraph(workflowId, nodes, edges)
+                    resolved = WorkflowRefResolver(self.db).resolve(php_intval(userId), nodes, edges)
+                    self.graphRepository.saveGraph(workflowId, resolved['nodes'], resolved['edges'])
                     error_log('[WorkflowController] Graph updated successfully')
                 except Exception as e:  # noqa: BLE001
                     error_log(f'[WorkflowController] Error updating graph: {e}')
@@ -594,6 +630,8 @@ class WorkflowController:
                 'message': 'Workflow updated successfully',
                 'status_code': 200,
             }
+        except UnresolvedRefsException as e:
+            return {'success': False, 'error': 'unknown references', 'missing': e.missing, 'status_code': 422}
         except Exception as e:  # noqa: BLE001
             return {'success': False, 'error': str(e), 'status_code': 500}
 
@@ -884,21 +922,52 @@ class WorkflowController:
             sse.send('error', {'error': 'Authentication required'})
             return None
 
-        nodeConfig = body.get('node_config') if isinstance(body.get('node_config'), dict) else {}
+        nodeConfig = dict(body.get('node_config')) if isinstance(body.get('node_config'), dict) else {}
         prompt = php_strval(body.get('prompt') if body.get('prompt') is not None else '')
+        # The first parent's text names the playbook and the job (as on the server engine); the prompt when absent.
+        parentText = body['parent_text'] if isinstance(body.get('parent_text'), str) else prompt
 
         def sseCallback(event: dict) -> None:
             sse.send_data(event)
 
         try:
-            # A node linked to the collection sends playbook_id; the text is read here, for its owner.
-            if nodeConfig.get('playbook_id') is not None:
+            fromInput = PlaybookSource.isFromInput(nodeConfig)
+            reason = None
+            result: dict = {}
+            if fromInput:
+                # The playbook is named by the job in the request text (the robot's published copy).
+                src = PlaybookSource.fromInput(self.db, userId, nodeConfig, parentText)
+                if src['ok']:
+                    nodeConfig['playbook'] = src['text']
+                    nodeConfig.pop('playbook_id', None)
+                else:
+                    reason = src['reason']
+            elif nodeConfig.get('playbook_id') is not None:
+                # A node linked to the collection sends playbook_id; the text is read here, for its owner.
                 pb = PlaybookStore(self.db).get(userId, php_intval(nodeConfig['playbook_id']))
                 if pb is None:
                     raise RuntimeError(f"Playbook #{nodeConfig['playbook_id']} not found")
-                nodeConfig = {**nodeConfig, 'playbook': pb['text']}
-            runner = PlaybookNodeRunner(self.config)
-            result = runner.run(userId, nodeConfig, prompt, sseCallback)
+                nodeConfig['playbook'] = pb['text']
+            hasExits = isinstance(nodeConfig.get('exits'), (list, dict)) and len(nodeConfig['exits']) > 0
+            transcript = ''
+            if reason is None:
+                try:
+                    runner = PlaybookNodeRunner(self.config)
+                    # Attended: gates go to the person at the editor.
+                    result = runner.run(userId, nodeConfig, prompt, sseCallback)
+                    transcript = php_strval(result.get('output') if result.get('output') is not None else '')
+                    reason = PlaybookOutcome.reason(php_strval(result.get('status') if result.get('status') is not None else ''),
+                                                    result.get('gate'))
+                except Exception as e:  # noqa: BLE001 -- PHP catch (\Throwable $e)
+                    if not hasExits:
+                        raise
+                    reason = PlaybookOutcome.errorReason(e)
+            res = PlaybookOutcome.nodeResult(reason, transcript,
+                                             PlaybookSource.jobLine(parentText) if fromInput or hasExits else None)
+            result['exit'] = res['exit']
+            # An old one-output node keeps its transcript as it was (no failure line, no exit routing).
+            if hasExits or fromInput:
+                result['output'] = res['text']
 
             sse.send('done', result)
         except Exception as e:  # noqa: BLE001 -- mirrors PHP `catch (\Throwable $e)`
@@ -967,6 +1036,49 @@ class WorkflowController:
             return {'success': True, 'data': executions, 'count': len(executions), 'status_code': 200}
         except Exception as e:  # noqa: BLE001
             return {'success': False, 'error': str(e), 'status_code': 500}
+
+    # ========================================================================
+    # GET /api/v1/workflows/{id}/live
+    # ========================================================================
+
+    def live(self, request, id: int = 0):
+        """The live overlay's stream (spec 2026-10-15 live-overlay §3.3): `event: run|state|bye|error` frames
+        (data JSON with unescaped slashes/unicode) and `: ping` comments, for about 50 s. The SSE headers come
+        from main.py's StreamingResponse; returning after the stream started sends no JSON body (PHP's
+        streaming_handled)."""
+        userId = php_intval(request.get('user_id') if request.get('user_id') is not None else 0)
+        params = request.get('params') or {}
+        workflowId = php_intval(params.get('id') if params.get('id') is not None else 0)
+        sse = request['sse']
+
+        def emit(event: str, data) -> None:
+            if event == 'ping':
+                sse.send_raw(b': ping\n\n')
+            else:
+                sse.send(event, data)
+
+        handled = {'streaming_handled': True}
+        if not userId or not workflowId or not self.workflowRepository.canUserAccess(userId, workflowId):
+            emit('error', {'error': 'Workflow not found or access denied' if userId else 'Authentication required'})
+            return handled
+        log = WorkflowRunLog(WorkflowRunLog.defaultDir(self.config))
+        active = ActiveWorkflowService(self.db)
+        query = request.get('query') or {}
+        cursor = php_strval(query['cursor']) if query.get('cursor') is not None else None
+        try:
+            LiveStream.run(
+                lambda c: LiveFeed.next(log, workflowId, c),
+                lambda: active.get(userId),
+                emit,
+                lambda s: time.sleep(s),
+                lambda: time.time(),
+                lambda: sse.aborted,
+                None if cursor == '' else cursor,
+            )
+        except RuntimeError as e:
+            if str(e) != 'CLIENT_ABORTED':   # the client left mid-send: PHP's connection_aborted() ends the loop
+                raise
+        return handled
 
     # ========================================================================
     # GET /api/v1/workflows/runs/{runId}/events

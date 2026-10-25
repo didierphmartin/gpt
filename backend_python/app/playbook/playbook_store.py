@@ -65,11 +65,13 @@ class PlaybookStore:
 
     def list(self, userId: int) -> list:
         """PHP 33-43."""
-        rows = self.db.fetch_all(f'SELECT {_COLS} FROM playbooks WHERE user_id = ? ORDER BY title', [userId])
+        # automation_id: the automation that manages the playbook (None = none); save_playbook_agent checks it on a key clash.
+        rows = self.db.fetch_all(f'SELECT {_COLS}, automation_id FROM playbooks WHERE user_id = ? ORDER BY title', [userId])
         out = []
         for r in rows:
             r = dict(r)
             r['id'] = int(r['id'])
+            r['automation_id'] = None if r['automation_id'] is None else int(r['automation_id'])
             used = self.usedBy(userId, r['id'])
             r['used_by'] = len(used['agents']) + len(used['nodes'])
             out.append(r)

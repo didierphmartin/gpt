@@ -62,6 +62,9 @@ class SqliteDb:
         self._autocommit()
         return cur.lastrowid
 
+    def inTransaction(self) -> bool:
+        return self._in_tx
+
     def begin(self):
         self.conn.commit()
         self._in_tx = True
@@ -135,7 +138,7 @@ def pb_state(pb_db, pb_dir) -> PlaybookRunState:
 PLAYBOOKS_DDL = [
     'CREATE TABLE playbooks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, pkey TEXT NOT NULL, '
     'title TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT, updated_at TEXT, '
-    'published_by INTEGER NULL, published_at TEXT NULL, source_id INTEGER NULL, UNIQUE (user_id, pkey))',
+    'published_by INTEGER NULL, published_at TEXT NULL, source_id INTEGER NULL, automation_id INTEGER NULL, UNIQUE (user_id, pkey))',
     'CREATE TABLE agents (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL, '
     "agent_type TEXT DEFAULT 'standard', instructions TEXT, playbook_id INTEGER)",
     'CREATE TABLE agent_workflows (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, name TEXT)',

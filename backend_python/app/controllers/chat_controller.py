@@ -336,11 +336,13 @@ class ChatController:
             name = entry.get('name')
             if (not isinstance(name, str) or name == ''
                     # route_to: the workflow dispatcher's branch choice (browser run path);
-                    # resolved client-side, so it rides the same per-request channel.
+                    # resolved client-side, so it rides the same per-request channel. save_*/install_automation:
+                    # the skills' browser-side save tools (playbook-author, workflow-compile, servicenow-automation-author).
                     # Deliberate deviation: PHP's preg_match('/^...$/') without the D
                     # modifier accepts a trailing "\n"; re.fullmatch is stricter and rejects
                     # it — kept as-is (stricter is safer for a name used to route tool calls).
-                    or not re.fullmatch(r'webmcp_[a-zA-Z0-9_\-.]{1,120}|route_to|save_playbook_agent', name)):
+                    or not re.fullmatch(r'webmcp_[a-zA-Z0-9_\-.]{1,120}|route_to|save_playbook_agent|save_workflow|save_automation|install_automation',
+                                             name)):
                 error_log(f"[ChatController] client_tools[{i}] dropped: invalid name " + repr(name))
                 continue
             description = entry.get('description') if entry.get('description') is not None else ''

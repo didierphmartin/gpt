@@ -9,6 +9,8 @@ import time
 
 import pymysql
 
+from app.agent_team.services.start_option_graph import StartOptionGraph
+from app.code_component.code_component_store import CodeComponentStore
 from app.playbook.playbook_store import PlaybookStore
 from app.support.logger import error_log
 from app.support.phpcompat import is_numeric, php_bool, php_empty, php_intval
@@ -57,24 +59,57 @@ class WorkflowGraphRepository:
             row['config'] = _decode_config(row.get('config'))
             result.append(row)
 
-        # Playbook nodes link to the collection: fill in the linked text for the workflow's
-        # owner, so every reader (compilers, docs) keeps receiving config['playbook'].
-        owner = None
+        # Linked nodes are filled for the workflow's owner, so every reader (compilers, docs) keeps
+        # receiving the node's own fields: playbook text, and a code component's body.
+        owner = {'id': None}
+
+        def ownerId() -> int:
+            if owner['id'] is None:
+                ownerRow = self.db.fetch_one('SELECT user_id FROM agent_workflows WHERE id = ?', [workflow_id])
+                owner['id'] = php_intval(ownerRow['user_id']) if ownerRow else 0
+            return owner['id']
         store = PlaybookStore(self.db)
         for row in result:
             cfg = row['config']
             if row.get('node_type') != 'playbook' or not isinstance(cfg, dict) or cfg.get('playbook_id') is None:
                 continue
-            if owner is None:
-                ownerRow = self.db.fetch_one('SELECT user_id FROM agent_workflows WHERE id = ?', [workflow_id])
-                owner = php_intval(ownerRow['user_id']) if ownerRow else 0
-            pb = store.get(owner, php_intval(cfg['playbook_id']))
+            pb = store.get(ownerId(), php_intval(cfg['playbook_id']))
             if pb is None:
                 cfg.pop('playbook', None)
                 cfg['playbook_missing'] = True
             else:
                 cfg.pop('playbook_missing', None)
                 cfg['playbook'] = pb['text']
+            row['config'] = cfg
+
+        codeStore = CodeComponentStore(self.db)
+        for row in result:
+            cfg = row['config']
+            if (not CodeComponentStore.isCodeNode(row.get('node_type'), cfg) or not isinstance(cfg, dict)
+                    or php_empty(cfg.get('code_component_id'))):
+                continue
+            c = codeStore.get(ownerId(), php_intval(cfg['code_component_id']))
+            for k in ('code', 'exits', 'mcp_servers', 'timeout_s', 'code_component_missing'):
+                cfg.pop(k, None)
+            if c is None:
+                cfg['code_component_missing'] = True
+            else:
+                cfg.update({'code': c['code'], 'exits': c['exits'], 'mcp_servers': c['mcp_servers'], 'timeout_s': c['timeout_s']})
+            row['config'] = cfg
+
+        # A Start on a Start option shows the option's exits as its ports: read like a linked code node's.
+        for row in result:
+            cid = StartOptionGraph.optionId(row)
+            if cid is None:
+                continue
+            cfg = row['config']
+            for k in ('exits', 'start_option_label', 'start_option_missing'):
+                cfg.pop(k, None)
+            c = codeStore.get(ownerId(), cid)
+            if c is None or c['start_trigger'] is None:
+                cfg['start_option_missing'] = True
+            else:
+                cfg.update({'exits': c['exits'], 'start_option_label': c['start_trigger']['label']})
             row['config'] = cfg
 
         return result
@@ -86,11 +121,21 @@ class WorkflowGraphRepository:
         )
 
     def getGraph(self, workflow_id: int) -> dict:
-        """PHP 78-84."""
-        return {
+        """Full graph (nodes + edges) for a workflow, as runners and compilers read it: a Start on a Start
+        option is expanded into Start -> the option's code node (StartOptionGraph)."""
+        graph = {
             'nodes': self.getNodes(workflow_id),
             'edges': self.getEdges(workflow_id),
         }
+        owner = {'id': None}
+        codeStore = CodeComponentStore(self.db)
+
+        def componentFor(id: int):
+            if owner['id'] is None:
+                ownerRow = self.db.fetch_one('SELECT user_id FROM agent_workflows WHERE id = ?', [workflow_id])
+                owner['id'] = php_intval(ownerRow['user_id']) if ownerRow else 0
+            return codeStore.get(owner['id'], id)
+        return StartOptionGraph.expand(graph, componentFor)
 
     def createNode(self, workflow_id: int, node_data: dict) -> int:
         """PHP 90-132."""
@@ -109,9 +154,7 @@ class WorkflowGraphRepository:
 
         # Ensure type is also stored in config for redundancy
         config = self._resolveConfig(node_data, node_type)
-        # A linked playbook node stores only the link; the text and the missing flag are derived on read.
-        if config.get('playbook_id') is not None:
-            config = {k: v for k, v in config.items() if k not in ('playbook', 'playbook_missing')}
+        config = self._stripDerived(config, node_type)
 
         # Validate agent_id: must be null or a valid integer (foreign key constraint)
         # Strings like "node_3" are not valid - treat them as null
@@ -143,9 +186,7 @@ class WorkflowGraphRepository:
             )
 
         config = self._resolveConfig(node_data, node_type)
-        # A linked playbook node stores only the link; the text and the missing flag are derived on read.
-        if config.get('playbook_id') is not None:
-            config = {k: v for k, v in config.items() if k not in ('playbook', 'playbook_missing')}
+        config = self._stripDerived(config, node_type)
         agent_id = self._resolveAgentId(node_data)
 
         sql = (
@@ -167,6 +208,21 @@ class WorkflowGraphRepository:
             'pos_y': self._resolvePos(node_data, 'pos_y', 'y'),
         })
         return True
+
+    @staticmethod
+    def _stripDerived(config: dict, node_type: str) -> dict:
+        """Linked nodes store only the link; what is derived on read is never saved."""
+        drop: tuple = ()
+        # A linked playbook node stores only the link; the text and the missing flag are derived on read.
+        if config.get('playbook_id') is not None:
+            drop += ('playbook', 'playbook_missing')
+        # A linked code node stores only the link; its body and the missing flag are derived on read.
+        if node_type == 'code' and config.get('code_component_id') is not None:
+            drop += ('code', 'exits', 'mcp_servers', 'timeout_s', 'code_component_missing')
+        # A Start on a Start option stores only the option; its exits, label and missing flag are derived on read.
+        if node_type == 'start':
+            drop += ('exits', 'start_option_label', 'start_option_missing')
+        return {k: v for k, v in config.items() if k not in drop} if drop else config
 
     @staticmethod
     def _resolveNodeType(node_data: dict) -> str:

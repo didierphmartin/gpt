@@ -81,6 +81,16 @@ class SseStream:
         if self.aborted:                      # PHP: connection_aborted() checked after flush()
             raise RuntimeError('CLIENT_ABORTED')
 
+    def send_raw(self, frame: bytes) -> None:
+        """A frame written as given (e.g. an SSE comment line, `: ping\\n\\n`), same start/abort semantics."""
+        if self.aborted:
+            raise RuntimeError('CLIENT_ABORTED')
+        if not self.started:
+            self.start()
+        self._loop.call_soon_threadsafe(self.queue.put_nowait, frame)
+        if self.aborted:
+            raise RuntimeError('CLIENT_ABORTED')
+
     def end(self) -> None:
         if self.ended:
             return
