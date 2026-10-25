@@ -277,7 +277,6 @@ router.post('/api/v1/admin/llm-settings', handle((ctx) => systemSettings.saveLLM
 router.post('/api/v1/admin/llm-settings/toggle', handle((ctx) => systemSettings.toggleProvider(ctx)));
 router.post('/api/v1/admin/llm-settings/seed', handle((ctx) => systemSettings.seedFromConfig(ctx)));
 router.get('/api/v1/admin/llm-settings/:key', handle((ctx) => systemSettings.getLLMProvider(ctx)));
-router.put('/api/v1/admin/llm-settings/:key', handle((ctx) => systemSettings.saveLLMProvider(ctx)));
 router.delete('/api/v1/admin/llm-settings/:key', handle((ctx) => systemSettings.deleteLLMProvider(ctx)));
 
 // Admin — users (protected; AUTHENTICATION ONLY — AdminController.php has NO admin-role check, so
