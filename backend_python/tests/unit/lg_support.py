@@ -99,6 +99,16 @@ def require_py310() -> str:
     return py
 
 
+def exec_lines(text: str) -> list:
+    """PHP exec()'s output array: one entry per line, trailing whitespace of each line dropped."""
+    if text == '':
+        return []
+    lines = text.split('\n')
+    if lines[-1] == '':
+        lines.pop()
+    return [line.rstrip(' \t\n\r\x0b\x0c') for line in lines]
+
+
 def venv() -> str:
     if not os.access(VENV, os.X_OK):
         pytest.skip('venv python missing')
