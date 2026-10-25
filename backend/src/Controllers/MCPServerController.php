@@ -62,7 +62,7 @@ class MCPServerController
      */
     public function list(array $request): array
     {
-        $userId = (string) ($request['query']['user_id'] ?? $request['user_id'] ?? '');
+        $userId = (string) ($request['user_id'] ?? '');
         // The sidebar needs disabled private servers too (to re-enable them);
         // chat-side callers keep the enabled-only default.
         $includeDisabled = !empty($request['query']['include_disabled']);
@@ -208,7 +208,7 @@ class MCPServerController
         }
 
         // Verify server is an enabled server owned globally or by the caller
-        $userId = (string) ($request['query']['user_id'] ?? $request['user_id'] ?? '');
+        $userId = (string) ($request['user_id'] ?? '');
         $sql = "SELECT id, name, user_id FROM mcp_servers WHERE id = ? AND enabled = 1 AND (user_id IS NULL"
             . ($userId !== '' ? " OR user_id = ?" : "") . ")";
         $stmt = $this->db->prepare($sql);
@@ -260,7 +260,7 @@ class MCPServerController
     public function getAllTools(array $request): array
     {
         // Get tools from all enabled servers visible to the caller
-        $userId = (string) ($request['query']['user_id'] ?? $request['user_id'] ?? '');
+        $userId = (string) ($request['user_id'] ?? '');
         $sql = "SELECT t.*, s.name as server_name, s.url as server_url, s.user_id as server_user_id
                 FROM mcp_server_tools t
                 JOIN mcp_servers s ON t.server_id = s.id
@@ -301,7 +301,7 @@ class MCPServerController
     public function create(array $request): array
     {
         $input = $request['body'];
-        $userId = $input['user_id'] ?? $request['user_id'] ?? 'demo-user';
+        $userId = $request['user_id'] ?? 'demo-user';
 
         $name = trim($input['name'] ?? '');
         $url = trim($input['url'] ?? '');
@@ -372,7 +372,7 @@ class MCPServerController
     public function update(array $request): array
     {
         $input = $request['body'];
-        $userId = $input['user_id'] ?? $request['user_id'] ?? 'demo-user';
+        $userId = $request['user_id'] ?? 'demo-user';
 
         $serverId = $input['server_id'] ?? null;
         $name = trim($input['name'] ?? '');
@@ -466,7 +466,7 @@ class MCPServerController
     public function toggle(array $request): array
     {
         $input = $request['body'];
-        $userId = $input['user_id'] ?? $request['user_id'] ?? 'demo-user';
+        $userId = $request['user_id'] ?? 'demo-user';
 
         $serverId = $input['server_id'] ?? null;
         $enabled = $input['enabled'] ?? true;
@@ -497,7 +497,7 @@ class MCPServerController
     public function delete(array $request): array
     {
         $serverId = $request['query']['server_id'] ?? null;
-        $userId = $request['query']['user_id'] ?? $request['user_id'] ?? 'demo-user';
+        $userId = $request['user_id'] ?? 'demo-user';
 
         if (!$serverId) {
             return [

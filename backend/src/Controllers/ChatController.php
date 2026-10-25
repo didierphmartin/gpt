@@ -776,7 +776,7 @@ class ChatController
             error_log("[ChatController] First history entry: " . json_encode($conversationHistory[0] ?? 'none'));
             error_log("[ChatController] Last history entry: " . json_encode(end($conversationHistory) ?: 'none'));
         }
-        $userId = (string)($input['user_id'] ?? $request['user_id'] ?? 'demo-user');
+        $userId = (string)($request['user_id'] ?? 'demo-user');
         $provider = $input['provider'] ?? null;
 
         // Debug: Log the provider being requested
@@ -952,7 +952,7 @@ class ChatController
         $provider = $input['provider'] ?? null;
         $model = isset($input['model']) ? trim((string)$input['model']) : '';
         $system = isset($input['system']) ? (string)$input['system'] : '';
-        $userId = (string)($input['user_id'] ?? $request['user_id'] ?? 'demo-user');
+        $userId = (string)($request['user_id'] ?? 'demo-user');
 
         if ($prompt === '') {
             return ['success' => false, 'error' => 'prompt is required', 'status_code' => 400];
@@ -1018,7 +1018,7 @@ class ChatController
         $originalMessage = trim((string)($input['original_message'] ?? ''));
         $responseText = trim((string)($input['response_text'] ?? ''));
         $verifierProvider = $input['verifier_provider'] ?? null;
-        $userId = (string)($input['user_id'] ?? $request['user_id'] ?? 'demo-user');
+        $userId = (string)($request['user_id'] ?? 'demo-user');
 
         if ($originalMessage === '' || $responseText === '' || !$verifierProvider) {
             return [
@@ -1190,7 +1190,7 @@ class ChatController
             ? self::stripVisualNoiseFromHistory($input['conversation_history'])
             : [];
         $compareProvider = $input['compare_provider'] ?? null;
-        $userId = (string)($input['user_id'] ?? $request['user_id'] ?? 'demo-user');
+        $userId = (string)($request['user_id'] ?? 'demo-user');
 
         // Mirror chat()'s skill/attachment context parsing so the comparer
         // gets the SAME inputs the primary does — so it can run the same

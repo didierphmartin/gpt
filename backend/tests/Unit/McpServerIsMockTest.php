@@ -27,31 +27,31 @@ final class McpServerIsMockTest extends TestCase
 
     public function testCreateAsMock(): void
     {
-        $r = $this->ctl->create(['body' => ['user_id' => '3', 'name' => 'ServiceNow', 'url' => 'http://localhost/servicenow/mock/jobs', 'is_mock' => true]]);
+        $r = $this->ctl->create(['user_id' => '3', 'body' => ['name' => 'ServiceNow', 'url' => 'http://localhost/servicenow/mock/jobs', 'is_mock' => true]]);
         $this->assertTrue($r['success'], json_encode($r));
         $this->assertSame(1, $this->isMock($r['server_id']));
     }
 
     public function testCreateWithoutTheFlagIsNotAMock(): void
     {
-        $r = $this->ctl->create(['body' => ['user_id' => '3', 'name' => 'Real', 'url' => 'https://x.test/mcp']]);
+        $r = $this->ctl->create(['user_id' => '3', 'body' => ['name' => 'Real', 'url' => 'https://x.test/mcp']]);
         $this->assertSame(0, $this->isMock($r['server_id']));
     }
 
     public function testUpdateSetsAndClearsTheFlag(): void
     {
-        $id = $this->ctl->create(['body' => ['user_id' => '3', 'name' => 'S', 'url' => 'https://x.test/mcp']])['server_id'];
-        $this->ctl->update(['body' => ['user_id' => '3', 'server_id' => $id, 'name' => 'S', 'url' => 'https://x.test/mcp', 'is_mock' => true]]);
+        $id = $this->ctl->create(['user_id' => '3', 'body' => ['name' => 'S', 'url' => 'https://x.test/mcp']])['server_id'];
+        $this->ctl->update(['user_id' => '3', 'body' => ['server_id' => $id, 'name' => 'S', 'url' => 'https://x.test/mcp', 'is_mock' => true]]);
         $this->assertSame(1, $this->isMock($id));
-        $this->ctl->update(['body' => ['user_id' => '3', 'server_id' => $id, 'name' => 'S', 'url' => 'https://x.test/mcp', 'is_mock' => false]]);
+        $this->ctl->update(['user_id' => '3', 'body' => ['server_id' => $id, 'name' => 'S', 'url' => 'https://x.test/mcp', 'is_mock' => false]]);
         $this->assertSame(0, $this->isMock($id));
     }
 
     public function testUpdateWithoutTheKeyLeavesTheFlag(): void
     {
         // A screen that does not send is_mock must not reset it (same rule as transport and headers).
-        $id = $this->ctl->create(['body' => ['user_id' => '3', 'name' => 'S', 'url' => 'https://x.test/mcp', 'is_mock' => 1]])['server_id'];
-        $this->ctl->update(['body' => ['user_id' => '3', 'server_id' => $id, 'name' => 'S2', 'url' => 'https://x.test/mcp']]);
+        $id = $this->ctl->create(['user_id' => '3', 'body' => ['name' => 'S', 'url' => 'https://x.test/mcp', 'is_mock' => 1]])['server_id'];
+        $this->ctl->update(['user_id' => '3', 'body' => ['server_id' => $id, 'name' => 'S2', 'url' => 'https://x.test/mcp']]);
         $this->assertSame(1, $this->isMock($id));
     }
 
@@ -73,13 +73,13 @@ final class McpServerIsMockTest extends TestCase
 
     public function testSavingUnchangedIsNotNotFound(): void
     {
-        $r = $this->mysqlLike(0, 125)->update(['body' => ['user_id' => '3', 'server_id' => 125, 'name' => 'ServiceNow', 'url' => 'http://localhost/servicenow/mock/jobs']]);
+        $r = $this->mysqlLike(0, 125)->update(['user_id' => '3', 'body' => ['server_id' => 125, 'name' => 'ServiceNow', 'url' => 'http://localhost/servicenow/mock/jobs']]);
         $this->assertTrue($r['success'], json_encode($r));
     }
 
     public function testAMissingServerIsStillNotFound(): void
     {
-        $r = $this->mysqlLike(0, false)->update(['body' => ['user_id' => '3', 'server_id' => 999, 'name' => 'X', 'url' => 'https://x.test/mcp']]);
+        $r = $this->mysqlLike(0, false)->update(['user_id' => '3', 'body' => ['server_id' => 999, 'name' => 'X', 'url' => 'https://x.test/mcp']]);
         $this->assertSame(404, $r['status_code']);
     }
 }

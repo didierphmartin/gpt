@@ -57,8 +57,8 @@ class HumeToolController
             ];
         }
 
-        // Get user ID from session or input
-        $userId = $input['userId'] ?? $request['user_id'] ?? 'demo-user';
+        // The authenticated caller; a body userId is ignored.
+        $userId = $request['user_id'] ?? 'demo-user';
 
         // Check if function exists
         if (!$this->toolsManager->hasFunction($toolName)) {

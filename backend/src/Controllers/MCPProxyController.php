@@ -43,7 +43,7 @@ class MCPProxyController
         $rawServerId = $input['server_id'] ?? null;
         $serverId = ($rawServerId === null || $rawServerId === '') ? null : (int) $rawServerId;
         $serverUrl = $input['server_url'] ?? null;
-        $userId = (string) ($input['user_id'] ?? $request['user_id'] ?? 'demo-user');
+        $userId = (string) ($request['user_id'] ?? 'demo-user');
 
         switch ($action) {
             case 'proxy':
