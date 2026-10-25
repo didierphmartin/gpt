@@ -20,6 +20,9 @@ export class MiddlewareProcessor {
     { method: 'POST', pattern: /^\/api\/v1\/scheduler\/run$/ },
     // EVI webhook — external callback from Hume; cannot carry our auth. Mirrors PHP.
     { method: 'POST', pattern: /^\/api\/v1\/evi\/webhook$/ },
+    // Corporate first-run setup; createAdmin refuses once any person exists.
+    { method: 'GET', pattern: /^\/api\/v1\/setup\/status$/ },
+    { method: 'POST', pattern: /^\/api\/v1\/setup\/admin$/ },
     { method: 'GET', pattern: /^\/$/ },
   ];
 

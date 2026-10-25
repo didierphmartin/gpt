@@ -8,6 +8,9 @@ import { PackageResolver } from '../Services/PackageResolver';
 import { RoleStore } from '../Services/RoleStore';
 import { RobotAccount } from '../Services/RobotAccount';
 import { requireAdmin } from './RequiresAdmin';
+import { config } from '../config/env';
+import { Edition, EditionConfig } from '../Services/Edition';
+import { LoginAccounts } from '../Services/LoginAccounts';
 
 /**
  * Mirrors src/Controllers/AdminController.php — the admin dashboard's user management over the
@@ -219,6 +222,29 @@ function nameOrUnknown(first: any, last: any): string {
 }
 
 export class AdminController {
+  private accountsInjected: boolean;
+
+  /**
+   * `cfg` carries the edition (and the login DB settings). Pass `accounts` (even null) to inject
+   * the login service's account store; leave it out to open the configured login DB on demand.
+   */
+  constructor(
+    private readonly cfg: EditionConfig & { loginDb?: typeof config.loginDb } = config,
+    private accounts?: LoginAccounts | null,
+  ) {
+    this.accountsInjected = arguments.length >= 2;
+  }
+
+  /** Only on a corporate install; throws if the login database is unreachable. */
+  private async loginAccounts(): Promise<LoginAccounts | null> {
+    if (!Edition.isCorporate(this.cfg)) return null;
+    if (!this.accountsInjected) {
+      this.accounts = await LoginAccounts.fromConfig(this.cfg);
+      this.accountsInjected = true;
+    }
+    return this.accounts ?? null;
+  }
+
   /** GET /api/v1/admin/users — list all users. Mirrors listUsers(). */
   async listUsers(ctx: Ctx): Promise<ControllerResult> {
     const denied = await requireAdmin(ctx);
@@ -345,7 +371,7 @@ export class AdminController {
 
     const firstName = phpTrim(input.first_name ?? '');
     const lastName = phpTrim(input.last_name ?? '');
-    const email = phpTrim(input.email ?? '');
+    const email = phpTrim(input.email ?? '').toLowerCase();
     const password = input.password ?? '';
     const role = input.role ?? 'user';
 
@@ -364,10 +390,42 @@ export class AdminController {
     // Hash password
     const hashedPassword = bcrypt.hashSync(String(password), 10);
 
-    const res = await sql`INSERT INTO users (email, password, first_name, last_name, role, provider, created_at, updated_at)
-                VALUES (${email}, ${hashedPassword}, ${firstName}, ${lastName}, ${role}, 'email', NOW(), NOW())`.execute(
-      db
-    );
+    // Corporate: the login service holds the credential, gpt holds the role.
+    let accounts: LoginAccounts | null;
+    try {
+      accounts = await this.loginAccounts();
+    } catch {
+      return { success: false, error: 'The login service database is not reachable', status_code: 503 };
+    }
+    if (Edition.isCorporate(this.cfg) && accounts === null) {
+      return { success: false, error: 'The login service is not configured', status_code: 503 };
+    }
+
+    let loginRowExisted = false;
+    if (accounts !== null) {
+      // Refuse before writing anything if a gpt user already owns this email — otherwise
+      // upsertVerified would overwrite an existing login credential and the later gpt INSERT would
+      // fail on the UNIQUE email constraint, which would then delete the login row we just clobbered.
+      const existing = await sql`SELECT 1 AS one FROM users WHERE email = ${email}`.execute(db);
+      if (existing.rows.length > 0) {
+        return { success: false, error: 'A user with that email already exists', status_code: 409 };
+      }
+      loginRowExisted = await accounts.exists(email);
+      await accounts.upsertVerified(email, bcrypt.hashSync(String(password), 10), firstName, lastName);
+    }
+
+    let res;
+    try {
+      res = await sql`INSERT INTO users (email, password, first_name, last_name, role, provider, email_verified, created_at, updated_at)
+                VALUES (${email}, ${accounts !== null ? null : hashedPassword}, ${firstName}, ${lastName}, ${role}, 'email', ${accounts !== null ? 1 : 0}, NOW(), NOW())`.execute(
+        db
+      );
+    } catch (e) {
+      if (accounts !== null && !loginRowExisted) {
+        await accounts.delete(email); // don't leave a login account with no gpt account
+      }
+      throw e;
+    }
 
     const newUserId = (res as any).insertId;
 
@@ -389,8 +447,8 @@ export class AdminController {
     const userId = phpIntVal(input.user_id ?? 0);
     const firstName = phpTrim(input.first_name ?? '');
     const lastName = phpTrim(input.last_name ?? '');
-    const email = phpTrim(input.email ?? '');
-    const password = input.password ?? '';
+    const email = phpTrim(input.email ?? '').toLowerCase();
+    let password = input.password ?? '';
     const role = input.role ?? null;
 
     if (userId <= 0) {
@@ -412,6 +470,33 @@ export class AdminController {
 
     const robotRefused = robotRoleRefusal(role);
     if (robotRefused) return robotRefused;
+
+    if (role !== null && role !== 'admin' && (await this.isLastAdmin(userId))) {
+      return this.lastAdminRefusal();
+    }
+
+    let accounts: LoginAccounts | null;
+    try {
+      accounts = await this.loginAccounts();
+    } catch {
+      return { success: false, error: 'The login service database is not reachable', status_code: 503 };
+    }
+    if (accounts !== null) {
+      const current = (await sql<{ email: string }>`SELECT email FROM users WHERE id = ${userId}`.execute(db)).rows[0];
+      const currentEmail = String(current?.email ?? '').toLowerCase();
+      // sso_exchange matches the login account to the gpt account by email.
+      if (currentEmail !== email.toLowerCase()) {
+        return {
+          success: false,
+          error: 'The email of an account cannot be changed on a corporate installation',
+          status_code: 400,
+        };
+      }
+      if (!phpEmpty(password)) {
+        await accounts.setPassword(currentEmail, bcrypt.hashSync(String(password), 10));
+      }
+      password = ''; // gpt keeps no password on a corporate install
+    }
 
     // Build update query — column set mirrors PHP's $fields/$params assembly order.
     const setFragments = [
@@ -449,6 +534,24 @@ export class AdminController {
       return this.userNotFound();
     }
 
+    if (await this.isLastAdmin(userId)) {
+      return this.lastAdminRefusal();
+    }
+
+    let accounts: LoginAccounts | null;
+    try {
+      accounts = await this.loginAccounts();
+    } catch {
+      return { success: false, error: 'The login service database is not reachable', status_code: 503 };
+    }
+    if (accounts !== null) {
+      const row = (await sql<{ email: string }>`SELECT email FROM users WHERE id = ${userId}`.execute(db)).rows[0];
+      const emailToDelete = String(row?.email ?? '');
+      if (emailToDelete !== '') {
+        await accounts.delete(emailToDelete);
+      }
+    }
+
     const res = await sql`DELETE FROM users WHERE id = ${userId}`.execute(db);
 
     if (Number(res.numAffectedRows ?? 0) === 0) {
@@ -456,6 +559,21 @@ export class AdminController {
     }
 
     return { success: true, message: 'User deleted', status_code: 200 };
+  }
+
+  /**
+   * Whether userId is the only admin. Removing or demoting it would leave nobody able to administer
+   * the install (and on corporate, would once have reopened first-run setup).
+   */
+  private async isLastAdmin(userId: number): Promise<boolean> {
+    const row = (await sql<{ role: string }>`SELECT role FROM users WHERE id = ${userId}`.execute(db)).rows[0];
+    if (row?.role !== 'admin') return false;
+    const n = (await sql<{ c: number }>`SELECT COUNT(*) AS c FROM users WHERE role = 'admin'`.execute(db)).rows[0];
+    return Number(n?.c ?? 0) === 1;
+  }
+
+  private lastAdminRefusal(): ControllerResult {
+    return { success: false, error: 'The last administrator cannot be removed or demoted', status_code: 409 };
   }
 
   /** The robot's service row is not a managed account: it answers as an unknown user. */

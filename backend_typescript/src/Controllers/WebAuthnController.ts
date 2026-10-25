@@ -5,6 +5,7 @@ import { db } from '../db/pools';
 import { config } from '../config/env';
 import { Ctx, ControllerResult } from '../Support/Http';
 import { isServiceUser } from '../Services/RobotAccount';
+import { Edition, EditionConfig } from '../Services/Edition';
 
 /**
  * Mirrors src/Controllers/WebAuthnController.php — passkey/biometric login.
@@ -19,6 +20,8 @@ import { isServiceUser } from '../Services/RobotAccount';
  * challenge + authenticate are PUBLIC (login); register + delete require authentication.
  */
 export class WebAuthnController {
+  constructor(private readonly editionCfg: EditionConfig = config) {}
+
   private static readonly CHALLENGE_EXPIRY = 120; // seconds
   private readonly jwtSecret = config.auth.jwtSecret;
   private readonly jwtExpiry = (config.auth as any).jwtExpiry ?? 28800;
@@ -111,6 +114,9 @@ export class WebAuthnController {
 
   /** POST /api/v1/webauthn/authenticate (public — login) */
   async authenticate(ctx: Ctx): Promise<ControllerResult> {
+    const refused = Edition.refuseLocalSignIn(this.editionCfg);
+    if (refused) return refused;
+
     const credentialId = ctx.body?.credential_id ?? '';
     const authenticatorData = ctx.body?.authenticator_data ?? '';
     const signature = ctx.body?.signature ?? '';

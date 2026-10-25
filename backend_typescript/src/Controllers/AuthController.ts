@@ -4,7 +4,18 @@ import crypto from 'crypto';
 import { db } from '../db/pools';
 import { config } from '../config/env';
 import { Ctx, ControllerResult } from '../Support/Http';
+import { sql } from 'kysely';
 import { isServiceUser } from '../Services/RobotAccount';
+import { Edition } from '../Services/Edition';
+import { SqlConn, connectSql } from '../Services/LoginDb';
+import { DbConfig } from '../config/env';
+
+/** The part of the config AuthController reads beyond the JWT settings. */
+export type AuthConfig = {
+  edition?: string | null;
+  auth: { loginJwtSecret?: string };
+  loginDb?: DbConfig;
+};
 
 /** A paid plan presented on re-sign-in promotes only a guest/prospect to 'user': custom roles are kept. */
 export function promotesOnPlanUpgrade(role: string | null | undefined): boolean {
@@ -19,6 +30,14 @@ export function roleAfterPlanUpgrade(current: string | null | undefined, plan: s
 
 /** Mirrors src/Controllers/AuthController.php (JWT, app-key, and Firebase helpers folded in). */
 export class AuthController {
+  constructor(private readonly cfg: AuthConfig = config) {}
+
+  /** Connection to the login service's database (overridable seam for tests). */
+  protected async loginDbConnection(ld: DbConfig | undefined): Promise<SqlConn> {
+    if (!ld) throw new Error('login_db is not configured');
+    return connectSql(ld);
+  }
+
   // ---- helpers --------------------------------------------------------------
 
   private nowString(): string {
@@ -115,6 +134,9 @@ export class AuthController {
   // ---- endpoints ------------------------------------------------------------
 
   async login(ctx: Ctx): Promise<ControllerResult> {
+    const refused = Edition.refuseLocalSignIn(this.cfg);
+    if (refused) return refused;
+
     const { email, password } = ctx.body;
     if (!email || !password) return { status_code: 400, success: false, message: 'Email and password are required' };
 
@@ -162,7 +184,92 @@ export class AuthController {
     return { success: true, message: 'Logout successful' };
   }
 
+  /**
+   * SSO for the gpt app and gpt_admin: exchange a login-microservice JWT for gpt tokens. The login
+   * JWT carries only the login-service user id ('sub'), so the email is resolved from the shared
+   * login DB, then mapped BY EMAIL to a pre-existing gpt user. Never creates accounts. Role is
+   * returned as stored — role gating is the caller's job (gpt_admin rejects non-admins
+   * client-side, and every admin endpoint stays requireAdmin-gated).
+   */
+  async ssoExchange(ctx: Ctx): Promise<ControllerResult> {
+    const loginToken = String(ctx.body?.login_token ?? '');
+    if (loginToken === '') {
+      return { success: false, message: 'login_token is required', status_code: 400 };
+    }
+    const secret = String(this.cfg.auth?.loginJwtSecret ?? '');
+    if (secret === '') {
+      return { success: false, message: 'SSO is not configured (LOGIN_JWT_SECRET missing)', status_code: 500 };
+    }
+    let claims: Record<string, any>;
+    try {
+      const decoded = jwt.verify(loginToken, secret, { algorithms: ['HS256'] });
+      if (decoded === null || typeof decoded !== 'object') throw new Error('not an object');
+      claims = decoded as Record<string, any>;
+    } catch {
+      return { success: false, message: 'Invalid SSO token', status_code: 401 };
+    }
+    // The login service was ported from gpt and (until secrets are rotated separately) may share
+    // gpt's own JWT signing secret — without this check a gpt-issued access token would decode
+    // fine here and its 'sub' (a gpt user id) would be misread as a login-DB user id. 'iss'
+    // anchors this token to the login service specifically.
+    if ((claims.iss ?? '') !== 'login-service') {
+      return { success: false, message: 'Invalid SSO token', status_code: 401 };
+    }
+    if ((claims.type ?? '') !== 'access' || claims.sub === undefined || claims.sub === null) {
+      return { success: false, message: 'Invalid SSO token', status_code: 401 };
+    }
+
+    // Login JWTs carry no email — resolve it from the shared login DB.
+    let loginUser: Record<string, any>;
+    let email: string;
+    try {
+      const ldb = await this.loginDbConnection(this.cfg.loginDb);
+      const sub = typeof claims.sub === 'number' ? Math.trunc(claims.sub) : parseInt(String(claims.sub), 10) || 0;
+      loginUser = (await ldb.select('SELECT email, email_verified FROM users WHERE id = ?', [sub]))[0] ?? {};
+      email = String(loginUser.email ?? '').trim().toLowerCase();
+    } catch {
+      return { success: false, message: 'SSO temporarily unavailable', status_code: 503 };
+    }
+    if (email === '') {
+      return { success: false, message: 'Unknown SSO user', status_code: 401 };
+    }
+    // The login service allows registration without verifying email ownership, and email is our
+    // identity anchor into gpt's user table — an unverified email could belong to someone
+    // impersonating an admin's address. Fail closed until the login service confirms it.
+    const verified = loginUser.email_verified;
+    if (verified === undefined || verified === null || verified === 0 || verified === '0' || verified === '' || verified === false) {
+      return { success: false, message: 'SSO account email not verified', status_code: 403 };
+    }
+
+    let user = await db.selectFrom('users').selectAll().where('email', '=', email).executeTakeFirst();
+    if (user && isServiceUser(user)) user = undefined;
+    if (!user) {
+      return { success: false, message: `No account for ${email} — sign up first`, status_code: 403 };
+    }
+
+    const tokens = this.generateTokens(user.id);
+    await sql`UPDATE users SET last_login = NOW() WHERE id = ${user.id}`.execute(db);
+
+    return {
+      success: true,
+      message: 'Login successful',
+      data: {
+        user: {
+          id: Number(user.id), email: user.email, first_name: user.first_name, last_name: user.last_name,
+          role: user.role ?? 'prospect', plan: user.plan ?? 'free', provider: 'sso',
+          last_login: this.nowString(), created_at: user.created_at ?? null,
+          app_key_prefix: user.app_key_prefix ?? null, app_key_created_at: user.app_key_created_at ?? null,
+        },
+        access_token: tokens.access_token, refresh_token: tokens.refresh_token, expires_in: tokens.expires_in,
+      },
+      status_code: 200,
+    };
+  }
+
   async register(ctx: Ctx): Promise<ControllerResult> {
+    const refused = Edition.refuseLocalSignIn(this.cfg);
+    if (refused) return refused;
+
     const email = String(ctx.body.email ?? '').trim().toLowerCase();
     const password = ctx.body.password;
     const firstName = String(ctx.body.first_name ?? '').trim();
@@ -305,6 +412,9 @@ export class AuthController {
 
   /** POST /api/v1/auth/firebase — verifies the ID token, derives identity from verified claims. */
   async firebaseAuth(ctx: Ctx): Promise<ControllerResult> {
+    const refused = Edition.refuseLocalSignIn(this.cfg);
+    if (refused) return refused;
+
     const provider = ctx.body.provider ?? '';
     const idToken = ctx.body.idToken ?? '';
     const userData = ctx.body.userData ?? {};
@@ -409,6 +519,7 @@ export class AuthController {
       case 'register': return this.register(ctx);
       case 'firebase': return this.firebaseAuth(ctx);
       case 'verify': return this.verify(ctx);
+      case 'sso_exchange': return this.ssoExchange(ctx);
       case 'logout': return this.logout(ctx);
       case 'link_phone': return this.linkPhone(ctx);
       case 'unlink_phone': return this.unlinkPhone(ctx);

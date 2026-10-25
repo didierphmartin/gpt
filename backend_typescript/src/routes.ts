@@ -46,6 +46,8 @@ import { GenesisController } from './Controllers/GenesisController';
 import { AgentMCPController } from './Controllers/AgentMCPController';
 import { RolesController } from './Controllers/RolesController';
 import { RobotController } from './Controllers/RobotController';
+import { LoginAdminController } from './Controllers/LoginAdminController';
+import { SetupController } from './Controllers/SetupController';
 import { roleKeyPath, withRoleParam } from './Support/RoleKeyRoute';
 
 export const router = Router();
@@ -74,6 +76,8 @@ const automations = new AutomationsController();
 const codeComponents = new CodeComponentsController();
 const roles = new RolesController();
 const robot = new RobotController();
+const loginAdmin = new LoginAdminController();
+const setup = new SetupController();
 const workflows = new WorkflowController();
 const schedules = new ScheduledWorkflowController();
 const workflowSchemas = new WorkflowSchemaController();
@@ -291,6 +295,22 @@ router.delete(
 );
 router.get('/api/v1/admin/users/:id(\\d+)/costs', handle((ctx) => admin.getUserCosts(ctx)));
 router.delete('/api/v1/admin/users/:id(\\d+)', handle((ctx) => admin.deleteUser(ctx)));
+
+// Login microservice admin (users, apps) — the gpt_admin Login card over the shared login DB.
+// Admin-gated inside the controller; write routes refuse on a corporate install.
+router.get('/api/v1/admin/login/stats', handle((ctx) => loginAdmin.getStats(ctx)));
+router.get('/api/v1/admin/login/users', handle((ctx) => loginAdmin.getUsers(ctx)));
+router.post('/api/v1/admin/login/users', handle((ctx) => loginAdmin.createUser(ctx)));
+router.post('/api/v1/admin/login/users/update', handle((ctx) => loginAdmin.updateUser(ctx)));
+router.post('/api/v1/admin/login/users/delete', handle((ctx) => loginAdmin.deleteUser(ctx)));
+router.get('/api/v1/admin/login/apps', handle((ctx) => loginAdmin.getApps(ctx)));
+router.get('/api/v1/admin/login/app-users', handle((ctx) => loginAdmin.getAppUsers(ctx)));
+router.post('/api/v1/admin/login/app-users/role', handle((ctx) => loginAdmin.setAppUserRole(ctx)));
+router.post('/api/v1/admin/login/app-users/add', handle((ctx) => loginAdmin.addAppMember(ctx)));
+
+// Corporate first-run setup (public: before setup nobody can sign in — see PUBLIC_ROUTES).
+router.get('/api/v1/setup/status', handle((ctx) => setup.status(ctx)));
+router.post('/api/v1/setup/admin', handle((ctx) => setup.createAdmin(ctx)));
 
 // Admin — usage / analytics (read-only; same AUTHENTICATION-ONLY gating). Literal /usage/* paths
 // are registered before the digit-param /usage/users/:id route. /costs + /exchange-rates literal.

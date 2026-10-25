@@ -55,7 +55,30 @@ export const config = {
     jwtExpiry: 28800, // 8h access TTL (matches PHP auth.jwt_expiry / expires_in)
     refreshExpiry: 604800, // 7d refresh TTL
     appKeySecret: process.env.APP_KEY_SECRET ?? '', // unused in this slice (no app-key auth yet)
+    // Login-microservice SSO (PHP auth.login_jwt_secret): the secret the login service signs its
+    // JWTs with. Empty = the sso_exchange action answers 500 'SSO is not configured'.
+    loginJwtSecret: process.env.LOGIN_JWT_SECRET ?? '',
   },
+
+  // The login service's database (PHP config['login_db']): sso_exchange resolves the login user's
+  // email here, and on a corporate install LoginAccounts writes the credential rows.
+  loginDb: {
+    host: process.env.LOGIN_DB_HOST ?? process.env.DB_HOST ?? '',
+    port: intEnv('LOGIN_DB_PORT', 3306),
+    database: process.env.LOGIN_DB_NAME ?? 'netfo587_login',
+    user: process.env.LOGIN_DB_USER ?? '',
+    password: process.env.LOGIN_DB_PASS ?? '',
+  } as DbConfig,
+
+  // The same database as the gpt_admin Login card reads it (PHP config['login_database']): no
+  // host/name fallbacks, so an unset LOGIN_DB_* means 'not configured'.
+  loginDatabase: {
+    host: process.env.LOGIN_DB_HOST ?? '',
+    port: intEnv('LOGIN_DB_PORT', 3306),
+    database: process.env.LOGIN_DB_NAME ?? '',
+    user: process.env.LOGIN_DB_USER ?? '',
+    password: process.env.LOGIN_DB_PASS ?? '',
+  } as DbConfig,
 
   // Scheduler cron token (PHP config['scheduler']['token']). Guards POST /api/v1/scheduler/run for
   // unauthenticated cron/external callers.
