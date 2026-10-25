@@ -78,7 +78,15 @@ import httpx
 
 from app.agent_team.models.agent import Agent
 from app.agent_team.models.workflow import Workflow
+from app.agent_team.services.code_node_emit import CodeNodeEmit
+from app.agent_team.services.code_node_executor import CodeNodeExecutor
+from app.agent_team.services.code_node_step import CodeNodeStep
 from app.agent_team.services.dispatch_routing import DispatchRouting
+from app.agent_team.services.jev_router import JevRouter
+from app.agent_team.services.playbook_node_runner import PlaybookNodeRunner
+from app.agent_team.services.playbook_outcome import PlaybookOutcome
+from app.agent_team.services.playbook_source import PlaybookSource
+from app.agent_team.services.workflow_graph_analyzer import WorkflowGraphAnalyzer
 from app.agent_team.services.execution_trace_store import ExecutionTraceStore
 from app.agent_team.services.prompt_template_processor import PromptTemplateProcessor
 from app.agent_team.services.session_search_service import SessionSearchService
@@ -89,10 +97,15 @@ from app.agent_team.services.workflow_schema_repository import WorkflowSchemaRep
 from app.config import PHP_BACKEND
 from app.exceptions import PricingUnavailableException
 from app.providers._http import SHARED_SSL_CONTEXT, headers_list_to_dict as _headers_list_to_dict
+from app.services.decision_key_resolver import DecisionKeyResolver
+from app.services.decision_routers import DecisionRouters
+from app.services.decision_usage import DecisionUsage
 from app.services.pricing_resolver import PricingResolver
+from app.services.usage_logger import UsageLogger
 from app.support.logger import error_log
 from app.support.phpcompat import (
     PHP_TRIM_CHARS,
+    is_numeric,
     is_php_array,
     mb_substr,
     php_array,
@@ -189,7 +202,10 @@ class NodeLogFormat:
 
 
 class GraphWorkflowRunner:
-    def __init__(self, db, agentRepository, agentRunner: Any, graphRepository, config: dict | None = None):
+    def __init__(self, db, agentRepository, agentRunner: Any, graphRepository, config: dict | None = None,
+                 playbookRunnerFactory=None):
+        """playbookRunnerFactory: fn() -> PlaybookNodeRunner (tests build one with fakes)."""
+        self.playbookRunnerFactory = playbookRunnerFactory
         self.db = db
         self.traceStore = ExecutionTraceStore(db)
         self.agentRepository = agentRepository
@@ -204,6 +220,8 @@ class GraphWorkflowRunner:
         self.parallelExecutor = None
 
         self.nodeOutputs: dict = {}
+        # node id => the node ids on the exit it took (code / playbook nodes): its other links carry nothing.
+        self.routedTo: dict = {}
         # Nodes indexed by id for the current run (DispatchRouting needs target names).
         self.graphNodes: dict = {}
         self.workflowName: str = ''
@@ -348,6 +366,7 @@ class GraphWorkflowRunner:
         scratchFiles = scratchFiles if scratchFiles is not None else []
 
         self.nodeOutputs = {}
+        self.routedTo = {}
         # Phase 0: one run_id correlates all node traces of this workflow run.
         self.runId = secrets.token_hex(16)
         self.currentWorkflowId = workflow.getId() if hasattr(workflow, 'getId') else None
@@ -400,7 +419,11 @@ class GraphWorkflowRunner:
                 'documents': _coalesce(startCfg.get('documents'), []),
             }
 
-            graph = self.graphRepository.getGraph(workflow.getId())
+            # Get all nodes and edges for traversal -- only what Start reaches: an
+            # unconnected canvas node is not part of the workflow, and as a parent of
+            # a reached node it would hold that node's merge wait forever.
+            graph = GraphWorkflowRunner.configuredTemplatesAsAgents(
+                WorkflowGraphAnalyzer.reachableGraph(self.graphRepository.getGraph(workflow.getId())))
             nodes = self._indexNodesById(graph['nodes'])
             self.graphNodes = nodes
             self.workflowName = php_strval(workflow.getName())
@@ -411,6 +434,8 @@ class GraphWorkflowRunner:
                 'execution_id': self.executionId,
                 'total_nodes': len(nodes),
             })
+            # The live overlay follows this workflow's latest run (LiveFeed).
+            self.runLog.markCurrent(php_intval(workflow.getId()), self.runId)
 
             self._emitNodeEvent('node_start', startNode, {'input': userPrompt})
             _sleep(0.3)  # 300ms delay so the active glow is visible before completion
@@ -524,6 +549,8 @@ class GraphWorkflowRunner:
                     'input_tokens': inputTokens,
                     'output_tokens': outputTokens,
                     'cost_usd': self._computeNodeCost(output.get('provider'), inputTokens, outputTokens),
+                    # A dispatcher's choice, so a viewer of the run log (the live overlay) can fade the other links.
+                    'route': output.get('route'),
                 })
 
                 # Phase 0: record an execution trace for agent nodes.
@@ -539,8 +566,27 @@ class GraphWorkflowRunner:
                     error_log("[GraphWorkflowRunner] Output node reached, final output collected")
                     continue  # Don't queue nodes after output
 
+                # Code node: continue on the exit it took; the other exits' branches are skipped.
+                codeRoute = output.get('code_route')
+                if codeRoute is not None:
+                    for skipId in DispatchRouting.skipSet(codeRoute['skip'], edges, php_intval(currentNodeId)):
+                        if skipId not in executedNodes:
+                            executedNodes.append(skipId)
+                    self.routedTo[php_intval(currentNodeId)] = [php_intval(c) for c in codeRoute['chosen']]
+                    for nextId in codeRoute['chosen']:
+                        if nextId not in queue and nextId not in executedNodes:
+                            queue.append(nextId)
+                    self.nodeOutputs[currentNodeId].pop('code_route', None)
+                    continue
+
                 # Dispatcher routing: one chosen branch, siblings skipped.
                 if self._applyRoute(currentNodeId, output, edges, queue, executedNodes):
+                    continue
+
+                # A decision-model dispatcher that did not route: the run stops on
+                # that branch point, and its failure is the run's result.
+                if self._haltUnrouted(currentNodeId, output, edges, executedNodes):
+                    finalOutput = output.get('output')
                     continue
 
                 # Check for parallel execution opportunity
@@ -592,8 +638,30 @@ class GraphWorkflowRunner:
 
             responseTime = (time.time() - startTime) * 1000
 
-            # Complete execution
-            self._completeExecution(self.executionId, self.nodeOutputs, responseTime)
+            # A poll that found nothing (a code node ran, no work node did) leaves no trace:
+            # no execution row, no run log. An error exit or a failed code node is never quiet.
+            summary = CodeNodeStep.summarize(self.nodeOutputs, edges, nodes)
+            if summary['quiet']:
+                self._ensureDbConnection()
+                self.db.execute('DELETE FROM agent_workflow_executions WHERE id = ?', [self.executionId])
+                try:
+                    os.unlink(self.runLog.pathFor(self.runId))
+                except OSError:
+                    pass
+                # An attached browser still needs the end of the run; it is not persisted.
+                if self.streamContext:
+                    self.streamContext.emit({'type': 'workflow_complete', 'workflow_id': workflow.getId(),
+                                             'workflow_name': workflow.getName(), 'timestamp': time.time(), 'success': True,
+                                             'quiet': True, 'execution_id': None, 'output': None})
+                return {'success': True, 'quiet': True, 'drain': False, 'execution_id': None,
+                        'output': None, 'node_outputs': self.nodeOutputs, 'nodes_executed': len(executedNodes)}
+
+            # Complete execution. A run in which a code node took its error exit keeps its row with the
+            # error recorded, but is neither saved to output storage nor archived as a chat (it would be
+            # one more chat per tick while a mailbox is down).
+            errorExits = CodeNodeStep.errorExits(self.nodeOutputs, nodes)
+            self._completeExecution(self.executionId, self.nodeOutputs, responseTime,
+                                    '; '.join(errorExits) if errorExits else None)
 
             self._emitWorkflowEvent('workflow_complete', workflow, {
                 'execution_id': self.executionId,
@@ -609,47 +677,50 @@ class GraphWorkflowRunner:
 
             # Save output to storage if enabled
             storageSaveResult = None
-            try:
-                storageSaveResult = self.outputStorage.saveOutput(
-                    workflow.getId(),
-                    userId,
-                    {
-                        'execution_id': self.executionId,
-                        'workflow_id': workflow.getId(),
-                        'workflow_name': workflow.getName(),
-                        'timestamp': php_date('c'),
-                        'response_time_ms': round(responseTime, 2),
-                        'nodes_executed': len(executedNodes),
-                        'output': finalOutput,
-                        'node_outputs': self.nodeOutputs,
-                        'input_variables': inputVariables,
-                    },
-                )
-
-                if storageSaveResult.get('success'):
-                    error_log(
-                        "[GraphWorkflowRunner] Output saved to storage: "
-                        + php_strval(_coalesce(storageSaveResult.get('path'), 'unknown'))
+            if errorExits == []:
+                try:
+                    storageSaveResult = self.outputStorage.saveOutput(
+                        workflow.getId(),
+                        userId,
+                        {
+                            'execution_id': self.executionId,
+                            'workflow_id': workflow.getId(),
+                            'workflow_name': workflow.getName(),
+                            'timestamp': php_date('c'),
+                            'response_time_ms': round(responseTime, 2),
+                            'nodes_executed': len(executedNodes),
+                            'output': finalOutput,
+                            'node_outputs': self.nodeOutputs,
+                            'input_variables': inputVariables,
+                        },
                     )
-            except Exception as e:  # noqa: BLE001 -- mirrors PHP catch (\Exception $e)
-                error_log(f"[GraphWorkflowRunner] Failed to save output to storage: {e}")
 
-            # Archive the run into conversation_contexts so it shows up in
-            # the chat sidebar and is searchable via session_search. This is
-            # best-effort — a failure here never fails the workflow.
-            try:
-                self._archiveRunToConversationContexts(
-                    userId,
-                    php_intval(workflow.getId()),
-                    php_strval(workflow.getName()),
-                    php_strval(userPrompt),
-                    php_strval(_coalesce(finalOutput, '')),
-                )
-            except Exception as e:  # noqa: BLE001 -- mirrors PHP catch (\Throwable $e)
-                error_log(f"[GraphWorkflowRunner] Archive to conversation_contexts failed: {e}")
+                    if storageSaveResult.get('success'):
+                        error_log(
+                            "[GraphWorkflowRunner] Output saved to storage: "
+                            + php_strval(_coalesce(storageSaveResult.get('path'), 'unknown'))
+                        )
+                except Exception as e:  # noqa: BLE001 -- mirrors PHP catch (\Exception $e)
+                    error_log(f"[GraphWorkflowRunner] Failed to save output to storage: {e}")
+
+                # Archive the run into conversation_contexts so it shows up in
+                # the chat sidebar and is searchable via session_search. This is
+                # best-effort — a failure here never fails the workflow.
+                try:
+                    self._archiveRunToConversationContexts(
+                        userId,
+                        php_intval(workflow.getId()),
+                        php_strval(workflow.getName()),
+                        php_strval(userPrompt),
+                        php_strval(_coalesce(finalOutput, '')),
+                    )
+                except Exception as e:  # noqa: BLE001 -- mirrors PHP catch (\Throwable $e)
+                    error_log(f"[GraphWorkflowRunner] Archive to conversation_contexts failed: {e}")
 
             return {
                 'success': True,
+                'quiet': False,
+                'drain': summary['drain'],
                 'execution_id': self.executionId,
                 'workflow': {'id': workflow.getId(), 'name': workflow.getName()},
                 'output': finalOutput,
@@ -708,7 +779,7 @@ class GraphWorkflowRunner:
         chosen = php_intval(route['id'])
         nextIds = self._getNextNodeIds(nodeId, edges)
         unchosen = [i for i in nextIds if i != chosen]
-        for skipId in DispatchRouting.skipSet(unchosen, edges):
+        for skipId in DispatchRouting.skipSet(unchosen, edges, php_intval(nodeId)):
             if skipId not in executedNodes:
                 executedNodes.append(skipId)
         if chosen not in queue and chosen not in executedNodes:
@@ -718,6 +789,33 @@ class GraphWorkflowRunner:
             "skipped " + php_json_encode(unchosen)
         )
         return True
+
+    def _haltUnrouted(self, nodeId: int, output: dict, edges: list, executedNodes: list) -> bool:
+        """Decision-model dispatcher that did not route ('halt_branches'): mark every branch -- and
+        everything reachable solely through them -- as done without running it, so no child agent or
+        model is called. Only a decision-provider mode sets the flag; an LLM dispatcher that does not
+        route keeps its historical behaviour. Returns False (and touches nothing) otherwise."""
+        if php_empty(output.get('halt_branches')):
+            return False
+        branches = self._getNextNodeIds(nodeId, edges)
+        for skipId in DispatchRouting.skipSet(branches, edges, php_intval(nodeId)):
+            if skipId not in executedNodes:
+                executedNodes.append(skipId)
+        error_log(f"[GraphWorkflowRunner] Dispatcher {nodeId} did not route (decision model only); skipped "
+                  + php_json_encode(branches))
+        return True
+
+    def _makeDecisionRouter(self, resolved: dict, floor: float):
+        """The decision router for one dispatcher decision. A seam so tests can replace the HTTP
+        transport; production always talks to the real service."""
+        return DecisionRouters.make(resolved, floor)
+
+    def _recordDecisionUsage(self, userId: int, providerKey: str, model: str, out: dict) -> None:
+        """Test seam: where an answered decision call is written as usage."""
+        DecisionUsage.record(
+            UsageLogger(self.db, True, _coalesce(self.config.get('contexts_database'), self.config.get('database'))),
+            userId, providerKey, model, out,
+        )
 
     def _getNextNodeIds(self, nodeId: int, edges: list) -> list:
         """Get IDs of nodes connected from the given node (PHP 669-678)."""
@@ -749,13 +847,46 @@ class GraphWorkflowRunner:
                 "Unconfigured agent template node found. Please configure all agent nodes before running the workflow."
             )
         if nodeType == 'playbook':
-            raise RuntimeError(
-                "Playbook nodes run only from the workflow editor's browser run path "
-                "(server-side durable runs arrive in slice 1c)."
-            )
+            return self._executePlaybookNode(node, userId, userPrompt, edges)
+        if nodeType == 'code':
+            return self._executeCodeNode(node, userId, userPrompt, edges)
         if nodeType == 'output':
             return self._executeOutputNode(node, edges, executedNodes)
         return {'type': nodeType, 'output': None}
+
+    @staticmethod
+    def configuredTemplatesAsAgents(graph: dict) -> dict:
+        """An agent-template node set up on the canvas -- linked to a saved agent, or defined in the node
+        (agent_name, instructions or a skill; a dispatcher keeps its type, provider and routing in config) --
+        runs as an agent, as it does in the editor's browser run. One never set up (isTemplate, or nothing
+        filled in) keeps its type and stops the run in executeNode."""
+        nodes = graph.get('nodes') if graph.get('nodes') is not None else []
+        out = None
+        for i, n in enumerate(nodes):
+            c = n.get('config') if isinstance(n.get('config'), dict) else {}
+            if WorkflowGraphAnalyzer.typeOf(n) != 'agent-template' or c.get('isTemplate') is True:
+                continue
+            agentId = n.get('agent_id') if php_bool(n.get('agent_id')) else c.get('agent_id')
+            inline = (php_trim(php_strval(_coalesce(c.get('agent_name'), ''))) != ''
+                      or php_trim(php_strval(_coalesce(c.get('instructions'), ''))) != ''
+                      or php_trim(php_strval(_coalesce(c.get('skill_content'), ''))) != ''
+                      or not php_empty(c.get('bound_skill')))
+            if not php_bool(agentId) and not inline:
+                continue
+            if out is None:
+                out = dict(graph)
+                out['nodes'] = list(nodes)
+            out['nodes'][i] = {**n, 'node_type': 'agent', 'agent_id': agentId if php_bool(agentId) else None}
+        return out if out is not None else graph
+
+    @staticmethod
+    def unsupportedNodeMessage(nodeType: str, config: dict | None = None) -> str | None:
+        """Why this runner cannot execute a node of nodeType, or None when it can."""
+        if nodeType == 'code':
+            return None if CodeNodeExecutor.enabled(config if config is not None else {}) else (
+                'Code nodes are switched off on this server (CODE_NODES_SERVER_SIDE=0); '
+                'run from the editor or a compiled workflow.')
+        return None
 
     # ─── Agent node execution ────────────────────────────────────────────────
 
@@ -938,6 +1069,88 @@ class GraphWorkflowRunner:
         # Force run_skill_script on the FIRST agent turn.
         if not php_empty(skillScripts) and isinstance(skillDirName, str) and skillDirName != '':
             runContext['tool_choice'] = {'type': 'function', 'function': {'name': 'run_skill_script'}}
+
+        # Dispatcher routing mode (settings.routing_mode) -- always exactly one:
+        #   'llm'  -> the model only; no decision provider is consulted.
+        #   a key  -> that decision provider only (a saved 'jev' is the jev row's key); the model is
+        #             never called. When it cannot decide (unclear, below the minimum confidence, unknown
+        #             provider, not in the plan, no key, error, timeout) the run stops with "did not
+        #             route" and none of the branches run -- unless the form names an unclear branch
+        #             for a not-classified outcome.
+        #   unset  -> the first decision provider the user's plan allows, else the model.
+        # A decision model answers the dispatcher's CLOSED question with an answer constrained to the
+        # options supplied (see the PHP runner for the full rationale).
+        if dispatchTargets != []:
+            routingSettings = agent.getSettings() if isinstance(agent.getSettings(), dict) else {}
+            saved = php_trim(php_strval(_coalesce(routingSettings.get('routing_mode'), '')))
+            routingMode = saved if saved != '' else _coalesce(
+                DecisionKeyResolver.defaultProvider(self.db, userId), 'llm')
+            if routingMode != 'llm':
+                # Same clamp as DispatchController (browser path): [0,1], else the default.
+                floorSetting = _coalesce(routingSettings.get('min_confidence'), routingSettings.get('jev_min_confidence'))
+                floor = (max(0.0, min(1.0, php_floatval(floorSetting))) if is_numeric(floorSetting)
+                         else JevRouter.DEFAULT_CONFIDENCE_FLOOR)
+                # The key the plan allows (user row, package key, global row); none = "did not route".
+                resolved = DecisionKeyResolver.resolve(self.db, self.config, userId, routingMode)
+                router = self._makeDecisionRouter(resolved, floor) if resolved['key'] != '' else None
+                out = (router.route(task, dispatchTargets,
+                                    DispatchRouting.defaultInstructions(agent.getName(), php_strval(agent.getDescription()),
+                                                                        self.workflowName))
+                       if router is not None else DecisionRouters.unavailable(resolved, routingMode))
+                # The only place a decision call is written as usage (answered calls only).
+                resolvedRow = resolved.get('row') if isinstance(resolved.get('row'), dict) else {}
+                self._recordDecisionUsage(userId, routingMode, php_strval(_coalesce(resolvedRow.get('model'), '')), out)
+                conf = '%.2f' % out['confidence'] if out.get('confidence') is not None else '?'
+                outUsage = out.get('usage') if isinstance(out.get('usage'), dict) else {}
+                usage = {'input_tokens': php_intval(_coalesce(outUsage.get('input_tokens'), 0)),
+                         'output_tokens': php_intval(_coalesce(outUsage.get('output_tokens'), 0))}
+                if out['outcome'] == 'routed':
+                    target = out['target']
+                    # Same shape the LLM path returns below, minus notes: a decision model writes no
+                    # prose, so the child gets the task alone.
+                    self._nodeLog(node, 'info', 'routing',
+                                  f"{routingMode} routed to {target['name']} (confidence {conf}, "
+                                  f"{php_strval(out.get('ms'))}ms, no LLM turn)")
+                    return {
+                        'type': 'agent', 'agent_id': agentId, 'agent_name': agent.getName(), 'input': task,
+                        'output': task,
+                        'route': {'id': target['id'], 'name': target['name'], 'notes': ''},
+                        'success': True,
+                        'usage': usage,
+                        'provider': routingMode,
+                    }
+                why = f"{out['outcome']}: {php_strval(out.get('reason'))}"
+                # The log lines add the confidence, which a low-confidence reason already states.
+                whyLog = why + ('' if out['outcome'] == 'low_confidence' else f', confidence {conf}')
+                # Not classified (unclear / low confidence) goes to the branch the form names for it,
+                # when there is one: a normal route, not a fallback model.
+                unclear = DispatchRouting.unclearBranch(routingSettings, dispatchTargets, php_strval(out['outcome']))
+                if unclear is not None:
+                    self._nodeLog(node, 'info', 'routing',
+                                  f"{routingMode} did not classify ({whyLog}) — sent to the unclear branch {unclear['name']}")
+                    return {
+                        'type': 'agent', 'agent_id': agentId, 'agent_name': agent.getName(), 'input': task,
+                        'output': task,
+                        'route': {'id': unclear['id'], 'name': unclear['name'], 'notes': ''},
+                        'success': True,
+                        'usage': usage,
+                        'provider': routingMode,
+                    }
+                # No model fallback, no other provider: the run stops here and says why. A request no
+                # branch fits is a normal ending; anything else is an error.
+                notClassified = out['outcome'] in DispatchRouting.NOT_CLASSIFIED
+                self._nodeLog(node, 'info' if notClassified else 'error', 'routing',
+                              f"{routingMode} did not route ({whyLog}) — decision-model dispatcher, no model fallback")
+                return {
+                    'type': 'agent', 'agent_id': agentId, 'agent_name': agent.getName(), 'input': task,
+                    'output': ('Not classified' if notClassified else 'Error')
+                    + f': dispatcher "{agent.getName()}" did not route the request ({routingMode}: {why}).',
+                    'success': notClassified,
+                    'usage': usage,
+                    'provider': routingMode,
+                    # The run loop reads this: no branch may run (see _haltUnrouted).
+                    'halt_branches': True,
+                }
 
         # Dispatcher: declare route_to and force the call.
         if dispatchTargets != []:
@@ -1332,6 +1545,83 @@ class GraphWorkflowRunner:
 
         return None
 
+    def _executePlaybookNode(self, node: dict, userId: int, userPrompt: str, edges: list) -> dict:
+        """A playbook node, server-side and unattended (nobody can approve): resolved -> exit 'done', anything
+        else -> exit 'failed' (PlaybookOutcome). With config.exits the node routes like a code node (port
+        output_k -> k-th exit, CodeNodeEmit.exitTargets); without exits it behaves as before: all children run,
+        a failure fails the run. A from-input node, or one with exits, ends its output with
+        "Job: <first parent's JSON>" (when that is a JSON object) for the complete and hand-back nodes."""
+        cfg = dict(node['config']) if isinstance(node.get('config'), dict) else {}
+        nodeId = php_intval(node.get('id'))
+        parents = CodeNodeStep.parents(nodeId, edges, self.graphNodes, self.nodeOutputs)
+        request = '\n\n'.join(p['text'] for p in parents) if parents else userPrompt
+        fromInput = PlaybookSource.isFromInput(cfg)
+        parentText = php_strval(parents[0]['text']) if parents else ''
+        transcript = ''
+        reason = None
+        if fromInput:
+            src = PlaybookSource.fromInput(self.db, userId, cfg, parentText)
+            if src['ok']:
+                cfg['playbook'] = src['text']
+            else:
+                reason = src['reason']
+        if reason is None:
+            try:
+                runner = self.playbookRunnerFactory() if self.playbookRunnerFactory is not None \
+                    else PlaybookNodeRunner(self.config)
+                res = runner.run(userId, cfg, request, lambda ev: None, True)
+                transcript = php_strval(res['output'])
+                reason = PlaybookOutcome.reason(php_strval(res['status']), res.get('gate'))
+            except Exception as e:  # noqa: BLE001 -- mirrors PHP catch (\Throwable $e)
+                reason = PlaybookOutcome.errorReason(e)
+        hasExits = isinstance(cfg.get('exits'), (list, dict)) and len(cfg['exits']) > 0
+        result = PlaybookOutcome.nodeResult(reason, transcript,
+                                            PlaybookSource.jobLine(parentText) if fromInput or hasExits else None)
+        exit_ = result['exit']
+        text = result['text']
+        if not hasExits:
+            if reason is not None:
+                raise RuntimeError(f'playbook node failed: {reason}')
+            return {'type': 'playbook', 'output': text, 'success': True}
+        self._nodeLog(node, 'info' if reason is None else 'error', 'done',
+                      'playbook took exit ' + exit_ + (f': {reason}' if reason is not None else ''))
+        exits = list(cfg['exits'].values()) if isinstance(cfg['exits'], dict) else list(cfg['exits'])
+        targets = CodeNodeEmit.exitTargets(php_strval(node.get('id')), exits, edges, list(self.graphNodes.keys()))
+        chosen = [php_intval(t) for t in (targets.get(exit_) or [])]
+        children = [php_intval(c) for c in self._getNextNodeIds(nodeId, edges)]
+        return {'type': 'playbook', 'output': text, 'exit': exit_, 'success': True,
+                'code_route': {'chosen': chosen, 'skip': [c for c in children if c not in chosen]}}
+
+    def _executeCodeNode(self, node: dict, userId: int, userPrompt: str, edges: list) -> dict:
+        """A code node, server-side: the shared harness via CodeNodeExecutor (spec 2026-10-07 §4).
+        Its nodeOutputs entry always carries 'exit' and 'success' (CodeNodeStep.summarize reads them);
+        a failed run is recorded there before the run fails, and an error exit is logged as an error."""
+        msg = GraphWorkflowRunner.unsupportedNodeMessage('code', self.config)
+        if msg:
+            raise RuntimeError(msg)
+        nodeId = php_intval(node.get('id'))
+        parents = CodeNodeStep.parents(nodeId, edges, self.graphNodes, self.nodeOutputs)
+        run = self._makeCodeNodeExecutor().run(node, edges, list(self.graphNodes.keys()), str(userId), parents, userPrompt)
+        res = run['result']
+        for c in res.get('tool_calls') or []:
+            self._nodeLog(node, 'info', 'tool',
+                          f"{php_strval(c.get('server'))}.{php_strval(c.get('tool'))} ok="
+                          + ('true' if c.get('ok') else 'false') + f" ({php_strval(c.get('ms'))} ms)")
+        route = CodeNodeStep.routeAfter(run['data'], res, self._getNextNodeIds(nodeId, edges))
+        if not route['success']:
+            self.nodeOutputs[nodeId] = {'type': 'code', 'output': route['output'], 'exit': None, 'success': False}
+            err = res.get('error') if res.get('error') is not None else 'unknown'
+            raise RuntimeError(f"code node '{run['data']['display']}' failed: {php_strval(err)}")
+        if route['exit'] == 'error':
+            self._nodeLog(node, 'error', 'done',
+                          f"code node '{run['data']['display']}' took its error exit: " + CodeNodeStep.reason(route['output']))
+        return {'type': 'code', 'output': route['output'], 'exit': route['exit'], 'success': True,
+                'code_route': route}
+
+    def _makeCodeNodeExecutor(self) -> CodeNodeExecutor:
+        """`new CodeNodeExecutor($this->db, $this->config)` (a seam only in name: production builds the real one)."""
+        return CodeNodeExecutor(self.db, self.config)
+
     def _executeOutputNode(self, node: dict, edges: list, executedNodes: list) -> dict:
         """Execute an output node: aggregates all incoming inputs (PHP 1426-1474)."""
         inputs = []
@@ -1340,6 +1630,11 @@ class GraphWorkflowRunner:
         for edge in edges:
             if php_intval(edge.get('to_node_id')) == php_intval(node.get('id')):
                 fromNodeId = php_intval(edge.get('from_node_id'))
+                # A node counts once, however many of its exits link here, and only through the exit it took.
+                if fromNodeId in [i['node_id'] for i in inputs]:
+                    continue
+                if fromNodeId in self.routedTo and php_intval(node.get('id')) not in self.routedTo[fromNodeId]:
+                    continue
 
                 if fromNodeId in self.nodeOutputs:
                     out = self.nodeOutputs[fromNodeId]
@@ -1514,16 +1809,16 @@ class GraphWorkflowRunner:
             [workflow.getId(), userId, php_json_encode(php_array(inputVariables))],
         )
 
-    def _completeExecution(self, executionId: int, outputs: dict, responseTime: float) -> None:
-        """Complete workflow execution (PHP 1676-1689). `$outputs` is a typed
-        PHP `array` param — an empty one must serialise as `[]`, not `{}`
-        (PHP 1683)."""
+    def _completeExecution(self, executionId: int, outputs: dict, responseTime: float, error: str | None = None) -> None:
+        """Complete workflow execution (PHP completeExecution). `$outputs` is a typed
+        PHP `array` param — an empty one must serialise as `[]`, not `{}`.
+        error: the error exits a code node took (the row keeps them), else None."""
         self._ensureDbConnection()
         self.db.execute(
             "UPDATE agent_workflow_executions\n"
-            "             SET status = 'completed', output = ?, response_time_ms = ?, completed_at = NOW()\n"
+            "             SET status = 'completed', output = ?, error_message = ?, response_time_ms = ?, completed_at = NOW()\n"
             "             WHERE id = ?",
-            [php_json_encode(php_array(outputs)), php_intval(responseTime), executionId],
+            [php_json_encode(php_array(outputs)), error, php_intval(responseTime), executionId],
         )
 
     def _failExecution(self, executionId: int, error: str) -> None:

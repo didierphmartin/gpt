@@ -18,6 +18,7 @@ import re
 from typing import Optional
 
 from app.playbook.mcp_executor_interface import McpExecutorInterface
+from app.support.phpcompat import php_empty
 
 _SLUG_RE = re.compile(r'[^a-z0-9]+', re.IGNORECASE)
 
@@ -37,6 +38,17 @@ class LoaderMcpExecutor(McpExecutorInterface):
             return {'ok': False, 'error': result.get('message') if result.get('message') is not None else 'MCP tool execution failed'}
 
         return {'ok': True, 'result': result}
+
+    def callRaw(self, server: str, tool: str, args: dict) -> dict:
+        """call() with the raw MCP result (structuredContent and isError kept), for code nodes."""
+        entry = self._findEntry(server, tool)
+        if entry is None:
+            return {'ok': False, 'error': f"MCP tool '{server}.{tool}' not found"}
+        r = self.loader.executeToolRaw('mcp_' + entry['original_name'], args)
+        if not php_empty(r.get('error')):
+            msg = r.get('message')
+            return {'ok': False, 'error': str(msg) if msg is not None else 'MCP tool execution failed'}
+        return {'ok': True, 'result': r.get('raw')}
 
     def availableTools(self) -> dict:
         tools = {}

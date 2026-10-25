@@ -220,6 +220,32 @@ class MCPToolsLoader:
 
         return result
 
+    def executeToolRaw(self, toolName: str, arguments: dict) -> dict:
+        """Execute a tool and return the raw MCP result ({content, structuredContent?, isError?}),
+        for code nodes, which need structuredContent and isError (executeTool's formatted
+        result keeps only the text). Never throws; failures are {'error': True, 'message'}."""
+        prefixedName = toolName if toolName.startswith('mcp_') else 'mcp_' + toolName
+        if prefixedName not in self.tools:
+            return {'error': True, 'message': f"MCP tool '{toolName}' not found"}
+        tool = self.tools[prefixedName]
+        call = self._callMCPServer(
+            tool['server_url'], tool['original_name'], arguments,
+            tool.get('server_headers') if tool.get('server_headers') is not None else [],
+            tool.get('server_transport') if tool.get('server_transport') is not None else 'http',
+        )
+        raw = call.get('raw')
+        if not isinstance(raw, (dict, list)):
+            formatted = call.get('formatted') if isinstance(call.get('formatted'), dict) else {}
+            msg = formatted.get('message')
+            return {'error': True, 'message': str(msg) if msg is not None else 'MCP call failed'}
+        if isinstance(raw, dict) and raw.get('error') is not None and raw.get('content') is None:
+            # a JSON-RPC error object, not a tool result
+            err = raw['error']
+            msg = (err.get('message') if err.get('message') is not None else 'MCP error') if isinstance(err, dict) else err
+            return {'error': True, 'message': str(msg)}
+        rawObject = call.get('raw_object')
+        return {'error': False, 'raw': rawObject if rawObject is not None else raw}
+
     def _callMCPServer(self, serverUrl: str, toolName: str, arguments: dict, extraHeaders: list | None = None, transport: str = 'http') -> dict:
         """Call an MCP server to execute a tool."""
         extraHeaders = extraHeaders or []
@@ -295,6 +321,9 @@ class MCPToolsLoader:
         return {
             'formatted': self._formatToolResult(result),
             'raw': result,
+            # PHP keeps a second decode with JSON objects as objects (an empty {} stays {});
+            # json.loads already keeps {} a dict, so it is the same result when that is an object.
+            'raw_object': result if isinstance(result, dict) else None,
         }
 
     def _parseResponse(self, response: str):

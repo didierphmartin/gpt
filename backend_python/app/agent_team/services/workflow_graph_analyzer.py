@@ -40,6 +40,43 @@ class WorkflowGraphAnalyzer:
     # --------------------------------------------------------------------------
 
     @staticmethod
+    def reachableGraph(graph: dict) -> dict:
+        """The part of a {nodes, edges} graph a run reaches: the start node(s) and
+        everything downstream of them. A node left unconnected on the canvas
+        (kept for later, or to compare a run with and without it) is not part of
+        the workflow, so it is dropped with its edges. A graph with no start node
+        is returned unchanged. Other keys of graph are kept."""
+        def end(e: dict, *keys) -> str:
+            for k in keys:
+                if e.get(k) is not None:
+                    return php_strval(e[k])
+            return ''
+
+        nodes = graph.get('nodes') if graph.get('nodes') is not None else []
+        edges = graph.get('edges') if graph.get('edges') is not None else []
+        children: dict = {}
+        seen: dict = {}
+        for e in edges:
+            frm = end(e, 'from', 'from_node_id', 'source')
+            to = end(e, 'to', 'to_node_id', 'target')
+            if frm != '' and to != '':
+                children.setdefault(frm, []).append(to)
+        queue = [php_strval(n.get('id') if n.get('id') is not None else '')
+                 for n in nodes if WorkflowGraphAnalyzer.typeOf(n) == 'start']
+        if not queue:
+            return graph
+        while queue:
+            id_ = queue.pop(0)
+            if id_ == '' or id_ in seen:
+                continue
+            seen[id_] = True
+            queue.extend(children.get(id_, []))
+        out = dict(graph)
+        out['nodes'] = [n for n in nodes if php_strval(n.get('id') if n.get('id') is not None else '') in seen]
+        out['edges'] = [e for e in edges if end(e, 'from', 'from_node_id', 'source') in seen]
+        return out
+
+    @staticmethod
     def analyzeGraph(graph: dict) -> dict:
         """PHP 51-145.
 

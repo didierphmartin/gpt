@@ -64,8 +64,10 @@ class PlaybookNodeRunner:
         self.bridgeFactory = bridgeFactory
         self.pdoFactory = pdoFactory
 
-    def run(self, userId: int, nodeConfig: dict, requestText: str, emit: Callable[[dict], None]) -> dict:
-        """@return {output: str, run_id: int, status: str}"""
+    def run(self, userId: int, nodeConfig: dict, requestText: str, emit: Callable[[dict], None],
+            unattended: bool = False) -> dict:
+        """unattended: no human present, any gate ends the run as handed_off.
+        @return {output: str, run_id: int, status: str, gate: str|None}"""
         # PHP sets default_socket_timeout / mysqlnd.net_read_timeout to 30s here
         # (playbook legs are long-lived and a dead connection with no read
         # timeout hangs the SSE request forever). uvicorn/pymysql have no
@@ -101,9 +103,13 @@ class PlaybookNodeRunner:
         # not just the interpreter's last sentence.
         events: list = []
         emitInner = emit
+        unattendedGate: list = [None]   # the first unattended gate wins (the run ends there)
 
         def _emit(ev: dict) -> None:
             events.append(ev)
+            res = ev.get('result') if isinstance(ev.get('result'), dict) else {}
+            if unattendedGate[0] is None and ev.get('type') == 'tool_result' and not php_empty(res.get('unattended')):
+                unattendedGate[0] = php_strval(res.get('kind') if res.get('kind') is not None else '')
             emitInner(ev)
 
         from app.agent_team.services.workflow_run_log import WorkflowRunLog
@@ -118,7 +124,7 @@ class PlaybookNodeRunner:
 
         native = PlaybookNativeTools(state)
         bridge = self.bridgeFactory(_emit) if self.bridgeFactory is not None else SkillBridgeGateBridge(_emit)
-        gates = GateManager(state, bridge)
+        gates = GateManager(state, bridge, unattended=unattended)
 
         space = PlaybookActionSpace(analysis['actions'], native, mcp, state, doc.policy, gates)
 
@@ -132,9 +138,16 @@ class PlaybookNodeRunner:
 
         result = interpreter.runLeg(runId, 0, doc, {}, requester, requestText)
 
-        output = self.renderTranscript(doc.title, events, php_strval(result.get('output')) if result.get('output') is not None else '', runId, php_strval(result['status']))
+        status = php_strval(result['status'])
+        if unattendedGate[0] is not None and status != 'handed_off':
+            # Defence in depth: an unattended gate hands the run off, whatever
+            # happened after it. Nothing may turn a hand-off into a resolve.
+            status = 'handed_off'
+            state.setStatus(runId, 'handed_off')
 
-        return {'output': output, 'run_id': runId, 'status': php_strval(result['status'])}
+        output = self.renderTranscript(doc.title, events, php_strval(result.get('output')) if result.get('output') is not None else '', runId, status)
+
+        return {'output': output, 'run_id': runId, 'status': status, 'gate': unattendedGate[0]}
 
     @staticmethod
     def renderTranscript(title: str, events: list, finalOutput: str, runId: Optional[int], status: str) -> str:

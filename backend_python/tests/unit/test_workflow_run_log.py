@@ -73,3 +73,17 @@ def test_read_skips_non_json_and_non_array_lines(tmp_path):
 def test_base_dir_trailing_slash_is_stripped():
     log = WorkflowRunLog('/tmp/runs/')
     assert log.baseDir == '/tmp/runs'
+
+
+def test_the_pointer_names_the_latest_run(tmp_path):
+    """LiveFeedTest::testThePointerNamesTheLatestRun (the WorkflowRunLog half: markCurrent/current)."""
+    a, b = 'a' * 32, 'b' * 32
+    log = WorkflowRunLog(str(tmp_path / 'runs'))
+    assert log.current(64) is None
+    log.markCurrent(64, a)
+    log.markCurrent(64, b)
+    assert log.current(64) == b
+    assert log.current(65) is None
+    log.markCurrent(64, 'not-a-run-id')
+    assert log.current(64) == b, 'an invalid id never replaces the pointer'
+    assert log.dir() == str(tmp_path / 'runs')

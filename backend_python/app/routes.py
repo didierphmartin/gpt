@@ -3,6 +3,7 @@ Rows for controllers not yet ported are added phase by phase."""
 from app.agent_team.controllers.agent_controller import AgentController
 from app.agent_team.controllers.agent_mcp_controller import AgentMCPController
 from app.agent_team.controllers.app_key_controller import AppKeyController
+from app.agent_team.controllers.code_node_controller import CodeNodeController
 from app.agent_team.controllers.ingestion_controller import IngestionController
 from app.agent_team.controllers.scheduled_workflow_controller import ScheduledWorkflowController
 from app.agent_team.controllers.scheduler_controller import SchedulerController
@@ -53,6 +54,7 @@ CONTROLLERS = {
     'AgentTeam:AgentController': AgentController,
     'AgentTeam:AgentMCPController': AgentMCPController,
     'AgentTeam:AppKeyController': AppKeyController,
+    'AgentTeam:CodeNodeController': CodeNodeController,
     'AgentTeam:IngestionController': IngestionController,
     'AgentTeam:ScheduledWorkflowController': ScheduledWorkflowController,
     'AgentTeam:SchedulerController': SchedulerController,
@@ -178,8 +180,13 @@ ROUTES = [
     ('POST', '/api/v1/settings/provider/active', ('SettingsController', 'setActiveProvider')),
     ('DELETE', '/api/v1/settings/provider', ('SettingsController', 'deleteProvider')),
     ('GET', '/api/v1/settings/phone', ('SettingsController', 'getPhoneStatus')),
-    # Decision-model routing (list only; routing is not supported on this backend)
+    # Decision-model routing (browser run path; keys stay server-side)
     ('GET', '/api/v1/dispatch/providers', ('DispatchController', 'providers')),
+    ('POST', '/api/v1/dispatch/route', ('DispatchController', 'route')),
+    # Aliases for pages loaded before decision providers were generalised.
+    ('GET', '/api/v1/dispatch/jev/status', ('DispatchController', 'jevStatus')),
+    ('POST', '/api/v1/dispatch/jev', ('DispatchController', 'jevRoute')),
+    ('GET', '/api/v1/dispatch/{key}/status', ('DispatchController', 'status')),
     # Storage settings
     ('GET', '/api/v1/settings/storage', ('SettingsController', 'getStorageSettings')),
     ('POST', '/api/v1/settings/storage', ('SettingsController', 'saveStorageSettings')),
@@ -366,6 +373,7 @@ ROUTES = [
     ('POST', '/api/v1/workflows/{id:\\d+}/run-stream', ('AgentTeam:WorkflowController', 'runStream')),
     ('POST', '/api/v1/workflows/tool-result', ('AgentTeam:WorkflowController', 'toolResult')),
     ('POST', '/api/v1/workflows/playbook-node/run', ('AgentTeam:WorkflowController', 'runPlaybookNode')),
+    ('POST', '/api/v1/workflows/code-node/tool-call', ('AgentTeam:CodeNodeController', 'toolCall')),
     # Standalone config-driven ingestion compiler (separate from agent code) —
     # chunks/scripts are compiled from the node configs the frontend sends
     # (routes.php 357-373; mirrors that ordering, positioned here per this
