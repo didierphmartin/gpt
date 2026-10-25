@@ -1,6 +1,8 @@
 import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { PlaybookStore } from '../Playbook/PlaybookStore';
+import { CodeComponentStore } from '../CodeComponent/CodeComponentStore';
+import { StartOptionGraph } from './StartOptionGraph';
 
 /**
  * Faithful mirror of:
@@ -273,6 +275,24 @@ function isTransientLockError(err: Error): boolean {
   );
 }
 
+/**
+ * createNode/updateNode: a linked code node stores only the link (its body and the missing flag are derived on
+ * read); a Start on a Start option stores only the option (its exits, label and missing flag are derived on read).
+ */
+function stripDerivedLinkFields(nodeType: string, config: any): void {
+  // A linked playbook node stores only the link; the text and the missing flag are derived on read.
+  if (config.playbook_id !== undefined && config.playbook_id !== null) {
+    delete config.playbook;
+    delete config.playbook_missing;
+  }
+  if (nodeType === 'code' && config.code_component_id !== undefined && config.code_component_id !== null) {
+    for (const k of ['code', 'exits', 'mcp_servers', 'timeout_s', 'code_component_missing']) delete config[k];
+  }
+  if (nodeType === 'start') {
+    for (const k of ['exits', 'start_option_label', 'start_option_missing']) delete config[k];
+  }
+}
+
 export class WorkflowGraphRepository {
   /** Mirrors findRealtimeWorkflowIds(): which of these workflows have a realtime-* node. */
   async findRealtimeWorkflowIds(workflowIds: number[]): Promise<number[]> {
@@ -293,26 +313,21 @@ export class WorkflowGraphRepository {
     const rows = (
       await sql<any>`SELECT * FROM workflow_nodes WHERE workflow_id = ${workflowId} ORDER BY id`.execute(db)
     ).rows;
-    const out = rows.map((row) => {
+    rows.forEach((row) => {
       row.config = decodeNodeConfig(row.config);
-      return row;
     });
 
-    // Playbook nodes link to the collection: fill in the linked text for the workflow's owner, so every
-    // reader (runners, compilers, docs) keeps receiving config.playbook.
-    let owner: number | null = null;
+    // Linked nodes are filled for the workflow's owner, so every reader (runners, compilers, docs) keeps
+    // receiving the node's own fields: playbook text, and a code component's body.
+    const ownerId = this.ownerOf(workflowId);
     const store = new PlaybookStore();
-    for (const row of out) {
+    for (const row of rows) {
       const cfg = row.config;
       if ((row.node_type ?? '') !== 'playbook' || cfg === null || typeof cfg !== 'object' || Array.isArray(cfg)
         || cfg.playbook_id === undefined || cfg.playbook_id === null) {
         continue;
       }
-      if (owner === null) {
-        const o = (await sql<any>`SELECT user_id FROM agent_workflows WHERE id = ${workflowId}`.execute(db)).rows[0];
-        owner = phpIntval(o?.user_id ?? 0);
-      }
-      const pb = await store.get(owner, phpIntval(cfg.playbook_id));
+      const pb = await store.get(await ownerId(), phpIntval(cfg.playbook_id));
       if (pb === null) {
         delete cfg.playbook;
         cfg.playbook_missing = true;
@@ -321,7 +336,52 @@ export class WorkflowGraphRepository {
         cfg.playbook = pb.text;
       }
     }
-    return out;
+
+    const codeStore = new CodeComponentStore();
+    for (const row of rows) {
+      const cfg = row.config;
+      if (!CodeComponentStore.isCodeNode(row.node_type ?? null, cfg) || cfg === null || typeof cfg !== 'object'
+        || phpEmpty(cfg.code_component_id)) {
+        continue;
+      }
+      const c = await codeStore.get(await ownerId(), phpIntval(cfg.code_component_id));
+      for (const k of ['code', 'exits', 'mcp_servers', 'timeout_s', 'code_component_missing']) delete cfg[k];
+      if (c === null) {
+        cfg.code_component_missing = true;
+      } else {
+        Object.assign(cfg, { code: c.code, exits: c.exits, mcp_servers: c.mcp_servers, timeout_s: c.timeout_s });
+      }
+    }
+
+    // A Start on a Start option shows the option's exits as its ports: read like a linked code node's.
+    for (const row of rows) {
+      const cid = StartOptionGraph.optionId(row);
+      if (cid === null) {
+        continue;
+      }
+      const cfg = row.config;
+      for (const k of ['exits', 'start_option_label', 'start_option_missing']) delete cfg[k];
+      const c = await codeStore.get(await ownerId(), cid);
+      if (c === null || c.start_trigger === null) {
+        cfg.start_option_missing = true;
+      } else {
+        Object.assign(cfg, { exits: c.exits, start_option_label: c.start_trigger.label });
+      }
+    }
+
+    return rows;
+  }
+
+  /** The workflow's owner (agent_workflows.user_id), read once and only when a linked node needs it. */
+  private ownerOf(workflowId: number): () => Promise<number> {
+    let owner: number | null = null;
+    return async () => {
+      if (owner === null) {
+        const r = (await sql<any>`SELECT user_id FROM agent_workflows WHERE id = ${workflowId}`.execute(db)).rows[0];
+        owner = phpIntval(r?.user_id ?? 0);
+      }
+      return owner;
+    };
   }
 
   /** Mirrors getNode(): a single node by id with `config` decoded (or [] when empty), else null. */
@@ -342,11 +402,7 @@ export class WorkflowGraphRepository {
     // Ensure type is stored in config too (redundancy), matching PHP.
     const config: any = nodeData.config ?? nodeData.data ?? {};
     if (config.type === undefined || config.type === null) config.type = nodeType;
-    // A linked playbook node stores only the link; the text and the missing flag are derived on read.
-    if (config.playbook_id !== undefined && config.playbook_id !== null) {
-      delete config.playbook;
-      delete config.playbook_missing;
-    }
+    stripDerivedLinkFields(nodeType, config);
     // agent_id must be null or a valid integer (FK); non-numeric strings like "node_3" → null.
     let agentId: any = nodeData.agent_id ?? null;
     if (agentId !== null && !phpIsNumeric(agentId)) agentId = null;
@@ -435,12 +491,18 @@ export class WorkflowGraphRepository {
     ).rows;
   }
 
-  /** Mirrors getGraph(): raw nodes (config decoded) + raw edges. Used by LangGraphGenerator. */
+  /**
+   * Mirrors getGraph(): nodes (config decoded, linked nodes filled) + raw edges, as runners and compilers read
+   * them: a Start on a Start option is expanded into Start -> the option's code node (StartOptionGraph).
+   */
   async getGraph(workflowId: number): Promise<{ nodes: any[]; edges: any[] }> {
-    return {
+    const graph = {
       nodes: await this.getNodes(workflowId),
       edges: await this.getEdges(workflowId),
     };
+    const ownerId = this.ownerOf(workflowId);
+    const codeStore = new CodeComponentStore();
+    return StartOptionGraph.expand(graph, async (id) => codeStore.get(await ownerId(), id));
   }
 
   /** Mirrors getGraphForFrontend(): Drawflow-compatible nodes/edges. */
@@ -501,11 +563,7 @@ export class WorkflowGraphRepository {
     if (config.type === undefined || config.type === null) {
       config.type = nodeType;
     }
-    // A linked playbook node stores only the link; the text and the missing flag are derived on read.
-    if (config.playbook_id !== undefined && config.playbook_id !== null) {
-      delete config.playbook;
-      delete config.playbook_missing;
-    }
+    stripDerivedLinkFields(nodeType, config);
 
     let agentId: any = nodeData.agent_id ?? null;
     if (agentId !== null && !phpIsNumeric(agentId)) {

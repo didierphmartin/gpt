@@ -19,6 +19,38 @@ import { phpIntval } from './WorkflowRepository';
  * comparisons (number !== number) and the stats shape line up with PHP.
  */
 export class ScheduledWorkflowService {
+  /**
+   * Mirrors ScheduledWorkflowService::eventTrigger(): an event schedule's trigger {server, tool, args}
+   * (a JSON string or an object), validated and normalised to its stored JSON; args stay an object.
+   * Throws (PHP InvalidArgumentException) with the PHP message on a bad shape.
+   */
+  static eventTrigger(raw: unknown): string {
+    let t: any = raw;
+    if (typeof raw === 'string') {
+      try {
+        t = JSON.parse(raw);
+      } catch {
+        t = null;
+      }
+    }
+    if (t === null || typeof t !== 'object') {
+      throw new Error('An event schedule needs event_trigger: {"server", "tool", "args"}');
+    }
+    const trim = (v: unknown) =>
+      (v === undefined || v === null ? '' : typeof v === 'object' ? 'Array' : String(v)).replace(/^[ \t\n\r\0\x0B]+|[ \t\n\r\0\x0B]+$/g, '');
+    const server = trim(t.server);
+    const tool = trim(t.tool);
+    const args = t.args ?? [];
+    if (server === '' || tool === '') {
+      throw new Error('event_trigger needs an MCP server and a tool');
+    }
+    // PHP: !is_array($args) || ($args !== [] && array_is_list($args)) -- a JSON object, or [] (stored as {})
+    if (args === null || typeof args !== 'object' || (Array.isArray(args) && args.length > 0)) {
+      throw new Error('event_trigger.args must be a JSON object');
+    }
+    return JSON.stringify({ server, tool, args: Array.isArray(args) ? {} : args });
+  }
+
   /** Mirrors create(). Inserts with status 'pending', next_run = scheduled_time, created_at NOW(). */
   async create(data: any): Promise<any> {
     const scheduledTime = data.scheduled_time;

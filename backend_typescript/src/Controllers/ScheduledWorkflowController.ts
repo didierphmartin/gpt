@@ -1,6 +1,8 @@
 import { Ctx, ControllerResult } from '../Support/Http';
 import { ScheduledWorkflowService } from '../AgentTeam/ScheduledWorkflowService';
 import { WorkflowRepository, phpEmpty, phpIntval } from '../AgentTeam/WorkflowRepository';
+import { CodeComponentStore } from '../CodeComponent/CodeComponentStore';
+import { CodeComponentError } from '../CodeComponent/CodeComponentError';
 
 /**
  * Faithful mirror of src/AgentTeam/Controllers/ScheduledWorkflowController.php.
@@ -51,10 +53,17 @@ export class ScheduledWorkflowController {
   /** POST /api/v1/schedules */
   async create(ctx: Ctx): Promise<ControllerResult> {
     const userId = this.getUserId(ctx);
-    const body: any = ctx.body ?? {};
+    let body: any = ctx.body ?? {};
 
     if (!userId) {
       return { success: false, error: 'Authentication required', status_code: 401 };
+    }
+
+    try { // a Start option names its component; the component supplies the event (spec §3)
+      body = await new CodeComponentStore().scheduleBody(userId, body);
+    } catch (e) {
+      if (!(e instanceof CodeComponentError)) throw e;
+      return { success: false, error: e.message, kind: e.kind, status_code: e.status };
     }
 
     // Validate required fields
@@ -129,10 +138,18 @@ export class ScheduledWorkflowController {
   async update(ctx: Ctx): Promise<ControllerResult> {
     const userId = this.getUserId(ctx);
     const id = this.getId(ctx);
-    const body: any = ctx.body ?? {};
+    let body: any = ctx.body ?? {};
 
     if (!userId) {
       return { success: false, error: 'Authentication required', status_code: 401 };
+    }
+
+    try { // a Start option names its component; the component supplies the event (spec §3)
+      body = await new CodeComponentStore().scheduleBody(userId, body,
+        phpIntval((await this.scheduleService.findById(id))?.workflow_id ?? 0));
+    } catch (e) {
+      if (!(e instanceof CodeComponentError)) throw e;
+      return { success: false, error: e.message, kind: e.kind, status_code: e.status };
     }
 
     // Validate repeat_type if provided

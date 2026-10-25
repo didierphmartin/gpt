@@ -23,6 +23,7 @@ import { AgentController } from './Controllers/AgentController';
 import { PlaybooksController } from './Controllers/PlaybooksController';
 import { PlaybookController } from './Controllers/PlaybookController';
 import { AutomationsController } from './Controllers/AutomationsController';
+import { CodeComponentsController } from './Controllers/CodeComponentsController';
 import { WorkflowController } from './Controllers/WorkflowController';
 import { ScheduledWorkflowController } from './Controllers/ScheduledWorkflowController';
 import { WorkflowSchemaController } from './Controllers/WorkflowSchemaController';
@@ -70,6 +71,7 @@ const agents = new AgentController();
 const playbooks = new PlaybooksController();
 const playbookValidation = new PlaybookController();
 const automations = new AutomationsController();
+const codeComponents = new CodeComponentsController();
 const roles = new RolesController();
 const robot = new RobotController();
 const workflows = new WorkflowController();
@@ -403,6 +405,16 @@ router.post('/api/v1/automations', handle((ctx) => automations.create(ctx)));
 router.put('/api/v1/automations/:id(\\d+)', handle((ctx) => automations.update(ctx)));
 router.post('/api/v1/automations/:id(\\d+)/check', handle((ctx) => automations.check(ctx)));
 router.post('/api/v1/automations/:id(\\d+)/install', handle((ctx) => automations.install(ctx)));
+// The code components collection (protected; CodeComponentsController, over CodeComponentStore); {id} numeric only.
+router.get('/api/v1/code-components', handle((ctx) => codeComponents.index(ctx)));
+router.post('/api/v1/code-components', handle((ctx) => codeComponents.create(ctx)));
+router.get('/api/v1/code-components/:id(\\d+)', handle((ctx) => codeComponents.show(ctx)));
+router.put('/api/v1/code-components/:id(\\d+)', handle((ctx) => codeComponents.update(ctx)));
+router.delete('/api/v1/code-components/:id(\\d+)', handle((ctx) => codeComponents.destroy(ctx)));
+router.get('/api/v1/code-components/:id(\\d+)/used-by', handle((ctx) => codeComponents.usedBy(ctx)));
+router.put('/api/v1/code-components/:id(\\d+)/start-option', handle((ctx) => codeComponents.setStartOption(ctx)));
+router.get('/api/v1/code-components/:id(\\d+)/start-option/impact', handle((ctx) => codeComponents.startOptionImpact(ctx)));
+router.delete('/api/v1/code-components/:id(\\d+)/start-option', handle((ctx) => codeComponents.clearStartOption(ctx)));
 
 // The robot (protected): status, its published playbooks, unpublish.
 router.get('/api/v1/robot', handle((ctx) => robot.show(ctx)));
