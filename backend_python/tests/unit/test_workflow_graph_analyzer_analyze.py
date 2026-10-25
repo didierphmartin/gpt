@@ -103,3 +103,36 @@ def test_analyze_falls_back_to_generated_name_when_blank():
     result = analyzer.analyze(99, '1')
 
     assert result['workflow']['name'] == 'workflow_99'
+
+
+def _agent(id_: str, name: str) -> dict:
+    return {'id': id_, 'type': 'agent', 'config': {'type': 'agent', 'agent_name': name, 'systemPrompt': name,
+                                                     'provider': 'claude', 'model': 'm', 'selectedTools': []}}
+
+
+def test_analyze_reads_only_what_start_reaches():
+    """PHP analyze(): reachableGraph() before analyzeGraph() -- an unconnected canvas node is not the workflow."""
+    graph = {
+        'nodes': [{'id': '1', 'type': 'start', 'config': {'type': 'start'}}, _agent('2', 'A'), _agent('9', 'Parked'),
+                  {'id': '3', 'type': 'output', 'config': {'type': 'output'}}],
+        'edges': [{'from': '1', 'to': '2'}, {'from': '2', 'to': '3'}, {'from': '9', 'to': '3'}],
+    }
+    workflow = Workflow({'id': 31, 'name': 'W'})
+    result = WorkflowGraphAnalyzer(_FakeDb(), _FakeWorkflowRepo(workflow), _FakeGraphRepo(graph), _FakeAgentRepo()).analyze(31, '3')
+    assert '9' not in result['agents']
+    assert '9' not in result['byId']
+    assert [e for e in result['edges'] if e['from'] == '9'] == []
+
+
+def test_two_exits_to_one_node_are_one_connection():
+    """PHP analyzeGraph(): a second edge between the same two nodes (two exits of a code node) is dropped."""
+    graph = {
+        'nodes': [{'id': '1', 'type': 'start', 'config': {'type': 'start'}},
+                  {'id': '2', 'type': 'code', 'config': {'type': 'code', 'exits': ['a', 'b']}}, _agent('3', 'A')],
+        'edges': [{'from': '1', 'to': '2'}, {'from': '2', 'to': '3', 'from_port': 'output_1'},
+                  {'from': '2', 'to': '3', 'from_port': 'output_2'}],
+    }
+    out = WorkflowGraphAnalyzer.analyzeGraph(graph)
+    assert out['children']['2'] == ['3']
+    assert out['parents']['3'] == ['2']
+    assert len([e for e in out['edges'] if e['from'] == '2']) == 1
