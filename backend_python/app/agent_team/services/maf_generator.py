@@ -343,8 +343,11 @@ class MAFGenerator:
                     hasExtra = True
 
             def _type(pspec):
+                """$typeMap[$pspec['type'] ?? ''] ?? 'str' -- an array "type" (["string", "null"]) is an illegal offset."""
                 t = pspec.get('type')
-                return _TYPE_MAP.get(t if isinstance(t, str) else '', 'str') if t is not None else 'str'
+                if isinstance(t, (list, dict)):
+                    raise TypeError('Illegal offset type')
+                return _TYPE_MAP.get(t, 'str') if isinstance(t, str) else 'str'
 
             params = [f'{p}: {_type(s)}' for p, s in validRequired.items()]
             params += [f'{p}: {_type(s)} = None' for p, s in validOptional.items()]
