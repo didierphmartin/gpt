@@ -183,6 +183,56 @@ class WorkflowGraphAnalyzer:
         return 'agent'
 
     @staticmethod
+    def dispatchMenus(analyzed: dict) -> dict:
+        """Each dispatcher's menu and who owns each menu child.
+
+        A dispatcher (an agent / agent-template node whose agent_type is 'dispatcher') routes to ONE of its
+        agent, playbook or code children (in edge order); a child of another kind a dispatcher points at (an
+        Output node, say) stays an ordinary edge and always runs.
+
+        Returns {'menus': {dispatcher id: [{id, name}, ...]}, 'routedBy': {child id: dispatcher id}}.
+        """
+        byId = analyzed.get('byId') or {}
+        order = analyzed.get('order') if analyzed.get('order') is not None else list(byId.keys())
+        menus: dict = {}
+        routedBy: dict = {}
+        for nid in order:
+            nid = php_strval(nid)
+            node = byId.get(nid)
+            if not isinstance(node, dict) or WorkflowGraphAnalyzer.typeOf(node) not in ('agent', 'agent-template'):
+                continue
+            cfg = node.get('config') if isinstance(node.get('config'), dict) else {}
+            if php_strval(_coalesce(cfg.get('agent_type'), '')) != 'dispatcher':
+                continue
+            targets = []
+            for e in analyzed.get('edges') or []:
+                frm = php_strval(_coalesce(e.get('from'), e.get('from_node_id'), ''))
+                to = php_strval(_coalesce(e.get('to'), e.get('to_node_id'), ''))
+                if frm != nid or to == '':
+                    continue
+                child = byId.get(to)
+                if not isinstance(child, dict) or WorkflowGraphAnalyzer.typeOf(child) not in ('agent', 'agent-template', 'playbook', 'code'):
+                    continue
+                targets.append({'id': to, 'name': WorkflowGraphAnalyzer._displayNameOf(child, analyzed, to)})
+                routedBy[to] = nid
+            if targets:
+                menus[nid] = targets
+        return {'menus': menus, 'routedBy': routedBy}
+
+    @staticmethod
+    def _displayNameOf(node: dict, analyzed: dict, id_: str) -> str:
+        """Display name for a node: the agents map first (it carries the resolved name), then config."""
+        ag = (analyzed.get('agents') or {}).get(id_)
+        fromAgents = php_strval((ag.get('name') if isinstance(ag, dict) else None) or '')
+        if fromAgents not in ('', '0'):
+            return fromAgents
+        cfg = node.get('config') if isinstance(node.get('config'), dict) else {}
+        for k in ('agent_name', 'name', 'label'):
+            if php_strval(_coalesce(cfg.get(k), '')) != '':
+                return php_strval(cfg[k])
+        return php_strval(_coalesce(node.get('name'), id_))
+
+    @staticmethod
     def docNodesFromAnalyzed(analyzed: dict, extra: dict | None = None,
                               runnable: list[str] | None = None) -> list[dict]:
         """PHP 185-197.
@@ -472,6 +522,38 @@ class WorkflowGraphAnalyzer:
     # LangGraphGenerator::loadMcpToolsWithServers + the catalog-filter block in
     # LangGraphGenerator::generate, lines ~220-244 and ~305-548).
     # --------------------------------------------------------------------------
+
+    def serverIndex(self, userId: str | None = None) -> dict:
+        """slug => {url, name} for every MCP server the user can call (CodeNodeEmit.slug of the name)."""
+        from app.agent_team.services.code_node_emit import CodeNodeEmit
+        out: dict = {}
+        for t in self._loadMcpToolsWithServers(userId):
+            url = php_strval(_coalesce(t.get('server_url'), ''))
+            name = php_strval(_coalesce(t.get('server_name'), ''))
+            if url != '' and name != '':
+                out[CodeNodeEmit.slug(name)] = {'url': url, 'name': name}
+        return out
+
+    def availableToolsById(self, userId: str | None = None) -> dict:
+        """Playbook binding ids ("<server slug>.<tool>") over the MCP registry, keyed the way
+        LoaderMcpExecutor::availableTools() keys them -- what a playbook's #Action bindings resolve against."""
+        from app.agent_team.services.compiler_php import PhpObj
+        out: dict = {}
+        for t in self._loadMcpToolsWithServers(userId):
+            surl = php_strval(_coalesce(t.get('server_url'), ''))
+            tname = php_strval(_coalesce(t.get('tool_name'), t.get('name'), ''))
+            if surl == '' or tname == '':
+                continue
+            # EXACTLY LangGraphGenerator::serverSlug() -- no trimming.
+            slug = re.sub(r'[^a-z0-9]+', '_', php_strval(_coalesce(t.get('server_name'), '')), flags=re.IGNORECASE | re.ASCII).lower()
+            schema = t.get('input_schema')
+            out[slug + '.' + tname] = {
+                'server_url': surl,
+                'tool': tname,
+                'description': php_strval(_coalesce(t.get('tool_description'), t.get('description'), '')),
+                'input_schema': PhpObj() if schema is None else schema,
+            }
+        return out
 
     def _loadMcpToolsWithServers(self, userId: str | None = None) -> list[dict]:
         """PHP 424-456 (`private function loadMcpToolsWithServers`).
