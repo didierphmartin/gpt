@@ -9,6 +9,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
+    "typecheck:diff": "tsc --noEmit -p tests/differential/tsconfig.json",
+    "test:diff": "node --import tsx --test --test-force-exit --test-concurrency=1 tests/differential/*.test.ts",
     "scheduler": "tsx src/bin/run-scheduled-workflows.ts",
     "event-worker": "tsx src/bin/event-worker.ts"
   },
