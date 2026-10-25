@@ -12,6 +12,7 @@ import jwt
 
 from app.db import Db
 from app.middleware.auth import decode_hs256, hash_user_app_key, user_app_key_pepper
+from app.services import edition
 from app.services.firebase_tokens import verify_firebase_id_token
 from app.support.logger import error_log
 from app.support.phpcompat import php_empty, php_intval, php_now, validate_email
@@ -78,6 +79,8 @@ def _user_payload(user: dict, user_id: int, provider_default: str, provider_over
 
 
 class AuthController:
+    # Corporate installs sign in only through the login service (Services/Edition::refuseLocalSignIn):
+    # login, register and firebaseAuth answer 403 there.
     def __init__(self, db, config: dict):
         self.db = db
         self.config = config
@@ -147,6 +150,9 @@ class AuthController:
 
     # ---- login / sso / register --------------------------------------------
     def login(self, request) -> dict:
+        refused = edition.refuse_local_sign_in(self.config)
+        if refused:
+            return refused
         email = request['body'].get('email', '') or ''
         password = request['body'].get('password', '') or ''
         if php_empty(email) or php_empty(password):
@@ -212,6 +218,9 @@ class AuthController:
         }
 
     def register(self, request) -> dict:
+        refused = edition.refuse_local_sign_in(self.config)
+        if refused:
+            return refused
         b = request['body']
         email = str(b.get('email', '') or '').strip().lower()
         password = b.get('password', '') or ''
@@ -249,6 +258,9 @@ class AuthController:
 
     # ---- firebase ------------------------------------------------------------
     def firebaseAuth(self, request) -> dict:
+        refused = edition.refuse_local_sign_in(self.config)
+        if refused:
+            return refused
         b = request['body']
         provider = b.get('provider', '') or ''
         id_token = b.get('idToken', '') or ''

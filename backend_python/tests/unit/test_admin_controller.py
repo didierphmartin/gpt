@@ -203,12 +203,13 @@ def test_create_user_sql_hashes_and_trims():
                               'first_name': '  Ann  ', 'last_name': '  Lee  '}))
     assert r == {'success': True, 'message': 'User created', 'user_id': 42, 'status_code': 200}
     assert sqls(db) == [
-        ('INSERT INTO users (email, password, first_name, last_name, role, provider, created_at, updated_at)'
-         " VALUES (:email, :password, :first_name, :last_name, :role, 'email', NOW(), NOW())"),
+        ('INSERT INTO users (email, password, first_name, last_name, role, provider, email_verified, created_at, updated_at)'
+         " VALUES (:email, :password, :first_name, :last_name, :role, 'email', :verified, NOW(), NOW())"),
     ]
     params = db.calls[0][1]
     assert params[':email'] == 'a@b.com' and params[':first_name'] == 'Ann' and params[':last_name'] == 'Lee'
     assert params[':role'] == 'user'
+    assert params[':verified'] == 0
     # $2y$ / $2b$ bcrypt round-trip: PHP-produced or Python-produced hashes verify on either backend.
     assert params[':password'].startswith('$2b$')
     assert password_verify('sup3r-secret', params[':password']) is True
@@ -280,8 +281,9 @@ def test_delete_user_success_sql():
     db = FakeDb(rowcount=1)
     r = c(db).deleteUser(ctx(), 5)
     assert r == {'success': True, 'message': 'User deleted', 'status_code': 200}
-    assert sqls(db) == ['SELECT kind FROM users WHERE id = :id', 'DELETE FROM users WHERE id = :id']
-    assert db.calls[1][1] == {':id': 5}
+    assert sqls(db) == ['SELECT kind FROM users WHERE id = :id', 'SELECT role FROM users WHERE id = :id',
+                        'DELETE FROM users WHERE id = :id']
+    assert db.calls[2][1] == {':id': 5}
 
 
 # ─── getProviderSettings (317) ───────────────────────────────────────────────

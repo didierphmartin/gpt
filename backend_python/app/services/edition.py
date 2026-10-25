@@ -1,4 +1,4 @@
-"""Port of Services/Edition.php (minimal): which edition this backend runs as,
+"""Port of Services/Edition.php: which edition this backend runs as,
 'individual', 'corporate', or '' (hosted)."""
 from __future__ import annotations
 
@@ -13,3 +13,15 @@ def current(config: dict) -> str:
 
 def is_corporate(config: dict) -> bool:
     return current(config) == 'corporate'
+
+
+def refuse_local_sign_in(config: dict) -> dict | None:
+    """On a corporate install every session comes from the login service via sso_exchange; gpt's own
+    credential paths must not issue one."""
+    if not is_corporate(config):
+        return None
+    return {
+        'success': False,
+        'message': 'This installation signs in through its login service.',
+        'status_code': 403,
+    }

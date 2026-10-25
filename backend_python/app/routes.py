@@ -41,6 +41,7 @@ from app.controllers.robot_controller import RobotController
 from app.controllers.roles_controller import RolesController
 from app.controllers.root_controller import RootController
 from app.controllers.settings_controller import SettingsController
+from app.controllers.setup_controller import SetupController
 from app.controllers.system_settings_controller import SystemSettingsController
 from app.controllers.tools_controller import ToolsController
 from app.controllers.traces_controller import TracesController
@@ -95,6 +96,7 @@ CONTROLLERS = {
     'RolesController': RolesController,
     'RootController': RootController,
     'SettingsController': SettingsController,
+    'SetupController': SetupController,
     'SystemSettingsController': SystemSettingsController,
     'ToolsController': ToolsController,
     'TracesController': TracesController,
@@ -341,6 +343,9 @@ ROUTES = [
     ('GET', '/api/v1/admin/login/app-users', ('LoginAdminController', 'getAppUsers')),
     ('POST', '/api/v1/admin/login/app-users/role', ('LoginAdminController', 'setAppUserRole')),
     ('POST', '/api/v1/admin/login/app-users/add', ('LoginAdminController', 'addAppMember')),
+    # Corporate first-run setup (public: before setup nobody can sign in).
+    ('GET', '/api/v1/setup/status', ('SetupController', 'status')),
+    ('POST', '/api/v1/setup/admin', ('SetupController', 'createAdmin')),
     # WEBAUTHN
     ('POST', '/api/v1/webauthn/challenge', ('WebAuthnController', 'challenge')),
     ('POST', '/api/v1/webauthn/register', ('WebAuthnController', 'register')),
