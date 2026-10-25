@@ -65,11 +65,15 @@ const fixtures = readdirSync(FIXTURES)
   })
   .sort();
 const skip = phpSkipReason();
+/** PARITY_TARGETS=adk,maf (and PARITY_FIXTURES=a,b) narrow the run while working on one target. */
+const only = (v: string | undefined) => (v ? new Set(v.split(',').map((x) => x.trim().replace(/\.json$/, ''))) : null);
+const onlyTargets = only(process.env.PARITY_TARGETS);
+const onlyFixtures = only(process.env.PARITY_FIXTURES);
 
-for (const name of fixtures) {
+for (const name of fixtures.filter((f) => onlyFixtures === null || onlyFixtures.has(f.replace(/\.json$/, '')))) {
   test(`compile targets parity: ${name}`, { skip: skip || false }, async (t) => {
     const php = phpTargets(name);
-    for (const target of TARGETS) {
+    for (const target of TARGETS.filter((x) => onlyTargets === null || onlyTargets.has(x))) {
       for (const mode of MODES) {
         await t.test(`${target} ${mode}`, async () => {
           assertSameResult(await fixtureTargetCompile(name, target, mode), php[target][mode]);
