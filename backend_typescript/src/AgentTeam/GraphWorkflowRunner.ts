@@ -20,6 +20,7 @@ import { WorkflowRunLog } from './WorkflowRunLog';
 import { WorkflowOutputStorage } from './WorkflowOutputStorage';
 import { ExecutionTraceStore } from './ExecutionTraceStore';
 import { SessionSearchService } from './SessionSearchService';
+import { WorkflowGraphAnalyzer } from './WorkflowGraphAnalyzer';
 
 /**
  * Faithful port of the start/agent/output execution paths of
@@ -178,6 +179,11 @@ export class GraphWorkflowRunner {
   private schemaRepository = new WorkflowSchemaRepository();
 
   private nodeOutputs: Record<number, any> = {};
+  /** node id => the node ids on the exit it took (code nodes): its other links carry nothing. */
+  private routedTo: Record<number, number[]> = {};
+  /** Nodes indexed by id for the current run (DispatchRouting needs target names). */
+  private graphNodes: Record<number, any> = {};
+  private workflowName = '';
   private executionId: number | null = null;
   private streamContext: StreamContext | null = null;
   private currentUserId: number | null = null;
@@ -317,6 +323,7 @@ export class GraphWorkflowRunner {
     scratchFiles: any[] = []
   ): Promise<Record<string, any>> {
     this.nodeOutputs = {};
+    this.routedTo = {};
     this.runId = randomBytes(16).toString('hex');
     this.currentWorkflowId = workflow.id ?? null;
     this.parallelEmitted = {};
@@ -364,8 +371,15 @@ export class GraphWorkflowRunner {
         documents: startNode.config?.documents ?? [],
       };
 
-      const graph = await this.graphRepository.getGraph(workflow.id as number);
+      // Get all nodes and edges for traversal -- only what Start reaches: an unconnected canvas
+      // node is not part of the workflow, and as a parent of a reached node it would hold that
+      // node's merge wait forever.
+      const graph = GraphWorkflowRunner.configuredTemplatesAsAgents(
+        WorkflowGraphAnalyzer.reachableGraph(await this.graphRepository.getGraph(workflow.id as number))
+      );
       const nodes = this.indexNodesById(graph.nodes);
+      this.graphNodes = nodes;
+      this.workflowName = String(workflow.name ?? '');
       const edges = graph.edges;
 
       this.emitWorkflowEvent('workflow_start', workflow, {
@@ -373,6 +387,8 @@ export class GraphWorkflowRunner {
         execution_id: this.executionId,
         total_nodes: Object.keys(nodes).length,
       });
+      // The live overlay follows this workflow's latest run (LiveFeed).
+      this.runLog.markCurrent(Number(workflow.id), this.runId);
 
       // Start node events: node_start (active glow), 300ms, node_complete.
       this.emitNodeEvent('node_start', startNode, { input: userPrompt });
@@ -601,6 +617,33 @@ export class GraphWorkflowRunner {
   // graph helpers
   // ========================================================================
 
+  /**
+   * An agent-template node set up on the canvas -- linked to a saved agent, or defined in the node
+   * (agent_name, instructions or a skill; a dispatcher keeps its type, provider and routing in
+   * config) -- runs as an agent, as it does in the editor's browser run. One never set up
+   * (isTemplate, or nothing filled in) keeps its type and stops the run in executeNode.
+   * Mirrors GraphWorkflowRunner::configuredTemplatesAsAgents.
+   */
+  static configuredTemplatesAsAgents<G extends { nodes?: any[] }>(graph: G): G {
+    const nodes = graph?.nodes;
+    if (!Array.isArray(nodes)) return graph;
+    let changed = false;
+    const out = nodes.map((n) => {
+      const c = n?.config !== null && typeof n?.config === 'object' && !Array.isArray(n.config) ? n.config : {};
+      if (WorkflowGraphAnalyzer.typeOf(n) !== 'agent-template' || c.isTemplate === true) return n;
+      const agentId = (!phpEmpty(n?.agent_id) ? n.agent_id : null) || (!phpEmpty(c.agent_id) ? c.agent_id : null);
+      const inline =
+        String(c.agent_name ?? '').trim() !== '' ||
+        String(c.instructions ?? '').trim() !== '' ||
+        String(c.skill_content ?? '').trim() !== '' ||
+        !phpEmpty(c.bound_skill);
+      if (!agentId && !inline) return n;
+      changed = true;
+      return { ...n, node_type: 'agent', agent_id: agentId || null };
+    });
+    return changed ? { ...graph, nodes: out } : graph;
+  }
+
   private indexNodesById(nodes: any[]): Record<number, any> {
     const indexed: Record<number, any> = {};
     for (const node of nodes) indexed[node.id] = node;
@@ -658,6 +701,12 @@ export class GraphWorkflowRunner {
       case 'agent-template':
         throw new Error(
           'Unconfigured agent template node found. Please configure all agent nodes before running the workflow.'
+        );
+      case 'playbook':
+        // PHP runs playbook nodes server-side (PlaybookNodeRunner); the TypeScript backend has no
+        // playbook interpreter yet, so the run stops with a reason instead of passing null on.
+        throw new Error(
+          'Playbook nodes run only from the workflow editor or the PHP backend (the TypeScript backend has no playbook interpreter).'
         );
       case 'output':
         return this.executeOutputNode(node, edges);
@@ -980,6 +1029,10 @@ export class GraphWorkflowRunner {
     for (const edge of edges) {
       if (phpIntval(edge.to_node_id) === phpIntval(node.id)) {
         const fromNodeId = phpIntval(edge.from_node_id);
+        // A node counts once, however many of its exits link here, and only through the exit it took.
+        if (inputs.some((i) => i.node_id === fromNodeId)) continue;
+        const routed = this.routedTo[fromNodeId];
+        if (routed !== undefined && !routed.includes(phpIntval(node.id))) continue;
         if (this.nodeOutputs[fromNodeId] !== undefined) {
           const output = this.nodeOutputs[fromNodeId].output ?? '';
           const sourceName =
@@ -2035,10 +2088,15 @@ export class GraphWorkflowRunner {
     return Number((res as any).insertId ?? 0);
   }
 
-  private async completeExecution(executionId: number | null, outputs: Record<number, any>, responseTime: number): Promise<void> {
+  private async completeExecution(
+    executionId: number | null,
+    outputs: Record<number, any>,
+    responseTime: number,
+    error: string | null = null
+  ): Promise<void> {
     await sql`
       UPDATE agent_workflow_executions
-      SET status = 'completed', output = ${JSON.stringify(outputs)}, response_time_ms = ${Math.trunc(responseTime)}, completed_at = NOW()
+      SET status = 'completed', output = ${JSON.stringify(outputs)}, error_message = ${error}, response_time_ms = ${Math.trunc(responseTime)}, completed_at = NOW()
       WHERE id = ${executionId}
     `.execute(db);
   }

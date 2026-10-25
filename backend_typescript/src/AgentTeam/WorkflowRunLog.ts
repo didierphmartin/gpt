@@ -30,6 +30,35 @@ export class WorkflowRunLog {
     return config.workflow_runs_dir ?? path.resolve(__dirname, '../../storage/workflow-runs');
   }
 
+  dir(): string {
+    return this.baseDir;
+  }
+
+  /**
+   * The workflow's latest run, read by the live overlay (LiveFeed); temp file + rename, so a reader
+   * never sees half a run id. Mirrors WorkflowRunLog::markCurrent.
+   */
+  markCurrent(workflowId: number, runId: string): void {
+    if (!this.isValidRunId(runId)) return;
+    try {
+      if (!fs.existsSync(this.baseDir)) fs.mkdirSync(this.baseDir, { recursive: true, mode: 0o775 });
+      const tmp = `${this.baseDir}/wf-${workflowId}.current.${process.pid}`;
+      fs.writeFileSync(tmp, runId);
+      fs.renameSync(tmp, `${this.baseDir}/wf-${workflowId}.current`);
+    } catch {
+      /* best effort, like PHP's @-silenced writes */
+    }
+  }
+
+  current(workflowId: number): string | null {
+    try {
+      const id = fs.readFileSync(`${this.baseDir}/wf-${workflowId}.current`, 'utf8').trim();
+      return this.isValidRunId(id) ? id : null;
+    } catch {
+      return null;
+    }
+  }
+
   pathFor(runId: string): string {
     return this.baseDir + '/' + runId + '.jsonl';
   }
