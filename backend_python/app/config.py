@@ -107,6 +107,11 @@ def load_config(env_file: str | None = '__default__') -> dict:
         },
         'edition': _e('GPT_EDITION'),   # ai_config.php: 'individual' | 'corporate' | '' (hosted)
         'scheduler': {'token': _e('SCHEDULER_TOKEN'), 'max_concurrent': 5, 'timeout_minutes': 30},
+        'code_nodes': {
+            # Run workflow code nodes on this server (scheduled/server runs). 0 switches it off.
+            'server_side': _e('CODE_NODES_SERVER_SIDE', '1') != '0',
+            'python': _e('CODE_NODE_PYTHON', 'python3'),   # needs Python 3.10+
+        },
         'storage': {'default_provider': 's3'},
         # Python-only: CORS origin allowlist (comma-separated). Unset → every Origin is
         # echoed (LAN-only deployment). PHP is same-origin and hardcodes '*'.

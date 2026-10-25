@@ -32,14 +32,15 @@ class DispatchRouting:
 
     @staticmethod
     def targets(nodeId: int, edges: list, nodes: dict) -> list:
-        """Downstream agent nodes of nodeId as [{'id': int, 'name': str}, …] in edge order."""
+        """Downstream agent and code nodes of nodeId as [{'id': int, 'name': str}, …] in edge order."""
         out = []
         for edge in edges:
             if php_intval(edge.get('from_node_id')) != nodeId:
                 continue
             toId = php_intval(edge.get('to_node_id'))
             node = nodes.get(toId)
-            if not node or node.get('node_type', '') != 'agent':
+            # Agents and code nodes are branches (as in the editor run and compiled scripts).
+            if not node or node.get('node_type', '') not in ('agent', 'code'):
                 continue
             cfg = node.get('config')
             cfg = cfg if isinstance(cfg, dict) else {}
@@ -152,22 +153,26 @@ class DispatchRouting:
         return None
 
     @staticmethod
-    def skipSet(unchosenIds: list, edges: list) -> list:
+    def skipSet(unchosenIds: list, edges: list, from_: int | None = None) -> list:
         """Node ids to skip given the unchosen direct targets: those nodes plus,
         transitively, any node ALL of whose predecessors are skipped. A node
-        fed by at least one live predecessor stays runnable. Ascending order."""
-        skipped = {php_intval(x): True for x in unchosenIds}
+        fed by at least one live predecessor stays runnable. Ascending order.
+        from_: the node that chose. Its links to the unchosen targets are dead, its other links live, so an
+        unchosen target that another node still feeds (e.g. an Output fed by a later step) is not skipped.
+        Without it every unchosen target is skipped outright."""
+        unchosen = {php_intval(x): True for x in unchosenIds}
+        skipped = dict(unchosen) if from_ is None else {}
         preds: dict[int, list] = {}
         for edge in edges:
             preds.setdefault(php_intval(edge.get('to_node_id')), []).append(php_intval(edge.get('from_node_id')))
         grew = True
         while grew:
             grew = False
-            for nodeId, froms in preds.items():
+            for nodeId, ps in preds.items():
                 if nodeId in skipped:
                     continue
-                allSkipped = all(p in skipped for p in froms)
-                if allSkipped:
+                allDead = all(p in skipped or (p == from_ and nodeId in unchosen) for p in ps)
+                if allDead:
                     skipped[nodeId] = True
                     grew = True
         return sorted(skipped.keys())

@@ -132,3 +132,27 @@ def test_resolve_reads_arguments_key_when_input_is_absent():
 def test_skip_set_empty_when_all_direct_targets_chosen():
     _, edges = _graph()
     assert DispatchRouting.skipSet([], edges) == []
+
+
+def test_code_nodes_are_targets_too():
+    # The editor run and compiled scripts route to code nodes; the scheduled run must too.
+    nodes = {2: {'id': 2, 'node_type': 'agent', 'config': {'agent_name': 'Triage'}},
+             3: {'id': 3, 'node_type': 'code', 'config': {'name': 'claims'}},
+             4: {'id': 4, 'node_type': 'agent', 'config': {'agent_name': 'Help'}}}
+    edges = [{'from_node_id': 2, 'to_node_id': 3}, {'from_node_id': 2, 'to_node_id': 4}]
+    assert DispatchRouting.targets(2, edges, nodes) == [{'id': 3, 'name': 'claims'}, {'id': 4, 'name': 'Help'}]
+
+
+def test_skip_set_keeps_an_unchosen_target_that_another_live_node_still_feeds():
+    # Convert(2) took done -> Store(3); its error exit -> Output(4), which Store(3) also feeds (ok/no).
+    edges = [{'from_node_id': 1, 'to_node_id': 2}, {'from_node_id': 2, 'to_node_id': 3},
+             {'from_node_id': 2, 'to_node_id': 4}, {'from_node_id': 3, 'to_node_id': 4}]
+    assert DispatchRouting.skipSet([4], edges, 2) == []
+    # Store took ok -> Output: nothing left to skip on its side either.
+    assert DispatchRouting.skipSet([], edges, 3) == []
+    # When Convert's chosen exit is error, Store is the unchosen one and Output stays.
+    assert DispatchRouting.skipSet([3], edges, 2) == [3]
+    # A target fed only by the deciding node is skipped, and so is what only it feeds.
+    edges.append({'from_node_id': 2, 'to_node_id': 5})
+    edges.append({'from_node_id': 5, 'to_node_id': 6})
+    assert DispatchRouting.skipSet([5], edges, 2) == [5, 6]

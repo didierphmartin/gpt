@@ -78,6 +78,8 @@ import httpx
 
 from app.agent_team.models.agent import Agent
 from app.agent_team.models.workflow import Workflow
+from app.agent_team.services.code_node_executor import CodeNodeExecutor
+from app.agent_team.services.code_node_step import CodeNodeStep
 from app.agent_team.services.dispatch_routing import DispatchRouting
 from app.agent_team.services.execution_trace_store import ExecutionTraceStore
 from app.agent_team.services.prompt_template_processor import PromptTemplateProcessor
@@ -204,6 +206,8 @@ class GraphWorkflowRunner:
         self.parallelExecutor = None
 
         self.nodeOutputs: dict = {}
+        # node id => the node ids on the exit it took (code / playbook nodes): its other links carry nothing.
+        self.routedTo: dict = {}
         # Nodes indexed by id for the current run (DispatchRouting needs target names).
         self.graphNodes: dict = {}
         self.workflowName: str = ''
@@ -348,6 +352,7 @@ class GraphWorkflowRunner:
         scratchFiles = scratchFiles if scratchFiles is not None else []
 
         self.nodeOutputs = {}
+        self.routedTo = {}
         # Phase 0: one run_id correlates all node traces of this workflow run.
         self.runId = secrets.token_hex(16)
         self.currentWorkflowId = workflow.getId() if hasattr(workflow, 'getId') else None
@@ -539,6 +544,19 @@ class GraphWorkflowRunner:
                     error_log("[GraphWorkflowRunner] Output node reached, final output collected")
                     continue  # Don't queue nodes after output
 
+                # Code node: continue on the exit it took; the other exits' branches are skipped.
+                codeRoute = output.get('code_route')
+                if codeRoute is not None:
+                    for skipId in DispatchRouting.skipSet(codeRoute['skip'], edges, php_intval(currentNodeId)):
+                        if skipId not in executedNodes:
+                            executedNodes.append(skipId)
+                    self.routedTo[php_intval(currentNodeId)] = [php_intval(c) for c in codeRoute['chosen']]
+                    for nextId in codeRoute['chosen']:
+                        if nextId not in queue and nextId not in executedNodes:
+                            queue.append(nextId)
+                    self.nodeOutputs[currentNodeId].pop('code_route', None)
+                    continue
+
                 # Dispatcher routing: one chosen branch, siblings skipped.
                 if self._applyRoute(currentNodeId, output, edges, queue, executedNodes):
                     continue
@@ -592,8 +610,30 @@ class GraphWorkflowRunner:
 
             responseTime = (time.time() - startTime) * 1000
 
-            # Complete execution
-            self._completeExecution(self.executionId, self.nodeOutputs, responseTime)
+            # A poll that found nothing (a code node ran, no work node did) leaves no trace:
+            # no execution row, no run log. An error exit or a failed code node is never quiet.
+            summary = CodeNodeStep.summarize(self.nodeOutputs, edges, nodes)
+            if summary['quiet']:
+                self._ensureDbConnection()
+                self.db.execute('DELETE FROM agent_workflow_executions WHERE id = ?', [self.executionId])
+                try:
+                    os.unlink(self.runLog.pathFor(self.runId))
+                except OSError:
+                    pass
+                # An attached browser still needs the end of the run; it is not persisted.
+                if self.streamContext:
+                    self.streamContext.emit({'type': 'workflow_complete', 'workflow_id': workflow.getId(),
+                                             'workflow_name': workflow.getName(), 'timestamp': time.time(), 'success': True,
+                                             'quiet': True, 'execution_id': None, 'output': None})
+                return {'success': True, 'quiet': True, 'drain': False, 'execution_id': None,
+                        'output': None, 'node_outputs': self.nodeOutputs, 'nodes_executed': len(executedNodes)}
+
+            # Complete execution. A run in which a code node took its error exit keeps its row with the
+            # error recorded, but is neither saved to output storage nor archived as a chat (it would be
+            # one more chat per tick while a mailbox is down).
+            errorExits = CodeNodeStep.errorExits(self.nodeOutputs, nodes)
+            self._completeExecution(self.executionId, self.nodeOutputs, responseTime,
+                                    '; '.join(errorExits) if errorExits else None)
 
             self._emitWorkflowEvent('workflow_complete', workflow, {
                 'execution_id': self.executionId,
@@ -609,47 +649,50 @@ class GraphWorkflowRunner:
 
             # Save output to storage if enabled
             storageSaveResult = None
-            try:
-                storageSaveResult = self.outputStorage.saveOutput(
-                    workflow.getId(),
-                    userId,
-                    {
-                        'execution_id': self.executionId,
-                        'workflow_id': workflow.getId(),
-                        'workflow_name': workflow.getName(),
-                        'timestamp': php_date('c'),
-                        'response_time_ms': round(responseTime, 2),
-                        'nodes_executed': len(executedNodes),
-                        'output': finalOutput,
-                        'node_outputs': self.nodeOutputs,
-                        'input_variables': inputVariables,
-                    },
-                )
-
-                if storageSaveResult.get('success'):
-                    error_log(
-                        "[GraphWorkflowRunner] Output saved to storage: "
-                        + php_strval(_coalesce(storageSaveResult.get('path'), 'unknown'))
+            if errorExits == []:
+                try:
+                    storageSaveResult = self.outputStorage.saveOutput(
+                        workflow.getId(),
+                        userId,
+                        {
+                            'execution_id': self.executionId,
+                            'workflow_id': workflow.getId(),
+                            'workflow_name': workflow.getName(),
+                            'timestamp': php_date('c'),
+                            'response_time_ms': round(responseTime, 2),
+                            'nodes_executed': len(executedNodes),
+                            'output': finalOutput,
+                            'node_outputs': self.nodeOutputs,
+                            'input_variables': inputVariables,
+                        },
                     )
-            except Exception as e:  # noqa: BLE001 -- mirrors PHP catch (\Exception $e)
-                error_log(f"[GraphWorkflowRunner] Failed to save output to storage: {e}")
 
-            # Archive the run into conversation_contexts so it shows up in
-            # the chat sidebar and is searchable via session_search. This is
-            # best-effort — a failure here never fails the workflow.
-            try:
-                self._archiveRunToConversationContexts(
-                    userId,
-                    php_intval(workflow.getId()),
-                    php_strval(workflow.getName()),
-                    php_strval(userPrompt),
-                    php_strval(_coalesce(finalOutput, '')),
-                )
-            except Exception as e:  # noqa: BLE001 -- mirrors PHP catch (\Throwable $e)
-                error_log(f"[GraphWorkflowRunner] Archive to conversation_contexts failed: {e}")
+                    if storageSaveResult.get('success'):
+                        error_log(
+                            "[GraphWorkflowRunner] Output saved to storage: "
+                            + php_strval(_coalesce(storageSaveResult.get('path'), 'unknown'))
+                        )
+                except Exception as e:  # noqa: BLE001 -- mirrors PHP catch (\Exception $e)
+                    error_log(f"[GraphWorkflowRunner] Failed to save output to storage: {e}")
+
+                # Archive the run into conversation_contexts so it shows up in
+                # the chat sidebar and is searchable via session_search. This is
+                # best-effort — a failure here never fails the workflow.
+                try:
+                    self._archiveRunToConversationContexts(
+                        userId,
+                        php_intval(workflow.getId()),
+                        php_strval(workflow.getName()),
+                        php_strval(userPrompt),
+                        php_strval(_coalesce(finalOutput, '')),
+                    )
+                except Exception as e:  # noqa: BLE001 -- mirrors PHP catch (\Throwable $e)
+                    error_log(f"[GraphWorkflowRunner] Archive to conversation_contexts failed: {e}")
 
             return {
                 'success': True,
+                'quiet': False,
+                'drain': summary['drain'],
                 'execution_id': self.executionId,
                 'workflow': {'id': workflow.getId(), 'name': workflow.getName()},
                 'output': finalOutput,
@@ -708,7 +751,7 @@ class GraphWorkflowRunner:
         chosen = php_intval(route['id'])
         nextIds = self._getNextNodeIds(nodeId, edges)
         unchosen = [i for i in nextIds if i != chosen]
-        for skipId in DispatchRouting.skipSet(unchosen, edges):
+        for skipId in DispatchRouting.skipSet(unchosen, edges, php_intval(nodeId)):
             if skipId not in executedNodes:
                 executedNodes.append(skipId)
         if chosen not in queue and chosen not in executedNodes:
@@ -753,9 +796,20 @@ class GraphWorkflowRunner:
                 "Playbook nodes run only from the workflow editor's browser run path "
                 "(server-side durable runs arrive in slice 1c)."
             )
+        if nodeType == 'code':
+            return self._executeCodeNode(node, userId, userPrompt, edges)
         if nodeType == 'output':
             return self._executeOutputNode(node, edges, executedNodes)
         return {'type': nodeType, 'output': None}
+
+    @staticmethod
+    def unsupportedNodeMessage(nodeType: str, config: dict | None = None) -> str | None:
+        """Why this runner cannot execute a node of nodeType, or None when it can."""
+        if nodeType == 'code':
+            return None if CodeNodeExecutor.enabled(config if config is not None else {}) else (
+                'Code nodes are switched off on this server (CODE_NODES_SERVER_SIDE=0); '
+                'run from the editor or a compiled workflow.')
+        return None
 
     # ─── Agent node execution ────────────────────────────────────────────────
 
@@ -1332,6 +1386,36 @@ class GraphWorkflowRunner:
 
         return None
 
+    def _executeCodeNode(self, node: dict, userId: int, userPrompt: str, edges: list) -> dict:
+        """A code node, server-side: the shared harness via CodeNodeExecutor (spec 2026-10-07 §4).
+        Its nodeOutputs entry always carries 'exit' and 'success' (CodeNodeStep.summarize reads them);
+        a failed run is recorded there before the run fails, and an error exit is logged as an error."""
+        msg = GraphWorkflowRunner.unsupportedNodeMessage('code', self.config)
+        if msg:
+            raise RuntimeError(msg)
+        nodeId = php_intval(node.get('id'))
+        parents = CodeNodeStep.parents(nodeId, edges, self.graphNodes, self.nodeOutputs)
+        run = self._makeCodeNodeExecutor().run(node, edges, list(self.graphNodes.keys()), str(userId), parents, userPrompt)
+        res = run['result']
+        for c in res.get('tool_calls') or []:
+            self._nodeLog(node, 'info', 'tool',
+                          f"{php_strval(c.get('server'))}.{php_strval(c.get('tool'))} ok="
+                          + ('true' if c.get('ok') else 'false') + f" ({php_strval(c.get('ms'))} ms)")
+        route = CodeNodeStep.routeAfter(run['data'], res, self._getNextNodeIds(nodeId, edges))
+        if not route['success']:
+            self.nodeOutputs[nodeId] = {'type': 'code', 'output': route['output'], 'exit': None, 'success': False}
+            err = res.get('error') if res.get('error') is not None else 'unknown'
+            raise RuntimeError(f"code node '{run['data']['display']}' failed: {php_strval(err)}")
+        if route['exit'] == 'error':
+            self._nodeLog(node, 'error', 'done',
+                          f"code node '{run['data']['display']}' took its error exit: " + CodeNodeStep.reason(route['output']))
+        return {'type': 'code', 'output': route['output'], 'exit': route['exit'], 'success': True,
+                'code_route': route}
+
+    def _makeCodeNodeExecutor(self) -> CodeNodeExecutor:
+        """`new CodeNodeExecutor($this->db, $this->config)` (a seam only in name: production builds the real one)."""
+        return CodeNodeExecutor(self.db, self.config)
+
     def _executeOutputNode(self, node: dict, edges: list, executedNodes: list) -> dict:
         """Execute an output node: aggregates all incoming inputs (PHP 1426-1474)."""
         inputs = []
@@ -1340,6 +1424,11 @@ class GraphWorkflowRunner:
         for edge in edges:
             if php_intval(edge.get('to_node_id')) == php_intval(node.get('id')):
                 fromNodeId = php_intval(edge.get('from_node_id'))
+                # A node counts once, however many of its exits link here, and only through the exit it took.
+                if fromNodeId in [i['node_id'] for i in inputs]:
+                    continue
+                if fromNodeId in self.routedTo and php_intval(node.get('id')) not in self.routedTo[fromNodeId]:
+                    continue
 
                 if fromNodeId in self.nodeOutputs:
                     out = self.nodeOutputs[fromNodeId]
@@ -1514,16 +1603,16 @@ class GraphWorkflowRunner:
             [workflow.getId(), userId, php_json_encode(php_array(inputVariables))],
         )
 
-    def _completeExecution(self, executionId: int, outputs: dict, responseTime: float) -> None:
-        """Complete workflow execution (PHP 1676-1689). `$outputs` is a typed
-        PHP `array` param — an empty one must serialise as `[]`, not `{}`
-        (PHP 1683)."""
+    def _completeExecution(self, executionId: int, outputs: dict, responseTime: float, error: str | None = None) -> None:
+        """Complete workflow execution (PHP completeExecution). `$outputs` is a typed
+        PHP `array` param — an empty one must serialise as `[]`, not `{}`.
+        error: the error exits a code node took (the row keeps them), else None."""
         self._ensureDbConnection()
         self.db.execute(
             "UPDATE agent_workflow_executions\n"
-            "             SET status = 'completed', output = ?, response_time_ms = ?, completed_at = NOW()\n"
+            "             SET status = 'completed', output = ?, error_message = ?, response_time_ms = ?, completed_at = NOW()\n"
             "             WHERE id = ?",
-            [php_json_encode(php_array(outputs)), php_intval(responseTime), executionId],
+            [php_json_encode(php_array(outputs)), error, php_intval(responseTime), executionId],
         )
 
     def _failExecution(self, executionId: int, error: str) -> None:
