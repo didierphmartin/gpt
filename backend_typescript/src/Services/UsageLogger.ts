@@ -38,6 +38,9 @@ export interface ChatUsageData {
   error_message?: string | null;
   function_calls_count?: number;
   mcp_calls_count?: number;
+  /** Stored JSON-encoded when an array (PHP: functions_called / mcp_tools_called). */
+  functions_called?: any[] | null;
+  mcp_tools_called?: any[] | null;
   session_id?: string | null;
   conversation_id?: string | null;
   /** Stored JSON-encoded (PHP: request_metadata, when an array). */
@@ -80,7 +83,7 @@ export async function logChatTransaction(data: ChatUsageData): Promise<number | 
         ${data.user_id}, ${data.session_id ?? null}, ${data.conversation_id ?? null}, ${data.provider}, ${data.model},
         ${promptTokens}, ${completionTokens}, ${totalTokens}, ${costUsd},
         ${data.response_time_ms ?? null}, ${status}, ${errorMessage},
-        ${data.function_calls_count ?? 0}, ${null}, ${data.mcp_calls_count ?? 0}, ${null},
+        ${data.function_calls_count ?? 0}, ${Array.isArray(data.functions_called) ? JSON.stringify(data.functions_called) : null}, ${data.mcp_calls_count ?? 0}, ${Array.isArray(data.mcp_tools_called) ? JSON.stringify(data.mcp_tools_called) : null},
         ${data.request_metadata && typeof data.request_metadata === 'object' ? JSON.stringify(data.request_metadata) : null},
         ${0}, ${null}, ${null}, ${null}
       )`.execute(db);

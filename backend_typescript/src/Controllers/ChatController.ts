@@ -1,9 +1,13 @@
 import { Request, Response } from 'express';
+import { sql } from 'kysely';
+import { db } from '../db/pools';
 import { log } from '../Services/Logger';
 import { logChatTransaction } from '../Services/UsageLogger';
 import { buildCtx, Ctx, ControllerResult } from '../Support/Http';
 import { SSEStream } from '../Services/SseStream';
 import { UserProviderOverlay } from '../Services/UserProviderOverlay';
+import { PackageResolver } from '../Services/PackageResolver';
+import { DecisionProviders } from '../Services/DecisionProviders';
 import { ProviderFactory } from '../Providers/ProviderFactory';
 import { ToolsManager } from '../Services/ToolsManager';
 import { MCPToolsLoader } from '../Services/MCPToolsLoader';
@@ -12,11 +16,12 @@ import { FilteredToolsExecutor } from '../Services/FilteredToolsExecutor';
 import { SearchFunctions } from '../Functions/SearchFunctions';
 import { FunctionExecutor } from '../Contracts/FunctionExecutor';
 import { LLMProvider } from '../Contracts/LLMProvider';
-import { ChatOptions, ChatResult, SkillMetadata, AvailableSkill } from '../Contracts/types';
+import { ChatOptions, ChatResult, ClientTool, NativeAttachment, ProviderConfig, SkillMetadata, AvailableSkill } from '../Contracts/types';
 import { AttachmentDispatcher } from '../Services/AttachmentDispatcher';
 import { buildMemoryBlock } from '../AgentTeam/UserMemoryRepository';
 import { MemoryAutoUpdater } from '../AgentTeam/MemoryAutoUpdater';
-import { phpBool, uniqid } from '../Playbook/php';
+import { SessionSearchService } from '../AgentTeam/SessionSearchService';
+import { mbLen, mbSub, phpBool, phpEmpty, uniqid } from '../Playbook/php';
 
 /**
  * Event-renaming SSE adapter for the /verify and /compare panes. The TS providers emit generic
@@ -70,18 +75,77 @@ const COMPARE_EVENT_MAP = {
   clientTool: 'compare_client_tool_call',
 } as const;
 
+/** Which skill-tool policy a request follows — PHP's three call sites differ (see skillPlan). */
+type SkillPath = 'stream' | 'regular' | 'compare';
+
+/**
+ * The server tools a request offers next to its skill tools (PHP options['tools'] +
+ * AIPortfolioAssistant::resolveToolsForRequest): 'all' = base + MCP, 'none' = skill turn (base and
+ * MCP suppressed), 'mcp' = MCP only (the comparer's multi-skill turn, which bypasses the base merge).
+ */
+type ServerTools = 'all' | 'none' | 'mcp';
+
+interface SkillPlan {
+  /** Skill tools; they ride the per-request client_tools channel (client-side in every provider). */
+  tools: any[];
+  toolChoice?: string | Record<string, any>;
+  serverTools: ServerTools;
+}
+
+/** The base tools + MCP loader one request's executor is built from (PHP: an AIPortfolioAssistant). */
+interface ToolSet {
+  toolsManager: ToolsManager;
+  mcpLoader: MCPToolsLoader | null;
+}
+
+interface Resolved {
+  impl: LLMProvider;
+  cfg: ProviderConfig;
+  executor: FunctionExecutor;
+}
+
+/** What the comparer sees — the same scene as the primary (PHP handleComparison / compareOnly). */
+interface CompareScene {
+  message: string;
+  history: any[];
+  skillMetadata: SkillMetadata | null;
+  availableSkills: AvailableSkill[];
+  skillContent: string;
+  imageAttachments: NativeAttachment[];
+  pdfAttachments: NativeAttachment[];
+}
+
+/** Parsed /chat body (ChatController::chat's locals). */
+interface ChatInput {
+  message: string;
+  history: any[];
+  provider: string | null;
+  skillContent: string;
+  skillMetadata: SkillMetadata | null;
+  availableSkills: AvailableSkill[];
+  clientTools: ClientTool[];
+  systemPrompt: string | null;
+  includeMemory: boolean;
+  toolsFilter: string[] | null;
+  maxTokens: number | null;
+  temperature: number | null;
+}
+
+/** PHP is_numeric(). */
+function isNumeric(v: any): boolean {
+  if (typeof v === 'number') return Number.isFinite(v);
+  return typeof v === 'string' && /^\s*[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?\s*$/.test(v);
+}
+
+/** PHP uniqid($prefix, true): the 13-hex id plus a ".dddddddd" entropy suffix. */
+function uniqidMore(prefix: string): string {
+  return uniqid(prefix) + '.' + String(Math.floor(Math.random() * 1e8)).padStart(8, '0');
+}
+
 /** Mirrors src/Controllers/ChatController.php (the /chat streaming + non-streaming path). */
 export class ChatController {
   private static readonly PROVIDER_REQUIRED =
     "This method requires $options['provider']. Silent fallback to a default provider has been removed.";
-
-  // Server-tool registry (Phase 2: one stub; Phase 3 adds the real Functions/* + MCP).
-  private readonly toolsManager: ToolsManager;
-
-  constructor() {
-    this.toolsManager = new ToolsManager();
-    SearchFunctions.register(this.toolsManager);
-  }
 
   /**
    * Extract the upstream provider's HTTP status from an error so it percolates to the client instead
@@ -123,16 +187,54 @@ export class ChatController {
     return msg;
   }
 
-  /** Mirrors ChatController::sanitizeClientTools: keep well-formed webMCP tools only. */
-  private sanitizeClientTools(raw: any): Array<{ name: string; description?: string; input_schema?: any }> {
+  /**
+   * Mirrors ChatController::stripVisualNoiseFromHistory: <svg>…</svg> blocks in a history
+   * message's string content become a short placeholder before any provider sees them.
+   */
+  static stripVisualNoiseFromHistory(history: any[]): any[] {
+    return history.map((m) => {
+      if (m && typeof m === 'object' && typeof m.content === 'string') {
+        return { ...m, content: m.content.replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi, '[SVG illustration omitted]') };
+      }
+      return m;
+    });
+  }
+
+  /**
+   * Mirrors ChatController::sanitizeClientTools: keep {name, description, input_schema} entries whose
+   * name is a webMCP tool or one of the browser-resolved tools; description capped at 2048 bytes.
+   */
+  static sanitizeClientTools(raw: any): ClientTool[] {
     if (!Array.isArray(raw)) return [];
-    return raw.filter(
-      (t) => t && typeof t === 'object' && typeof t.name === 'string' && /^(?:webmcp_|route_to$|save_playbook_agent$|save_workflow$|save_automation$|install_automation$)/.test(t.name) && t.input_schema && typeof t.input_schema === 'object',
-    );
+    const out: ClientTool[] = [];
+    raw.forEach((entry, i) => {
+      if (entry === null || typeof entry !== 'object') {
+        console.error(`[ChatController] client_tools[${i}] dropped: not an object`);
+        return;
+      }
+      const name = entry.name ?? null;
+      if (
+        typeof name !== 'string' ||
+        name === '' ||
+        !/^(?:webmcp_[a-zA-Z0-9_\-.]{1,120}|route_to|save_playbook_agent|save_workflow|save_automation|install_automation)$/.test(name)
+      ) {
+        console.error(`[ChatController] client_tools[${i}] dropped: invalid name ` + JSON.stringify(name));
+        return;
+      }
+      let description = typeof entry.description === 'string' ? entry.description : '';
+      if (Buffer.byteLength(description) > 2048) description = Buffer.from(description).subarray(0, 2048).toString('utf8');
+      const inputSchema = entry.input_schema ?? null;
+      if (inputSchema === null || typeof inputSchema !== 'object') {
+        console.error(`[ChatController] client_tools[${i}] dropped: input_schema not an array`);
+        return;
+      }
+      out.push({ name, description, input_schema: inputSchema });
+    });
+    return out;
   }
 
   /** Mirrors ChatController::sanitizeSkillMetadata — clean {dir_name, scripts} or null. */
-  private sanitizeSkillMetadata(raw: any): SkillMetadata | null {
+  static sanitizeSkillMetadata(raw: any): SkillMetadata | null {
     if (raw === null || typeof raw !== 'object') return null;
     const dirName = typeof raw.dir_name === 'string' ? raw.dir_name.trim() : '';
     if (dirName === '') return null;
@@ -154,7 +256,7 @@ export class ChatController {
   }
 
   /** Mirrors ChatController::sanitizeAvailableSkills — array of clean skill records or []. */
-  private sanitizeAvailableSkills(raw: any): AvailableSkill[] {
+  static sanitizeAvailableSkills(raw: any): AvailableSkill[] {
     if (!Array.isArray(raw)) return [];
     const out: AvailableSkill[] = [];
     const seen = new Set<string>();
@@ -186,12 +288,12 @@ export class ChatController {
     return out;
   }
 
-  /** True when a run_skill_script call has already happened in this conversation (mirrors PHP). */
-  private hasPriorRunSkillScript(history: any[]): boolean {
+  /** True when a run_skill_script round already happened (discover_skill rounds do not count). */
+  private static hasPriorRunSkillScript(history: any[]): boolean {
     for (const h of history) {
-      if (!h) continue;
+      if (!h || typeof h !== 'object') continue;
       if (h.role === 'tool' && h.name === 'run_skill_script') return true;
-      if (h.role === 'assistant' && Array.isArray(h.tool_calls)) {
+      if (h.role === 'assistant' && Array.isArray(h.tool_calls) && h.tool_calls.length) {
         for (const tc of h.tool_calls) {
           const name = tc?.function?.name ?? tc?.name ?? '';
           if (name === 'run_skill_script') return true;
@@ -201,78 +303,167 @@ export class ChatController {
     return false;
   }
 
-  private buildOptions(body: Record<string, any>, userId: number | null): ChatOptions {
-    const clientTools = this.sanitizeClientTools(body.client_tools);
-    const clientToolNames = clientTools.map((t) => t.name);
-    const conversationHistory = Array.isArray(body.conversation_history) ? body.conversation_history : [];
-
-    const skillContent = typeof body.skill_content === 'string' ? body.skill_content.trim() : '';
-    const skillMetadata = this.sanitizeSkillMetadata(body.skill_metadata ?? null);
-    const availableSkills = this.sanitizeAvailableSkills(body.available_skills ?? null);
-
-    const opts: ChatOptions = {
-      message: typeof body.message === 'string' ? body.message : '',
-      conversation_history: conversationHistory,
-      system_prompt: typeof body.system_prompt === 'string' ? body.system_prompt : undefined,
-      client_tools: clientTools,
-      client_tool_names: clientToolNames,
-      user_id: userId,
-      // Per-request overrides from the workflow agent form; when present they win
-      // over the provider-config defaults (applied in resolveProvider).
-      max_tokens: typeof body.max_tokens === 'number' ? body.max_tokens : undefined,
-      temperature: typeof body.temperature === 'number' ? body.temperature : undefined,
-      tools: Array.isArray(body.tools) ? body.tools.filter((t: any) => typeof t === 'string') : undefined,
-    };
-
-    // Skill-tool routing. The skill tools are CLIENT-SIDE (run_skill_script /
-    // discover_skill / Task are in every provider's CLIENT_SIDE_TOOL_NAMES),
-    // so they are appended to the same per-request client_tools list the
-    // webMCP tools use — that is the only channel a TS provider declares
-    // per-request tools through. The provider's all-client short-circuit then
-    // returns pending_client_tool_call instead of executing them server-side.
-    if (skillMetadata !== null) {
-      // Single active skill (chip override): declare run_skill_script (+ Task)
-      // and force tool_choice toward run_skill_script when no run_skill_script
-      // round has happened yet this conversation.
-      clientTools.push(ChatController.buildRunSkillScriptTool(skillMetadata));
-      clientTools.push(ChatController.buildTaskTool());
-      clientToolNames.push('run_skill_script', 'Task');
-      opts.skill_metadata = skillMetadata;
-
-      if (!this.hasPriorRunSkillScript(conversationHistory)) {
-        // Provider-conditional forcing form: bare 'required' for grok/deepseek
-        // (which silently ignore the specific-function form), specific-function
-        // for everyone else. Each provider translates this into its native shape.
-        const providerName = String(body.provider ?? '').toLowerCase();
-        if (providerName === 'grok' || providerName === 'deepseek') {
-          opts.tool_choice = 'required';
-        } else {
-          opts.tool_choice = { type: 'function', function: { name: 'run_skill_script' } };
-        }
-      }
-    } else if (availableSkills.length > 0) {
-      // Multi-skill auto-routing: declare discover_skill + the multi-skill
-      // run_skill_script. No tool_choice forcing — the model decides whether
-      // to call any skill at all based on intent (matching MCP-tool routing).
-      clientTools.push(ChatController.buildDiscoverSkillTool(availableSkills));
-      clientTools.push(ChatController.buildMultiSkillTool(availableSkills));
-      clientToolNames.push('discover_skill', 'run_skill_script');
-      opts.available_skills = availableSkills;
+  /** True when any tool round happened (handleRegularChat's looser guard). */
+  private static hasPriorToolRound(history: any[]): boolean {
+    for (const h of history) {
+      if (!h || typeof h !== 'object') continue;
+      if (h.role === 'tool') return true;
+      if (h.role === 'assistant' && Array.isArray(h.tool_calls) && h.tool_calls.length) return true;
     }
-
-    // Active Skill from the Skills Library (dragged onto prompt input) — the
-    // provider's buildSystemPrompt appends this after the persona.
-    if (skillContent !== '') {
-      opts.skill_content = skillContent;
-    }
-
-    return opts;
+    return false;
   }
 
-  /** Per-request executor: base tools (+ the user's MCP tools when any exist). Fails soft. */
-  private lastResolved: { cfg: any; executor: FunctionExecutor } | null = null;
+  /**
+   * The skill tools, tool_choice and server-tool policy of one call — PHP builds these inline in
+   * handleStreamingChat ('stream'), handleRegularChat ('regular') and compareOnly/handleComparison
+   * ('compare'), and the three differ:
+   *  - single skill (chip): run_skill_script + Task, base and MCP suppressed. Forced to
+   *    run_skill_script until a run happened — 'stream'/'compare': specific-function form, bare
+   *    'required' for grok/deepseek, only run_skill_script rounds count; 'regular': always the
+   *    specific-function form, any tool round counts.
+   *  - multi-skill (auto-routing): 'stream' declares discover_skill + run_skill_script beside base
+   *    and MCP, forcing discover_skill only on a fresh turn that has an attachment and a deliverable
+   *    verb; 'regular' declares the catalog run_skill_script only, never forced; 'compare' declares
+   *    both beside MCP only.
+   *  - no skill: base + MCP.
+   */
+  private static skillPlan(path: SkillPath, provider: string, message: string, history: any[], skillMetadata: SkillMetadata | null, availableSkills: AvailableSkill[]): SkillPlan {
+    if (skillMetadata !== null) {
+      const plan: SkillPlan = { tools: [ChatController.buildRunSkillScriptTool(skillMetadata), ChatController.buildTaskTool()], serverTools: 'none' };
+      if (path === 'regular') {
+        if (!ChatController.hasPriorToolRound(history)) plan.toolChoice = { type: 'function', function: { name: 'run_skill_script' } };
+      } else if (!ChatController.hasPriorRunSkillScript(history)) {
+        plan.toolChoice = ['grok', 'deepseek'].includes(provider.toLowerCase())
+          ? 'required'
+          : { type: 'function', function: { name: 'run_skill_script' } };
+      }
+      return plan;
+    }
+    if (availableSkills.length > 0) {
+      if (path === 'regular') {
+        return { tools: [ChatController.buildMultiSkillTool(availableSkills)], serverTools: 'all' };
+      }
+      const plan: SkillPlan = {
+        tools: [ChatController.buildDiscoverSkillTool(availableSkills), ChatController.buildMultiSkillTool(availableSkills)],
+        serverTools: path === 'compare' ? 'mcp' : 'all',
+      };
+      if (path === 'stream') {
+        const last = history.length ? history[history.length - 1] : null;
+        const isContinuation = !!last && typeof last === 'object' && last.role === 'tool';
+        // The marker the frontend's attachment converter prepends to the outgoing message.
+        const hasAttachment = message.includes('[The user attached the following document(s)');
+        const promptTail = mbSub(message, Math.max(0, mbLen(message) - 600), 600);
+        const deliverableSignal =
+          /\b(create|generate|make|build|produce|edit|update|replace|fix|correct|swap|change|modify|revise)\b|in the (document|file)\b|attached (html|document|file)/i.test(promptTail);
+        if (!isContinuation && hasAttachment && deliverableSignal) {
+          plan.toolChoice = { type: 'function', function: { name: 'discover_skill' } };
+        }
+      }
+      return plan;
+    }
+    return { tools: [], serverTools: 'all' };
+  }
 
-  /** Snapshot of what a request sends to the LLM (Context tab). Mirrors the PHP helper. */
+  /**
+   * The base tool registry of one request (PHP: a fresh AIPortfolioAssistant's ToolsManager — the
+   * search functions; the chat paths add the user-scoped session_search) and the user's MCP tools.
+   * A tools filter that names no mcp_* tool skips the MCP load entirely; `mcpAllowlist` is the
+   * package's server allowlist (verify / compare pass it, the chat paths do not).
+   */
+  private async loadToolSet(userId: number | null, opts: { sessionSearch: boolean; toolsFilter?: string[] | null; mcpAllowlist?: string[] | null } ): Promise<ToolSet> {
+    const toolsManager = new ToolsManager();
+    SearchFunctions.register(toolsManager);
+    if (opts.sessionSearch && userId !== null) SessionSearchService.registerAsTool(toolsManager, userId);
+
+    const filter = opts.toolsFilter ?? null;
+    const wantsMcp = filter === null || filter.some((t) => String(t).startsWith('mcp_'));
+    let mcpLoader: MCPToolsLoader | null = null;
+    if (wantsMcp) {
+      try {
+        mcpLoader = new MCPToolsLoader();
+        await mcpLoader.loadToolsForUser(userId, opts.mcpAllowlist);
+      } catch (e: any) {
+        console.error('[MCP] Failed to load MCP tools: ' + (e?.message ?? e));
+        mcpLoader = null;
+      }
+    } else {
+      console.error('[MCP] Skipped MCP load: node selected no MCP tools');
+    }
+    return { toolsManager, mcpLoader };
+  }
+
+  /** The executor offering the policy's server tools; a tools filter is an exact allow-list over base + MCP. */
+  private static executorFor(set: ToolSet, serverTools: ServerTools, toolsFilter: string[] | null = null): FunctionExecutor {
+    const all: FunctionExecutor = set.mcpLoader && set.mcpLoader.hasTools() ? new CombinedToolsExecutor(set.toolsManager, set.mcpLoader) : set.toolsManager;
+    if (toolsFilter !== null) return new FilteredToolsExecutor(all, toolsFilter);
+    if (serverTools === 'none') return new FilteredToolsExecutor(all, []);
+    if (serverTools === 'mcp') {
+      const names = set.mcpLoader && set.mcpLoader.hasTools() ? set.mcpLoader.getToolDefinitions().map((t) => t.name) : [];
+      return new FilteredToolsExecutor(all, names);
+    }
+    return all;
+  }
+
+  /** The package's MCP server allowlist (null = all servers); fails open. */
+  private async resolvePackageMcpAllowlist(userId: number | null): Promise<string[] | null> {
+    try {
+      return await new PackageResolver().allowedMcpServers(userId);
+    } catch (e: any) {
+      console.error('[ChatController] MCP allowlist resolution failed: ' + (e?.message ?? e));
+      return null;
+    }
+  }
+
+  /**
+   * Mirrors ChatController::checkFreeTrialQuota: a free-plan, non-admin user whose package caps
+   * lifetime tokens is refused once the recorded total (decision-model tokens excluded) reaches the
+   * cap. Returns the 403 body, or null when the call may proceed. Fails open.
+   */
+  static async checkFreeTrialQuota(userId: number | null): Promise<ControllerResult | null> {
+    if (userId === null || !userId) return null;
+    try {
+      const user = (await sql<any>`SELECT plan, role FROM users WHERE id = ${userId}`.execute(db)).rows[0];
+      if (!user) return null;
+      if ((user.role ?? '') === 'admin') return null;
+      if ((user.plan ?? 'free') !== 'free') return null;
+
+      let packageQuota: any = null;
+      try {
+        packageQuota = (await new PackageResolver().resolveForUser(userId)).capabilities?.quota_tokens ?? null;
+      } catch (e: any) {
+        console.error('[ChatController] Package quota resolution failed: ' + (e?.message ?? e));
+        packageQuota = null;
+      }
+      if (packageQuota === null) return null;
+      const quota = Math.trunc(Number(packageQuota)) || 0;
+
+      if ((await sql<any>`SHOW TABLES LIKE 'llm_usage_balance'`.execute(db)).rows.length === 0) return null;
+
+      // Decision-model tokens are recorded but never count toward the quota.
+      const decisionKeys = await DecisionProviders.keys();
+      const notIn = decisionKeys.length === 0 ? sql`` : sql` AND provider NOT IN (${sql.join(decisionKeys)})`;
+      const row = (
+        await sql<any>`SELECT COALESCE(SUM(total_tokens), 0) as total FROM llm_usage_balance WHERE user_id = ${userId}${notIn}`.execute(db)
+      ).rows[0];
+      const totalTokens = Math.trunc(Number(row?.total ?? 0)) || 0;
+
+      if (totalTokens >= quota) {
+        const fmt = (n: number) => n.toLocaleString('en-US');
+        return {
+          success: false,
+          error: `Token quota reached. You have used ${fmt(totalTokens)} of ${fmt(quota)} tokens. Please upgrade your plan to continue.`,
+          code: 'QUOTA_EXCEEDED',
+          usage: { total_tokens: totalTokens, quota },
+          status_code: 403,
+        };
+      }
+    } catch (e: any) {
+      console.error('[ChatController] Error checking free trial quota: ' + (e?.message ?? e));
+    }
+    return null;
+  }
+
+  /** Snapshot of what a request sends to the LLM (Context tab). Mirrors ChatController::buildLlmContextSnapshot. */
   static buildLlmContextSnapshot(
     provider: string, model: string | null, opts: ChatOptions, serverTools: any[], history: any[], message: string,
     limits: { max_tokens: number | null; temperature: number | null },
@@ -285,9 +476,11 @@ export class ChatController {
       .map((h) => ({ role: String(h.role ?? ''), content: typeof h.content === 'string' ? h.content : JSON.stringify(h.content ?? '') }));
     messages.push({ role: 'user', content: message });
     const systemPrompt = opts.system_prompt ?? '';
-    const chars = systemPrompt.length + messages.reduce((n, m) => n + m.content.length, 0)
-      + JSON.stringify(serverTools).length + JSON.stringify(opts.client_tools ?? []).length
-      + (opts.memory_context ?? '').length + (opts.skill_content ?? '').length;
+    // strlen() counts bytes; the current message is counted on its own and again in messages.
+    const bytes = (s: string) => Buffer.byteLength(s);
+    const chars = bytes(systemPrompt) + bytes(message) + messages.reduce((n, m) => n + bytes(m.content), 0)
+      + bytes(JSON.stringify(serverTools)) + bytes(JSON.stringify(opts.client_tools ?? []))
+      + bytes(opts.memory_context ?? '') + bytes(opts.skill_content ?? '');
     return {
       provider, model, max_tokens: limits.max_tokens, temperature: limits.temperature,
       system_prompt: systemPrompt,
@@ -299,40 +492,21 @@ export class ChatController {
     };
   }
 
-  private async buildExecutor(userId: number | null, toolsFilter?: string[] | null): Promise<FunctionExecutor> {
-    let executor: FunctionExecutor = this.toolsManager;
-    let mcpLoaded = false;
-    try {
-      const mcpLoader = new MCPToolsLoader();
-      await mcpLoader.loadToolsForUser(userId);
-      mcpLoaded = mcpLoader.hasTools();
-      if (mcpLoaded) executor = new CombinedToolsExecutor(this.toolsManager, mcpLoader);
-    } catch (e: any) {
-      console.error('[chat] MCP load failed:', e?.message ?? e);
-    }
-    // Honor the node's MCP/tool selection (workflow agent form): an exact
-    // allow-list — [] = no tools; only null/undefined = all tools.
-    if (Array.isArray(toolsFilter)) {
-      executor = new FilteredToolsExecutor(executor, toolsFilter);
-    }
-    log.info('[chat] executor built', {
-      mcp_loaded: mcpLoaded,
-      tools_filter: Array.isArray(toolsFilter) ? toolsFilter.length : toolsFilter,
-      total_tool_defs: executor.getToolDefinitions().length,
-    });
-    return executor;
-  }
-
+  /**
+   * The provider for one call, its resolved config (system_llm_settings → package defaults → the
+   * user's own key/endpoint/model/prompt) and the executor it was given. null when the provider is
+   * not available (PHP: getProvider() returns null).
+   */
   private async resolveProvider(
     provider: string | null,
     userId: number | null,
-    overrides?: { max_tokens?: number; temperature?: number; tools?: string[] },
-  ): Promise<LLMProvider> {
+    executor: FunctionExecutor | null,
+    overrides?: { max_tokens?: number | null; temperature?: number | null },
+  ): Promise<Resolved | null> {
     if (!provider) throw new Error(ChatController.PROVIDER_REQUIRED);
-    // system_llm_settings → the user's package defaults → the user's own key/endpoint/model/prompt.
     const cfg = await UserProviderOverlay.resolve(provider, userId);
-    if (!cfg) throw new Error(`Provider '${provider}' not available`);
-    // Per-request overrides (workflow agent form) win over the provider-config defaults.
+    if (!cfg) return null;
+    // Per-node overrides (workflow agent form) win over the provider-config defaults.
     if (overrides?.max_tokens != null) cfg.max_tokens = overrides.max_tokens;
     if (overrides?.temperature != null) cfg.temperature = overrides.temperature;
     log.info('[chat] resolved provider config', {
@@ -346,86 +520,123 @@ export class ChatController {
       overrides,
     });
     const impl = ProviderFactory.create(cfg); // throws for not-yet-ported formats
-    const executor = await this.buildExecutor(userId, overrides?.tools);
-    impl.setFunctionExecutor(executor);
-    // Remembered for the workflow node modal's Context tab (return_context).
-    this.lastResolved = { cfg, executor };
-    return impl;
+    if (executor) impl.setFunctionExecutor(executor);
+    return { impl, cfg, executor: executor ?? new ToolsManager() };
   }
 
-  private async handleStreamingChat(req: Request, res: Response, provider: string | null, opts: ChatOptions): Promise<ChatResult | null> {
+  /** The chat call's options (the PHP $options block): skill plan, memory, persona, attachments, client tools. */
+  private async chatOptions(input: ChatInput, userId: number | null, path: SkillPath): Promise<{ opts: ChatOptions; plan: SkillPlan }> {
+    const plan = ChatController.skillPlan(path, input.provider ?? '', input.message, input.history, input.skillMetadata, input.availableSkills);
+    // A workflow node's tool filter is an exact allow-list over every declared tool, skill tools included.
+    const skillTools = input.toolsFilter === null ? plan.tools : plan.tools.filter((t) => input.toolsFilter!.includes(t.name));
+    const clientTools = [...input.clientTools, ...skillTools];
+    const opts: ChatOptions = {
+      message: input.message,
+      conversation_history: input.history,
+      client_tools: clientTools,
+      client_tool_names: clientTools.map((t) => t.name),
+      user_id: userId,
+    };
+    if (plan.toolChoice !== undefined) opts.tool_choice = plan.toolChoice;
+    if (input.skillMetadata !== null) opts.skill_metadata = input.skillMetadata;
+    else if (input.availableSkills.length > 0) opts.available_skills = input.availableSkills;
+    if (input.includeMemory && userId !== null) {
+      const block = await buildMemoryBlock(userId);
+      if (block !== '') opts.memory_context = block;
+    }
+    if (input.skillContent !== '') opts.skill_content = input.skillContent;
+    if (input.systemPrompt !== null) opts.system_prompt = input.systemPrompt;
+    if (input.toolsFilter !== null) opts.tools = input.toolsFilter;
+    return { opts, plan };
+  }
+
+  private async handleStreamingChat(req: Request, res: Response, input: ChatInput, opts: ChatOptions, plan: SkillPlan, userId: number | null): Promise<{ result: ChatResult; sessionId: string } | null> {
     const sse = new SSEStream(res);
     sse.start();
     res.on('close', () => {
       if (!res.writableEnded) sse.markAborted();
     });
 
+    const provider = input.provider;
     const started = Date.now();
+    const sessionId = uniqidMore('chat_');
     try {
-      const impl = await this.resolveProvider(provider, opts.user_id ?? null, { max_tokens: opts.max_tokens, temperature: opts.temperature, tools: opts.tools });
-      const result: ChatResult = await impl.streamChat(opts, sse);
-
-      // Record usage (fire-and-forget) — TS port of PHP's UsageLogger, previously skipped on /chat.
-      void logChatTransaction({
-        user_id: opts.user_id ?? null,
-        provider: result.provider,
-        model: result.model,
-        prompt_tokens: result.usage?.input_tokens ?? 0,
-        completion_tokens: result.usage?.output_tokens ?? 0,
-        response_time_ms: Date.now() - started,
-        status: 'success',
-        function_calls_count: result.usage?.function_calls ?? 0,
-      });
+      const tools = await this.loadToolSet(userId, { sessionSearch: true, toolsFilter: input.toolsFilter });
+      const executor = ChatController.executorFor(tools, plan.serverTools, input.toolsFilter);
+      // PHP's streaming path never applies the max_tokens / temperature overrides.
+      const resolved = await this.resolveProvider(provider, userId, executor);
+      if (!resolved) throw new Error(`Provider '${provider}' not available`);
+      const result: ChatResult = await resolved.impl.streamChat(opts, sse);
+      const responseTimeMs = Date.now() - started;
 
       const providerResp: Record<string, any> = {
         text: result.text, usage: result.usage, model: result.model, provider: result.provider,
         functions_called: result.functions_called ?? [], mcp_tools_called: result.mcp_tools_called ?? [], mcp_calls_count: result.mcp_calls_count ?? 0,
       };
-      const controllerResp: Record<string, any> = { success: true, text: result.text, usage: result.usage, provider: result.provider };
-      // Conversations' View Context asks for what was actually sent (return_context).
-      if (req.body?.return_context) {
-        const cfg = this.lastResolved?.cfg;
-        controllerResp.context = ChatController.buildLlmContextSnapshot(
-          result.provider ?? provider ?? '',
-          cfg?.model ?? null,
-          { ...opts, system_prompt: opts.system_prompt ?? cfg?.system_prompt ?? '' },
-          this.lastResolved?.executor?.getToolDefinitions() ?? [],
-          opts.conversation_history ?? [],
-          opts.message ?? '',
-          { max_tokens: cfg?.max_tokens ?? null, temperature: cfg?.temperature ?? null },
-        );
-      }
+      const controllerResp: Record<string, any> = { success: true, text: result.text, usage: result.usage ?? [], provider: result.provider ?? 'claude' };
       if (result.pending_client_tool_call) {
         for (const r of [providerResp, controllerResp]) {
           r.pending_client_tool_call = true;
-          r.pending_tool_calls = result.pending_tool_calls;
+          r.pending_tool_calls = result.pending_tool_calls ?? [];
         }
       }
+      // Conversations' View Context asks for what was actually sent (return_context).
+      if (!phpEmpty(req.body?.return_context)) controllerResp.context = this.contextSnapshot(resolved, result, provider, opts);
       sse.send('response', providerResp);
       sse.send('complete', { status: 'done' });
       sse.send('response', controllerResp);
 
-      // Inline verification / comparison (turn-level) — mirrors PHP handleStreamingChat running
-      // handleVerification/handleComparison from the /chat stream after the primary response, BEFORE
-      // the final 'complete'. Skipped when the primary returned a pending client-tool call (they run on
-      // the real turn after the tool round) and when the verifier/comparer equals the primary provider.
+      // Verification / comparison are turn-level: skipped while the primary waits on a client tool
+      // (they run on the real continuation) and when the verifier/comparer is the primary provider.
       const vcBody = req.body ?? {};
       const isPending = !!result.pending_client_tool_call;
       const verifierProvider: string | null = vcBody.verifier_provider ?? null;
-      if (!isPending && vcBody.verification_enabled && verifierProvider && verifierProvider !== provider) {
-        await this.runVerification(sse, opts.message ?? '', result.text ?? '', verifierProvider, opts.user_id ?? null);
+      if (!isPending && phpBool(vcBody.verification_enabled ?? false) && verifierProvider && verifierProvider !== provider) {
+        const r = await this.runVerification(sse, opts.message, result.text ?? '', verifierProvider, userId, ChatController.executorFor(tools, 'all'), false);
+        if (r) this.logPaneUsage(userId, 'verify_', verifierProvider, r, Date.now() - started - responseTimeMs);
       }
       const compareProvider: string | null = vcBody.compare_provider ?? null;
-      if (!isPending && vcBody.compare_enabled && compareProvider && compareProvider !== provider) {
-        await this.runComparison(sse, vcBody, compareProvider, opts.message ?? '', opts.user_id ?? null);
+      if (!isPending && phpBool(vcBody.compare_enabled ?? false) && compareProvider && compareProvider !== provider) {
+        const scene: CompareScene = {
+          message: opts.message, history: input.history, skillMetadata: input.skillMetadata, availableSkills: input.availableSkills,
+          skillContent: input.skillContent, imageAttachments: opts.image_attachments ?? [], pdfAttachments: opts.pdf_attachments ?? [],
+        };
+        const r = await this.runComparison(sse, scene, compareProvider, userId, tools, true, false);
+        if (r) this.logPaneUsage(userId, 'compare_', compareProvider, r, Date.now() - started - responseTimeMs);
       }
 
       sse.send('complete', { status: 'done' });
       sse.end();
-      return result;
+
+      void logChatTransaction({
+        user_id: userId,
+        session_id: sessionId,
+        provider: result.provider ?? 'claude',
+        model: result.model ?? 'unknown',
+        prompt_tokens: result.usage?.input_tokens ?? 0,
+        completion_tokens: result.usage?.output_tokens ?? 0,
+        response_time_ms: responseTimeMs,
+        status: 'success',
+        function_calls_count: result.usage?.function_calls ?? 0,
+        functions_called: result.functions_called ?? null,
+        mcp_calls_count: result.mcp_calls_count ?? 0,
+        mcp_tools_called: result.mcp_tools_called ?? null,
+      });
+      return { result, sessionId };
     } catch (e: any) {
-      if (e?.message === 'CLIENT_ABORTED') return null;
       const raw = e?.message ?? 'Unknown error';
+      if (raw === 'CLIENT_ABORTED') {
+        console.error('[ChatController] Client aborted, upstream LLM call cancelled');
+        void logChatTransaction({
+          user_id: userId, provider: provider ?? 'claude', model: 'unknown', prompt_tokens: 0, completion_tokens: 0,
+          response_time_ms: Date.now() - started, status: 'aborted', error_message: 'Cancelled by user',
+        });
+        return null;
+      }
+      void logChatTransaction({
+        user_id: userId, provider: provider ?? 'claude', model: 'unknown', prompt_tokens: 0, completion_tokens: 0,
+        response_time_ms: Date.now() - started, status: 'error', error_message: raw,
+      });
       const code = this.providerErrorStatus(raw) ?? 500;
       try {
         sse.send('error', { error: true, message: raw, code });
@@ -438,54 +649,86 @@ export class ChatController {
     }
   }
 
-  private async handleRegularChat(res: Response, provider: string | null, opts: ChatOptions, returnContext = false): Promise<ChatResult | null> {
-    const started = Date.now();
+  private async handleRegularChat(res: Response, input: ChatInput, opts: ChatOptions, plan: SkillPlan, userId: number | null, returnContext: boolean): Promise<ChatResult | null> {
+    const provider = input.provider;
+    let started = Date.now();
     try {
-      const impl = await this.resolveProvider(provider, opts.user_id ?? null, { max_tokens: opts.max_tokens, temperature: opts.temperature, tools: opts.tools });
-      const result = await impl.chat(opts);
-      const body: Record<string, any> = { success: true, text: result.text, usage: result.usage, provider: result.provider, finish_reason: result.finish_reason ?? null };
-      if (result.pending_client_tool_call) {
-        body.pending_client_tool_call = true;
-        body.pending_tool_calls = result.pending_tool_calls;
-        if (result.assistant_reasoning) body.assistant_reasoning = result.assistant_reasoning;
-      }
-      // Workflow nodes ask for the context they sent (Context tab). Mirrors
-      // ChatController::buildLlmContextSnapshot.
-      if (returnContext) {
-        const cfg = this.lastResolved?.cfg;
-        body.context = ChatController.buildLlmContextSnapshot(
-          result.provider ?? provider ?? '',
-          cfg?.model ?? null,
-          // No override → the provider uses its configured persona; report that, not ''.
-          { ...opts, system_prompt: opts.system_prompt ?? cfg?.system_prompt ?? '' },
-          this.lastResolved?.executor?.getToolDefinitions() ?? [],
-          opts.conversation_history ?? [],
-          opts.message ?? '',
-          { max_tokens: cfg?.max_tokens ?? null, temperature: cfg?.temperature ?? null },
-        );
-      }
-      res.status(200).json(body);
-      // Record usage (fire-and-forget; failures are swallowed so they never affect the response).
-      // This is the TS port of PHP's UsageLogger, which the /chat path had been skipping.
+      const tools = await this.loadToolSet(userId, { sessionSearch: true, toolsFilter: input.toolsFilter });
+      const executor = ChatController.executorFor(tools, plan.serverTools, input.toolsFilter);
+      const resolved = await this.resolveProvider(provider, userId, executor, { max_tokens: input.maxTokens, temperature: input.temperature });
+      if (!resolved) throw new Error(`Provider '${provider}' not available`);
+      started = Date.now();
+      const result = await resolved.impl.chat(opts);
+      const responseTimeMs = Date.now() - started;
+
       void logChatTransaction({
-        user_id: opts.user_id ?? null,
-        provider: result.provider,
-        model: result.model,
+        user_id: userId,
+        provider: result.provider ?? 'claude',
+        model: result.model ?? 'unknown',
         prompt_tokens: result.usage?.input_tokens ?? 0,
         completion_tokens: result.usage?.output_tokens ?? 0,
-        response_time_ms: Date.now() - started,
+        response_time_ms: responseTimeMs,
         status: 'success',
         function_calls_count: result.usage?.function_calls ?? 0,
+        functions_called: result.functions_called ?? null,
+        mcp_calls_count: result.mcp_calls_count ?? 0,
+        mcp_tools_called: result.mcp_tools_called ?? null,
       });
+
+      const body: Record<string, any> = { success: true, text: result.text, usage: result.usage ?? [], provider: result.provider ?? 'claude', finish_reason: result.finish_reason ?? null };
+      if (result.pending_client_tool_call) {
+        body.pending_client_tool_call = true;
+        body.pending_tool_calls = result.pending_tool_calls ?? [];
+        if (result.assistant_reasoning) body.assistant_reasoning = result.assistant_reasoning;
+      }
+      // Workflow nodes ask for the context they sent (Context tab).
+      if (returnContext) body.context = this.contextSnapshot(resolved, result, provider, opts);
+      res.status(200).json(body);
       return result;
     } catch (e: any) {
-      // Percolate the upstream provider's status (e.g. 429 rate-limit) instead of masking as 500,
-      // and humanize the message. A non-provider error (real bug) has no extractable code → 500.
       const raw = e?.message ?? 'Unknown error';
+      void logChatTransaction({
+        user_id: userId, provider: provider ?? 'claude', model: 'unknown', prompt_tokens: 0, completion_tokens: 0,
+        response_time_ms: Date.now() - started, status: 'error', error_message: raw,
+      });
+      // Percolate the upstream provider's status (e.g. 429) instead of masking it as 500.
       const status = this.providerErrorStatus(raw) ?? 500;
       res.status(status).json({ success: false, error: this.humanizeProviderError(raw) });
       return null;
     }
+  }
+
+  /** The Context-tab snapshot: the resolved config's model/limits, the effective persona and the offered tools. */
+  private contextSnapshot(resolved: Resolved, result: ChatResult, provider: string | null, opts: ChatOptions): Record<string, any> {
+    const cfg = resolved.cfg;
+    return ChatController.buildLlmContextSnapshot(
+      provider ?? result.provider ?? 'claude',
+      cfg.model !== '' ? cfg.model : null,
+      // No override → the provider uses its configured persona; report that, not ''.
+      { ...opts, system_prompt: opts.system_prompt ?? cfg.system_prompt ?? '' },
+      resolved.executor.getToolDefinitions(),
+      opts.conversation_history ?? [],
+      opts.message ?? '',
+      { max_tokens: cfg.max_tokens ?? null, temperature: cfg.temperature ?? null },
+    );
+  }
+
+  /** Usage row for an inline verifier/comparer pass (its own session id; time net of the primary's). */
+  private logPaneUsage(userId: number | null, prefix: string, provider: string, r: ChatResult, responseTimeMs: number): void {
+    void logChatTransaction({
+      user_id: userId,
+      session_id: uniqidMore(prefix),
+      provider,
+      model: r.model ?? 'unknown',
+      prompt_tokens: r.usage?.input_tokens ?? 0,
+      completion_tokens: r.usage?.output_tokens ?? 0,
+      response_time_ms: responseTimeMs > 0 ? responseTimeMs : 0,
+      status: 'success',
+      function_calls_count: r.usage?.function_calls ?? 0,
+      functions_called: r.functions_called ?? null,
+      mcp_calls_count: r.mcp_calls_count ?? 0,
+      mcp_tools_called: r.mcp_tools_called ?? null,
+    });
   }
 
   /**
@@ -765,6 +1008,46 @@ export class ChatController {
     };
   }
 
+  /** Parse the /chat body the way ChatController::chat does. */
+  private parseChatInput(body: Record<string, any>): ChatInput {
+    const systemPrompt = typeof body.system_prompt === 'string' ? body.system_prompt.trim() : null;
+    return {
+      message: typeof body.message === 'string' ? body.message : '',
+      history: ChatController.stripVisualNoiseFromHistory(Array.isArray(body.conversation_history) ? body.conversation_history : []),
+      provider: body.provider ?? null,
+      skillContent: typeof body.skill_content === 'string' ? body.skill_content.trim() : '',
+      skillMetadata: ChatController.sanitizeSkillMetadata(body.skill_metadata ?? null),
+      availableSkills: ChatController.sanitizeAvailableSkills(body.available_skills ?? null),
+      clientTools: ChatController.sanitizeClientTools(body.client_tools ?? null),
+      systemPrompt: systemPrompt === '' ? null : systemPrompt,
+      // Optional 'memory' flag (default true): API callers (e.g. AI-Dialog) and workflow nodes send false.
+      includeMemory: Object.prototype.hasOwnProperty.call(body, 'memory') ? phpBool(body.memory) : true,
+      toolsFilter: Array.isArray(body.tools) ? body.tools : null,
+      maxTokens: isNumeric(body.max_tokens) ? Math.trunc(Number(body.max_tokens)) : null,
+      temperature: isNumeric(body.temperature) ? Number(body.temperature) : null,
+    };
+  }
+
+  /**
+   * Attachment ids uploaded earlier via /chat/upload: text-native files are prepended to the
+   * message, images (and PDFs on native-PDF providers) ride the options; skill mode elides bodies to
+   * short /scratch/ references. Returns the (possibly prefixed) message.
+   */
+  private async applyAttachments(body: Record<string, any>, userId: number | null, provider: string | null, skillModeActive: boolean, message: string, target: { image_attachments?: NativeAttachment[]; pdf_attachments?: NativeAttachment[] }, label: string): Promise<string> {
+    const attachmentIds: any[] = Array.isArray(body.attachment_ids) ? body.attachment_ids : [];
+    if (!attachmentIds.length || userId === null) return message;
+    try {
+      const built = await new AttachmentDispatcher().buildPrefix(attachmentIds, userId, provider, skillModeActive);
+      if (built.prefix !== '') message = built.prefix + message;
+      if (built.image_attachments.length) target.image_attachments = built.image_attachments;
+      if (built.pdf_attachments.length) target.pdf_attachments = built.pdf_attachments;
+      if (built.notes.length) console.error(`[${label}] Attachment notes: ` + built.notes.join(' | '));
+    } catch (e: any) {
+      console.error(`[${label}] Attachment dispatch failed: ` + (e?.message ?? e));
+    }
+    return message;
+  }
+
   /** POST /api/v1/chat — protected by the global auth middleware. */
   async chat(req: Request, res: Response): Promise<void> {
     const ctx = buildCtx(req);
@@ -779,62 +1062,66 @@ export class ChatController {
       msg_len: (body.message || '').length,
     });
 
+    // App-key auth is scope-gated: an `ak_` key must carry the `chat` scope. JWT users and
+    // per-user `uak_` keys are unrestricted.
+    if (ctx.auth_type === 'app_key') {
+      const scopes = (req as any).app_key_scopes ?? [];
+      if (!Array.isArray(scopes) || !scopes.includes('chat')) {
+        res.status(403).json({ success: false, error: 'App key not authorized for chat (missing scope "chat")' });
+        return;
+      }
+    }
+
     if (body.tools !== undefined && body.tools !== null && !Array.isArray(body.tools)) {
       res.status(400).json({ success: false, error: 'tools must be an array of tool names' });
       return;
     }
 
-    const opts = this.buildOptions(body, ctx.user_id);
-    const provider: string | null = body.provider ?? null;
+    const input = this.parseChatInput(body);
+    const userId = typeof ctx.user_id === 'number' ? ctx.user_id : null;
+    const attachments: { image_attachments?: NativeAttachment[]; pdf_attachments?: NativeAttachment[] } = {};
+    const skillModeActive = input.skillMetadata !== null || input.availableSkills.length > 0;
+    input.message = await this.applyAttachments(body, userId, input.provider, skillModeActive, input.message, attachments, 'ChatController');
 
-    // Attachment ids uploaded earlier via /chat/upload. Mirrors PHP: images (and
-    // PDFs on native-PDF providers) ride opts.image_attachments/pdf_attachments to
-    // the provider; text-native files are prepended to the message; skill mode
-    // elides bodies to short /scratch/ references.
-    const attachmentIds: any[] = Array.isArray(body.attachment_ids) ? body.attachment_ids : [];
-    if (attachmentIds.length && typeof ctx.user_id === 'number') {
-      try {
-        const dispatcher = new AttachmentDispatcher();
-        const skillModeActive = opts.skill_metadata != null || (opts.available_skills ?? []).length > 0;
-        const built = await dispatcher.buildPrefix(attachmentIds, ctx.user_id, provider, skillModeActive);
-        if (built.prefix !== '') opts.message = built.prefix + opts.message;
-        if (built.image_attachments.length) opts.image_attachments = built.image_attachments;
-        if (built.pdf_attachments.length) opts.pdf_attachments = built.pdf_attachments;
-        if (built.notes.length) console.error('[ChatController] Attachment notes: ' + built.notes.join(' | '));
-      } catch (e: any) {
-        console.error('[ChatController] Attachment dispatch failed:', e?.message ?? e);
-      }
-    }
-
-    const history = opts.conversation_history;
-    const isToolContinuation = history.length > 0 && history[history.length - 1]?.role === 'tool';
-    if ((!opts.message || opts.message.trim() === '') && !isToolContinuation) {
+    // An empty message is allowed only for a client-tool continuation (tool_result at the tail).
+    const history = input.history;
+    const isToolResultContinuation = input.message === '' && history.length > 0 && history[history.length - 1]?.role === 'tool';
+    if (phpEmpty(input.message) && !isToolResultContinuation) {
       res.status(400).json({ success: false, error: 'Message is required' });
       return;
     }
 
-    // Optional 'memory' flag (default true): the user's memory block is appended to the system
-    // prompt, and the post-response auto-updater runs. API callers (e.g. AI-Dialog) and workflow
-    // nodes send memory:false.
-    const includeMemory = Object.prototype.hasOwnProperty.call(body, 'memory') ? phpBool(body.memory) : true;
-    const userId = typeof ctx.user_id === 'number' ? ctx.user_id : null;
-    if (includeMemory && userId !== null) {
-      const block = await buildMemoryBlock(userId);
-      if (block !== '') opts.memory_context = block;
+    const quota = await ChatController.checkFreeTrialQuota(userId);
+    if (quota !== null) {
+      const { status_code = 403, ...rest } = quota;
+      res.status(status_code).json(rest);
+      return;
     }
 
-    const result = body.streaming === true
-      ? await this.handleStreamingChat(req, res, provider, opts)
-      : await this.handleRegularChat(res, provider, opts, body.return_context === true);
+    const streaming = phpBool(body.streaming ?? false);
+    const { opts, plan } = await this.chatOptions(input, userId, streaming ? 'stream' : 'regular');
+    if (attachments.image_attachments) opts.image_attachments = attachments.image_attachments;
+    if (attachments.pdf_attachments) opts.pdf_attachments = attachments.pdf_attachments;
+
+    let result: ChatResult | null;
+    let sessionId: string;
+    if (streaming) {
+      const out = await this.handleStreamingChat(req, res, input, opts, plan, userId);
+      result = out?.result ?? null;
+      sessionId = out?.sessionId ?? uniqidMore('chat_');
+    } else {
+      result = await this.handleRegularChat(res, input, opts, plan, userId, !phpEmpty(body.return_context));
+      sessionId = uniqidMore('chat_');
+    }
 
     // Post-response tail: failures never affect the user (the response is already sent).
-    if (includeMemory && userId !== null && result && result.text) {
-      await this.runMemoryAutoUpdater(userId, opts.message ?? '', result.text);
+    if (input.includeMemory && userId !== null && result && result.text) {
+      await this.runMemoryAutoUpdater(userId, sessionId, input.message, result.text);
     }
   }
 
-  /** PHP's post-response MemoryAutoUpdater run, with the resolved Claude config (or ANTHROPIC_API_KEY). */
-  private async runMemoryAutoUpdater(userId: number, message: string, text: string): Promise<void> {
+  /** PHP's post-response MemoryAutoUpdater run, with the user's resolved Claude config (or ANTHROPIC_API_KEY). */
+  private async runMemoryAutoUpdater(userId: number, sessionId: string, message: string, text: string): Promise<void> {
     try {
       // PHP reads $config['claude'] after the user overlay: the user's own Claude key (and entry
       // point) when they have one.
@@ -844,7 +1131,6 @@ export class ChatController {
         console.error('[ChatController] MemoryAutoUpdater skipped: no Claude API key in merged config or ANTHROPIC_API_KEY env');
         return;
       }
-      const sessionId = 'chat_' + uniqid() + '.' + String(Math.floor(Math.random() * 1e8)).padStart(8, '0');
       await new MemoryAutoUpdater(apiKey, claude?.base_url ?? '', claude?.chat_endpoint ?? '').run(userId, sessionId, message, text);
     } catch (e: any) {
       console.error('[ChatController] MemoryAutoUpdater failed: ' + (e?.message ?? e));
@@ -853,24 +1139,16 @@ export class ChatController {
 
   /**
    * POST /api/v1/agent — single-pass LLM call: prompt in, text out. No tools, no history,
-   * no streaming, no skill routing. Used by clients (e.g. the skill-creator port) that just
-   * need "spawn an agent, get its answer." Faithful mirror of ChatController::agent (PHP
-   * ~line 892). Plain JSON — a ctx-based method for the handle() wrapper (the one Chat
-   * endpoint that never streams).
-   *
-   * Tools are forced off by NOT attaching a FunctionExecutor and passing no client_tools —
-   * the TS providers only send `tools` when one of those exists (see buildToolDefs), which
-   * matches PHP passing `tools: []` to the provider.
-   *
-   * DIVERGENCES (pre-existing gaps in the ported TS infra — same as /chat, /verify, /compare):
-   *  - checkFreeTrialQuota is not ported (no free-trial gate before the call).
+   * no streaming, no skill routing. Faithful mirror of ChatController::agent: the free-trial gate,
+   * the user's package defaults and own key, then one plain chat. Tools are forced off by attaching
+   * no executor and no client_tools (PHP passes `tools: []`).
    */
   async agent(ctx: Ctx): Promise<ControllerResult> {
     const body = ctx.body;
     const prompt = String(body.prompt ?? '').trim();
     const provider: string | null = body.provider ?? null;
-    const model = typeof body.model === 'string' ? body.model.trim() : '';
-    const system = typeof body.system === 'string' ? body.system : '';
+    const model = body.model !== undefined && body.model !== null ? String(body.model).trim() : '';
+    const system = body.system !== undefined && body.system !== null ? String(body.system) : '';
     const userId = ctx.user_id;
 
     if (prompt === '') {
@@ -880,6 +1158,9 @@ export class ChatController {
       return { success: false, error: 'provider is required', status_code: 400 };
     }
 
+    const quota = await ChatController.checkFreeTrialQuota(userId);
+    if (quota !== null) return quota;
+
     try {
       const cfg = await UserProviderOverlay.resolve(provider, userId);
       if (!cfg) {
@@ -887,9 +1168,7 @@ export class ChatController {
       }
       if (model !== '') cfg.model = model; // PHP: setModel() only when a model was passed
 
-      // No setFunctionExecutor and no client_tools → the provider declares zero tools.
       const impl = ProviderFactory.create(cfg); // throws for not-yet-ported formats
-
       const opts: ChatOptions = { message: prompt, conversation_history: [], user_id: userId };
       if (system !== '') opts.system_prompt = system;
 
@@ -902,7 +1181,7 @@ export class ChatController {
         model: result.model ?? null,
       };
     } catch (e: any) {
-      console.error('[ChatController::agent]', e?.message ?? e);
+      console.error('[ChatController::agent] ' + (e?.message ?? e));
       return {
         success: false,
         error: this.humanizeProviderError(e?.message ?? 'Unknown error'),
@@ -915,8 +1194,6 @@ export class ChatController {
    * Format the current date the way PHP's date() does for the verification prompt:
    *   Y-m-d            → e.g. "2026-06-30"
    *   Y-m-d H:i:s T    → e.g. "2026-06-30 14:23:01 UTC"
-   * Uses local server time (matching PHP's default-timezone date()); the value is runtime, only the
-   * surrounding prompt template is behavior-critical.
    */
   private static phpDates(): { date: string; dateTime: string } {
     const now = new Date();
@@ -941,13 +1218,10 @@ export class ChatController {
 
   /**
    * POST /api/v1/verify — on-demand verification of an already-completed assistant response.
-   * Faithful mirror of ChatController::verify (PHP ~line 913). Streams SSE:
+   * Faithful mirror of ChatController::verify. Streams SSE:
    *   verification_start → verification_progress (×N) → verifier_chunk (×N)
-   *     → verification_progress → verification_response → verification_complete
-   * Raw Express handler (like /chat); validation returns a 400 JSON BEFORE any SSE headers.
-   *
-   * DIVERGENCES (pre-existing gaps in the ported TS infra, not invented here):
-   *  - checkFreeTrialQuota / UsageLogger are not ported in TS (the /chat path skips them too).
+   *     → verification_response → verification_complete
+   * Validation and the quota gate return JSON BEFORE any SSE headers.
    */
   async verify(req: Request, res: Response): Promise<void> {
     const ctx = buildCtx(req);
@@ -966,20 +1240,32 @@ export class ChatController {
       return;
     }
 
+    const quota = await ChatController.checkFreeTrialQuota(userId);
+    if (quota !== null) {
+      const { status_code = 403, ...rest } = quota;
+      res.status(status_code).json(rest);
+      return;
+    }
+
     const sse = new SSEStream(res);
     sse.start();
     res.on('close', () => {
       if (!res.writableEnded) sse.markAborted();
     });
 
-    await this.runVerification(sse, originalMessage, responseText, verifierProvider, userId);
+    const started = Date.now();
+    // A separate assistant in PHP: the search tools (no session_search) + MCP under the package allowlist.
+    const tools = await this.loadToolSet(userId, { sessionSearch: false, mcpAllowlist: await this.resolvePackageMcpAllowlist(userId) });
+    const r = await this.runVerification(sse, originalMessage, responseText, verifierProvider, userId, ChatController.executorFor(tools, 'all'), true);
+    if (r) this.logPaneUsage(userId, 'verify_', verifierProvider, r, Date.now() - started);
     sse.end();
   }
 
   /**
-   * Core verification pass — emits verification_* events on `sse`. Does NOT end the stream (the caller
-   * decides). Shared by the standalone /verify endpoint AND the inline pass that runs after the primary
-   * response in handleStreamingChat (mirrors PHP handleVerification being called from the /chat stream).
+   * Core verification pass — emits verification_* events on `sse`; does NOT end the stream. Shared by
+   * /verify (standalone: an unavailable verifier is an error) and the inline pass after the primary
+   * response (PHP handleVerification: an unavailable verifier is skipped). Returns the verifier's
+   * result, or null when none ran.
    */
   private async runVerification(
     sse: SSEStream,
@@ -987,11 +1273,13 @@ export class ChatController {
     responseText: string,
     verifierProvider: string,
     userId: number | null,
-  ): Promise<void> {
+    executor: FunctionExecutor,
+    standalone: boolean,
+  ): Promise<ChatResult | null> {
     try {
       sse.send('verification_start', { verifier: verifierProvider });
 
-      // Verification prompt — copied VERBATIM from ChatController::verify (PHP ~982).
+      // Verification prompt — copied VERBATIM from ChatController::verify.
       const { date: currentDate, dateTime: currentDateTime } = ChatController.phpDates();
       const verificationPrompt =
         'You are a verification assistant. Your task is to analyze the following response for accuracy, completeness, and potential issues.\n\n' +
@@ -1006,61 +1294,72 @@ export class ChatController {
         'Be concise and focus on the most important points.\n' +
         'IMPORTANT: Write your entire verification in the same language as the Response to Verify (if the response is in French, answer in French; if in English, answer in English, etc.).';
 
-      const impl = await this.resolveProvider(verifierProvider, userId);
-      const sink = new PaneSseSink(sse, VERIFY_EVENT_MAP) as unknown as SSEStream;
-      const opts: ChatOptions = { message: verificationPrompt, conversation_history: [], user_id: userId };
-      const result: ChatResult = await impl.streamChat(opts, sink);
-
-      sse.send('verification_response', { success: true, text: result.text ?? '', verifier: verifierProvider });
+      const resolved = await this.resolveProvider(verifierProvider, userId, executor);
+      let result: ChatResult | null = null;
+      if (!resolved) {
+        if (standalone) throw new Error(`Verifier provider '${verifierProvider}' not available`);
+      } else {
+        const sink = new PaneSseSink(sse, VERIFY_EVENT_MAP) as unknown as SSEStream;
+        const opts: ChatOptions = { message: verificationPrompt, conversation_history: [], user_id: userId };
+        result = await resolved.impl.streamChat(opts, sink);
+        sse.send('verification_response', { success: true, text: result.text ?? '', verifier: verifierProvider });
+      }
       sse.send('verification_complete', { status: 'done' });
+      return result;
     } catch (e: any) {
-      if (e?.message === 'CLIENT_ABORTED') return;
+      if (e?.message === 'CLIENT_ABORTED') {
+        if (standalone) return null;
+        throw e; // the primary stream's abort handling owns it
+      }
       const raw = e?.message ?? 'Unknown error';
+      console.error((standalone ? '[ChatController::verify] Error: ' : 'Verification error: ') + raw);
       try {
         sse.send('verification_error', { message: this.humanizeProviderError(raw) });
         sse.send('verification_complete', { status: 'error' });
       } catch {
         /* connection gone */
       }
+      return null;
     }
   }
 
   /**
    * POST /api/v1/compare — re-answer the last user message with a different provider (compare pane).
-   * Faithful mirror of ChatController::compareOnly (PHP ~line 1082). Streams SSE:
-   *   compare_start → compare_progress (×N) → compare_chunk (×N)
-   *     → compare_progress → compare_response → compare_complete
-   * Raw Express handler (like /chat); validation returns a 400 JSON BEFORE any SSE headers.
-   *
-   * Skill/tool handling reuses buildOptions (with the provider shimmed to compare_provider so the
-   * grok/deepseek tool_choice branch keys off the comparer): single-skill forces run_skill_script,
-   * multi-skill adds discover_skill + the catalog tool, no-skill runs base+MCP only. The base+MCP
-   * tools reach the provider via resolveProvider's executor; the skill tools ride on client_tools.
-   *
-   * DIVERGENCES (gaps in the ported TS infra — not invented here):
-   *  - stripVisualNoiseFromHistory and AttachmentDispatcher are not ported, so conversation_history is
-   *    used as-is and attachment prefixing / native image+pdf attachments are NOT applied.
-   *  - checkFreeTrialQuota / UsageLogger not ported (same as the /chat path).
+   * Faithful mirror of ChatController::compareOnly. Streams SSE:
+   *   compare_start → compare_progress (×N) → compare_chunk (×N) → compare_response → compare_complete
+   * The comparer sees the primary's scene: skill tools / tool_choice / skill_content and the same
+   * attachment treatment (with the comparer as the dispatch target). Validation and the quota gate
+   * return JSON BEFORE any SSE headers.
    */
   async compare(req: Request, res: Response): Promise<void> {
     const ctx = buildCtx(req);
     const body = ctx.body;
 
-    const message = String(body.message ?? '').trim();
-    const conversationHistory = Array.isArray(body.conversation_history) ? body.conversation_history : [];
+    let message = String(body.message ?? '').trim();
+    const history = Array.isArray(body.conversation_history) ? ChatController.stripVisualNoiseFromHistory(body.conversation_history) : [];
     const compareProvider: string | null = body.compare_provider ?? null;
     const userId = ctx.user_id;
+    const skillContent = typeof body.skill_content === 'string' ? body.skill_content.trim() : '';
+    const skillMetadata = ChatController.sanitizeSkillMetadata(body.skill_metadata ?? null);
+    const availableSkills = ChatController.sanitizeAvailableSkills(body.available_skills ?? null);
 
     // Allow empty message when the request is a tool-result continuation (last history entry role:'tool').
-    let hasToolResultTail = false;
-    if (conversationHistory.length > 0) {
-      const tail = conversationHistory[conversationHistory.length - 1];
-      if (tail && typeof tail === 'object' && tail.role === 'tool') hasToolResultTail = true;
-    }
+    const tail = history.length > 0 ? history[history.length - 1] : null;
+    const hasToolResultTail = !!tail && typeof tail === 'object' && tail.role === 'tool';
     if ((!hasToolResultTail && message === '') || !compareProvider) {
       res.status(400).json({ success: false, error: 'message and compare_provider are required' });
       return;
     }
+
+    const quota = await ChatController.checkFreeTrialQuota(userId);
+    if (quota !== null) {
+      const { status_code = 403, ...rest } = quota;
+      res.status(status_code).json(rest);
+      return;
+    }
+
+    const attachments: { image_attachments?: NativeAttachment[]; pdf_attachments?: NativeAttachment[] } = {};
+    message = await this.applyAttachments(body, userId, compareProvider, skillMetadata !== null || availableSkills.length > 0, message, attachments, 'ChatController::compareOnly');
 
     const sse = new SSEStream(res);
     sse.start();
@@ -1068,46 +1367,76 @@ export class ChatController {
       if (!res.writableEnded) sse.markAborted();
     });
 
-    await this.runComparison(sse, body, compareProvider, message, userId);
+    const started = Date.now();
+    const tools = await this.loadToolSet(userId, { sessionSearch: false, mcpAllowlist: await this.resolvePackageMcpAllowlist(userId) });
+    const scene: CompareScene = {
+      message, history, skillMetadata, availableSkills, skillContent,
+      imageAttachments: attachments.image_attachments ?? [], pdfAttachments: attachments.pdf_attachments ?? [],
+    };
+    // Honor the frontend's streaming preference (default true).
+    const r = await this.runComparison(sse, scene, compareProvider, userId, tools, phpBool(body.streaming ?? true), true);
+    if (r) this.logPaneUsage(userId, 'compare_', compareProvider, r, Date.now() - started);
     sse.end();
   }
 
   /**
-   * Core comparison pass — emits compare_* events on `sse`. Does NOT end the stream (caller decides).
-   * Shared by the standalone /compare endpoint AND the inline pass in handleStreamingChat.
+   * Core comparison pass — emits compare_* events on `sse`; does NOT end the stream. Shared by
+   * /compare (standalone) and the inline pass in handleStreamingChat (PHP handleComparison, always
+   * streamed; an unavailable comparer is skipped there). The comparer gets the skill tools only —
+   * no webMCP client tools, no persona override, no memory, as in PHP.
    */
   private async runComparison(
     sse: SSEStream,
-    body: Record<string, any>,
+    scene: CompareScene,
     compareProvider: string,
-    message: string,
     userId: number | null,
-  ): Promise<void> {
+    tools: ToolSet,
+    useStreaming: boolean,
+    standalone: boolean,
+  ): Promise<ChatResult | null> {
     try {
       sse.send('compare_start', { comparer: compareProvider });
 
-      const impl = await this.resolveProvider(compareProvider, userId);
-      // Build the SAME options block the primary /chat path produces (tools / skill_content /
-      // tool_choice forcing / skill_metadata / available_skills). Shim provider→compare_provider so
-      // buildOptions' grok/deepseek tool_choice branch keys off the comparer, and message→trimmed.
-      const opts = this.buildOptions({ ...body, provider: compareProvider, message }, userId);
-      const sink = new PaneSseSink(sse, COMPARE_EVENT_MAP) as unknown as SSEStream;
+      const plan = ChatController.skillPlan('compare', compareProvider, scene.message, scene.history, scene.skillMetadata, scene.availableSkills);
+      const resolved = await this.resolveProvider(compareProvider, userId, ChatController.executorFor(tools, plan.serverTools));
+      let result: ChatResult | null = null;
+      if (!resolved) {
+        if (standalone) throw new Error(`Compare provider '${compareProvider}' not available`);
+      } else {
+        const opts: ChatOptions = {
+          message: scene.message,
+          conversation_history: scene.history,
+          client_tools: plan.tools,
+          client_tool_names: plan.tools.map((t) => t.name),
+          user_id: userId,
+        };
+        if (plan.toolChoice !== undefined) opts.tool_choice = plan.toolChoice;
+        if (scene.skillMetadata !== null) opts.skill_metadata = scene.skillMetadata;
+        else if (scene.availableSkills.length > 0) opts.available_skills = scene.availableSkills;
+        if (scene.skillContent !== '') opts.skill_content = scene.skillContent;
+        if (scene.imageAttachments.length) opts.image_attachments = scene.imageAttachments;
+        if (scene.pdfAttachments.length) opts.pdf_attachments = scene.pdfAttachments;
 
-      // Honor the frontend's streaming preference (default true).
-      const useStreaming = body.streaming ?? true;
-      const result: ChatResult = useStreaming ? await impl.streamChat(opts, sink) : await impl.chat(opts);
-
-      sse.send('compare_response', { success: true, text: result.text ?? '', comparer: compareProvider, usage: result.usage ?? null });
+        const sink = new PaneSseSink(sse, COMPARE_EVENT_MAP) as unknown as SSEStream;
+        result = useStreaming ? await resolved.impl.streamChat(opts, sink) : await resolved.impl.chat(opts);
+        sse.send('compare_response', { success: true, text: result.text ?? '', comparer: compareProvider, usage: result.usage ?? null });
+      }
       sse.send('compare_complete', { status: 'done' });
+      return result;
     } catch (e: any) {
-      if (e?.message === 'CLIENT_ABORTED') return;
+      if (e?.message === 'CLIENT_ABORTED') {
+        if (standalone) return null;
+        throw e;
+      }
       const raw = e?.message ?? 'Unknown error';
+      console.error((standalone ? '[ChatController::compareOnly] Error: ' : 'Compare error: ') + raw);
       try {
         sse.send('compare_error', { message: this.humanizeProviderError(raw) });
         sse.send('compare_complete', { status: 'error' });
       } catch {
         /* connection gone */
       }
+      return null;
     }
   }
 }
