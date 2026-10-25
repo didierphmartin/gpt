@@ -95,7 +95,11 @@ foreach (array_slice($argv, 1) as $path) {
             new FixtureWorkflowRepo($fx['workflow']),
             new FixtureGraphRepo($fx['graph'], $fx['code_components'] ?? []),
             new FixtureAgentRepo($fx['agents'] ?? []),
-            $skillsRoot
+            $skillsRoot,
+            // A Start document is copied from storage/synergyaichatroot/<user folder>/ (no universalFS adapter).
+            isset($fx['document_store'])
+                ? new \AgentTeam\Services\StartDocumentStore((string) $fx['document_store']['user_folder'], null, __DIR__ . '/storage')
+                : null
         );
         try {
             $results[$mode] = $gen->generate((int) $fx['workflow']['id'], (string) ($fx['user_id'] ?? '3'),

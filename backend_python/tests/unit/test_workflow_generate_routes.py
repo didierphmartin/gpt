@@ -21,6 +21,7 @@ import pytest
 from starlette.datastructures import Headers
 
 from app.agent_team.controllers.workflow_controller import WorkflowController
+from app.agent_team.services.start_document_store import StartDocumentStore
 from app.support.http import Ctx
 
 CFG = {'auth': {'jwt_secret': 'S'}, 'database': {}, 'contexts_database': {}}
@@ -77,8 +78,9 @@ class FakeGenerator:
 
     last_instance = None
 
-    def __init__(self, db, workflowRepo, graphRepo, agentRepo):
+    def __init__(self, db, workflowRepo, graphRepo, agentRepo, skillsRoot=None, startDocuments=None):
         self.ctor_args = (db, workflowRepo, graphRepo, agentRepo)
+        self.extra_args = (skillsRoot, startDocuments)
         self.generate_calls = []
         self.result = {'filename': 'wf.py', 'code': 'print("hi")\n'}
         self.raise_ = None
@@ -141,7 +143,11 @@ def test_default_mode_returns_json_data(monkeypatch, method, cls_name, has_a2a):
     gen = FakeGenerator.last_instance
     assert gen.ctor_args == (c.db, c.workflowRepository, c.graphRepository, gen.ctor_args[3])
     if has_a2a:
-        assert gen.generate_calls == [(42, '3', {'a2a': False})]
+        assert gen.generate_calls == [(42, '3', {'a2a': False, 'modular': False})]
+        # LangGraph: no skills root (the default), and the requesting user's Start document store.
+        assert gen.extra_args[0] is None
+        assert isinstance(gen.extra_args[1], StartDocumentStore)
+        assert gen.extra_args[1].userFolder == 'user_3'
     else:
         assert gen.generate_calls == [(42, '3', None)]
 
@@ -177,8 +183,8 @@ def test_generate_python_a2a_mode_returns_root_and_files(monkeypatch):
     # Pre-seed the result the fake will return for this call.
     orig_init = FakeGenerator.__init__
 
-    def init_with_a2a_result(self, db, wr, gr, ar):
-        orig_init(self, db, wr, gr, ar)
+    def init_with_a2a_result(self, *args):
+        orig_init(self, *args)
         self.result = {'root': 'wf_42', 'files': [{'path': 'agent.py', 'code': 'x'}]}
 
     monkeypatch.setattr(FakeGenerator, '__init__', init_with_a2a_result)
@@ -188,7 +194,7 @@ def test_generate_python_a2a_mode_returns_root_and_files(monkeypatch):
         'data': {'root': 'wf_42', 'files': [{'path': 'agent.py', 'code': 'x'}]},
         'status_code': 200,
     }
-    assert FakeGenerator.last_instance.generate_calls == [(42, '3', {'a2a': True})]
+    assert FakeGenerator.last_instance.generate_calls == [(42, '3', {'a2a': True, 'modular': False})]
 
 
 def test_generate_python_a2a_ignores_download(monkeypatch):
@@ -199,8 +205,8 @@ def test_generate_python_a2a_ignores_download(monkeypatch):
     c = controller()
     orig_init = FakeGenerator.__init__
 
-    def init_with_a2a_result(self, db, wr, gr, ar):
-        orig_init(self, db, wr, gr, ar)
+    def init_with_a2a_result(self, *args):
+        orig_init(self, *args)
         self.result = {'root': 'wf_42', 'files': []}
 
     monkeypatch.setattr(FakeGenerator, '__init__', init_with_a2a_result)
@@ -216,11 +222,81 @@ def test_generate_python_a2a_ignores_download(monkeypatch):
 @pytest.mark.parametrize('method,cls_name,has_a2a', GENERATORS)
 def test_generator_exception_returns_500(monkeypatch, method, cls_name, has_a2a):
     class RaisingGenerator(FakeGenerator):
-        def __init__(self, db, workflowRepo, graphRepo, agentRepo):
-            super().__init__(db, workflowRepo, graphRepo, agentRepo)
+        def __init__(self, *args):
+            super().__init__(*args)
             self.raise_ = RuntimeError('boom')
 
     monkeypatch.setattr(f'app.agent_team.controllers.workflow_controller.{cls_name}', RaisingGenerator)
     c = controller()
     r = getattr(c, method)(ctx(), id=42)
     assert r == {'success': False, 'error': 'boom', 'status_code': 500}
+
+
+# ============================================================================
+# generatePython-only: ?modular=1 (a package manifest) and ?format=zip (Export)
+# ============================================================================
+
+def _with_result(monkeypatch, result):
+    monkeypatch.setattr('app.agent_team.controllers.workflow_controller.LangGraphGenerator', FakeGenerator)
+    orig_init = FakeGenerator.__init__
+
+    def init(self, *args):
+        orig_init(self, *args)
+        self.result = result
+
+    monkeypatch.setattr(FakeGenerator, '__init__', init)
+
+
+def test_generate_python_modular_mode_returns_the_package_manifest(monkeypatch):
+    package = {'root': 'wf_modular', 'files': [{'path': 'workflow.py', 'code': 'x'}], 'architecture': '# doc\n'}
+    _with_result(monkeypatch, package)
+    r = controller().generatePython(ctx(query={'modular': '1', 'download': '1'}), id=42)
+    assert r == {'success': True, 'data': package, 'status_code': 200}
+    assert FakeGenerator.last_instance.generate_calls == [(42, '3', {'a2a': False, 'modular': True})]
+
+
+def test_generate_python_a2a_wins_over_modular(monkeypatch):
+    _with_result(monkeypatch, {'root': 'wf_a2a', 'files': []})
+    controller().generatePython(ctx(query={'modular': '1', 'a2a': '1'}), id=42)
+    assert FakeGenerator.last_instance.generate_calls == [(42, '3', {'a2a': True, 'modular': False})]
+
+
+def _zip_entries(body: bytes) -> dict:
+    import io
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(body)) as zf:
+        return {n: zf.read(n) for n in zf.namelist()}
+
+
+def test_generate_python_zip_of_a_single_file_holds_the_script_and_its_architecture(monkeypatch):
+    _with_result(monkeypatch, {'filename': 'dispatcher_demo_langgraph.py', 'code': 'print(1)\n', 'architecture': '# A\n'})
+    r = controller().generatePython(ctx(query={'format': 'zip', 'download': '1'}), id=42)
+    assert r['status_code'] == 200 and r['success'] is True
+    assert r['headers']['Content-Type'] == 'application/zip'
+    assert r['headers']['Content-Disposition'] == 'attachment; filename="dispatcher_demo_single.zip"'
+    assert r['headers']['Content-Length'] == str(len(r['raw_body']))
+    assert _zip_entries(r['raw_body']) == {
+        'dispatcher_demo_langgraph/dispatcher_demo_langgraph.py': b'print(1)\n',
+        'dispatcher_demo_langgraph/ARCHITECTURE.md': b'# A\n',
+    }
+
+
+def test_generate_python_zip_of_a_package_decodes_binary_files(monkeypatch):
+    import base64
+    _with_result(monkeypatch, {'root': 'support_swarm_modular_swarm', 'files': [
+        {'path': 'workflow.py', 'code': 'w'},
+        {'path': 'skills/x/icon.png', 'code': base64.b64encode(b'\x89PNG\x00').decode(), 'encoding': 'base64'},
+    ]})
+    r = controller().generatePython(ctx(query={'format': 'zip', 'modular': '1'}), id=42)
+    assert r['headers']['Content-Disposition'] == 'attachment; filename="support_swarm_modular.zip"'
+    assert _zip_entries(r['raw_body']) == {
+        'support_swarm_modular_swarm/workflow.py': b'w',
+        'support_swarm_modular_swarm/skills/x/icon.png': b'\x89PNG\x00',
+    }
+
+
+def test_generate_python_zip_without_architecture_holds_the_script_only(monkeypatch):
+    _with_result(monkeypatch, {'filename': 'ingest_langgraph.py', 'code': 'x', 'architecture': None})
+    r = controller().generatePython(ctx(query={'format': 'zip', 'a2a': '1'}), id=42)
+    assert r['headers']['Content-Disposition'] == 'attachment; filename="ingest_a2a.zip"'
+    assert list(_zip_entries(r['raw_body'])) == ['ingest_langgraph/ingest_langgraph.py']

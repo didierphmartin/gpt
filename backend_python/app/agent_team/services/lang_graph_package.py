@@ -16,6 +16,7 @@ import re
 from app.agent_team.services.code_node_emit import CodeNodeEmit
 from app.agent_team.services.lang_graph_runtime import CODE_HARNESS_PATH
 from app.agent_team.services.python_emit_helpers import PythonEmitHelpers
+from app.agent_team.services.start_document_store import StartDocumentStore
 
 
 def _unique(items: list) -> list:
@@ -24,17 +25,6 @@ def _unique(items: list) -> list:
         if x not in out:
             out.append(x)
     return out
-
-
-def _safe_segments(path: str) -> list | None:
-    """StartDocumentStore::safeSegments(): plain "/"-separated segments, none empty, "." or "..", no "\\"."""
-    if path == '' or '\\' in path or '\0' in path:
-        return None
-    segs = path.split('/')
-    for s in segs:
-        if s in ('', '.', '..'):
-            return None
-    return segs
 
 
 class LangGraphPackage:
@@ -136,7 +126,7 @@ class LangGraphPackage:
         for d in cls.skillDirs(facts):
             # dir_name comes from the client-saved node config: plain segments, none starting with ".",
             # resolved inside the root.
-            segments = _safe_segments(d)
+            segments = StartDocumentStore.safeSegments(d)
             safe = segments is not None and not [s for s in segments if s.startswith('.')]
             cand = os.path.join(root, d) if (safe and root is not None) else None
             base = os.path.realpath(cand) if cand is not None and os.path.exists(cand) else None

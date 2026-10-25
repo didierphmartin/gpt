@@ -14,6 +14,7 @@ from pathlib import Path
 from app.agent_team.models.agent import Agent
 from app.agent_team.models.workflow import Workflow
 from app.agent_team.services.lang_graph_generator import LangGraphGenerator
+from app.agent_team.services.start_document_store import StartDocumentStore
 from app.agent_team.services.start_option_graph import StartOptionGraph
 from tests.unit.playbook.conftest import SqliteDb
 
@@ -76,6 +77,9 @@ def generator(fx: dict) -> LangGraphGenerator:
         FixtureGraphRepo(fx['graph'], fx.get('code_components') or {}),
         FixtureAgentRepo(fx.get('agents') or {}),
         SKILLS_ROOT,
+        # A Start document is copied from storage/synergyaichatroot/<user folder>/ (no universalFS adapter).
+        StartDocumentStore(str(fx['document_store']['user_folder']), None, str(FIXTURES / 'storage'))
+        if 'document_store' in fx else None,
     )
 
 

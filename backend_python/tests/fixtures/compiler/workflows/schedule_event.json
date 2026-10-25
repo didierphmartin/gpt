@@ -1,5 +1,5 @@
 {
- "description": "A cron schedule row and an event-trigger row (DEFAULT_CRON, DEFAULT_WATCH), an agent using the trigger's server, Start documents",
+ "description": "A cron schedule row and an event-trigger row (DEFAULT_CRON, DEFAULT_WATCH), an agent using the trigger's server, Start documents; Start documents copied from the user's storage (binary, a name clash, local / absolute / escaping paths left as they are)",
  "workflow": {
   "id": 54,
   "name": "Scheduled digest",
@@ -22,8 +22,28 @@
       {
        "name": "notes.pdf",
        "path": "docs/notes.pdf",
-       "fullPath": "/a/notes.pdf"
-      }
+       "fullPath": "/a/notes.pdf",
+       "localUri": "file:///a/notes.pdf",
+       "storage": "remote"
+      },
+      {
+       "name": "brief.txt",
+       "path": "docs/brief.txt"
+      },
+      {
+       "name": "brief.txt",
+       "path": "other/brief.txt"
+      },
+      {
+       "name": "mine.txt",
+       "path": "docs/brief.txt",
+       "storage": "local"
+      },
+      {
+       "name": "escape",
+       "path": "docs/../../user_4/x.txt"
+      },
+      "just a string"
      ]
     }
    },
@@ -74,5 +94,8 @@
   "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('claude', 'claude-sonnet-4-5', 1)",
   "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('deepseek', 'deepseek-v4-flash', 1)",
   "INSERT INTO system_llm_settings (provider_key, model, enabled) VALUES ('gemini', 'gemini-2.5-pro', 1)"
- ]
+ ],
+ "document_store": {
+  "user_folder": "user_3"
+ }
 }
