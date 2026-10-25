@@ -4,6 +4,7 @@ import { config } from '../config/env';
 import { db } from '../db/pools';
 import { DB } from '../db/types';
 import { Ctx, ControllerResult } from '../Support/Http';
+import { requireAdmin } from './RequiresAdmin';
 import { ROUTER_FORMAT, routerRowError } from '../Services/ProviderKinds';
 import { DECISION_PROTOCOLS, decisionProtocolCatalog } from '../Services/DecisionProtocols';
 
@@ -85,25 +86,6 @@ export class SystemSettingsController {
   // getProvidersFromConfig/seedFromConfig therefore return empty sets, matching live PHP.
   private readonly phpConfig: Record<string, any> = {};
 
-  /**
-   * Verify the current user has admin role. Returns an error ControllerResult to short-circuit,
-   * or null when the caller is an admin. Mirrors requireAdmin().
-   */
-  private async requireAdmin(ctx: Ctx): Promise<ControllerResult | null> {
-    const userId = ctx.user_id ?? null;
-
-    if (!userId) {
-      return { success: false, error: 'Authentication required', status_code: 401 };
-    }
-
-    const user = (await sql<{ role: string | null }>`SELECT role FROM users WHERE id = ${userId}`.execute(db)).rows[0];
-
-    if (!user || user.role !== 'admin') {
-      return { success: false, error: 'Admin access required', status_code: 403 };
-    }
-
-    return null;
-  }
 
   /** Mask API key for display (first 4 + *** + last 4; '***' when missing or < 12 chars). */
   private maskApiKey(apiKey: string | null): string {
@@ -127,7 +109,7 @@ export class SystemSettingsController {
 
   /** GET /api/v1/admin/llm-settings — all providers (DB, falling back to config when empty). */
   async getLLMProviders(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
 
     try {
@@ -328,7 +310,7 @@ export class SystemSettingsController {
 
   /** GET /api/v1/admin/llm-settings/:key — single provider by key. Mirrors getLLMProvider(). */
   async getLLMProvider(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
 
     const providerKey = ctx.params?.key ?? null;
@@ -370,7 +352,7 @@ export class SystemSettingsController {
 
   /** POST/PUT /api/v1/admin/llm-settings — create or update a provider. Mirrors saveLLMProvider(). */
   async saveLLMProvider(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
 
     const body: Record<string, any> = ctx.body ?? {};
@@ -522,14 +504,14 @@ export class SystemSettingsController {
 
   /** GET /api/v1/admin/decision-protocols: the protocols a decision provider row may name. */
   async decisionProtocols(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
     return { success: true, protocols: decisionProtocolCatalog(), status_code: 200 };
   }
 
   /** DELETE /api/v1/admin/llm-settings/:key. Mirrors deleteLLMProvider(). */
   async deleteLLMProvider(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
 
     const providerKey = ctx.params?.key ?? null;
@@ -556,7 +538,7 @@ export class SystemSettingsController {
 
   /** POST /api/v1/admin/llm-settings/seed — seed DB from config. Mirrors seedFromConfig(). */
   async seedFromConfig(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
 
     try {
@@ -644,7 +626,7 @@ export class SystemSettingsController {
 
   /** POST /api/v1/admin/llm-settings/toggle — toggle enabled status. Mirrors toggleProvider(). */
   async toggleProvider(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
 
     const body: Record<string, any> = ctx.body ?? {};

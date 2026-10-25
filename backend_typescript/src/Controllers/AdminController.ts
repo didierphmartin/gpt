@@ -7,6 +7,7 @@ import { Ctx, ControllerResult } from '../Support/Http';
 import { PackageResolver } from '../Services/PackageResolver';
 import { RoleStore } from '../Services/RoleStore';
 import { RobotAccount } from '../Services/RobotAccount';
+import { requireAdmin } from './RequiresAdmin';
 
 /**
  * Mirrors src/Controllers/AdminController.php — the admin dashboard's user management over the
@@ -14,9 +15,10 @@ import { RobotAccount } from '../Services/RobotAccount';
  * createUser, updateUser, deleteUser).
  *
  * Faithful-divergence notes:
- *  - GATING: AdminController.php has NO admin-role check (no requireAdmin). These endpoints are
- *    gated by AUTHENTICATION ONLY (the global auth middleware populates ctx.user_id). We therefore
- *    do NOT add a role === 'admin' check — that would diverge from PHP.
+ *  - GATING: every endpoint starts with the shared requireAdmin() guard (./RequiresAdmin, the twin
+ *    of PHP's RequiresAdmin trait): 401 'Authentication required' without a user, 403 'Admin access
+ *    required' unless users.role is 'admin', re-read from the database on each request. The JWT
+ *    carries only `sub`, so the auth middleware alone let any signed-in user reach these routes.
  *  - Runtime existence checks: getUserAccount replicates PHP's `SHOW TABLES LIKE
  *    'llm_usage_transactions'` guard (so a missing usage table yields tokens 0/0), but no DDL is
  *    created.
@@ -218,7 +220,10 @@ function nameOrUnknown(first: any, last: any): string {
 
 export class AdminController {
   /** GET /api/v1/admin/users — list all users. Mirrors listUsers(). */
-  async listUsers(_ctx: Ctx): Promise<ControllerResult> {
+  async listUsers(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const users = (
       await sql<any>`SELECT id, email, first_name, last_name, role, provider, plan, app_key_prefix, app_key_created_at, created_at, updated_at FROM users WHERE kind <> 'service' ORDER BY id`.execute(
         db
@@ -234,6 +239,9 @@ export class AdminController {
 
   /** GET /api/v1/admin/users/:id — single user by ID. Mirrors getUser(). */
   async getUser(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const userId = phpIntVal(ctx.params?.id ?? 0);
 
     if (userId <= 0) {
@@ -255,6 +263,9 @@ export class AdminController {
 
   /** GET /api/v1/admin/users/:id/account — account info (plan, role, token usage). Mirrors getUserAccount(). */
   async getUserAccount(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const userId = phpIntVal(ctx.params?.id ?? 0);
 
     if (userId <= 0) {
@@ -327,6 +338,9 @@ export class AdminController {
 
   /** POST /api/v1/admin/users — create a new user. Mirrors createUser(). */
   async createUser(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const input = ctx.body ?? {};
 
     const firstName = phpTrim(input.first_name ?? '');
@@ -367,6 +381,9 @@ export class AdminController {
 
   /** POST /api/v1/admin/users/update — update a user. Mirrors updateUser(). */
   async updateUser(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const input = ctx.body ?? {};
 
     const userId = phpIntVal(input.user_id ?? 0);
@@ -419,6 +436,9 @@ export class AdminController {
 
   /** DELETE /api/v1/admin/users/:id — delete a user. Mirrors deleteUser(). */
   async deleteUser(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const userId = phpIntVal(ctx.params?.id ?? 0);
 
     if (userId <= 0) {
@@ -457,6 +477,9 @@ export class AdminController {
    * Mirrors getProviderSettings(). Skips the runtime DDL (ensure*TableExists) per port policy.
    */
   async getProviderSettings(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const userId = phpIntVal(ctx.params?.id ?? 0);
 
     if (userId <= 0) {
@@ -518,6 +541,9 @@ export class AdminController {
 
   /** POST /api/v1/admin/providers — save a provider for a user. Mirrors saveProvider(). */
   async saveProvider(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const input = ctx.body ?? {};
 
     const userId = phpIntVal(input.user_id ?? 0);
@@ -591,6 +617,9 @@ export class AdminController {
 
   /** POST /api/v1/admin/providers/category-toggle — enable/disable a whole category. Mirrors toggleCategoryEnabled(). */
   async toggleCategoryEnabled(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const input = ctx.body ?? {};
 
     const userId = phpIntVal(input.user_id ?? 0);
@@ -634,6 +663,9 @@ export class AdminController {
 
   /** POST /api/v1/admin/providers/toggle — enable/disable a single provider. Mirrors toggleProviderEnabled(). */
   async toggleProviderEnabled(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const input = ctx.body ?? {};
 
     const userId = phpIntVal(input.user_id ?? 0);
@@ -683,6 +715,9 @@ export class AdminController {
 
   /** DELETE /api/v1/admin/providers — delete a provider for a user. Mirrors deleteProvider(). */
   async deleteProvider(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const input = ctx.body ?? {};
 
     const userId = phpIntVal(input.user_id ?? 0);
@@ -723,6 +758,9 @@ export class AdminController {
    * (no decrypt — this table stores them raw); masked_key = '****' + last 4.
    */
   async getApiKeys(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const userId = phpIntVal(ctx.params?.id ?? 0);
 
     if (userId <= 0) {
@@ -840,6 +878,9 @@ export class AdminController {
    * a brand-new row can't be inserted without an api_key (NOT NULL column) so we SELECT 1 and skip.
    */
   async saveApiKeys(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const input = ctx.body ?? {};
 
     const userId = phpIntVal(input.user_id ?? 0);
@@ -958,6 +999,9 @@ export class AdminController {
 
   /** POST /api/v1/admin/keys/delete — delete one LLM API key for a user. Mirrors deleteApiKey(). */
   async deleteApiKey(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const input = ctx.body ?? {};
 
     const userId = phpIntVal(input.user_id ?? 0);
@@ -993,6 +1037,9 @@ export class AdminController {
    * getUserMCPServers().
    */
   async getUserMCPServers(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const userId = phpIntVal(ctx.params?.id ?? 0);
 
     try {
@@ -1070,6 +1117,9 @@ export class AdminController {
    * for one MCP server. Mirrors setUserMCPOverride().
    */
   async setUserMCPOverride(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const userId = phpIntVal(ctx.params?.id ?? 0);
     const serverId = phpIntVal(ctx.params?.serverId ?? 0);
 
@@ -1114,6 +1164,9 @@ export class AdminController {
    * reverting to the package default. Mirrors clearUserMCPOverride().
    */
   async clearUserMCPOverride(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const userId = phpIntVal(ctx.params?.id ?? 0);
     const serverId = phpIntVal(ctx.params?.serverId ?? 0);
 
@@ -1198,6 +1251,9 @@ export class AdminController {
    * per-server tool_count and a resolved user_email. Mirrors listMCPServers().
    */
   async listMCPServers(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     try {
       await this.ensureMCPSchema();
 
@@ -1303,6 +1359,9 @@ export class AdminController {
    * then best-effort fetches its tools. Mirrors createMCPServer().
    */
   async createMCPServer(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     try {
       await this.ensureMCPSchema();
 
@@ -1380,6 +1439,9 @@ export class AdminController {
    * changed. Mirrors updateMCPServer().
    */
   async updateMCPServer(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     try {
       const input = ctx.body ?? {};
 
@@ -1451,6 +1513,9 @@ export class AdminController {
    * POST /api/v1/admin/mcp/servers/toggle — enable/disable an MCP server. Mirrors toggleMCPServer().
    */
   async toggleMCPServer(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     try {
       const input = ctx.body ?? {};
 
@@ -1484,6 +1549,9 @@ export class AdminController {
    * deleteMCPServer().
    */
   async deleteMCPServer(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const serverId = phpIntVal(ctx.params?.id ?? 0);
     try {
       if (!serverId) {
@@ -1515,6 +1583,9 @@ export class AdminController {
    * refreshMCPServerTools().
    */
   async refreshMCPServerTools(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     try {
       const input = ctx.body ?? {};
       const serverId = phpIntVal(input.server_id ?? 0);
@@ -1766,6 +1837,9 @@ export class AdminController {
 
   /** GET /api/v1/admin/users/:id/costs — per-user usage costs breakdown (last 30 days). Mirrors getUserCosts(). */
   async getUserCosts(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const userId = phpIntVal(ctx.params?.id ?? 0);
 
     if (userId <= 0) {
@@ -1948,6 +2022,9 @@ export class AdminController {
 
   /** GET /api/v1/admin/usage/stats — overall + by-provider + daily-trend usage. Mirrors getUsageStats(). */
   async getUsageStats(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     try {
       const q = ctx.query ?? {};
       const period = (q.period as any) ?? 'month';
@@ -2053,6 +2130,9 @@ export class AdminController {
 
   /** GET /api/v1/admin/usage/by-user — usage breakdown by user (paginated). Mirrors getUsageByUser(). */
   async getUsageByUser(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     try {
       const q = ctx.query ?? {};
       const period = (q.period as any) ?? 'month';
@@ -2125,6 +2205,9 @@ export class AdminController {
 
   /** GET /api/v1/admin/usage/users/:id — detailed usage for one user. Mirrors getUserUsageDetail(). */
   async getUserUsageDetail(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     const userId = phpIntVal(ctx.params?.id ?? 0);
     try {
       const q = ctx.query ?? {};
@@ -2241,6 +2324,9 @@ export class AdminController {
 
   /** GET /api/v1/admin/usage/transactions — filtered transaction list (admin view). Mirrors getUsageTransactions(). */
   async getUsageTransactions(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     try {
       const q = ctx.query ?? {};
       const provider = (q.provider as any) ?? null;
@@ -2333,6 +2419,9 @@ export class AdminController {
 
   /** GET /api/v1/admin/usage/tools — tool/MCP usage statistics. Mirrors getToolStats(). */
   async getToolStats(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     try {
       const q = ctx.query ?? {};
       const period = (q.period as any) ?? 'month';
@@ -2533,7 +2622,10 @@ export class AdminController {
   }
 
   /** GET /api/v1/admin/costs — stored provider pricing + usage costs breakdown (all users). Mirrors getCosts(). */
-  async getCosts(_ctx: Ctx): Promise<ControllerResult> {
+  async getCosts(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     try {
       // PHP ensureCostsTableExists() (CREATE TABLE IF NOT EXISTS) is skipped per DDL policy; the
       // SHOW TABLES guard yields the same effective empty-shape (→ getDefaultCosts) when absent.
@@ -2584,7 +2676,10 @@ export class AdminController {
   }
 
   /** GET /api/v1/admin/exchange-rates — stored USD→X exchange rates. Mirrors getExchangeRates(). */
-  async getExchangeRates(_ctx: Ctx): Promise<ControllerResult> {
+  async getExchangeRates(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     try {
       // PHP ensureExchangeRatesTableExists() DDL is skipped; SHOW TABLES guard yields the default
       // rate set when the table is absent (same effective shape as the post-create empty query).
@@ -2625,7 +2720,10 @@ export class AdminController {
    * Iterates the default catalog (llm/voice/avatar); per-provider failures accumulate into errors[]
    * as "{provider}: {message}". Returns the reloaded stored costs. AUTHENTICATION-ONLY gating.
    */
-  async refreshAllCosts(_ctx: Ctx): Promise<ControllerResult> {
+  async refreshAllCosts(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     try {
       // PHP ensureCostsTableExists() (CREATE TABLE IF NOT EXISTS) is skipped per DDL policy; the
       // reload SELECT below is guarded by SHOW TABLES like getCosts().
@@ -2698,6 +2796,9 @@ export class AdminController {
    * requires provider (400 'Provider is required'), then 404 'Provider not found' if not in defaults.
    */
   async refreshProviderCosts(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     try {
       const input = ctx.body ?? {};
       const category = input.category ?? '';
@@ -2776,7 +2877,10 @@ export class AdminController {
    * back to hardcoded defaults), so the 'Failed to fetch exchange rates' branch is effectively
    * unreachable — kept for fidelity with the PHP source.
    */
-  async refreshExchangeRates(_ctx: Ctx): Promise<ControllerResult> {
+  async refreshExchangeRates(ctx: Ctx): Promise<ControllerResult> {
+    const denied = await requireAdmin(ctx);
+    if (denied) return denied;
+
     try {
       // PHP ensureExchangeRatesTableExists() DDL skipped per policy.
 

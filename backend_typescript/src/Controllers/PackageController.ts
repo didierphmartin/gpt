@@ -1,6 +1,7 @@
 import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { Ctx, ControllerResult } from '../Support/Http';
+import { requireAdmin } from './RequiresAdmin';
 import { PackageResolver, ResolvedPackage } from '../Services/PackageResolver';
 import { Role, RoleStore } from '../Services/RoleStore';
 
@@ -22,7 +23,7 @@ export class PackageController {
 
   /** GET /api/v1/admin/packages — every package (admin only), each with its role's name and builtin flag. */
   async adminList(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
     const resolver = new PackageResolver();
     const packages = [];
@@ -34,7 +35,7 @@ export class PackageController {
 
   /** GET /api/v1/admin/packages/:role — a single package (admin only). */
   async adminGet(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
     const role = String(ctx.params.role ?? '');
     const row = await new RoleStore().get(role);
@@ -46,7 +47,7 @@ export class PackageController {
 
   /** PUT /api/v1/admin/packages/:role — replace a package's capabilities (admin only). */
   async adminUpdate(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
     const role = String(ctx.params.role ?? '');
     if (!(await new RoleStore().exists(role))) {
@@ -103,19 +104,6 @@ export class PackageController {
     }
     if ('quota_tokens' in caps && caps.quota_tokens !== null && !Number.isInteger(caps.quota_tokens)) {
       return 'capabilities.quota_tokens must be null or an integer';
-    }
-    return null;
-  }
-
-  /** Mirrors PackageController.php requireAdmin: 401 if unauthenticated, 403 if not role=admin. */
-  private async requireAdmin(ctx: Ctx): Promise<ControllerResult | null> {
-    const userId = ctx.user_id ?? null;
-    if (!userId) {
-      return { success: false, error: 'Authentication required', status_code: 401 };
-    }
-    const row = (await sql<{ role: string | null }>`SELECT role FROM users WHERE id = ${userId} LIMIT 1`.execute(db)).rows[0];
-    if (!row || (row.role ?? '') !== 'admin') {
-      return { success: false, error: 'Admin access required', status_code: 403 };
     }
     return null;
   }

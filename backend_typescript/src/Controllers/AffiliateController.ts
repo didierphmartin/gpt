@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { Ctx, ControllerResult } from '../Support/Http';
+import { requireAdmin } from './RequiresAdmin';
 import { AffiliateRepository } from '../Services/AffiliateRepository';
 import { AffiliateCommission } from '../Services/AffiliateCommission';
 import { AffiliateSupport } from '../Services/AffiliateSupport';
@@ -90,13 +91,13 @@ export class AffiliateController {
   // ===== Admin: affiliates ==============================================
 
   async adminList(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
     return { success: true, affiliates: await this.repo.listAffiliates() };
   }
 
   async adminGet(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
     const id = Number(ctx.params.id);
     const affiliate = await this.repo.findAffiliate(id);
@@ -109,7 +110,7 @@ export class AffiliateController {
   }
 
   async adminCreate(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
     const body = ctx.body ?? {};
     const name = phpTrim(body['name'] ?? '');
@@ -180,7 +181,7 @@ export class AffiliateController {
   }
 
   async adminDelete(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
     const id = Number(ctx.params.id);
     const affiliate = await this.repo.findAffiliate(id);
@@ -207,7 +208,7 @@ export class AffiliateController {
   // ===== Admin: accounts ================================================
 
   async adminAddAccount(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
     const id = Number(ctx.params.id);
     if (!(await this.repo.findAffiliate(id))) return this.notFound('Affiliate');
@@ -222,7 +223,7 @@ export class AffiliateController {
   }
 
   async adminUpdateAccount(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
     const id = Number(ctx.params.id);
     const productId = Number(ctx.params.productId);
@@ -236,7 +237,7 @@ export class AffiliateController {
   }
 
   async adminDeleteAccount(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
     const id = Number(ctx.params.id);
     const productId = Number(ctx.params.productId);
@@ -247,7 +248,7 @@ export class AffiliateController {
   // ===== Admin: transactions ============================================
 
   async adminTransactions(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
     const id = Number(ctx.params.id);
     if (!(await this.repo.findAffiliate(id))) return this.notFound('Affiliate');
@@ -255,7 +256,7 @@ export class AffiliateController {
   }
 
   async adminMarkPaid(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
     const id = Number(ctx.params.id);
     const saleId = Number(ctx.params.saleId);
@@ -266,13 +267,13 @@ export class AffiliateController {
   // ===== Admin: products ================================================
 
   async adminListProducts(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
     return { success: true, products: await this.repo.listProducts() };
   }
 
   async adminCreateProduct(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
     const p = this.validateProduct(ctx.body ?? {});
     if ((p as any).error !== undefined) return p as ControllerResult;
@@ -281,7 +282,7 @@ export class AffiliateController {
   }
 
   async adminUpdateProduct(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
     const id = Number(ctx.params.id);
     if (!(await this.repo.findProduct(id))) return this.notFound('Product');
@@ -292,7 +293,7 @@ export class AffiliateController {
   }
 
   async adminDeleteProduct(ctx: Ctx): Promise<ControllerResult> {
-    const err = await this.requireAdmin(ctx);
+    const err = await requireAdmin(ctx);
     if (err) return err;
     const id = Number(ctx.params.id);
     await this.repo.deleteProduct(id);
@@ -448,18 +449,6 @@ export class AffiliateController {
       currency: phpElvisStr(phpStrtoupper(phpTrim(body['currency'] ?? 'USD')), 'USD'),
       active: !phpEmpty(body['active']) ? 1 : 0,
     };
-  }
-
-  private async requireAdmin(ctx: Ctx): Promise<ControllerResult | null> {
-    const userId = ctx.user_id ?? null;
-    if (!userId) return { success: false, error: 'Authentication required', status_code: 401 };
-    const user = (
-      await sql<any>`SELECT role FROM users WHERE id = ${userId} LIMIT 1`.execute(db)
-    ).rows[0];
-    if (!user || (user['role'] ?? '') !== 'admin') {
-      return { success: false, error: 'Admin access required', status_code: 403 };
-    }
-    return null;
   }
 
   /** Returns the affiliate row for the authenticated user, or an error array. */
