@@ -91,14 +91,14 @@ def test_execute_unknown_tool_returns_404_with_available_functions():
     assert 'get_user_watchlist' in r['availableFunctions']
 
 
-def test_execute_routes_to_watchlist_function_with_userid_from_body():
+def test_execute_routes_to_watchlist_function_with_the_authenticated_userid():
     db = Db([[{'id': 1, 'asset_id': 5, 'name': 'Apple', 'symbol': 'AAPL', 'type': 'stock', 'exchange': 'NASDAQ', 'currency': 'USD'}]])
     ctl = HumeToolController(db, CFG_NO_HUME_KEY)
-    r = ctl.execute(req(body={'toolCallId': 'tc1', 'toolName': 'get_user_watchlist', 'userId': 7}))
+    r = ctl.execute(req(body={'toolCallId': 'tc1', 'toolName': 'get_user_watchlist', 'userId': 9}, user_id=7))
     assert r['success'] is True and r['status_code'] == 200
     assert r['toolCallId'] == 'tc1' and r['toolName'] == 'get_user_watchlist'
     assert r['result']['success'] is True and r['result']['count'] == 1
-    # SQL executed with the userId taken from the body ("userId" ?? request user_id ?? 'demo-user')
+    # SQL executed with the authenticated user id; the body userId (9) is ignored
     sql, params = db.calls[0]
     assert params == [7]
     # content is json_encode($result, JSON_PRETTY_PRINT) -- a pretty string, escaped, matching result
@@ -117,12 +117,9 @@ def test_execute_userid_falls_back_to_request_user_id_then_demo_user():
     assert db2.calls[0][1] == ['demo-user']
 
 
-def test_execute_input_useridzero_is_falsy_like_php_null_coalesce():
-    # PHP `$input['userId'] ?? $request['user_id'] ?? 'demo-user'` only skips on
-    # isset()==false (missing/null) -- a present-but-falsy 0 IS used, unlike
-    # the toolCallId/toolName guard above which uses `!` (empty()). Probed with
-    # a stub function (rather than get_user_watchlist) because WatchlistFunctions
-    # itself treats userId=0 as falsy and short-circuits before any query.
+def test_execute_ignores_a_body_userid():
+    # PHP `$request['user_id'] ?? 'demo-user'`: a body userId never names the
+    # user, not even a present-but-falsy 0. Probed with a stub function.
     ctl = HumeToolController(Db(), CFG_NO_HUME_KEY)
     seen = {}
 
@@ -132,7 +129,7 @@ def test_execute_input_useridzero_is_falsy_like_php_null_coalesce():
 
     ctl.toolsManager.registerFunction('probe_tool', probe, {'description': 'd', 'input_schema': {'type': 'object', 'properties': {}, 'required': []}})
     ctl.execute(req(body={'toolCallId': 'tc1', 'toolName': 'probe_tool', 'userId': 0}, user_id=99))
-    assert seen['context'] == 0
+    assert seen['context'] == 99
 
 
 # ─── list() ──────────────────────────────────────────────────────────────────

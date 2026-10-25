@@ -55,8 +55,7 @@ class MCPProxyController:
         serverId = None if (rawServerId is None or rawServerId == '') else php_intval(rawServerId)
         serverUrl = input_.get('server_url')
         userId = php_strval(
-            input_['user_id'] if input_.get('user_id') is not None
-            else (request['user_id'] if request.get('user_id') is not None else 'demo-user')
+            request['user_id'] if request.get('user_id') is not None else 'demo-user'
         )
 
         if action == 'proxy':

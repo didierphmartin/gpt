@@ -1052,8 +1052,7 @@ class ChatController:
             error_log("[ChatController] Last history entry: " + dumps(
                 last_entry if not php_empty(last_entry) else 'none'))
 
-        userId = str(input_.get('user_id') if input_.get('user_id') is not None
-                     else (request.get('user_id') if request.get('user_id') is not None else 'demo-user'))
+        userId = str(request.get('user_id') if request.get('user_id') is not None else 'demo-user')
         provider = input_.get('provider')
 
         # Debug: Log the provider being requested
@@ -1221,8 +1220,7 @@ class ChatController:
         provider = input_.get('provider')
         model = str(input_['model']).strip() if input_.get('model') is not None else ''
         system = str(input_['system']) if input_.get('system') is not None else ''
-        userId = str(input_.get('user_id') if input_.get('user_id') is not None
-                     else (request.get('user_id') if request.get('user_id') is not None else 'demo-user'))
+        userId = str(request.get('user_id') if request.get('user_id') is not None else 'demo-user')
 
         if prompt == '':
             return {'success': False, 'error': 'prompt is required', 'status_code': 400}
@@ -1289,8 +1287,7 @@ class ChatController:
         originalMessage = str(input_.get('original_message') if input_.get('original_message') is not None else '').strip()
         responseText = str(input_.get('response_text') if input_.get('response_text') is not None else '').strip()
         verifierProvider = input_.get('verifier_provider')
-        userId = str(input_.get('user_id') if input_.get('user_id') is not None
-                     else (request.get('user_id') if request.get('user_id') is not None else 'demo-user'))
+        userId = str(request.get('user_id') if request.get('user_id') is not None else 'demo-user')
 
         if originalMessage == '' or responseText == '' or php_empty(verifierProvider):
             return {
@@ -1452,8 +1449,7 @@ class ChatController:
             if isinstance(input_.get('conversation_history'), (dict, list)) else []
         )
         compareProvider = input_.get('compare_provider')
-        userId = str(input_.get('user_id') if input_.get('user_id') is not None
-                     else (request.get('user_id') if request.get('user_id') is not None else 'demo-user'))
+        userId = str(request.get('user_id') if request.get('user_id') is not None else 'demo-user')
 
         # Mirror chat()'s skill/attachment context parsing so the comparer
         # gets the SAME inputs the primary does — so it can run the same

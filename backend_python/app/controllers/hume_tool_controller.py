@@ -72,10 +72,8 @@ class HumeToolController:
                     'status_code': 400,
                 }
 
-            # Get user ID from session or input
-            userId = input_.get('userId')
-            if userId is None:
-                userId = request.get('user_id')
+            # The authenticated caller; a body userId is ignored.
+            userId = request.get('user_id')
             if userId is None:
                 userId = 'demo-user'
 

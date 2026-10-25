@@ -70,8 +70,7 @@ class MCPServerController:
         """
         query = request['query'] if request.get('query') is not None else {}
         userId = php_strval(
-            query['user_id'] if query.get('user_id') is not None
-            else (request['user_id'] if request.get('user_id') is not None else '')
+            request['user_id'] if request.get('user_id') is not None else ''
         )
         # The sidebar needs disabled private servers too (to re-enable them);
         # chat-side callers keep the enabled-only default.
@@ -192,8 +191,7 @@ class MCPServerController:
 
         # Verify server is an enabled server owned globally or by the caller
         userId = php_strval(
-            query['user_id'] if query.get('user_id') is not None
-            else (request['user_id'] if request.get('user_id') is not None else '')
+            request['user_id'] if request.get('user_id') is not None else ''
         )
         sql = ("SELECT id, name, user_id FROM mcp_servers WHERE id = ? AND enabled = 1 AND (user_id IS NULL"
                + (" OR user_id = ?" if userId != '' else "") + ")")
@@ -238,10 +236,8 @@ class MCPServerController:
     def getAllTools(self, request) -> dict:
         """Get all tools from all enabled global servers."""
         # Get tools from all enabled servers visible to the caller
-        query = request['query'] if request.get('query') is not None else {}
         userId = php_strval(
-            query['user_id'] if query.get('user_id') is not None
-            else (request['user_id'] if request.get('user_id') is not None else '')
+            request['user_id'] if request.get('user_id') is not None else ''
         )
         sql = ("SELECT t.*, s.name as server_name, s.url as server_url, s.user_id as server_user_id\n"
                "                FROM mcp_server_tools t\n"
@@ -277,8 +273,7 @@ class MCPServerController:
     def create(self, request) -> dict:
         """Add a new MCP server."""
         input_ = request['body']
-        userId = (input_['user_id'] if input_.get('user_id') is not None
-                  else (request['user_id'] if request.get('user_id') is not None else 'demo-user'))
+        userId = request['user_id'] if request.get('user_id') is not None else 'demo-user'
 
         name = php_trim(input_['name'] if input_.get('name') is not None else '')
         url = php_trim(input_['url'] if input_.get('url') is not None else '')
@@ -338,8 +333,7 @@ class MCPServerController:
     def update(self, request) -> dict:
         """Update an existing MCP server."""
         input_ = request['body']
-        userId = (input_['user_id'] if input_.get('user_id') is not None
-                  else (request['user_id'] if request.get('user_id') is not None else 'demo-user'))
+        userId = request['user_id'] if request.get('user_id') is not None else 'demo-user'
 
         serverId = input_['server_id'] if input_.get('server_id') is not None else None
         name = php_trim(input_['name'] if input_.get('name') is not None else '')
@@ -416,8 +410,7 @@ class MCPServerController:
     def toggle(self, request) -> dict:
         """Toggle server enabled/disabled state."""
         input_ = request['body']
-        userId = (input_['user_id'] if input_.get('user_id') is not None
-                  else (request['user_id'] if request.get('user_id') is not None else 'demo-user'))
+        userId = request['user_id'] if request.get('user_id') is not None else 'demo-user'
 
         serverId = input_['server_id'] if input_.get('server_id') is not None else None
         enabled = input_['enabled'] if input_.get('enabled') is not None else True
@@ -443,8 +436,7 @@ class MCPServerController:
         """Delete an MCP server."""
         query = request['query'] if request.get('query') is not None else {}
         serverId = query['server_id'] if query.get('server_id') is not None else None
-        userId = (query['user_id'] if query.get('user_id') is not None
-                  else (request['user_id'] if request.get('user_id') is not None else 'demo-user'))
+        userId = request['user_id'] if request.get('user_id') is not None else 'demo-user'
 
         if php_empty(serverId):
             return {
