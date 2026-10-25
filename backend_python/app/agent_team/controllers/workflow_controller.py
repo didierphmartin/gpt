@@ -40,13 +40,16 @@ from __future__ import annotations
 
 import os
 import re
+import time
 
 from app.agent_team.models.workflow import Workflow
+from app.agent_team.services.active_workflow_service import ActiveWorkflowService
 from app.agent_team.services.adk_generator import ADKGenerator
 from app.agent_team.services.agent_repository import AgentRepository
 from app.agent_team.services.agent_runner import AgentRunner
 from app.agent_team.services.graph_workflow_runner import GraphWorkflowRunner
 from app.agent_team.services.lang_graph_generator import LangGraphGenerator
+from app.agent_team.services.live_feed import LiveFeed, LiveStream
 from app.agent_team.services.maf_generator import MAFGenerator
 from app.agent_team.services.nooa_generator import NOOAGenerator
 from app.agent_team.services.playbook_node_runner import PlaybookNodeRunner
@@ -967,6 +970,49 @@ class WorkflowController:
             return {'success': True, 'data': executions, 'count': len(executions), 'status_code': 200}
         except Exception as e:  # noqa: BLE001
             return {'success': False, 'error': str(e), 'status_code': 500}
+
+    # ========================================================================
+    # GET /api/v1/workflows/{id}/live
+    # ========================================================================
+
+    def live(self, request, id: int = 0):
+        """The live overlay's stream (spec 2026-10-15 live-overlay §3.3): `event: run|state|bye|error` frames
+        (data JSON with unescaped slashes/unicode) and `: ping` comments, for about 50 s. The SSE headers come
+        from main.py's StreamingResponse; returning after the stream started sends no JSON body (PHP's
+        streaming_handled)."""
+        userId = php_intval(request.get('user_id') if request.get('user_id') is not None else 0)
+        params = request.get('params') or {}
+        workflowId = php_intval(params.get('id') if params.get('id') is not None else 0)
+        sse = request['sse']
+
+        def emit(event: str, data) -> None:
+            if event == 'ping':
+                sse.send_raw(b': ping\n\n')
+            else:
+                sse.send(event, data)
+
+        handled = {'streaming_handled': True}
+        if not userId or not workflowId or not self.workflowRepository.canUserAccess(userId, workflowId):
+            emit('error', {'error': 'Workflow not found or access denied' if userId else 'Authentication required'})
+            return handled
+        log = WorkflowRunLog(WorkflowRunLog.defaultDir(self.config))
+        active = ActiveWorkflowService(self.db)
+        query = request.get('query') or {}
+        cursor = php_strval(query['cursor']) if query.get('cursor') is not None else None
+        try:
+            LiveStream.run(
+                lambda c: LiveFeed.next(log, workflowId, c),
+                lambda: active.get(userId),
+                emit,
+                lambda s: time.sleep(s),
+                lambda: time.time(),
+                lambda: sse.aborted,
+                None if cursor == '' else cursor,
+            )
+        except RuntimeError as e:
+            if str(e) != 'CLIENT_ABORTED':   # the client left mid-send: PHP's connection_aborted() ends the loop
+                raise
+        return handled
 
     # ========================================================================
     # GET /api/v1/workflows/runs/{runId}/events

@@ -1,5 +1,6 @@
 """Route table — mirrors backend/src/routes.php (same order, same handler names).
 Rows for controllers not yet ported are added phase by phase."""
+from app.agent_team.controllers.active_workflow_controller import ActiveWorkflowController
 from app.agent_team.controllers.agent_controller import AgentController
 from app.agent_team.controllers.agent_mcp_controller import AgentMCPController
 from app.agent_team.controllers.app_key_controller import AppKeyController
@@ -51,6 +52,7 @@ from app.controllers.webauthn_controller import WebAuthnController
 # PHP-prefixed key 'AgentTeam:<ClassName>' so the registry mirrors routes.php's
 # ['AgentTeam:UserMemoryController', 'show'] handler literals.
 CONTROLLERS = {
+    'AgentTeam:ActiveWorkflowController': ActiveWorkflowController,
     'AgentTeam:AgentController': AgentController,
     'AgentTeam:AgentMCPController': AgentMCPController,
     'AgentTeam:AppKeyController': AppKeyController,
@@ -404,6 +406,7 @@ ROUTES = [
     ('GET', '/api/v1/workflows/{id:\\d+}/generate-maf', ('AgentTeam:WorkflowController', 'generateMaf')),
     ('GET', '/api/v1/workflows/{id:\\d+}/generate-nooa', ('AgentTeam:WorkflowController', 'generateNooa')),
     ('GET', '/api/v1/workflows/{id:\\d+}/executions', ('AgentTeam:WorkflowController', 'executions')),
+    ('GET', '/api/v1/workflows/{id:\\d+}/live', ('AgentTeam:WorkflowController', 'live')),
     ('GET', '/api/v1/workflows/runs/{runId:[a-f0-9]{32}}/events', ('AgentTeam:WorkflowController', 'runEvents')),
     ('POST', '/api/v1/workflows/{id:\\d+}/toggle', ('AgentTeam:WorkflowController', 'toggle')),
     ('POST', '/api/v1/workflows/{id:\\d+}/duplicate', ('AgentTeam:WorkflowController', 'duplicate')),
@@ -471,6 +474,9 @@ ROUTES = [
     ('POST', '/api/v1/schedules/{id:\\d+}/pause', ('AgentTeam:ScheduledWorkflowController', 'pause')),
     ('POST', '/api/v1/schedules/{id:\\d+}/resume', ('AgentTeam:ScheduledWorkflowController', 'resume')),
     ('GET', '/api/v1/workflows/{id:\\d+}/schedules', ('AgentTeam:ScheduledWorkflowController', 'byWorkflow')),
+    ('GET', '/api/v1/workflows/active', ('AgentTeam:ActiveWorkflowController', 'show')),
+    ('POST', '/api/v1/workflows/{id:\\d+}/activate', ('AgentTeam:ActiveWorkflowController', 'activate')),
+    ('DELETE', '/api/v1/workflows/{id:\\d+}/activate', ('AgentTeam:ActiveWorkflowController', 'deactivate')),
     # SCHEDULER (routes.php:464-465. `/scheduler/run` is public — see
     # app/middleware/processor.py PUBLIC_ROUTES.)
     ('POST', '/api/v1/scheduler/run', ('AgentTeam:SchedulerController', 'run')),

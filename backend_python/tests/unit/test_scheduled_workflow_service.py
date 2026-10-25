@@ -17,6 +17,7 @@ full generator script and raw output.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 
 from app.agent_team.services.scheduled_workflow_service import ScheduledWorkflowService
 
@@ -79,14 +80,14 @@ def test_create_inserts_and_returns_found_row():
     assert insert_call[0] == 'insert'
     assert norm(insert_call[1]) == norm(
         "INSERT INTO scheduled_workflows"
-        " (user_id, workflow_id, input_prompt, scheduled_time, status, repeat_type, repeat_interval, next_run, created_at)"
+        " (user_id, workflow_id, input_prompt, scheduled_time, status, repeat_type, repeat_interval, cron, next_run, created_at)"
         " VALUES"
-        " (:user_id, :workflow_id, :input_prompt, :scheduled_time, 'pending', :repeat_type, :repeat_interval, :next_run, NOW())"
+        " (:user_id, :workflow_id, :input_prompt, :scheduled_time, 'pending', :repeat_type, :repeat_interval, :cron, :next_run, NOW())"
     )
     assert insert_call[2] == {
         'user_id': 1, 'workflow_id': 3, 'input_prompt': 'go',
         'scheduled_time': '2026-01-15 10:00:00', 'repeat_type': 'daily',
-        'repeat_interval': 1, 'next_run': '2026-01-15 10:00:00',
+        'repeat_interval': 1, 'cron': None, 'next_run': '2026-01-15 10:00:00',
     }
 
     find_call = db.calls[1]
@@ -239,9 +240,9 @@ def test_find_by_workflow():
 # getDueSchedules
 # ---------------------------------------------------------------------------
 
-def test_get_due_schedules_predicate_and_no_params():
+def test_get_due_schedules_predicate_and_params():
     db = FakeDb(all_=[[SCHEDULE_ROW]])
-    svc = ScheduledWorkflowService(db)
+    svc = ScheduledWorkflowService(db, lambda: datetime(2026, 1, 15, 10, 0, 0))
     result = svc.getDueSchedules()
     assert result == [SCHEDULE_ROW]
     call = db.calls[0]
@@ -251,25 +252,28 @@ def test_get_due_schedules_predicate_and_no_params():
         " FROM scheduled_workflows sw"
         " LEFT JOIN agent_workflows w ON sw.workflow_id = w.id"
         " LEFT JOIN users u ON sw.user_id = u.id"
-        " WHERE sw.status = 'pending'"
-        " AND sw.next_run <= NOW()"
+        " WHERE ((sw.status = 'pending' AND sw.next_run <= :now)"
+        " OR (sw.status = 'running' AND (sw.running_since IS NULL OR sw.running_since < :stale)))"
         " ORDER BY sw.next_run ASC"
         " LIMIT 50"
     )
-    assert call[2] is None
+    assert call[2] == {'now': '2026-01-15 10:00:00', 'stale': '2026-01-15 09:00:00'}
 
 
 # ---------------------------------------------------------------------------
 # markRunning / markCompleted / markFailed
 # ---------------------------------------------------------------------------
 
-def test_mark_running():
+def test_claim():
     db = FakeDb()
-    svc = ScheduledWorkflowService(db)
-    svc.markRunning(7)
+    svc = ScheduledWorkflowService(db, lambda: datetime(2026, 1, 15, 10, 0, 0))
+    assert svc.claim(7) is True
     call = db.calls[0]
-    assert norm(call[1]) == norm("UPDATE scheduled_workflows SET status = 'running' WHERE id = :id")
-    assert call[2] == {'id': 7}
+    assert norm(call[1]) == norm(
+        "UPDATE scheduled_workflows SET status = 'running', running_since = :now WHERE id = :id"
+        " AND ((status = 'pending' AND next_run <= :due)"
+        " OR (status = 'running' AND (running_since IS NULL OR running_since < :stale)))")
+    assert call[2] == {'id': 7, 'now': '2026-01-15 10:00:00', 'due': '2026-01-15 10:00:00', 'stale': '2026-01-15 09:00:00'}
 
 
 def test_mark_completed_missing_schedule_is_noop():
@@ -286,7 +290,7 @@ def test_mark_completed_one_time_marks_completed():
     svc.markCompleted(7, 'exec-1')
     call = db.calls[1]
     assert norm(call[1]) == norm(
-        "UPDATE scheduled_workflows SET status = 'completed', last_run = NOW() WHERE id = :id"
+        "UPDATE scheduled_workflows SET status = 'completed', last_run = NOW(), running_since = NULL WHERE id = :id"
     )
     assert call[2] == {'id': 7}
 
@@ -298,7 +302,7 @@ def test_mark_completed_recurring_calculates_next_run():
     svc.markCompleted(7)
     call = db.calls[1]
     assert norm(call[1]) == norm(
-        "UPDATE scheduled_workflows SET status = 'pending', last_run = NOW(), next_run = :next_run WHERE id = :id"
+        "UPDATE scheduled_workflows SET status = 'pending', last_run = NOW(), running_since = NULL, next_run = :next_run WHERE id = :id"
     )
     assert call[2] == {'id': 7, 'next_run': '2026-01-17 10:00:00'}
 
@@ -318,7 +322,7 @@ def test_mark_failed_one_time_marks_failed():
     call = db.calls[1]
     assert norm(call[1]) == norm(
         "UPDATE scheduled_workflows"
-        " SET status = 'failed', error_message = :error, last_run = NOW()"
+        " SET status = 'failed', error_message = :error, last_run = NOW(), running_since = NULL"
         " WHERE id = :id"
     )
     assert call[2] == {'id': 7, 'error': 'boom'}
@@ -332,7 +336,7 @@ def test_mark_failed_recurring_resets_to_pending_with_next_run():
     call = db.calls[1]
     assert norm(call[1]) == norm(
         "UPDATE scheduled_workflows"
-        " SET status = 'pending', error_message = :error, last_run = NOW(), next_run = :next_run"
+        " SET status = 'pending', error_message = :error, last_run = NOW(), running_since = NULL, next_run = :next_run"
         " WHERE id = :id"
     )
     assert call[2] == {'id': 7, 'error': 'boom', 'next_run': '2026-01-15 11:00:00'}

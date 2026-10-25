@@ -29,9 +29,11 @@ WorkflowController.run/runStream (Phase 5).
 """
 from __future__ import annotations
 
+from app.agent_team.services.active_workflow_service import ActiveWorkflowService
 from app.agent_team.services.agent_repository import AgentRepository
 from app.agent_team.services.agent_runner import AgentRunner
 from app.agent_team.services.graph_workflow_runner import GraphWorkflowRunner
+from app.agent_team.services.schedule_tick import ScheduleTick
 from app.agent_team.services.scheduled_workflow_service import ScheduledWorkflowService
 from app.agent_team.services.workflow_repository import WorkflowRepository
 from app.agent_team.services.workflow_runner import WorkflowRunner
@@ -39,7 +41,7 @@ from app.ai_portfolio_assistant import AIPortfolioAssistant
 from app.services.llm_provider_resolver import LLMProviderResolver
 from app.services.mcp_tools_loader import MCPToolsLoader
 from app.support.logger import error_log
-from app.support.phpcompat import php_empty, php_intval, php_now, php_tz
+from app.support.phpcompat import php_now, php_tz
 
 
 class SchedulerController:
@@ -155,83 +157,15 @@ class SchedulerController:
             self.config,
         )
 
-        # Get due schedules
-        dueSchedules = self.scheduleService.getDueSchedules()
-
-        results = {
-            'timestamp': php_now(),
-            'due_count': len(dueSchedules),
-            'executed': [],
-            'failed': [],
-        }
-
-        for schedule in dueSchedules:
-            scheduleId = php_intval(schedule['id'])
-            workflowId = php_intval(schedule['workflow_id'])
-            userId = php_intval(schedule['user_id'])
-            inputPrompt = schedule['input_prompt']
-
-            try:
-                # Mark as running
-                self.scheduleService.markRunning(scheduleId)
-
-                # Load workflow
-                workflow = workflowRepository.findById(workflowId)
-
-                if not workflow:
-                    raise Exception(f'Workflow #{workflowId} not found')
-
-                if not workflow.isEnabled():
-                    raise Exception(f'Workflow #{workflowId} is disabled')
-
-                # Prepare input variables
-                inputVariables = {}
-                if not php_empty(inputPrompt):
-                    inputVariables['user_prompt'] = inputPrompt
-                    inputVariables['prompt'] = inputPrompt
-
-                # Check if graph-based workflow
-                hasGraphNodes = graphRepository.getNodes(workflowId)
-                isGraphWorkflow = not php_empty(hasGraphNodes)
-
-                # Execute workflow
-                if isGraphWorkflow:
-                    result = graphWorkflowRunner.run(workflow, userId, inputVariables)
-                else:
-                    result = workflowRunner.run(workflow, userId, inputVariables)
-
-                if result.get('success'):
-                    self.scheduleService.markCompleted(scheduleId)
-                    results['executed'].append({
-                        'schedule_id': scheduleId,
-                        'workflow_id': workflowId,
-                        'workflow_name': schedule['workflow_name'],
-                        'execution_id': result.get('execution_id'),
-                    })
-                else:
-                    raise Exception(
-                        result['error'] if result.get('error') is not None else 'Workflow execution failed'
-                    )
-
-            except Exception as e:  # noqa: BLE001 -- mirrors PHP `catch (\Exception $e)`
-                errorMessage = str(e)
-                self.scheduleService.markFailed(scheduleId, errorMessage)
-
-                results['failed'].append({
-                    'schedule_id': scheduleId,
-                    'workflow_id': workflowId,
-                    'workflow_name': (
-                        schedule['workflow_name'] if schedule.get('workflow_name') is not None else 'Unknown'
-                    ),
-                    'error': errorMessage,
-                })
-
-                error_log(
-                    f'Scheduled workflow failed: Schedule #{scheduleId}, '
-                    f'Workflow #{workflowId}: {errorMessage}'
-                )
-
-        results['executed_count'] = len(results['executed'])
-        results['failed_count'] = len(results['failed'])
-
-        return results
+        tick = ScheduleTick(
+            self.scheduleService,
+            ScheduleTick.workflowRunner(workflowRepository, graphRepository, graphWorkflowRunner, workflowRunner),
+        )
+        # A missing active_workflows table (not migrated yet) must not break the tick: then nothing is due,
+        # never every schedule.
+        try:
+            activeWorkflowIds = ActiveWorkflowService(self.db).scheduleWorkflowIds()
+        except Exception as e:  # noqa: BLE001 -- PHP catch (\Throwable)
+            error_log(f'Scheduler: active workflows unavailable, running none: {e}')
+            activeWorkflowIds = []
+        return tick.run(activeWorkflowIds)

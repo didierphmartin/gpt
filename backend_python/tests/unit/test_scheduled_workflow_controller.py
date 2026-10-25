@@ -183,7 +183,7 @@ def test_create_invalid_repeat_type():
     }))
     assert r == {
         'success': False,
-        'error': 'Invalid repeat type. Must be one of: none, hourly, daily, weekly, monthly',
+        'error': 'Invalid repeat type. Must be one of: none, hourly, daily, weekly, monthly, cron, event',
         'status_code': 400,
     }
 
@@ -200,6 +200,7 @@ def test_create_success_defaults_and_types():
     assert fake.calls == [('create', {
         'user_id': 3, 'workflow_id': 5, 'input_prompt': None,
         'scheduled_time': '2099-01-01 00:00:00', 'repeat_type': 'none', 'repeat_interval': 1,
+        'cron': None, 'event_trigger': None, 'trigger_component_id': None,
     })]
 
 
@@ -214,6 +215,7 @@ def test_create_success_explicit_repeat():
     assert fake.calls == [('create', {
         'user_id': 3, 'workflow_id': 5, 'input_prompt': 'go',
         'scheduled_time': '2099-01-01 00:00:00', 'repeat_type': 'daily', 'repeat_interval': 3,
+        'cron': None, 'event_trigger': None, 'trigger_component_id': None,
     })]
 
 
