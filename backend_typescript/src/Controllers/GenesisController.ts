@@ -2,8 +2,7 @@ import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { Ctx, ControllerResult } from '../Support/Http';
 import { GenesisProposer, GenesisProposal } from '../Services/GenesisProposer';
-import { LLMProviderResolver } from '../Services/LLMProviderResolver';
-import { ProviderFactory } from '../Providers/ProviderFactory';
+import { ChatController } from './ChatController';
 
 /**
  * GenesisController — faithful TS mirror of src/Controllers/GenesisController.php.
@@ -415,24 +414,21 @@ export class GenesisController {
     // Workflow promotions arrive here with `proposal` already built.
     if (proposal === null) {
       const cfg = await this.genesisConfig(userId);
-      let text = '';
-      try {
-        // Mirrors PHP's ChatController::agent: resolve the reflection provider from the
-        // shared provider config and run one plain non-streaming chat (no tools).
-        const providerCfg = await LLMProviderResolver.getProviderConfig(cfg.provider);
-        if (!providerCfg) {
-          throw new Error(`Provider '${cfg.provider}' not available`);
-        }
-        const impl = ProviderFactory.create(providerCfg);
-        const result = await impl.chat({ message: prompt, conversation_history: [], user_id: userId });
-        text = String(result.text ?? '');
-      } catch (e: any) {
+      // PHP runs ChatController::agent: the free-trial gate, the user's package defaults and own
+      // key, one plain non-streaming chat with no tools, and a humanized error.
+      const resp = await new ChatController().agent({
+        ...ctx,
+        body: { prompt, provider: cfg.provider, user_id: userId },
+        user_id: userId,
+      });
+      if (!resp.success) {
         return {
           success: false,
-          error: 'Reflection call failed: ' + (e?.message ?? 'unknown'),
+          error: 'Reflection call failed: ' + String(resp.error ?? 'unknown'),
           status_code: 502,
         };
       }
+      const text = String(resp.response ?? resp.text ?? '');
       proposal = GenesisProposer.parseProposal(text);
       if (proposal === null) {
         return { success: true, promotion: null, message: 'No repeatable procedure found in this material.' };

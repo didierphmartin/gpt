@@ -3,7 +3,7 @@ import { log } from '../Services/Logger';
 import { logChatTransaction } from '../Services/UsageLogger';
 import { buildCtx, Ctx, ControllerResult } from '../Support/Http';
 import { SSEStream } from '../Services/SseStream';
-import { LLMProviderResolver } from '../Services/LLMProviderResolver';
+import { UserProviderOverlay } from '../Services/UserProviderOverlay';
 import { ProviderFactory } from '../Providers/ProviderFactory';
 import { ToolsManager } from '../Services/ToolsManager';
 import { MCPToolsLoader } from '../Services/MCPToolsLoader';
@@ -329,7 +329,8 @@ export class ChatController {
     overrides?: { max_tokens?: number; temperature?: number; tools?: string[] },
   ): Promise<LLMProvider> {
     if (!provider) throw new Error(ChatController.PROVIDER_REQUIRED);
-    const cfg = await LLMProviderResolver.getProviderConfig(provider);
+    // system_llm_settings → the user's package defaults → the user's own key/endpoint/model/prompt.
+    const cfg = await UserProviderOverlay.resolve(provider, userId);
     if (!cfg) throw new Error(`Provider '${provider}' not available`);
     // Per-request overrides (workflow agent form) win over the provider-config defaults.
     if (overrides?.max_tokens != null) cfg.max_tokens = overrides.max_tokens;
@@ -835,7 +836,9 @@ export class ChatController {
   /** PHP's post-response MemoryAutoUpdater run, with the resolved Claude config (or ANTHROPIC_API_KEY). */
   private async runMemoryAutoUpdater(userId: number, message: string, text: string): Promise<void> {
     try {
-      const claude = await LLMProviderResolver.getProviderConfig('claude').catch(() => null);
+      // PHP reads $config['claude'] after the user overlay: the user's own Claude key (and entry
+      // point) when they have one.
+      const claude = await UserProviderOverlay.resolve('claude', userId).catch(() => null);
       const apiKey = claude?.api_key || process.env.ANTHROPIC_API_KEY || '';
       if (apiKey === '') {
         console.error('[ChatController] MemoryAutoUpdater skipped: no Claude API key in merged config or ANTHROPIC_API_KEY env');
@@ -861,8 +864,6 @@ export class ChatController {
    *
    * DIVERGENCES (pre-existing gaps in the ported TS infra — same as /chat, /verify, /compare):
    *  - checkFreeTrialQuota is not ported (no free-trial gate before the call).
-   *  - applyPackageDefaults / applyUserApiKeys have no TS carrier: LLMProviderResolver reads
-   *    only system_llm_settings, so per-user API keys are NOT overlaid.
    */
   async agent(ctx: Ctx): Promise<ControllerResult> {
     const body = ctx.body;
@@ -880,7 +881,7 @@ export class ChatController {
     }
 
     try {
-      const cfg = await LLMProviderResolver.getProviderConfig(provider);
+      const cfg = await UserProviderOverlay.resolve(provider, userId);
       if (!cfg) {
         return { success: false, error: `Provider '${provider}' not available`, status_code: 400 };
       }
@@ -947,8 +948,6 @@ export class ChatController {
    *
    * DIVERGENCES (pre-existing gaps in the ported TS infra, not invented here):
    *  - checkFreeTrialQuota / UsageLogger are not ported in TS (the /chat path skips them too).
-   *  - applyUserApiKeys has no TS carrier: LLMProviderResolver reads only system_llm_settings, so
-   *    per-user API keys are NOT overlaid (same as the ported /chat path).
    */
   async verify(req: Request, res: Response): Promise<void> {
     const ctx = buildCtx(req);
@@ -1042,7 +1041,6 @@ export class ChatController {
    *  - stripVisualNoiseFromHistory and AttachmentDispatcher are not ported, so conversation_history is
    *    used as-is and attachment prefixing / native image+pdf attachments are NOT applied.
    *  - checkFreeTrialQuota / UsageLogger not ported (same as the /chat path).
-   *  - applyUserApiKeys has no TS carrier (per-user keys not overlaid; same as /chat).
    */
   async compare(req: Request, res: Response): Promise<void> {
     const ctx = buildCtx(req);
