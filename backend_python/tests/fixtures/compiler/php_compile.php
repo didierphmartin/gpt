@@ -1,8 +1,13 @@
 <?php
 /**
- * Differential oracle: compile fixture workflows with the PHP LangGraph compiler, no database.
+ * Differential oracle: compile fixture workflows with a PHP compiler, no database.
  *
- *   php php_compile.php <fixture.json> [<fixture.json> ...]
+ *   php php_compile.php [--target=langgraph|adk|maf|nooa] <fixture.json> [<fixture.json> ...]
+ *
+ * --target (default langgraph) picks the compiler. LangGraph compiles the modes the fixture lists (default
+ * single, modular, a2a) through generate($id, $user, ['a2a' => ..., 'modular' => ...]); ADK, MAF and NOOA
+ * compile all three, as WorkflowController::compiledTargetResponse() does: single = generate(),
+ * modular = generatePackage(), a2a = generateA2A().
  *
  * Prints {"<fixture name>": {"<mode>": <generate() result> | {"error": "<message>"}}} as JSON.
  * Each fixture names a workflow row, its graph, the agent records it references,
@@ -15,16 +20,36 @@ declare(strict_types=1);
 
 require __DIR__ . '/php_compile_lib.php';
 
+use AgentTeam\Services\ADKGenerator;
 use AgentTeam\Services\LangGraphGenerator;
+use AgentTeam\Services\MAFGenerator;
+use AgentTeam\Services\NOOAGenerator;
+
+$target = 'langgraph';
+$paths = [];
+foreach (array_slice($argv, 1) as $arg) {
+    if (str_starts_with($arg, '--target=')) {
+        $target = substr($arg, 9);
+    } else {
+        $paths[] = $arg;
+    }
+}
+$class = ['langgraph' => LangGraphGenerator::class, 'adk' => ADKGenerator::class, 'maf' => MAFGenerator::class,
+    'nooa' => NOOAGenerator::class][$target] ?? null;
+if ($class === null) {
+    fwrite(STDERR, "unknown --target {$target}\n");
+    exit(2);
+}
 
 $out = [];
-foreach (array_slice($argv, 1) as $path) {
+foreach ($paths as $path) {
     $fx = json_decode(file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
     $name = basename($path, '.json');
     $skillsRoot = __DIR__ . '/skills';
     $results = [];
-    foreach ($fx['modes'] ?? ['single', 'modular', 'a2a'] as $mode) {
-        $gen = new LangGraphGenerator(
+    $modes = $target === 'langgraph' ? ($fx['modes'] ?? ['single', 'modular', 'a2a']) : ['single', 'modular', 'a2a'];
+    foreach ($modes as $mode) {
+        $gen = new $class(
             fixturePdo($fx['sql'] ?? []),
             new FixtureWorkflowRepo($fx['workflow']),
             new FixtureGraphRepo($fx['graph'], $fx['code_components'] ?? []),
@@ -36,8 +61,14 @@ foreach (array_slice($argv, 1) as $path) {
                 : null
         );
         try {
-            $results[$mode] = $gen->generate((int) $fx['workflow']['id'], (string) ($fx['user_id'] ?? '3'),
-                ['a2a' => $mode === 'a2a', 'modular' => $mode === 'modular']);
+            $id = (int) $fx['workflow']['id'];
+            $user = (string) ($fx['user_id'] ?? '3');
+            $results[$mode] = match (true) {
+                $target === 'langgraph' => $gen->generate($id, $user, ['a2a' => $mode === 'a2a', 'modular' => $mode === 'modular']),
+                $mode === 'a2a' => $gen->generateA2A($id, $user),
+                $mode === 'modular' => $gen->generatePackage($id, $user),
+                default => $gen->generate($id, $user),
+            };
         } catch (Throwable $e) {
             $results[$mode] = ['error' => $e->getMessage()];
         }

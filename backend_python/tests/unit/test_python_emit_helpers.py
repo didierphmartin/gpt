@@ -1,6 +1,7 @@
 """Port of backend/tests/Unit/PythonEmitHelpersTest.php (Phase 6, Task 1)."""
 from __future__ import annotations
 
+from app.agent_team.services.compiler_php import json_to_python
 from app.agent_team.services.python_emit_helpers import PythonEmitHelpers
 
 
@@ -13,7 +14,7 @@ def test_py_str_escapes():
 
 def test_json_to_python_null_true_false():
     """PHP testJsonToPythonNullTrueFalse (lines 14-20)."""
-    out = PythonEmitHelpers.jsonToPython({'a': None, 'b': True, 'c': False})
+    out = json_to_python({'a': None, 'b': True, 'c': False})
     assert 'None' in out
     assert 'True' in out
     assert 'False' in out
@@ -30,11 +31,11 @@ def test_json_to_python_empty_dict_without_force_object_renders_list():
     response for workflow 27 ("test ingestion workflow", no agent nodes):
     PHP emits `NODE_NAMES = []`, not `{}`. A caller here that built the
     natural Python port -- an empty `dict` -- must match that."""
-    assert PythonEmitHelpers.jsonToPython({}) == '[]'
+    assert json_to_python({}) == '[]'
     # forceObject=True still takes the (object) cast path -- unaffected.
-    assert PythonEmitHelpers.jsonToPython({}, True) == '{}'
+    assert json_to_python({}, True) == '{}'
     # A non-empty dict is unaffected either way.
-    assert PythonEmitHelpers.jsonToPython({'1': 'a'}) == '{\n    "1": "a"\n}'
+    assert json_to_python({'1': 'a'}) == '{\n    "1": "a"\n}'
 
 
 # ─── jsonToPython float tokens (Fix round 1) ───────────────────────────────
@@ -69,7 +70,7 @@ _FLOAT_LIST = [1.0, 100.0, 0.0, -0.0, 0.1, 1e16, 1e-5, 1e25, 123456789.123, 1.5]
 
 
 def test_json_to_python_float_tokens_nested_in_dict():
-    out = PythonEmitHelpers.jsonToPython(_FLOAT_DICT)
+    out = json_to_python(_FLOAT_DICT)
     assert out == (
         '{\n'
         '    "a": 1,\n'
@@ -87,7 +88,7 @@ def test_json_to_python_float_tokens_nested_in_dict():
 
 
 def test_json_to_python_float_tokens_nested_in_list():
-    out = PythonEmitHelpers.jsonToPython(_FLOAT_LIST)
+    out = json_to_python(_FLOAT_LIST)
     assert out == (
         '[\n'
         '    1,\n'

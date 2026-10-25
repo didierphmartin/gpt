@@ -437,123 +437,75 @@ class WorkflowController:
         }
 
     # ========================================================================
-    # GET /api/v1/workflows/{id}/generate-adk
+    # GET /api/v1/workflows/{id}/generate-adk | generate-maf | generate-nooa
     # ========================================================================
 
     def generateAdk(self, request, id: int = 0) -> dict:
-        """PHP 303-351."""
-        userId = request['user_id'] if request.get('user_id') is not None else 0
-        workflowId = php_intval(id)
-        query = request['query'] if request.get('query') is not None else {}
-        download = (query.get('download') if query.get('download') is not None else '0') == '1'
-
-        if not userId:
-            return {'success': False, 'error': 'Authentication required', 'status_code': 401}
-        if not workflowId:
-            return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
-
-        try:
-            if not self.workflowRepository.canUserAccess(userId, workflowId):
-                return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
-
-            agentRepo = AgentRepository(self.db)
-            gen = ADKGenerator(self.db, self.workflowRepository, self.graphRepository, agentRepo)
-            result = gen.generate(workflowId, php_strval(userId))
-
-            if download:
-                return {
-                    'success': True,
-                    'raw_body': result['code'],
-                    'headers': {
-                        'Content-Type': 'text/x-python; charset=utf-8',
-                        'Content-Disposition': f'attachment; filename="{result["filename"]}"',
-                    },
-                    'status_code': 200,
-                }
-
-            return {'success': True, 'data': result, 'status_code': 200}
-        except Exception as e:  # noqa: BLE001
-            error_log(f'[WorkflowController] generateAdk failed: {e}')
-            return {'success': False, 'error': str(e), 'status_code': 500}
-
-    # ========================================================================
-    # GET /api/v1/workflows/{id}/generate-maf
-    # ========================================================================
+        """GET /api/v1/workflows/{id}/generate-adk | generate-maf | generate-nooa: the workflow compiled for
+        Google ADK, Microsoft Agent Framework or NVIDIA NOOA, in the code structure the query names (as
+        generate-python): ?modular=1 (or ?package=1) agents in separate files -- a package {root, files};
+        ?a2a=1 one A2A agent server per node + an orchestrator {root, files}; else a single file
+        {filename, code}, raw with ?download=1. ?format=zip returns the structure as one zip."""
+        return self.compiledTargetResponse(request, id, ADKGenerator, 'adk')
 
     def generateMaf(self, request, id: int = 0) -> dict:
-        """PHP 361-409."""
-        userId = request['user_id'] if request.get('user_id') is not None else 0
-        workflowId = php_intval(id)
-        query = request['query'] if request.get('query') is not None else {}
-        download = (query.get('download') if query.get('download') is not None else '0') == '1'
-
-        if not userId:
-            return {'success': False, 'error': 'Authentication required', 'status_code': 401}
-        if not workflowId:
-            return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
-
-        try:
-            if not self.workflowRepository.canUserAccess(userId, workflowId):
-                return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
-
-            agentRepo = AgentRepository(self.db)
-            gen = MAFGenerator(self.db, self.workflowRepository, self.graphRepository, agentRepo)
-            result = gen.generate(workflowId, php_strval(userId))
-
-            if download:
-                return {
-                    'success': True,
-                    'raw_body': result['code'],
-                    'headers': {
-                        'Content-Type': 'text/x-python; charset=utf-8',
-                        'Content-Disposition': f'attachment; filename="{result["filename"]}"',
-                    },
-                    'status_code': 200,
-                }
-
-            return {'success': True, 'data': result, 'status_code': 200}
-        except Exception as e:  # noqa: BLE001
-            error_log(f'[WorkflowController] generateMaf failed: {e}')
-            return {'success': False, 'error': str(e), 'status_code': 500}
-
-    # ========================================================================
-    # GET /api/v1/workflows/{id}/generate-nooa
-    # ========================================================================
+        return self.compiledTargetResponse(request, id, MAFGenerator, 'maf')
 
     def generateNooa(self, request, id: int = 0) -> dict:
-        """PHP 419-467."""
+        return self.compiledTargetResponse(request, id, NOOAGenerator, 'nooa')
+
+    def compiledTargetResponse(self, request, id, generatorClass, target: str) -> dict:
+        """The shared body of generate-adk / -maf / -nooa: the generator class differs, nothing else."""
         userId = request['user_id'] if request.get('user_id') is not None else 0
         workflowId = php_intval(id)
-        query = request['query'] if request.get('query') is not None else {}
-        download = (query.get('download') if query.get('download') is not None else '0') == '1'
-
+        q = request['query'] if request.get('query') is not None else {}
         if not userId:
             return {'success': False, 'error': 'Authentication required', 'status_code': 401}
         if not workflowId:
             return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
-
+        mode = ('a2a' if (q.get('a2a') if q.get('a2a') is not None else '0') == '1'
+                else ('modular' if ((q.get('modular') if q.get('modular') is not None else '0') == '1'
+                                    or not php_empty(q.get('package'))) else 'single'))
+        zip_ = (q.get('format') if q.get('format') is not None else '') == 'zip'
         try:
             if not self.workflowRepository.canUserAccess(userId, workflowId):
                 return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
-
-            agentRepo = AgentRepository(self.db)
-            gen = NOOAGenerator(self.db, self.workflowRepository, self.graphRepository, agentRepo)
-            result = gen.generate(workflowId, php_strval(userId))
-
-            if download:
+            # (PHP refuses a zip without its ZipArchive extension; Python's zipfile is always there.)
+            # A packaged Start document is copied only from this user's own document storage.
+            storagePath = self.config.get('storage_path')
+            gen = generatorClass(
+                self.db,
+                self.workflowRepository,
+                self.graphRepository,
+                AgentRepository(self.db),
+                None,
+                StartDocumentStore(
+                    self.getUserStorageFolder(php_intval(userId)),
+                    lambda: self.getUniversalFSAdapter(php_intval(userId)),
+                    storagePath if storagePath is not None else str(PHP_BACKEND.parent / 'storage'),
+                ),
+            )
+            if mode == 'a2a':
+                result = gen.generateA2A(workflowId, php_strval(userId))
+            elif mode == 'modular':
+                result = gen.generatePackage(workflowId, php_strval(userId))
+            else:
+                result = gen.generate(workflowId, php_strval(userId))
+            if zip_:
+                return self.langGraphZipResponse(result, f'{target}_{mode}')
+            if mode == 'single' and (q.get('download') if q.get('download') is not None else '0') == '1':
                 return {
                     'success': True,
                     'raw_body': result['code'],
                     'headers': {
                         'Content-Type': 'text/x-python; charset=utf-8',
-                        'Content-Disposition': f'attachment; filename="{result["filename"]}"',
+                        'Content-Disposition': 'attachment; filename="' + result['filename'] + '"',
                     },
                     'status_code': 200,
                 }
-
             return {'success': True, 'data': result, 'status_code': 200}
-        except Exception as e:  # noqa: BLE001
-            error_log(f'[WorkflowController] generateNooa failed: {e}')
+        except Exception as e:  # noqa: BLE001 -- mirrors the PHP catch (Throwable)
+            error_log(f'[WorkflowController] generate-{target} ({mode}) failed: {e}')
             return {'success': False, 'error': str(e), 'status_code': 500}
 
     # ========================================================================

@@ -4,7 +4,7 @@ PROVENANCE
 ==========
   Workflow:   diamond (id 1)
   Target:     Google ADK (Python) -- LlmAgent per node, Sequential/Parallel layers
-  Generated:  2026-09-07 19:11:18 CEST by the SynergyAI workflow editor
+  Generated:  2026-01-01 00:00:00 UTC by the SynergyAI workflow editor
   This file is a frozen snapshot of the workflow. Edits made here are
   overwritten by the next Generate: change the workflow in the editor and
   re-generate instead.
@@ -50,7 +50,7 @@ HOW THIS FILE IS ORGANISED (top to bottom):
   6. root_agent = SequentialAgent  -- the graph as TOPOLOGICAL LAYERS: independent nodes
                                       at the same depth run together in a ParallelAgent;
                                       the layers themselves run in order.
-  7. main()                        -- seeds the prompt (plus attached documents), runs the
+  7. run_workflow()                -- seeds the prompt (plus attached documents), runs the
                                       graph via Runner, streams a [node]/[tool] trace,
                                       saves the result, and prints a RUN SUMMARY.
 
@@ -64,7 +64,11 @@ NODE-INTERNAL PIPELINE (fixed order):
           prompt is the skill's SKILL.md, then a capture agent that makes the
           node output the file the skill's script PRODUCED (else the LLM text).
     The Output node is a non-LLM pass-through: parents' text verbatim.
-Dispatcher and playbook nodes are NOT executed by this target (see GRAPH NODES).
+A DISPATCHER node routes: it names one child from its menu and only that
+child runs (its menu is nested under the dispatcher, not in a layer).
+A PLAYBOOK node is an interpreter, not an agent: the model re-decides each
+round from the running transcript of tool calls, and that transcript IS the
+node output, published to session.state like any other node's result.
 
 TO RUN
 ======
@@ -82,11 +86,13 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-# Load provider API keys from the runner env's .env (one dir up from scripts/).
-# Without this, a DIRECT terminal run has no credentials and every LiteLLM call
-# fails with "Missing credentials … set the OPENAI_API_KEY" — runner-mediated
-# runs only worked because main.py loads the same file and subprocesses inherit.
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
+# Provider keys and MCP headers come from .env: this folder's own first, then the runner's
+# python/.env -- one level up for the single file in scripts/, two for the package in
+# scripts/<folder>/. load_dotenv never overrides, so the nearest value wins.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _d in (_HERE, os.path.dirname(_HERE), os.path.dirname(os.path.dirname(_HERE))):
+    load_dotenv(os.path.join(_d, ".env"))
+PACKAGE_DIR = _HERE   # this program's folder: code/, skills/, start_documents/ and outputs/ are relative to it
 
 from google.adk.agents import LlmAgent, SequentialAgent, ParallelAgent, BaseAgent
 from google.adk.models.lite_llm import LiteLlm
@@ -98,6 +104,26 @@ from google.genai import types
 
 # Runtime "today" for date-grounding every agent instruction (evaluated at import).
 _TODAY = time.strftime("%Y-%m-%d")
+
+
+def _agent_instruction(prompt: str, parent_keys: list):
+    """Return an ADK InstructionProvider (callable) for an agent node.
+
+    A callable instruction makes ADK use the text VERBATIM
+    (bypass_state_injection=True): a string instruction would be run through
+    session-state templating, where every {name} is a placeholder and an
+    unknown key raises KeyError -- so a prompt that says "Today is {date}"
+    would crash the run. The parents' outputs are appended here from
+    session.state (keys "node_<id>", written by each parent's output_key),
+    which is what the {node_<id>} string placeholders used to do.
+    """
+    def _instr(ctx):
+        text = ("Current date: " + _TODAY + ". Treat this as 'now'; "
+                "prefer your tools for current data over memory.\n\n" + prompt)
+        for key in parent_keys:
+            text += "\n\n## Input from " + key + "\n" + str(ctx.state.get(key, ""))
+        return text
+    return _instr
 # ==============================================================
 # MODEL FACTORY
 # Maps a node provider+model to an ADK model. Gemini is native;
@@ -122,55 +148,57 @@ def _make_model(provider: str, model: str, thinking: str | None = None):
             f"No model for provider {p!r}. Set a model on the agent in the editor, "
             "or a default in system_llm_settings."
         )
-    if p in ("gemini", "google", "google-genai"):
-        return model
-    if p in ("claude", "anthropic"):
-        return LiteLlm(model=model if "/" in model else "anthropic/" + model)
-    if p == "openai":
-        return LiteLlm(model=model if "/" in model else "openai/" + model)
-    if p in ("grok", "xai"):
-        return LiteLlm(
-            model="openai/" + model,
-            api_base="https://api.x.ai/v1",
-            api_key=os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY"),
-        )
-    if p == "deepseek":
-        kwargs = dict(
-            model="openai/" + model,
-            api_base="https://api.deepseek.com",
-            api_key=os.environ.get("DEEPSEEK_API_KEY"),
-        )
-        if model.startswith(("deepseek-v4", "deepseek-flash")):
-            # The node form's Thinking attribute governs (platform parity):
-            # 'off' -> disabled (form temperature accepted); 'on'/default ->
-            # V4's server default stays ON (sampling params are dropped at the
-            # config level by the generator in that case).
-            _mode = "disabled" if thinking == "off" else "enabled"
-            kwargs["extra_body"] = {"thinking": {"type": _mode}}
-        return LiteLlm(**kwargs)
-    if p == "kimi":
-        kwargs = dict(
-            model="openai/" + model,
-            api_base="https://api.moonshot.ai/v1",
-            api_key=os.environ.get("KIMI_API_KEY"),
-        )
-        if model.startswith("kimi-k2"):
-            # Thinking attribute governs; K2's sampling constraints per mode
-            # are enforced at the config level by the generator.
-            _mode = "enabled" if thinking == "on" else "disabled"
-            kwargs["extra_body"] = {"thinking": {"type": _mode}}
-        return LiteLlm(**kwargs)
-    if p == "glm":
-        # GLM 5.2 (z.ai / Zhipu) is OpenAI-compatible. Default: thinking off so it
-        # answers directly; the node form's Thinking attribute can enable it.
-        return LiteLlm(
-            model="openai/" + model,
-            api_base="https://api.z.ai/api/paas/v4",
-            api_key=os.environ.get("GLM_API_KEY"),
-            extra_body={"thinking": {"type": "enabled" if thinking == "on" else "disabled"}},
-        )
-    # Fallback: best-effort litellm prefixed spec.
-    return LiteLlm(model=model if "/" in model else p + "/" + model)
+    match p:
+        case "gemini" | "google" | "google-genai":
+            return model
+        case "claude" | "anthropic":
+            return LiteLlm(model=model if "/" in model else "anthropic/" + model)
+        case "openai":
+            return LiteLlm(model=model if "/" in model else "openai/" + model)
+        case "grok" | "xai":
+            return LiteLlm(
+                model="openai/" + model,
+                api_base=os.environ.get("XAI_BASE_URL") or "https://api.x.ai/v1",
+                api_key=os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY"),
+            )
+        case "deepseek":
+            kwargs = dict(
+                model="openai/" + model,
+                api_base=os.environ.get("DEEPSEEK_BASE_URL") or "https://api.deepseek.com",
+                api_key=os.environ.get("DEEPSEEK_API_KEY"),
+            )
+            if model.startswith(("deepseek-v4", "deepseek-flash")):
+                # The node form's Thinking attribute governs (platform parity):
+                # 'off' -> disabled (form temperature accepted); 'on'/default ->
+                # V4's server default stays ON (sampling params are dropped at the
+                # config level by the generator in that case).
+                _mode = "disabled" if thinking == "off" else "enabled"
+                kwargs["extra_body"] = {"thinking": {"type": _mode}}
+            return LiteLlm(**kwargs)
+        case "kimi":
+            kwargs = dict(
+                model="openai/" + model,
+                api_base=os.environ.get("KIMI_BASE_URL") or "https://api.moonshot.ai/v1",
+                api_key=os.environ.get("KIMI_API_KEY"),
+            )
+            if model.startswith("kimi-k2"):
+                # Thinking attribute governs; K2's sampling constraints per mode
+                # are enforced at the config level by the generator.
+                _mode = "enabled" if thinking == "on" else "disabled"
+                kwargs["extra_body"] = {"thinking": {"type": _mode}}
+            return LiteLlm(**kwargs)
+        case "glm":
+            # GLM 5.2 (z.ai / Zhipu) is OpenAI-compatible. Default: thinking off so it
+            # answers directly; the node form's Thinking attribute can enable it.
+            return LiteLlm(
+                model="openai/" + model,
+                api_base=os.environ.get("GLM_BASE_URL") or "https://api.z.ai/api/paas/v4",
+                api_key=os.environ.get("GLM_API_KEY"),
+                extra_body={"thinking": {"type": "enabled" if thinking == "on" else "disabled"}},
+            )
+        case _:
+            # Fallback: best-effort litellm prefixed spec.
+            return LiteLlm(model=model if "/" in model else p + "/" + model)
 # ==============================================================
 # MCP SERVER REGISTRY
 # Baked at generation time from the workflow editor config.
@@ -189,81 +217,59 @@ TOOL_CATALOG = {}
 # MCP CLIENT
 # HTTP JSON-RPC client used by every generated _tool_* function.
 # ==============================================================
-def _mcp_candidates(url: str) -> list:
-    """The endpoints to try for a registered MCP server URL, in order.
+MCP_SERVER_SLUGS = {}   # registered URL -> slug: MCP_HEADERS_<SLUG> / MCP_URL_<SLUG> in .env
+MCP_SLUGS = {v: k for k, v in MCP_SERVER_SLUGS.items()}   # slug -> URL (a code node's call_tool)
 
-    - The URL exactly as registered first (servers addressed by query or
-      mounted at their bare URL answer there, e.g. PHP endpoints).
-    - Then with /mcp inserted into the path, before any query string.
-    - A path already ending in /mcp or .php is the endpoint: no fallback.
+_MCP_BASE_HEADERS = {"Content-Type": "application/json",
+                     "Accept": "application/json, text/event-stream, */*"}
+_MCP_ENDPOINTS: dict = {}   # registered server URL -> endpoint that accepted the handshake
+
+
+def _mcp_headers(server_url: str) -> dict:
+    """The base headers plus the server's own from MCP_HEADERS_<SLUG> in .env (a JSON object).
+
+    Header values (keys, account ids) never live in this script: the editor's MCP server
+    entry holds them, and .env carries them to the compiled run.
     """
+    slug = MCP_SERVER_SLUGS.get(server_url, "")
+    var = f"MCP_HEADERS_{slug.upper()}"
+    raw = os.environ.get(var, "") if slug else ""
+    if not raw:
+        return dict(_MCP_BASE_HEADERS)
+    try:
+        extra = json.loads(raw)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"{var} in .env is not valid JSON (expected e.g. {{\"Header\": \"value\"}})") from None
+    if not isinstance(extra, dict):
+        raise RuntimeError(f"{var} in .env must be a JSON object")
+    for k, v in extra.items():
+        if not isinstance(v, str) or "\r" in v or "\n" in v or "\r" in str(k) or "\n" in str(k):
+            raise RuntimeError(f"{var} in .env: every header value must be a single-line string (check header {str(k)!r})")
+    return {**_MCP_BASE_HEADERS, **{str(k): v for k, v in extra.items()}}
+
+
+def _mcp_live_url(server_url: str) -> str:
+    """Where the server answers: MCP_URL_<SLUG> from .env when set (the server moved), else the
+    registered URL. The registered URL stays the key for headers and endpoints."""
+    slug = MCP_SERVER_SLUGS.get(server_url, "")
+    return (os.environ.get(f"MCP_URL_{slug.upper()}", "").strip() if slug else "") or server_url
+
+
+def _mcp_candidates(url: str) -> list:
+    """The endpoints to try, in order: the URL exactly as given, then with /mcp in its path
+    (before any query string). A path already ending in /mcp or .php is the endpoint."""
     cut = min([i for i in (url.find("?"), url.find("#")) if i >= 0] or [len(url)])
     path, rest = url[:cut].rstrip("/"), url[cut:]
     if path.endswith("/mcp") or path.endswith(".php"):
         return [url]
     return [url, path + "/mcp" + rest]
 
-_MCP_ENDPOINTS: dict = {}   # registered server URL -> endpoint that accepted the handshake
-
-def _init_mcp_session(url: str, headers: dict) -> str | None:
-    """Initialize an MCP session with the server.
-
-    The MCP protocol requires a handshake before tool calls:
-    1. Client sends 'initialize' with protocol version and capabilities
-    2. Server responds with its capabilities
-    3. Client sends 'notifications/initialized' to confirm
-
-    Tries _mcp_candidates(url) in order: the URL exactly as registered, then
-    with /mcp in its path. The endpoint that answers is remembered.
-    Returns that endpoint URL, or None when no candidate accepted the handshake.
-    """
-    init_req = {
-        "jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "clientInfo": {"name": "LangGraph-Workflow", "version": "1.0.0"},
-            "capabilities": {}
-        }
-    }
-    candidates = [_MCP_ENDPOINTS[url]] if url in _MCP_ENDPOINTS else []
-    for cand in _mcp_candidates(url):
-        if cand not in candidates:
-            candidates.append(cand)
-    last_err = None
-    for mcp_url in candidates:
-        try:
-            with httpx.Client(timeout=30) as c:
-                r = c.post(mcp_url, json=init_req, headers=headers)
-                r.raise_for_status()
-                data = _parse_mcp_response(r.text)
-                if data is None or "error" in (data or {}):
-                    last_err = (data or {}).get("error") if data else "invalid response"
-                    continue
-                # Send initialized notification
-                c.post(mcp_url, json={
-                    "jsonrpc": "2.0",
-                    "method": "notifications/initialized",
-                    "params": {}
-                }, headers=headers)
-                _MCP_ENDPOINTS[url] = mcp_url
-                return mcp_url
-        except Exception as e:
-            last_err = e
-    print(f"[warn] MCP init failed for {url}: {last_err}")
-    return None
 
 def _parse_mcp_response(text: str) -> dict | None:
-    """Parse a JSON-RPC response from an MCP server.
-
-    MCP servers may respond in two formats:
-    - Plain JSON: standard JSON-RPC response body
-    - SSE (Server-Sent Events): lines prefixed with 'data:' containing JSON
-    This function tries plain JSON first, then falls back to SSE parsing.
-    """
-    import json as _json
+    """A JSON-RPC response as plain JSON, or the first parsable SSE `data:` line."""
     try:
-        return _json.loads(text)
-    except _json.JSONDecodeError:
+        return json.loads(text)
+    except json.JSONDecodeError:
         pass
     for line in text.split("\n"):
         line = line.strip()
@@ -271,48 +277,70 @@ def _parse_mcp_response(text: str) -> dict | None:
             data = line[5:].strip()
             if data:
                 try:
-                    return _json.loads(data)
-                except _json.JSONDecodeError:
+                    return json.loads(data)
+                except json.JSONDecodeError:
                     continue
     return None
 
-def _call_mcp_tool(server_url: str, tool_name: str,
-                   arguments: dict) -> str:
-    """Call a tool on an MCP server via JSON-RPC 2.0.
 
-    Sequence: init session -> send tools/call -> parse response -> extract text.
-    The MCP response contains a 'content' array; we extract all text items
-    and join them. If no text is found, falls back to raw JSON.
-    """
-    headers = {"Content-Type": "application/json",
-               "Accept": "application/json, text/event-stream, */*"}
+def _init_mcp_session(server_url: str) -> str | None:
+    """The initialize handshake; tries _mcp_candidates(live URL): as given, then with /mcp.
+    Returns the endpoint that answered (remembered per server), or None."""
+    h = _mcp_headers(server_url)   # outside the try: a bad MCP_HEADERS_<SLUG> stops the run
+    init_req = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2024-11-05",
+                           "clientInfo": {"name": "ADK-Workflow", "version": "1.0.0"}, "capabilities": {}}}
+    candidates = [_MCP_ENDPOINTS[server_url]] if server_url in _MCP_ENDPOINTS else []
+    live = _mcp_live_url(server_url)
+    for cand in _mcp_candidates(live):
+        if cand not in candidates:
+            candidates.append(cand)
+    last_err = None
+    for mcp_url in candidates:
+        try:
+            with httpx.Client(timeout=30) as c:
+                r = c.post(mcp_url, json=init_req, headers=h)
+                r.raise_for_status()
+                data = _parse_mcp_response(r.text)
+                if data is None or "error" in data:
+                    last_err = (data or {}).get("error") if data else "invalid response"
+                    continue
+                c.post(mcp_url, json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}, headers=h)
+                _MCP_ENDPOINTS[server_url] = mcp_url
+                return mcp_url
+        except Exception as e:
+            last_err = e
+    print(f"[warn] MCP init failed for {server_url}: {last_err}")
+    return None
 
-    mcp_url = _init_mcp_session(server_url, headers) or _mcp_candidates(server_url)[-1]
 
-    request = {
-        "jsonrpc": "2.0", "id": int(time.time()),
-        "method": "tools/call",
-        "params": {"name": tool_name,
-                   "arguments": arguments or {}}
-    }
+def _call_mcp_tool_raw(server_url: str, tool_name: str, arguments: dict) -> dict:
+    """tools/call; the raw MCP result {content, structuredContent?, isError?} (code nodes)."""
+    mcp_url = _init_mcp_session(server_url) or _mcp_candidates(_mcp_live_url(server_url))[-1]
+    request = {"jsonrpc": "2.0", "id": int(time.time()), "method": "tools/call",
+               "params": {"name": tool_name, "arguments": arguments or {}}}
     try:
         with httpx.Client(timeout=180) as c:
-            r = c.post(mcp_url, json=request, headers=headers)
+            r = c.post(mcp_url, json=request, headers=_mcp_headers(server_url))
             r.raise_for_status()
             data = _parse_mcp_response(r.text)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
-
+    except Exception as e:   # refused, timed out, HTTP error
+        return {"isError": True, "transport_error": True, "content": [{"type": "text", "text": str(e)}]}
     if data is None:
-        return json.dumps({"error": "invalid response"})
+        return {"isError": True, "content": [{"type": "text", "text": "invalid response"}]}
     if "error" in data:
-        return json.dumps({"error": data["error"].get("message", "unknown")})
+        return {"isError": True, "content": [{"type": "text", "text": data["error"].get("message", "unknown")}]}
+    return data.get("result") or {}
 
-    content = (data.get("result") or {}).get("content", [])
-    texts = [c.get("text", "") for c in content
-             if isinstance(c, dict) and c.get("type") == "text"]
-    return "\n".join(t for t in texts if t) or json.dumps(data.get("result"))[:8000]
 
+def _call_mcp_tool(server_url: str, tool_name: str, arguments: dict) -> str:
+    """tools/call for an agent's tool or a playbook #Action: the result's text items joined,
+    the raw result as JSON when it has none, {"error": ...} on failure."""
+    res = _call_mcp_tool_raw(server_url, tool_name, arguments)
+    texts = [c.get("text", "") for c in res.get("content") or [] if isinstance(c, dict) and c.get("type") == "text"]
+    if res.get("isError"):
+        return json.dumps({"error": "\n".join(t for t in texts if t) or "tool error"})
+    return "\n".join(t for t in texts if t) or json.dumps(res)[:8000]
 # ==============================================================
 # DOCUMENT CONVERTER
 # Turns a start-node attachment into markdown for the prompt.
@@ -466,9 +494,7 @@ START_DOCUMENTS = []
 node_2 = LlmAgent(
     name="node_2",
     model=_make_model("claude", "m", thinking=None),
-    instruction=("Current date: " + _TODAY + ". Treat this as 'now'; "
-                 "prefer your tools for current data over memory.\n\n"
-                 + "A"),
+    instruction=_agent_instruction("A", []),
     tools=[],
     include_contents='none',
     output_key="node_2",
@@ -483,9 +509,7 @@ node_2 = LlmAgent(
 node_3 = LlmAgent(
     name="node_3",
     model=_make_model("gemini", "g", thinking=None),
-    instruction=("Current date: " + _TODAY + ". Treat this as 'now'; "
-                 "prefer your tools for current data over memory.\n\n"
-                 + "B"),
+    instruction=_agent_instruction("B", []),
     tools=[],
     include_contents='none',
     output_key="node_3",
@@ -503,9 +527,12 @@ class _PassThroughAgent(BaseAgent):
     a finished HTML report back into plain markdown.)
     """
     source_keys: list = []
+    took: dict = {}   # parent key -> [route key, exits leading here]: a code parent counts only through the exit it took
 
     async def _run_async_impl(self, ctx):
-        vals = [str(ctx.session.state.get(k, "")) for k in self.source_keys]
+        st = ctx.session.state
+        keys = [k for k in self.source_keys if k not in self.took or st.get(self.took[k][0]) in self.took[k][1]]
+        vals = [str(st.get(k, "")) for k in keys]
         vals = [v for v in vals if v]
         text = vals[0] if len(vals) == 1 else "\n\n---\n\n".join(vals)
         yield Event(
@@ -517,6 +544,90 @@ class _PassThroughAgent(BaseAgent):
 # Output (fan-in) node 4 -- forwards its parent(s) result verbatim (no LLM),
 # so formatting such as HTML is preserved. Single parent = pass-through.
 node_4 = _PassThroughAgent(name="node_4", source_keys=["node_2", "node_3"])
+# ==============================================================
+# RUN EVENTS
+# Each node's start and completion (a code node's exit, a
+# dispatcher's route) go to GRAPH_RECORDER when the package's
+# listener set one: runs/ and GET /live, the editor's live canvas.
+# ==============================================================
+NODE_META = {
+    "node_2": [
+        "2",
+        "agent",
+        "A"
+    ],
+    "node_3": [
+        "3",
+        "agent",
+        "B"
+    ],
+    "node_4": [
+        "4",
+        "output",
+        "Output"
+    ]
+}   # agent name -> [node id, type, canvas name]: the nodes whose runs are recorded
+START_NODE = ["1", "Start"]   # [id, name] of the Start node
+DISPATCHER_IDS = []   # dispatchers record themselves; their choice is work (not a quiet poll)
+OUTPUT_NODE_KEYS = ["node_4"]   # the Output nodes: their answers are the workflow's answer
+GRAPH_RECORDER = None   # the run's RunRecorder (the package's listener sets it); None: nothing is recorded
+_RUN = {"ran": [], "routes": {}, "open": {}, "unrouted": ""}   # this run: nodes that ran, code exits, nodes
+#   started not completed, and why a dispatcher did not route (the answer when nothing reached the Output)
+
+
+def _set_recorder(recorder) -> None:
+    """The run's recorder: the listener's run_once sets it for a run and resets it after. A setter, not an
+    assignment from outside, so a package that keeps this in common.py still records."""
+    global GRAPH_RECORDER
+    GRAPH_RECORDER = recorder
+
+
+def _current_recorder():
+    return GRAPH_RECORDER
+
+
+def _run_reset() -> None:
+    _RUN["ran"], _RUN["routes"], _RUN["open"], _RUN["unrouted"] = [], {}, {}, ""
+
+
+def _rec_node_start(nid: str, name: str, ntype: str) -> None:
+    _RUN["open"][nid] = (name, ntype)
+    if GRAPH_RECORDER is not None:
+        GRAPH_RECORDER.node_start(nid, name, ntype)
+
+
+def _rec_node_complete(nid: str, name: str, ntype: str, output: str = "", **extra) -> None:
+    _RUN["open"].pop(nid, None)
+    _RUN["ran"].append(nid)
+    if "exit" in extra:
+        _RUN["routes"][nid] = extra["exit"]
+    if GRAPH_RECORDER is not None:
+        GRAPH_RECORDER.node_complete(nid, name, ntype, output=str(output or ""), **extra)
+
+
+def _rec_before(callback_context):
+    meta = NODE_META.get(callback_context.agent_name)
+    if meta:
+        _rec_node_start(meta[0], meta[2], meta[1])
+    return None
+
+
+def _rec_after(callback_context):
+    meta = NODE_META.get(callback_context.agent_name)
+    if meta:
+        nid, ntype, name = meta
+        extra = {"exit": callback_context.state.get("route_" + nid)} if ntype == "code" else {}
+        _rec_node_complete(nid, name, ntype, output=callback_context.state.get("node_" + nid, ""), **extra)
+    return None
+
+
+def _attach_recording(agent) -> None:
+    """Every recorded node's agent gets the before/after callbacks, wherever it sits in the tree."""
+    if agent.name in NODE_META:
+        agent.before_agent_callback = _rec_before
+        agent.after_agent_callback = _rec_after
+    for sub in getattr(agent, "sub_agents", None) or []:
+        _attach_recording(sub)
 # ==============================================================
 # ORCHESTRATION
 # The workflow graph as TOPOLOGICAL LAYERS: independent nodes at
@@ -530,6 +641,7 @@ root_agent = SequentialAgent(
     node_4
     ],
 )
+_attach_recording(root_agent)   # run events for every recorded node (see RUN EVENTS)
 # ==============================================================
 # CLI ENTRY
 # Seeds the prompt (+ attached documents), runs the graph via
@@ -539,19 +651,28 @@ root_agent = SequentialAgent(
 # ==============================================================
 WORKFLOW_NAME = "diamond"
 WORKFLOW_ID = 1
+START_MODE = "prompt"
+DEFAULT_CRON = None
+DEFAULT_WATCH = None
+DEFAULT_PROMPT = "GO"
 OUTPUT_STORAGE_ENABLED = False
 OUTPUT_FOLDER = None
 NODE_NAMES = {
     "2": "A",
     "3": "B"
 }  # node id -> human name (for readable logs)
+OUTPUT_IDS = [
+    "4"
+]  # the Output nodes: named "Output" in the logs, not timed in the summary
 
-async def main(user_prompt: str = "GO"):
+async def run_workflow(prompt: str, session: str | None = None) -> str:
     if START_DOCUMENTS:
         doc_parts = []
         for doc in START_DOCUMENTS:
             name = doc.get("name", "Document")
             path = doc.get("path", "")
+            if path and not os.path.isabs(path):
+                path = os.path.join(PACKAGE_DIR, path)   # start_documents/ in the package
             if not path:
                 doc_parts.append(f"### {name}\n\n_(no path on attachment record)_")
                 continue
@@ -561,24 +682,29 @@ async def main(user_prompt: str = "GO"):
             except Exception as e:
                 doc_parts.append(f"### {name}\n\n_(conversion failed: {e})_")
         if doc_parts:
-            user_prompt = (
+            prompt = (
                 "## Attached Documents\n\n"
                 + "\n\n---\n\n".join(doc_parts)
                 + "\n\n---\n\n"
-                + user_prompt
+                + prompt
             )
     print(f"[workflow] {WORKFLOW_NAME} starting", flush=True)
-    print(f"[workflow] prompt: {user_prompt[:200]!r}", flush=True)
+    print(f"[workflow] prompt: {prompt[:200]!r}", flush=True)
     session_service = InMemorySessionService()
     runner = Runner(agent=root_agent, app_name="workflow", session_service=session_service)
-    session = await session_service.create_session(app_name="workflow", user_id="local", state={})
+    adk_session = await session_service.create_session(app_name="workflow", user_id="local", state={"user_prompt": prompt})
+    _run_reset()
+    if START_NODE:
+        _rec_node_start(START_NODE[0], START_NODE[1], "start")
+        _rec_node_complete(START_NODE[0], START_NODE[1], "start", output=prompt)
+    outputs = {}   # the Output nodes' answers (the workflow's answer, when it has Output nodes)
     final = ""
     t0 = time.monotonic()
     seen = set()
     _t_first, _t_last = {}, {}  # per-node timing for the RUN SUMMARY
-    content = types.Content(role="user", parts=[types.Part(text=user_prompt)])
+    content = types.Content(role="user", parts=[types.Part(text=prompt)])
     try:
-        async for event in runner.run_async(user_id="local", session_id=session.id, new_message=content):
+        async for event in runner.run_async(user_id="local", session_id=adk_session.id, new_message=content):
             author = getattr(event, "author", "?")
             if isinstance(author, str) and author.startswith("node_"):
                 _nk = author.split("_")[1] if "_" in author else author
@@ -589,8 +715,8 @@ async def main(user_prompt: str = "GO"):
                 if isinstance(author, str) and author.startswith("node_"):
                     _ap = author.split("_")
                     _nid = _ap[1] if len(_ap) > 1 else author
-                    _kind = "skill step" if "skill" in author else "agent"
-                    print(f"[node {_nid}] {NODE_NAMES.get(_nid, _nid)!r} \u2192 {_kind} active", flush=True)
+                    _kind = "skill step" if "skill" in author else "node"
+                    print(f"[node {_nid}] {NODE_NAMES.get(_nid, 'Output' if _nid in OUTPUT_IDS else _nid)!r} \u2192 {_kind} active", flush=True)
                 else:
                     print(f"[node] > {author}", flush=True)
             parts = (event.content.parts if event.content else None) or []
@@ -609,38 +735,23 @@ async def main(user_prompt: str = "GO"):
                         print(f"[{author}] {txt[:240]}", flush=True)
             if event.is_final_response() and event.content and event.content.parts:
                 final = event.content.parts[0].text or final
+                if author in OUTPUT_NODE_KEYS:
+                    outputs[author] = event.content.parts[0].text or ""
+        if OUTPUT_NODE_KEYS:   # the answer is what the Output nodes gave: none ran (nothing to do) = ""
+            final = "\n\n---\n\n".join(v for v in outputs.values() if v)
+        final = final or _RUN["unrouted"]   # nothing reached the Output: why the dispatcher did not route
         print(f"[workflow] done in {time.monotonic() - t0:.1f}s, {len(final)} chars", flush=True)
-    except Exception:
+    except Exception as e:
+        for _nid, (_name, _type) in list(_RUN["open"].items()):   # a node that failed mid-run ends as failed
+            _rec_node_complete(_nid, _name, _type, success=False, error=f"{type(e).__name__}: {e}")
         print("[workflow] ERROR:", flush=True)
         traceback.print_exc()
         raise
-    import re as _re
-    _mm = _re.search(r"(?is)<!doctype html.*?</html\s*>", final) or _re.search(r"(?is)<html[\s>].*?</html\s*>", final)
-    if _mm:
-        final = _mm.group(0)  # strip narration/fences around a full HTML doc
-        _ext = "html"
-    else:
-        _ext = "md"
-    _slug = "".join(c if c.isalnum() else "_" for c in WORKFLOW_NAME).strip("_")[:60] or "workflow"
-    _ts = time.strftime("%Y%m%d-%H%M%S")
-    # Honour the Output node's storage setting: when ON, persist the final result
-    # where the app stores it (~/Documents/synergyAI/outputs/workflow/ by default,
-    # overridable via SYNERGYAI_OUTPUT_ROOT) or the workflow's custom folder; when OFF, skip.
-    _saved_path = None
-    if OUTPUT_STORAGE_ENABLED:
-        _root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.expanduser("~/Documents/synergyAI/outputs")
-        if OUTPUT_FOLDER:
-            _cf = os.path.expanduser(OUTPUT_FOLDER)
-            _save_dir = _cf if os.path.isabs(_cf) else os.path.join(_root, OUTPUT_FOLDER)
-        else:
-            _save_dir = os.path.join(_root, "workflow")
-        os.makedirs(_save_dir, exist_ok=True)
-        _out = os.path.join(_save_dir, f"{WORKFLOW_ID}-{_slug}_{_ts}.{_ext}")
-        with open(_out, "w", encoding="utf-8") as _f:
-            _f.write(final)
-        _saved_path = os.path.abspath(_out)
     print(final)
-    # Closing RUN SUMMARY (printed LAST): time per node, total, document location.
+    # Closing RUN SUMMARY (printed LAST): time per node, total wall-clock.
+    # Where the document was saved is NOT part of this block: saving belongs
+    # to __main__ (see below), so the CLI entry prints that line itself right
+    # after this one.
     print("\n" + "=" * 74, flush=True)
     print("RUN SUMMARY", flush=True)
     print("-" * 74, flush=True)
@@ -653,15 +764,48 @@ async def main(user_prompt: str = "GO"):
             print(f"    {_n:<{_w}}   {_s:7.1f}s", flush=True)
     print(f"  Total wall-clock: {time.monotonic() - t0:.1f}s", flush=True)
     print(f"  Final output: {len(final)} chars", flush=True)
+    print("=" * 74, flush=True)
+    return final
+
+# ============================== CLI ENTRY =================================
+# Extracting the deliverable and saving it both live HERE, not in
+# run_workflow(): the run server calls run_workflow() once per
+# conversational turn, and a turn must not write a file per prompt.
+# run_workflow() returns the answer UN-STRIPPED for the same reason --
+# the editor runs this same extraction on what it receives, so narration
+# wrapped around a document (or a second document, which the non-greedy
+# regex would discard) must still be there when the answer arrives.
+if __name__ == "__main__":
+    # argparse would fight the prompt's own spaces; the runner
+    # passes it space-split; sys.argv[1] alone would keep only the first word.
+    _text = asyncio.run(run_workflow(" ".join(sys.argv[1:]) if len(sys.argv) > 1 else "GO"))
+    # Honour the Output node's storage setting: when ON, persist the final result
+    # where the app stores it (~/Documents/synergyAI/outputs/workflow/ by default,
+    # overridable via SYNERGYAI_OUTPUT_ROOT) or the workflow's custom folder; when OFF, skip.
+    _saved_path = None
+    if OUTPUT_STORAGE_ENABLED:
+        import re as _re
+        _mm = _re.search(r"(?is)<!doctype html.*?</html\s*>", _text) or _re.search(r"(?is)<html[\s>].*?</html\s*>", _text)
+        if _mm:
+            _text = _mm.group(0)  # strip narration/fences around a full HTML doc
+            _ext = "html"
+        else:
+            _ext = "md"
+        _slug = "".join(c if c.isalnum() else "_" for c in WORKFLOW_NAME).strip("_")[:60] or "workflow"
+        _ts = time.strftime("%Y%m%d-%H%M%S")
+        _root = os.environ.get("SYNERGYAI_OUTPUT_ROOT") or os.path.expanduser("~/Documents/synergyAI/outputs")
+        if OUTPUT_FOLDER:
+            _cf = os.path.expanduser(OUTPUT_FOLDER)
+            _save_dir = _cf if os.path.isabs(_cf) else os.path.join(_root, OUTPUT_FOLDER)
+        else:
+            _save_dir = os.path.join(_root, "workflow")
+        os.makedirs(_save_dir, exist_ok=True)
+        _out = os.path.join(_save_dir, f"{WORKFLOW_ID}-{_slug}_{_ts}.{_ext}")
+        with open(_out, "w", encoding="utf-8") as _f:
+            _f.write(_text)
+        _saved_path = os.path.abspath(_out)
     if _saved_path:
         print(f"  Document saved to: {_saved_path}", flush=True)
     else:
         print("  Document not saved (output storage is OFF in the workflow settings) -- "
               "the output is printed above.", flush=True)
-    print("=" * 74, flush=True)
-    return final
-
-if __name__ == "__main__":
-    # Join ALL argv (a prompt is one string even with spaces) -- the runner
-    # passes it space-split; sys.argv[1] alone would keep only the first word.
-    asyncio.run(main(" ".join(sys.argv[1:]) if len(sys.argv) > 1 else "GO"))

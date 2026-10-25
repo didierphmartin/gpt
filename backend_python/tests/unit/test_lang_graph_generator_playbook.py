@@ -5,8 +5,8 @@ LangGraph compiler: playbook nodes and dispatcher agents.
   at generation time and runs through the emitted playbook runtime.
 - A dispatcher agent's fan-out is a MENU: route_to over its children and a conditional edge.
 
-The two PHP tests that also compile with ADK, MAF and NOOA keep their LangGraph half here; their
-ADK/MAF/NOOA half is skipped (those Python generators predate the refusal and are out of this port).
+The two PHP tests that also compile with ADK, MAF and NOOA run their other-target half over
+OTHER_TARGETS: the targets whose Python port is PHP-faithful (they refuse what PHP refuses).
 """
 from __future__ import annotations
 
@@ -61,7 +61,25 @@ def _robot_db():
     return database
 
 
-def _generate(graph: dict, userId='3', database=None, options: dict | None = None) -> str:
+OTHER_TARGETS = ('adk', 'maf', 'nooa')
+
+
+def _target_class(target: str):
+    if target == 'adk':
+        from app.agent_team.services.adk_generator import ADKGenerator
+        return ADKGenerator
+    if target == 'maf':
+        from app.agent_team.services.maf_generator import MAFGenerator
+        return MAFGenerator
+    from app.agent_team.services.nooa_generator import NOOAGenerator
+    return NOOAGenerator
+
+
+def _generate(graph: dict, userId='3', database=None, options: dict | None = None, target: str = 'langgraph') -> str:
+    if target != 'langgraph':
+        gen = _target_class(target)(database or _db(), S.WfRepo({'id': 44, 'name': 'Dispatcher demo', 'user_id': '3'}),
+                                    S.GraphRepo(graph), S.AgentRepo())
+        return gen.generate(44, userId)['code']
     res = S.generator(database or _db(), graph).generate(44, userId, options or {})
     if 'code' in res:
         return res['code']
@@ -172,14 +190,14 @@ def test_modular_listen_runs_are_unattended_per_run():
 
 
 def test_wired_failed_exit_refused_on_other_targets():
-    # LangGraph routes it (the ADK/MAF/NOOA half: test_wired_failed_exit_refused_on_adk_maf_nooa).
+    for target in OTHER_TARGETS:
+        with pytest.raises(RuntimeError) as e:
+            _generate(_fixed_exits_graph(True), '3', None, None, target)
+        assert str(e.value) == 'Playbook node "Playbook HR": the "failed" exit is supported by the LangGraph target only.', target
+        # Only "done" wired: compiles as before.
+        assert _generate(_fixed_exits_graph(False), '3', None, None, target) != '', target
+    # LangGraph routes it.
     assert '"exit_targets": {"done":["3"],"failed":["4"]},' in _generate(_fixed_exits_graph(True))
-
-
-@pytest.mark.skip(reason='ADK/MAF/NOOA half of the PHP test: the Python ADK/MAF/NOOA generators predate '
-                         'PlaybookEmit::refuseLangGraphOnly and are outside the LangGraph port')
-def test_wired_failed_exit_refused_on_adk_maf_nooa():
-    pass
 
 
 def test_from_input_without_robot_bakes_an_empty_dict():
@@ -207,10 +225,11 @@ def test_from_input_refused_on_a2_a():
         _generate(_from_input_graph(), '3', _robot_db(), {'a2a': True})
 
 
-@pytest.mark.skip(reason='ADK/MAF/NOOA only: the Python ADK/MAF/NOOA generators predate '
-                         'PlaybookEmit::refuseLangGraphOnly and are outside the LangGraph port')
 def test_from_input_refused_on_other_targets():
-    pass
+    for target in OTHER_TARGETS:
+        with pytest.raises(RuntimeError) as e:
+            _generate(_from_input_graph(), '3', _robot_db(), None, target)
+        assert str(e.value) == 'Playbook node "Run job playbook": "from input" is supported by the LangGraph target only.', target
 
 
 def test_playbook_node_binds_actions_against_user_registry():
