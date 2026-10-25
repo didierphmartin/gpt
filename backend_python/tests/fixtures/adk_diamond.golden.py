@@ -68,6 +68,7 @@ Dispatcher and playbook nodes are NOT executed by this target (see GRAPH NODES).
 
 TO RUN
 ======
+  # Requires Python 3.10+ (the generated code uses match statements)
   pip install "google-adk>=2.3,<3" litellm httpx python-dotenv   # 2.3.x: SequentialAgent/ParallelAgent still supported
   # API keys read from ../.env for the providers this workflow uses:
   #   ANTHROPIC_API_KEY (claude)

@@ -732,6 +732,14 @@ class PythonEmitHelpers:
         return _SKILL_FS_SYNC_BLOCK
 
     @staticmethod
+    def eventSinkBlock() -> str:
+        """Event sink + gate rendezvous (_SINK, _GATES, set_event_sink, emit_event, open_gate,
+        resolve_gate, take_gate_answer). Inert unless a host installs a sink. The caller must
+        supply `import threading` (RunServerEmitter.commonBlock() prepends it)."""
+        from app.agent_team.services.compiler_text import python_emit_helpers as T
+        return T.eventSinkBlock__ret
+
+    @staticmethod
     def documentConverterBlock() -> str:
         """PHP 441-564.
 
@@ -744,16 +752,18 @@ class PythonEmitHelpers:
     # Generated-script documentation (shared by every compile target)
     # ------------------------------------------------------------------
 
+    # Env var that carries the API key of each LLM provider (as the runner's .env names them).
+    PROVIDER_KEY_ENV = {
+        'claude': 'ANTHROPIC_API_KEY', 'anthropic': 'ANTHROPIC_API_KEY',
+        'openai': 'OPENAI_API_KEY', 'gemini': 'GOOGLE_API_KEY', 'google': 'GOOGLE_API_KEY',
+        'grok': 'XAI_API_KEY', 'xai': 'XAI_API_KEY', 'kimi': 'KIMI_API_KEY', 'moonshot': 'KIMI_API_KEY',
+        'deepseek': 'DEEPSEEK_API_KEY', 'glm': 'GLM_API_KEY',
+    }
+
     @staticmethod
     def providerKeyEnv(provider: str) -> str | None:
-        """PHP 571-579. Env var that carries the API key of a provider (as the
-        runner's .env names them)."""
-        return {
-            'claude': 'ANTHROPIC_API_KEY', 'anthropic': 'ANTHROPIC_API_KEY',
-            'openai': 'OPENAI_API_KEY', 'gemini': 'GOOGLE_API_KEY', 'google': 'GOOGLE_API_KEY',
-            'grok': 'XAI_API_KEY', 'xai': 'XAI_API_KEY', 'kimi': 'KIMI_API_KEY', 'moonshot': 'KIMI_API_KEY',
-            'deepseek': 'DEEPSEEK_API_KEY', 'glm': 'GLM_API_KEY',
-        }.get(provider.lower())
+        """Env var that carries the API key of a provider (as the runner's .env names them)."""
+        return PythonEmitHelpers.PROVIDER_KEY_ENV.get(provider.lower())
 
     @staticmethod
     def _nodeSummary(n: dict) -> str:
@@ -838,12 +848,13 @@ class PythonEmitHelpers:
         L.append('===========')
         w = 0
         for n in nodes:
-            w = max(w, len(str(n['id']) + ' (' + n['type'] + '):'))
+            w = max(w, len((str(n['id']) + ' (' + n['type'] + '):').encode('utf-8')))
         for n in nodes:
             marker = _coalesce(n.get('marker'), '')
             entry = dict(n)
             entry['dispatch_supported'] = dispatchOk
-            head = (str(n['id']) + ' (' + n['type'] + '):').ljust(w)
+            head = str(n['id']) + ' (' + n['type'] + '):'
+            head += ' ' * max(0, w - len(head.encode('utf-8')))   # str_pad counts bytes
             L.append('  ' + head + ' ' + n['name'] + ' -- ' + PythonEmitHelpers._nodeSummary(entry)
                       + ('   ' + marker if marker != '' else ''))
         L.append('')
@@ -881,11 +892,12 @@ class PythonEmitHelpers:
         L.append('')
         L.append('DATA FLOW')
         L.append('=========')
-        for dl in php_strval(_coalesce(doc.get('data_flow'), '')).rstrip('\n').split('\n'):
+        for dl in php_strval(_coalesce(doc.get('data_flow'), '')).rstrip(' \t\n\r\x00\x0b').split('\n'):
             L.append(dl)
         L.append('')
         L.append('TO RUN')
         L.append('======')
+        L.append('  # Requires Python 3.10+ (the generated code uses match statements)')
         run = doc.get('run') if isinstance(doc.get('run'), dict) else {}
         for dep in _coalesce(run.get('deps'), []):
             L.append('  ' + dep)
@@ -921,7 +933,7 @@ class PythonEmitHelpers:
         st = _coalesce(doc.get('storage'), {})
         if not php_empty(st.get('enabled')):
             folder = _coalesce(st.get('folder'), '')
-            folder = folder if folder != '' else '~/Documents/synergyAI/outputs/workflow/'
+            folder = folder if folder != '' else _coalesce(st.get('default'), '~/Documents/synergyAI/outputs/workflow/')
             storage_line = 'ON -> ' + folder
         else:
             storage_line = 'OFF (the result is printed, not saved)'
@@ -936,10 +948,10 @@ class PythonEmitHelpers:
         generated code (same fields in every target).
         """
         head = '# ---- node ' + str(n['id']) + ': ' + n['name'] + ' (' + n['type'] + ') '
-        L = [indent + head + '-' * max(4, 78 - len(head))]
+        L = [indent + head + '-' * max(4, 78 - len(head.encode('utf-8')))]   # strlen counts bytes
 
         def row(k: str, v: str) -> str:
-            return indent + '#   ' + k.ljust(15) + ': ' + v
+            return indent + '#   ' + k + ' ' * max(0, 15 - len(k.encode('utf-8'))) + ': ' + v
 
         provider = _coalesce(n.get('provider'), '')
         model = _coalesce(n.get('model'), '')
