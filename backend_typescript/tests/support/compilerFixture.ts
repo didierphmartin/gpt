@@ -27,8 +27,50 @@ export function loadFixture(name: string): any {
   return fx;
 }
 
+/** The compile targets, each a generator class constructed as LangGraphGenerator is (repositories, skills root, documents). */
+export const TARGETS = ['langgraph', 'adk', 'maf', 'nooa'] as const;
+export type Target = (typeof TARGETS)[number];
+export const MODES = ['single', 'modular', 'a2a'] as const;
+export type Mode = (typeof MODES)[number];
+
+function targetClass(target: Target): any {
+  switch (target) {
+    case 'langgraph':
+      return LangGraphGenerator;
+    case 'adk':
+      return require('../../src/AgentTeam/ADKGenerator').ADKGenerator;
+    case 'maf':
+      return require('../../src/AgentTeam/MAFGenerator').MAFGenerator;
+    case 'nooa':
+      return require('../../src/AgentTeam/NOOAGenerator').NOOAGenerator;
+  }
+}
+
+/**
+ * One target's generation of a fixture in one code structure, as WorkflowController calls it (php_compile.php's
+ * fixture_target_compile): {ok, result} or {ok: false, error}.
+ */
+export async function fixtureTargetCompile(name: string, target: Target, mode: Mode): Promise<{ ok: boolean; result?: any; error?: string }> {
+  const { gen, fx, cleanup } = fixtureGenerator(name, target);
+  const wid = Number(fx.workflow.id);
+  const uid = fx.user_id !== undefined && fx.user_id !== null ? String(fx.user_id) : null;
+  try {
+    let result: any;
+    if (target === 'langgraph') {
+      result = await gen.generate(wid, uid, { a2a: mode === 'a2a', modular: mode === 'modular' });
+    } else {
+      result = mode === 'a2a' ? await gen.generateA2A(wid, uid) : mode === 'modular' ? await gen.generatePackage(wid, uid) : await gen.generate(wid, uid);
+    }
+    return { ok: true, result };
+  } catch (e: any) {
+    return { ok: false, error: e?.message ?? String(e) };
+  } finally {
+    cleanup();
+  }
+}
+
 /** Installs the fixture's database (replacing the previous one) and returns its generator; cleanup() removes the skills folder. */
-export function fixtureGenerator(name: string): { gen: LangGraphGenerator; fx: any; cleanup: () => void } {
+export function fixtureGenerator(name: string, target: Target = 'langgraph'): { gen: any; fx: any; cleanup: () => void } {
   const fx = loadFixture(name);
   const sqlite = installSqliteDb();
   for (const s of [...JSON.parse(readFileSync(path.join(FIXTURES, 'schema.json'), 'utf8')), ...(fx.sql ?? [])]) {
@@ -56,7 +98,8 @@ export function fixtureGenerator(name: string): { gen: LangGraphGenerator; fx: a
   }
   const components = fx.code_components ?? {};
   const agents = fx.agents ?? {};
-  const gen = new LangGraphGenerator(
+  const Gen = targetClass(target);
+  const gen = new Gen(
     { findById: async () => WorkflowView.fromRecord(fx.workflow) },
     { getGraph: async () => StartOptionGraph.expand(fx.graph, (id: number) => components[String(id)] ?? null) },
     { findById: async (id: number) => (agents[String(id)] !== undefined ? hydrateAgent(agents[String(id)]) : null) },

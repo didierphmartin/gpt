@@ -4,6 +4,10 @@
  * LangGraph compiler on a fixture without MySQL and prints the result as JSON.
  *
  *   php php_compile.php compile <fixture.json>   -> {"ok": true, "result": <generate() result>} | {"ok": false, "error": "..."}
+ *   php php_compile.php target <fixture.json> <target> <mode>
+ *                                               -> one target's (langgraph|adk|maf|nooa) result in one mode
+ *                                                  (single|modular|a2a), as WorkflowController generates it
+ *   php php_compile.php targets <fixture.json>   -> {target: {mode: that result}} for every target and mode
  *   php php_compile.php facts <fixture.json>     -> analyzeForEmit()'s facts (the workflow object as its fields)
  *   php php_compile.php call                     -> stdin {"class", "method", "args": [...]}: a static method's
  *                                                   return value (private ones too); an argument
@@ -76,7 +80,7 @@ function fixture_skills_root(array $fx): string
     return $root;
 }
 
-function fixture_generator(array $fx): \AgentTeam\Services\LangGraphGenerator
+function fixture_generator(array $fx, string $class = \AgentTeam\Services\LangGraphGenerator::class): object
 {
     $pdo = fixture_pdo($fx);
     $wf = new \AgentTeam\Models\Workflow($fx['workflow']);
@@ -103,7 +107,7 @@ function fixture_generator(array $fx): \AgentTeam\Services\LangGraphGenerator
             return isset($this->agents[(string) $id]) ? new \AgentTeam\Models\Agent($this->agents[(string) $id]) : null;
         }
     };
-    return new \AgentTeam\Services\LangGraphGenerator($pdo, $wfRepo, $graphRepo, $agentRepo, fixture_skills_root($fx), fixture_documents($fx));
+    return new $class($pdo, $wfRepo, $graphRepo, $agentRepo, fixture_skills_root($fx), fixture_documents($fx));
 }
 
 /**
@@ -126,6 +130,39 @@ function fixture_documents(array $fx): ?\AgentTeam\Services\StartDocumentStore
         exec('rm -rf ' . escapeshellarg($root));
     });
     return new \AgentTeam\Services\StartDocumentStore($folder, null, $root);
+}
+
+/** The generator classes of the compile targets (php_compile.php targets). */
+const TARGET_CLASSES = [
+    'langgraph' => \AgentTeam\Services\LangGraphGenerator::class,
+    'adk' => \AgentTeam\Services\ADKGenerator::class,
+    'maf' => \AgentTeam\Services\MAFGenerator::class,
+    'nooa' => \AgentTeam\Services\NOOAGenerator::class,
+];
+
+/**
+ * One target's generation of a fixture in one code structure, as WorkflowController calls it: LangGraph's
+ * generate() with {a2a} / {modular} / {}, the other targets' generateA2A() / generatePackage() / generate().
+ */
+function fixture_target_compile(array $fx, string $target, string $mode): array
+{
+    $gen = fixture_generator($fx, TARGET_CLASSES[$target]);
+    $wid = (int) $fx['workflow']['id'];
+    $uid = isset($fx['user_id']) ? (string) $fx['user_id'] : null;
+    try {
+        if ($target === 'langgraph') {
+            $result = $gen->generate($wid, $uid, ['a2a' => $mode === 'a2a', 'modular' => $mode === 'modular']);
+        } else {
+            $result = match ($mode) {
+                'a2a' => $gen->generateA2A($wid, $uid),
+                'modular' => $gen->generatePackage($wid, $uid),
+                default => $gen->generate($wid, $uid),
+            };
+        }
+        return ['ok' => true, 'result' => $result];
+    } catch (\Throwable $e) {
+        return ['ok' => false, 'error' => $e->getMessage(), 'class' => get_class($e)];
+    }
 }
 
 function fixture_facts(string $path): array
@@ -156,6 +193,19 @@ try {
             $gen = fixture_generator($fx);
             $result = $gen->generate((int) $fx['workflow']['id'], isset($fx['user_id']) ? (string) $fx['user_id'] : null, $fx['options'] ?? []);
             out(['ok' => true, 'result' => $result]);
+            break;
+        case 'target':   // target <fixture.json> <langgraph|adk|maf|nooa> <single|modular|a2a>
+            out(fixture_target_compile(fixture_load($argv[2]), $argv[3], $argv[4]));
+            break;
+        case 'targets':   // targets <fixture.json> -> {target: {mode: {ok, result} | {ok: false, error}}}
+            $fx = fixture_load($argv[2]);
+            $all = [];
+            foreach (array_keys(TARGET_CLASSES) as $t) {
+                foreach (['single', 'modular', 'a2a'] as $m) {
+                    $all[$t][$m] = fixture_target_compile($fx, $t, $m);
+                }
+            }
+            out($all);
             break;
         case 'facts':
             out(fixture_facts($argv[2]));
