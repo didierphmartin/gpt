@@ -1,5 +1,8 @@
+import { sql } from 'kysely';
+import { db } from '../db/pools';
 import { Ctx } from '../Support/Http';
 import { McpEndpoint } from '../Services/McpEndpoint';
+import { phpJsonEscape } from '../Support/PhpJson';
 
 /** Raw (non-JSON) response: the route handler writes raw_body with these headers/status. */
 export interface RawResult {
@@ -17,11 +20,26 @@ export interface RawResult {
  * PUBLIC route (see `MiddlewareProcessor.PUBLIC_ROUTES`) — matching the PHP backend.
  */
 export class MCPAppController {
+  /**
+   * The HTML comes from an MCP server: run it in an opaque origin (no allow-same-origin), so it
+   * cannot read this site's storage or session token, even when opened directly. Sent on every
+   * answer, as PHP's index.php does.
+   */
+  static readonly SANDBOX_CSP = 'sandbox allow-scripts allow-forms allow-downloads allow-modals';
+
   /** GET /api/v1/mcp/app — returns HTML (or text/plain on error). */
   async getResource(ctx: Ctx): Promise<RawResult> {
     const q = ctx.query ?? {};
     const str = (v: unknown): string => (v === undefined || v === null ? '' : String(v));
 
+    const textErr = (msg: string, status: number): RawResult => ({
+      raw_body: msg,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Security-Policy': MCPAppController.SANDBOX_CSP },
+      status_code: status,
+    });
+
+    const isStr = (v: unknown) => v === undefined || v === null || typeof v === 'string';
+    if (!isStr(q.server) || !isStr(q.resource)) return textErr('Invalid server or resource parameter', 400);
     const serverUrl = str(q.server);
     const resourceUri = str(q.resource);
     const west = str(q.west);
@@ -31,14 +49,12 @@ export class MCPAppController {
     const label = str(q.label);
     const viewUUID = str(q.viewUUID);
 
-    const textErr = (msg: string, status: number): RawResult => ({
-      raw_body: msg,
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-      status_code: status,
-    });
-
     if (!serverUrl) return textErr('Missing server parameter', 400);
     if (!resourceUri) return textErr('Missing resource parameter', 400);
+
+    // This route is public (an iframe cannot send the session header), so it only reaches MCP
+    // servers someone registered, never any URL.
+    if (!(await this.isRegisteredServer(serverUrl))) return textErr('Unknown MCP server', 404);
 
     // The endpoint is the first candidate (McpEndpoint: the URL as given,
     // then with "/mcp" in its path) that answers initialize with JSON-RPC.
@@ -86,8 +102,10 @@ export class MCPAppController {
     let htmlContent: string | null = resourceResponse?.result?.contents?.[0]?.text ?? null;
     if (!htmlContent) return textErr('No HTML content in MCP resource', 502);
 
-    // Inject initialization script with the tool arguments
-    const initData = JSON.stringify({
+    // Inject initialization script with the tool arguments (HEX flags: no '</script>' or quote in
+    // a value can end the script)
+    const serverUrlJs = MCPAppController.jsonHex(serverUrl);
+    const initData = MCPAppController.jsonHex({
       west: west !== '' ? parseFloat(west) : null,
       south: south !== '' ? parseFloat(south) : null,
       east: east !== '' ? parseFloat(east) : null,
@@ -102,7 +120,7 @@ export class MCPAppController {
     window.MCP_INIT_DATA = ${initData};
 
     // Override the MCP server URL to point to the actual server
-    window.MCP_SERVER_URL = ${JSON.stringify(serverUrl)};
+    window.MCP_SERVER_URL = ${serverUrlJs};
 
     // Dispatch init event when DOM is ready
     if (document.readyState === 'loading') {
@@ -123,9 +141,26 @@ export class MCPAppController {
 
     return {
       raw_body: htmlContent,
-      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      headers: { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': MCPAppController.SANDBOX_CSP },
       status_code: 200,
     };
+  }
+
+  /**
+   * PHP json_encode($v, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT): default-flag
+   * bytes (escaped slashes, \uXXXX for non-ASCII) with < > & ' " inside strings as \u003C etc.
+   */
+  static jsonHex(v: unknown): string {
+    const quoted = JSON.stringify(v).replace(/\\(.)/g, (m, c) => (c === '"' ? '\\u0022' : m));
+    const hexed = quoted.replace(/[<>&']/g, (c) => '\\u' + c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0'));
+    return phpJsonEscape(hexed);
+  }
+
+  /** Whether an enabled MCP server row has this URL (trailing slash ignored). */
+  private async isRegisteredServer(url: string): Promise<boolean> {
+    const want = url.replace(/\/+$/, '');
+    const rows = (await sql<{ url: string | null }>`SELECT url FROM mcp_servers WHERE enabled = 1`.execute(db)).rows;
+    return rows.some((r) => String(r.url ?? '').replace(/\/+$/, '') === want);
   }
 
   /**
