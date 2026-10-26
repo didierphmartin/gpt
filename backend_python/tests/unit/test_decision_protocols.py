@@ -55,3 +55,9 @@ def test_the_registry_names_each_adapter():
     assert DecisionProtocols.get('nope') is None
     assert DECISION_PROTOCOLS['typesafe']['url'] == JevRouter.URL and DECISION_PROTOCOLS['openai']['url'] == OpenAIDecisionRouter.URL
     assert DECISION_PROTOCOLS['typesafe']['model'] == JevRouter.MODEL and DECISION_PROTOCOLS['openai']['model'] == OpenAIDecisionRouter.MODEL
+
+
+def test_decision_provider_list_carries_the_rate():
+    """SettingsController::decisionProviderList: rate = rateOf(key); null when unpriced."""
+    out = decision_provider_list(ROWS, lambda k: True, {'jev': {'input': 0.042, 'output': 0.0}})
+    assert {d['key']: d['rate'] for d in out} == {'acme': None, 'jev': {'input': 0.042, 'output': 0.0}}

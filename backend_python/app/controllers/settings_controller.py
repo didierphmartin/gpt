@@ -18,8 +18,11 @@ from pathlib import Path
 
 from app.config import PHP_BACKEND
 from app.services.api_key_crypto import ApiKeyCrypto
-from app.services.decision_access import package_allowed, router_rows
+from app.exceptions import PricingUnavailableException
+from app.services.decision_access import package_allowed
+from app.services.decision_providers import DecisionProviders
 from app.services.package_resolver import PackageResolver
+from app.services.pricing_resolver import PricingResolver
 from app.services.provider_kinds import decision_provider_list
 from app.support.crypto import aes256cbc_encrypt
 from app.support.db_presence import DbPresence
@@ -156,11 +159,17 @@ class SettingsController:
         planSql = "SELECT plan, role FROM users WHERE id = :user_id"
         userRow = self.db.fetch_one(planSql, {':user_id': userId}) or {}
 
+        decisionKeys = DecisionProviders.keys(self.db)
+        rates = self.routerRates(PricingResolver(self.db), decisionKeys)
+
         return {
             'success': True,
             'usage': {
                 'current_month': currentMonth,
                 'by_provider': php_array(byProvider),
+                # Rates for usage rows the model catalog does not price (decision providers),
+                # read from the admin-editable system_llm_settings row.
+                'rates': php_array(rates),
                 'totals': {
                     'cost_usd': totalCost,
                     'tokens': totalTokens,
@@ -173,9 +182,13 @@ class SettingsController:
                     'cost_usd': php_floatval(lifetime['lifetime_cost_usd'] if lifetime.get('lifetime_cost_usd') is not None else 0),
                     'requests': php_intval(lifetime['lifetime_requests'] if lifetime.get('lifetime_requests') is not None else 0),
                 },
+                # What the free-trial quota counts: the same sum ChatController checkFreeTrialQuota
+                # enforces (llm_usage_balance, decision providers excluded). lifetime.total_tokens still counts all.
+                'quota_tokens_used': self.quotaTokensUsed(balances, decisionKeys),
                 'plan': userRow['plan'] if userRow.get('plan') is not None else 'free',
                 'role': userRow['role'] if userRow.get('role') is not None else 'prospect',
                 'free_trial_quota': 50000,
+                'decision_providers': self._decisionProviderList(userId, rates),
             },
             'status_code': 200,
         }
@@ -261,6 +274,8 @@ class SettingsController:
         except Exception as e:  # noqa: BLE001
             error_log('[SettingsController] Package lookup failed in getKeys: ' + str(e))
 
+        rates = self.routerRates(PricingResolver(self.db), DecisionProviders.keys(self.db))
+
         return {
             'success': True,
             'keys': php_array(result),
@@ -269,9 +284,45 @@ class SettingsController:
             'locked': php_array(locked),
             'system_prompts': php_array(systemPrompts),
             'endpoints': php_array(endpoints),
-            'decision_providers': decision_provider_list(router_rows(self.db), package_allowed(self.db, userId)),
+            # Admin-set rates for the decision-model rows; None = unpriced.
+            'rates': php_array(rates),
+            'decision_providers': self._decisionProviderList(userId, rates),
             'status_code': 200,
         }
+
+    @staticmethod
+    def quotaTokensUsed(balances: list, decisionKeys: list) -> int:
+        """Tokens that count toward the quota: every provider's balance total except
+        decision providers, whose routing tokens are recorded but never capped."""
+        total = 0
+        for row in balances:
+            if php_strval(row.get('provider') if row.get('provider') is not None else '') not in decisionKeys:
+                total += php_intval(row.get('total_tokens') if row.get('total_tokens') is not None else 0)
+        return total
+
+    @staticmethod
+    def rateOf(pricing: PricingResolver, provider: str) -> dict | None:
+        """A provider's per-1M rates as {input, output}, or None when its row has
+        no price (the card then shows a dash instead of a made-up $0)."""
+        try:
+            rateIn, rateOut = pricing.resolve(provider)
+        except PricingUnavailableException:
+            return None
+        return {'input': rateIn, 'output': rateOut}
+
+    @classmethod
+    def routerRates(cls, pricing: PricingResolver, decisionKeys: list) -> dict:
+        """Rates for rows the model catalog does not price (decision providers),
+        keyed by provider; shared by /settings/usage and /settings/keys."""
+        return {key: cls.rateOf(pricing, key) for key in decisionKeys}
+
+    def _decisionProviderList(self, userId, rates: dict) -> list:
+        """Enabled decision rows with a registered protocol that the user's plan allows,
+        admin order. Never a key."""
+        rows = DecisionProviders.rows(self.db)
+        if not rows:
+            return []
+        return decision_provider_list(rows, package_allowed(self.db, userId), rates)
 
     def saveKeys(self, request) -> dict:
         """Save user's custom API keys."""
@@ -307,6 +358,11 @@ class SettingsController:
                     'status_code': 400,
                 }
 
+        # Decision-provider keys are stored like LLM keys, encrypted the same
+        # way, but have no model choice and no system prompt.
+        decisionKeys = DecisionProviders.keys(self.db)
+        validKeyProviders = validProviders + decisionKeys
+
         self.ensureApiKeysTableExists()
         self.ensureUserModelsTableExists()
 
@@ -314,7 +370,7 @@ class SettingsController:
 
         # Save API keys
         for provider, apiKey in php_items(keys):
-            if provider not in validProviders:
+            if provider not in validKeyProviders:
                 continue
 
             if php_empty(php_trim(apiKey)):
@@ -398,7 +454,8 @@ class SettingsController:
         # without a trailing slash since providers append their own path.
         endpointCount = 0
         for provider, url in php_items(endpoints):
-            if provider not in validProviders or not isinstance(url, str):
+            # Decision providers too: they can sit behind a gateway (full URL).
+            if provider not in validKeyProviders or not isinstance(url, str):
                 continue
             value = php_trim(url).rstrip('/')
 

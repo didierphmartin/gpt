@@ -18,8 +18,27 @@ class PackageController:
     def me(self, request) -> dict:
         uid = request.get('user_id')
         package = self.resolver.resolveForUser(int(uid) if is_numeric(uid) else None)
-        return {'success': True, 'role': package['role'], 'capabilities': package['capabilities'],
+        return {'success': True, 'role': package['role'],
+                'capabilities': self._without_provider_keys(package['capabilities']),
                 'updated_at': package['updated_at']}
+
+    @staticmethod
+    def _without_provider_keys(capabilities):
+        """PackageController::withoutProviderKeys. The browser sees which providers are on
+        and their default model, never the package's default keys (the server resolves
+        those per call). The admin endpoints keep the keys: gpt_admin edits them.
+        Copies, never mutates: the resolver's cached package keeps its keys."""
+        if not isinstance(capabilities, dict) or not isinstance(capabilities.get('providers'), (dict, list)):
+            return capabilities
+        providers = capabilities['providers']
+        if isinstance(providers, dict):
+            stripped = {name: ({k: v for k, v in entry.items() if k != 'default_api_key'}
+                               if isinstance(entry, dict) else entry)
+                        for name, entry in providers.items()}
+        else:   # a JSON list: entries can be objects too
+            stripped = [({k: v for k, v in entry.items() if k != 'default_api_key'}
+                         if isinstance(entry, dict) else entry) for entry in providers]
+        return {**capabilities, 'providers': stripped}
 
     def adminList(self, request) -> dict:
         err = require_admin(self.db, request)
