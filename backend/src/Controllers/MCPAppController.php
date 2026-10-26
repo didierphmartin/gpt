@@ -57,6 +57,16 @@ class MCPAppController
             ];
         }
 
+        // This route is public (an iframe cannot send the session header), so
+        // it only reaches MCP servers someone registered, never any URL.
+        if (!$this->isRegisteredServer($serverUrl)) {
+            return [
+                'error' => 'Unknown MCP server',
+                'status_code' => 404,
+                'content_type' => 'text/plain'
+            ];
+        }
+
         // Initialize MCP session
         $initRequest = [
             'jsonrpc' => '2.0',
@@ -127,7 +137,10 @@ class MCPAppController
             ];
         }
 
-        // Inject initialization script with the tool arguments
+        // Inject initialization script with the tool arguments (HEX flags: no
+        // '</script>' or quote in a value can end the script)
+        $jsonFlags = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
+        $serverUrlJs = json_encode($serverUrl, $jsonFlags);
         $initData = json_encode([
             'west' => $west !== '' ? (float)$west : null,
             'south' => $south !== '' ? (float)$south : null,
@@ -136,7 +149,7 @@ class MCPAppController
             'label' => $label,
             'viewUUID' => $viewUUID,
             'serverUrl' => $serverUrl
-        ]);
+        ], $jsonFlags);
 
         $initScript = <<<SCRIPT
 <script>
@@ -144,7 +157,7 @@ class MCPAppController
     window.MCP_INIT_DATA = {$initData};
 
     // Override the MCP server URL to point to the actual server
-    window.MCP_SERVER_URL = '{$serverUrl}';
+    window.MCP_SERVER_URL = {$serverUrlJs};
 
     // Dispatch init event when DOM is ready
     if (document.readyState === 'loading') {
@@ -169,6 +182,21 @@ SCRIPT;
             'status_code' => 200,
             'content_type' => 'text/html; charset=utf-8'
         ];
+    }
+
+    /**
+     * Whether an enabled MCP server row has this URL (trailing slash ignored).
+     */
+    private function isRegisteredServer(string $url): bool
+    {
+        $want = rtrim($url, '/');
+        $stmt = $this->db->query("SELECT url FROM mcp_servers WHERE enabled = 1");
+        foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $known) {
+            if (rtrim((string) $known, '/') === $want) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

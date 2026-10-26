@@ -168,6 +168,10 @@ switch ($routeInfo[0]) {
                 http_response_code($statusCode);
                 header('Content-Type: ' . $result['content_type']);
                 header('Cache-Control: no-cache');
+                // The HTML comes from an MCP server: run it in an opaque origin
+                // (no allow-same-origin), so it cannot read this site's storage
+                // or session token, even when opened directly.
+                header('Content-Security-Policy: sandbox allow-scripts allow-forms allow-downloads allow-modals');
                 if (isset($result['html'])) {
                     echo $result['html'];
                 } elseif (isset($result['error'])) {
