@@ -739,8 +739,8 @@ router.post('/api/v1/drive/save', handle((ctx) => drive.save(ctx)));
 router.post('/api/v1/mcp/agents', handle((ctx) => agentMcp.handle(ctx)));
 
 // Voice (protected — none of /api/v1/voice/* are in MiddlewareProcessor.PUBLIC_ROUTES, so all four
-// require auth; the retired Hume/EVI path is not ported). New voice: Grok (ephemeral token brokered
-// here) + Gemini (client connects direct to Google; backend only brokers the key via /voice/config).
+// require auth; the retired Hume/EVI path is not ported). Grok and Gemini both get an ephemeral
+// token brokered here (/voice/token); /voice/config never returns a key.
 router.post('/api/v1/voice/usage', handle((ctx) => voice.logUsage(ctx)));
 router.get('/api/v1/voice/stats', handle((ctx) => voice.getStats(ctx)));
 router.post('/api/v1/voice/token', handle((ctx) => voice.getEphemeralToken(ctx)));
