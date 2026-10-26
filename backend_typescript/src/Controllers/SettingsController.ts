@@ -1,6 +1,8 @@
 import { sql } from 'kysely';
-import { ROUTER_FORMAT, decisionProviderList } from '../Services/ProviderKinds';
+import { decisionProviderList, Rate } from '../Services/ProviderKinds';
 import { packageAllowed } from '../Services/DecisionAccess';
+import { DecisionProviders } from '../Services/DecisionProviders';
+import { resolvePricing, PricingUnavailableError } from '../Services/PricingResolver';
 import { db } from '../db/pools';
 import { config } from '../config/env';
 import { PackageResolver } from '../Services/PackageResolver';
@@ -120,11 +122,17 @@ export class SettingsController {
     const userRow =
       (await sql<{ plan: string | null; role: string | null }>`SELECT plan, role FROM users WHERE id = ${userId}`.execute(db)).rows[0] ?? {};
 
+    const decisionKeys = await DecisionProviders.keys();
+    const rates = await SettingsController.routerRates(decisionKeys);
+
     return {
       success: true,
       usage: {
         current_month: currentMonth,
         by_provider: byProvider,
+        // Rates for usage rows the model catalog does not price (decision providers),
+        // read from the admin-editable system_llm_settings row.
+        rates: SettingsController.phpMap(rates),
         totals: { cost_usd: totalCost, tokens: totalTokens, requests: totalRequests },
         lifetime: {
           input_tokens: Number(lifetime.lifetime_input_tokens ?? 0),
@@ -133,11 +141,59 @@ export class SettingsController {
           cost_usd: Number(lifetime.lifetime_cost_usd ?? 0),
           requests: Number(lifetime.lifetime_requests ?? 0),
         },
+        // What the free-trial quota counts: the same sum ChatController's checkFreeTrialQuota enforces
+        // (llm_usage_balance, decision providers excluded). lifetime.total_tokens still counts all.
+        quota_tokens_used: SettingsController.quotaTokensUsed(balances, decisionKeys),
         plan: (userRow as any).plan ?? 'free',
         role: (userRow as any).role ?? 'prospect',
         free_trial_quota: 50000,
+        decision_providers: await SettingsController.decisionProviders(userId, rates),
       },
     };
+  }
+
+  /**
+   * Tokens that count toward the quota: every provider's balance total except decision providers,
+   * whose routing tokens are recorded but never capped.
+   */
+  static quotaTokensUsed(balances: Array<Record<string, any>>, decisionKeys: string[]): number {
+    let sum = 0;
+    for (const row of balances) {
+      if (!decisionKeys.includes(String(row.provider ?? ''))) {
+        sum += Math.trunc(Number(row.total_tokens ?? 0)) || 0;
+      }
+    }
+    return sum;
+  }
+
+  /** A provider's per-1M rates as {input, output}, or null when its row has no price. */
+  static async rateOf(provider: string): Promise<Rate> {
+    try {
+      const [input, output] = await resolvePricing(provider);
+      return { input, output };
+    } catch (e) {
+      if (e instanceof PricingUnavailableError) return null;
+      throw e;
+    }
+  }
+
+  /** Rates for rows the model catalog does not price (decision providers), keyed by provider. */
+  static async routerRates(decisionKeys: string[]): Promise<Record<string, Rate>> {
+    const rates: Record<string, Rate> = {};
+    for (const key of decisionKeys) rates[key] = await SettingsController.rateOf(key);
+    return rates;
+  }
+
+  /** Enabled decision rows with a registered protocol that the user's plan allows, admin order. Never a key. */
+  static async decisionProviders(userId: unknown, rates: Record<string, Rate>) {
+    const rows = await DecisionProviders.rows();
+    if (rows.length === 0) return [];
+    return decisionProviderList(rows, await packageAllowed(userId), rates);
+  }
+
+  /** PHP json_encodes an empty array as [] (a non-empty keyed one as an object). */
+  private static phpMap<T>(m: Record<string, T>): Record<string, T> | [] {
+    return Object.keys(m).length === 0 ? [] : m;
   }
 
   /** GET /api/v1/settings/keys */
@@ -199,11 +255,14 @@ export class SettingsController {
       /* fail open — leave package_models/locked empty */
     }
 
-    // Decision-model providers (router rows) the plan allows; routing itself is PHP-only.
-    const routerRows = (await sql`SELECT * FROM system_llm_settings WHERE api_format = ${ROUTER_FORMAT}`.execute(db)).rows as Record<string, any>[];
-    const decision_providers = decisionProviderList(routerRows, await packageAllowed(userId));
+    // Admin-set rates for the decision-model rows; null = unpriced.
+    const rates = await SettingsController.routerRates(await DecisionProviders.keys());
+    const decision_providers = await SettingsController.decisionProviders(userId, rates);
 
-    return { success: true, keys: result, models, package_models: packageModels, locked, system_prompts: systemPrompts, endpoints, decision_providers };
+    return {
+      success: true, keys: result, models, package_models: packageModels, locked, system_prompts: systemPrompts, endpoints,
+      rates: SettingsController.phpMap(rates), decision_providers,
+    };
   }
 
   /** POST /api/v1/settings/keys */
@@ -234,9 +293,12 @@ export class SettingsController {
     }
 
     const valid = SettingsController.VALID_PROVIDERS;
+    // Decision-provider keys are stored like LLM keys, encrypted the same way, but have no model
+    // choice and no system prompt.
+    const validKey = [...valid, ...(await DecisionProviders.keys())];
     let savedCount = 0;
     for (const [provider, apiKey] of Object.entries(keys)) {
-      if (!valid.includes(provider)) continue;
+      if (!validKey.includes(provider)) continue;
       if (typeof apiKey !== 'string' || apiKey.trim() === '') continue;
       const encryptedKey = this.encryptApiKey(apiKey.trim());
       await sql`
@@ -274,7 +336,8 @@ export class SettingsController {
     // their own path.
     let endpointCount = 0;
     for (const [provider, url] of Object.entries(endpoints)) {
-      if (!valid.includes(provider)) continue;
+      // Decision providers too: they can sit behind a gateway (full URL).
+      if (!validKey.includes(provider)) continue;
       if (typeof url !== 'string') continue;
       const value = url.trim().replace(/\/+$/, '');
       const stored = value === '' ? null : value;

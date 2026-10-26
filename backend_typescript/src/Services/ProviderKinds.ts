@@ -63,8 +63,13 @@ function decisionRows(rows: Row[]): Row[] {
 
 const protocolOf = (row: Row) => (row.protocol && Object.hasOwn(DECISION_PROTOCOLS, row.protocol) && DECISION_PROTOCOLS[row.protocol]) || null;
 
-/** `decision_providers` of GET /settings/keys: usable rows the plan allows. Never a key. No rate on TS. */
-export function decisionProviderList(rows: Row[], allowed: (key: string) => boolean) {
+export type Rate = { input: number; output: number } | null;
+
+/**
+ * `decision_providers` of GET /settings/keys and /settings/usage (SettingsController::decisionProviderList):
+ * usable rows the plan allows, admin order. Never a key. `rates` is routerRates() keyed by provider.
+ */
+export function decisionProviderList(rows: Row[], allowed: (key: string) => boolean, rates: Record<string, Rate> = {}) {
   const out = [];
   for (const row of decisionRows(rows)) {
     const key = String(row.provider_key);
@@ -76,7 +81,7 @@ export function decisionProviderList(rows: Row[], allowed: (key: string) => bool
       protocol: String(row.protocol),
       model: String(row.model || protocol.model),
       default_url: String(row.base_url ?? '').trim() || protocol.url,
-      rate: null,
+      rate: rates[key] ?? null,
       console_url: protocol.console_url,
     });
   }

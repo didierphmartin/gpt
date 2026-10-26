@@ -5,6 +5,7 @@ import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { Ctx, ControllerResult } from '../Support/Http';
 import { PackageResolver } from '../Services/PackageResolver';
+import { DecisionProviders } from '../Services/DecisionProviders';
 import { RoleStore } from '../Services/RoleStore';
 import { RobotAccount } from '../Services/RobotAccount';
 import { requireAdmin } from './RequiresAdmin';
@@ -875,6 +876,18 @@ export class AdminController {
    * overlaid with the user's package-granted keys. Mirrors getApiKeys(). Keys are returned PLAINTEXT
    * (no decrypt — this table stores them raw); masked_key = '****' + last 4.
    */
+  /** Every provider key an admin configured (chat and decision rows): the per-user key slots. */
+  private async configuredProviderKeys(): Promise<string[]> {
+    try {
+      return (await sql<{ provider_key: string }>`SELECT provider_key FROM system_llm_settings`.execute(db)).rows.map((r) =>
+        String(r.provider_key)
+      );
+    } catch (e: any) {
+      console.error('[AdminController] provider keys lookup failed: ' + (e?.message ?? ''));
+      return [];
+    }
+  }
+
   async getApiKeys(ctx: Ctx): Promise<ControllerResult> {
     const denied = await requireAdmin(ctx);
     if (denied) return denied;
@@ -925,8 +938,9 @@ export class AdminController {
       };
     }
 
-    // Include all valid providers with empty state if not set.
-    const validProviders = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi', 'gamma4'];
+    // Include all valid providers with empty state if not set. Decision keys are listed too: stored
+    // per user like LLM keys, never a chat provider.
+    const validProviders = await this.configuredProviderKeys();
     for (const provider of validProviders) {
       if (keys[provider] === undefined) {
         keys[provider] = { ...emptyState };
@@ -1017,7 +1031,10 @@ export class AdminController {
       return { success: false, error: 'No keys provided', status_code: 400 };
     }
 
-    const validProviders = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi', 'gamma4'];
+    // Decision keys are accepted like LLM keys; see the settings filter below for what a decision
+    // row may carry.
+    const validProviders = await this.configuredProviderKeys();
+    const decisionKeys = await DecisionProviders.keys();
     let savedCount = 0;
 
     // Columns that can be updated individually (without requiring an api_key).
@@ -1067,8 +1084,14 @@ export class AdminController {
         updates.push('api_key = VALUES(api_key)');
       }
 
+      const isRouter = decisionKeys.includes(provider);
       for (const [inputKey, col, cast] of settingFields) {
         if (!Object.prototype.hasOwnProperty.call(entry, inputKey)) {
+          continue;
+        }
+        // A decision row has no model, prompt or sampling to set; its URL (base_url, a gateway in
+        // front of the vendor) it does.
+        if (isRouter && inputKey !== 'enabled' && inputKey !== 'base_url') {
           continue;
         }
         cols.push(col);
