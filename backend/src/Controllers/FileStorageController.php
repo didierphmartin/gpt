@@ -29,6 +29,25 @@ class FileStorageController
     }
 
     /**
+     * A storage path as 'a/b/c' (no leading or trailing slash), or null when
+     * it has a '.' or '..' segment or a NUL byte: paths come from the request
+     * and from the user's own settings, and must stay under the user's folder.
+     */
+    private static function safeRelative(string $path): ?string
+    {
+        if (str_contains($path, "\0")) {
+            return null;
+        }
+        $parts = array_values(array_filter(explode('/', str_replace('\\', '/', $path)), fn($p) => $p !== ''));
+        foreach ($parts as $part) {
+            if ($part === '.' || $part === '..') {
+                return null;
+            }
+        }
+        return implode('/', $parts);
+    }
+
+    /**
      * Build the full path including the root folder
      * Structure: synergyaichatroot/{user_folder}/{path}
      */
@@ -161,12 +180,15 @@ class FileStorageController
 
         // Get parameters from query string
         $query = $request['query'] ?? [];
-        $relativePath = $query['path'] ?? ''; // Path relative to user's folder
+        $relativePath = self::safeRelative((string) ($query['path'] ?? '')); // Path relative to user's folder
+        if ($relativePath === null) {
+            return ['success' => false, 'error' => 'Invalid path', 'items' => []];
+        }
 
         // Get user's storage config
         $storageConfig = $this->getUserStorageConfig($userId);
         $provider = $storageConfig['provider'];
-        $userFolder = $storageConfig['folder'];
+        $userFolder = self::safeRelative((string) ($storageConfig['folder'] ?? '')) ?? '';
 
         // Check if storage folder is configured
         if (empty($userFolder)) {
@@ -304,15 +326,23 @@ class FileStorageController
         $storageConfig = $this->getUserStorageConfig($userId);
         $provider = $storageConfig['provider'];
 
+        // fileId is the path a listing returned: it must lie inside this user's folder
+        $userFolder = self::safeRelative((string) ($storageConfig['folder'] ?? '')) ?? '';
+        $relativeFile = self::safeRelative((string) $fileId);
+        if ($userFolder === '' || $relativeFile === null
+            || !str_starts_with($relativeFile, $this->buildFullPath($userFolder) . '/')) {
+            return ['success' => false, 'error' => 'File not found'];
+        }
+
         try {
             $adapter = $this->getUniversalFSAdapter($provider);
 
             if (!$adapter) {
-                return $this->readLocalFile($userId, $fileId);
+                return $this->readLocalFile($relativeFile);
             }
 
             // Use path directly (fileId contains the path)
-            $filePath = '/' . ltrim($fileId, '/');
+            $filePath = '/' . $relativeFile;
 
             error_log("[FileStorageController] Reading file: " . $filePath);
 
@@ -454,10 +484,10 @@ class FileStorageController
     /**
      * Read local file (fallback)
      */
-    private function readLocalFile(int $userId, string $filePath): array
+    private function readLocalFile(string $filePath): array
     {
         $basePath = $this->config['storage_path'] ?? __DIR__ . '/../../../../storage';
-        $fullPath = $basePath . '/user_' . $userId . '/' . ltrim($filePath, '/');
+        $fullPath = $basePath . '/' . $filePath;
 
         if (!file_exists($fullPath) || !is_file($fullPath)) {
             return ['success' => false, 'error' => 'File not found'];

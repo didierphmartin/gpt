@@ -20,9 +20,14 @@ final class McpAppEndpointTest extends TestCase
         if (!$up) {
             $this->markTestSkipped('ServiceNow connector not served at localhost/servicenow');
         }
-        $app = (new ReflectionClass(MCPAppController::class))->newInstanceWithoutConstructor();
+        // The route only reaches registered servers
+        $server = 'http://localhost/servicenow/?profile=mock&toolset=jobs';
+        $db = new PDO('sqlite::memory:');
+        $db->exec('CREATE TABLE mcp_servers (id INTEGER PRIMARY KEY, url TEXT, enabled INTEGER)');
+        $db->prepare('INSERT INTO mcp_servers (url, enabled) VALUES (?, 1)')->execute([$server]);
+        $app = new MCPAppController($db, []);
         $r = $app->getResource(['query' => [
-            'server' => 'http://localhost/servicenow/?profile=mock&toolset=jobs',
+            'server' => $server,
             'resource' => 'ui://none',
         ]]);
         $this->assertStringStartsWith('Failed to fetch MCP resource', $r['error'] ?? '', json_encode($r));

@@ -32,10 +32,11 @@ if (!$isCli) {
         exit(1);
     }
 
-    $expectedToken = $config['scheduler']['token'] ?? 'change-this-secret-token-in-production';
+    // A blank SCHEDULER_TOKEN turns HTTP access off: it never matches ''
+    $expectedToken = (string) ($config['scheduler']['token'] ?? '');
     $providedToken = $_GET['token'] ?? $_SERVER['HTTP_X_SCHEDULER_TOKEN'] ?? '';
 
-    if ($providedToken !== $expectedToken) {
+    if ($expectedToken === '' || !is_string($providedToken) || !hash_equals($expectedToken, $providedToken)) {
         http_response_code(403);
         echo json_encode(['error' => 'Invalid scheduler token']);
         exit(1);

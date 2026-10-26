@@ -3306,11 +3306,17 @@ class GraphWorkflowRunner
             return null;
         }
 
+        // The path comes from the workflow definition: no '.' or '..' segment
+        $relative = ltrim($fullPath ?: (self::ROOT_FOLDER . '/' . $storagePath), '/');
+        if (str_contains($relative, "\0") || preg_match('#(^|[/\\\\])\.\.?([/\\\\]|$)#', $relative)) {
+            return null;
+        }
+
         // Try universalFS first
         $adapter = $this->getDocumentStorageAdapter();
         if ($adapter) {
             try {
-                $path = '/' . ltrim($fullPath ?: (self::ROOT_FOLDER . '/' . $storagePath), '/');
+                $path = '/' . $relative;
                 $stream = $adapter->readStream($path);
                 $content = stream_get_contents($stream);
                 fclose($stream);
@@ -3321,8 +3327,8 @@ class GraphWorkflowRunner
         }
 
         // Fallback to local storage
-        $localPath = $this->getDocumentLocalPath($fullPath ?: $storagePath);
-        if (file_exists($localPath)) {
+        $localPath = $this->getDocumentLocalPath($relative);
+        if ($localPath !== null) {
             return file_get_contents($localPath);
         }
 
@@ -3482,10 +3488,16 @@ class GraphWorkflowRunner
     /**
      * Get local storage path for document
      */
-    private function getDocumentLocalPath(string $relativePath): string
+    private function getDocumentLocalPath(string $relativePath): ?string
     {
+        // A file under the storage root folder, symlinks resolved, or null (as StartDocumentStore does)
         $basePath = $this->config['storage_path'] ?? __DIR__ . '/../../../../storage';
-        return $basePath . '/' . ltrim($relativePath, '/');
+        $root = realpath($basePath . '/' . self::ROOT_FOLDER);
+        $target = realpath($basePath . '/' . ltrim($relativePath, '/'));
+        if ($root === false || $target === false || !str_starts_with($target, $root . DIRECTORY_SEPARATOR) || !is_file($target)) {
+            return null;
+        }
+        return $target;
     }
 
     /**

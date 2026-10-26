@@ -16,6 +16,8 @@ use Quantis\AIPortfolioAssistant\Services\McpEndpoint;
  */
 class MCPProxyController
 {
+    use RequiresAdmin;
+
     private PDO $db;
     private array $config;
     private ?string $lastError = null;
@@ -77,9 +79,14 @@ class MCPProxyController
      */
     private function proxyRequest(?string $serverUrl, ?int $serverId, ?array $jsonrpc, string $userId): array
     {
-        // Get server URL from ID if not provided directly
-        if (!$serverUrl && $serverId) {
-            $serverUrl = $this->getServerUrl($serverId, $userId);
+        // A registered server is reached at its stored URL only: its stored
+        // headers (credentials) must never go to a URL the caller names.
+        if ($serverId) {
+            $server = $this->usableServer($serverId, $userId);
+            if ($server === null) {
+                return $this->unknownServer();
+            }
+            $serverUrl = $server['url'];
         }
 
         // Look up custom headers by server id (global or caller's user scope)
@@ -232,6 +239,14 @@ class MCPProxyController
      */
     private function discoverTools(string $serverUrl, ?int $serverId, string $userId): array
     {
+        $server = null;
+        if ($serverId) {
+            $server = $this->usableServer($serverId, $userId);
+            if ($server === null) {
+                return $this->unknownServer();
+            }
+            $serverUrl = $server['url'];
+        }
         $extraHeaders = $serverId ? $this->getServerHeaders($serverId, $userId) : [];
         $transport = $serverId ? $this->getServerTransport($serverId, $userId) : 'http';
         if (!$serverUrl) {
@@ -302,8 +317,11 @@ class MCPProxyController
 
         $tools = $toolsResponse['result']['tools'] ?? [];
 
-        // Cache tools in database if we have a server ID
-        if ($serverId) {
+        // Cache tools for the caller's own server; a global server's cached
+        // tools reach every user's model, so only an admin refreshes them.
+        if ($server !== null && ($server['user_id'] !== null
+            ? (string) $server['user_id'] === $userId
+            : $this->requireAdmin(['user_id' => (int) $userId]) === null)) {
             $this->cacheTools($serverId, $tools);
         }
 
@@ -433,18 +451,28 @@ class MCPProxyController
     }
 
     /**
-     * Get server URL from database
+     * An enabled server the caller may use (global or their own): url and
+     * user_id, or null.
      */
-    private function getServerUrl(int $serverId, string $userId): ?string
+    private function usableServer(int $serverId, string $userId): ?array
     {
         $stmt = $this->db->prepare("
-            SELECT url FROM mcp_servers
-            WHERE id = ? AND user_id = ? AND enabled = 1
+            SELECT url, user_id FROM mcp_servers
+            WHERE id = ? AND enabled = 1 AND (user_id IS NULL OR user_id = ?)
+            LIMIT 1
         ");
         $stmt->execute([$serverId, $userId]);
-        $row = $stmt->fetch();
+        $row = $stmt->fetch(\PDO::FETCH_ASSOC);
+        return $row ?: null;
+    }
 
-        return $row['url'] ?? null;
+    private function unknownServer(): array
+    {
+        return [
+            'success' => false,
+            'error' => ['code' => -32602, 'message' => 'Unknown MCP server'],
+            'status_code' => 404
+        ];
     }
 
     /**

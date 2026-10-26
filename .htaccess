@@ -9,3 +9,11 @@ DirectoryIndex index.html index.php
 <IfModule mod_headers.c>
     Header set Access-Control-Allow-Origin "*"
 </IfModule>
+
+# Hidden files and folders (.env, .git/, ...) are never served, in any
+# subfolder: backend_typescript/ and backend_python/ have no .htaccess of their
+# own, and their .env holds the same secrets as backend/.env.
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>
+RedirectMatch 404 "/\.(?!well-known/)"

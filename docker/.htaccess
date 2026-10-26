@@ -1,0 +1,3 @@
+# Image build files and setup scripts (bootstrap-admin.php seeds an admin):
+# never served when the repo sits in a web root.
+Require all denied

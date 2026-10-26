@@ -11,6 +11,11 @@
     RewriteRule ^run-scheduled-workflows\.php$ - [F,L]
 </IfModule>
 
+# Shared CLI code, never a page
+<FilesMatch "(?i)^bootstrap\.php$">
+    Require all denied
+</FilesMatch>
+
 # Prevent directory listing
 Options -Indexes
 

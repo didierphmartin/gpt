@@ -50,8 +50,11 @@ class SchedulerController
         $schedulerToken = $body['token'] ?? $request['headers']['X-Scheduler-Token'] ?? null;
         $expectedToken = $this->config['scheduler']['token'] ?? '';
 
-        // Either need valid user auth or valid scheduler token
-        if (!$userId && $schedulerToken !== $expectedToken) {
+        // Either need valid user auth or valid scheduler token (a blank
+        // SCHEDULER_TOKEN turns the token path off, it never matches '')
+        $tokenOk = is_string($schedulerToken) && $expectedToken !== ''
+            && hash_equals($expectedToken, $schedulerToken);
+        if (!$userId && !$tokenOk) {
             return [
                 'success' => false,
                 'error' => 'Authentication required',

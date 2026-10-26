@@ -161,12 +161,25 @@ class AuthMiddleware
     private function validateToken(string $token): ?int
     {
         try {
-            $decoded = JWT::decode($token, new Key($this->jwtSecret, 'HS256'));
-            return isset($decoded->sub) ? (int)$decoded->sub : null;
+            return self::accessTokenSubject($token, $this->jwtSecret);
         } catch (Exception $e) {
             error_log("[AuthMiddleware] JWT validation failed: " . $e->getMessage());
             return null;
         }
+    }
+
+    /**
+     * The user id of a gpt access token, or null. Other services (the login
+     * service) may sign with the same secret, and a refresh token must not
+     * work as a session, so 'iss' and 'type' are both required.
+     */
+    public static function accessTokenSubject(string $token, string $jwtSecret): ?int
+    {
+        $decoded = JWT::decode($token, new Key($jwtSecret, 'HS256'));
+        if (($decoded->iss ?? '') !== 'gpt-chat' || ($decoded->type ?? '') !== 'access') {
+            return null;
+        }
+        return isset($decoded->sub) ? (int)$decoded->sub : null;
     }
 
     /**
@@ -261,8 +274,7 @@ class AuthMiddleware
         }
 
         try {
-            $decoded = JWT::decode($matches[1], new Key($jwtSecret, 'HS256'));
-            return isset($decoded->sub) ? (int)$decoded->sub : null;
+            return self::accessTokenSubject($matches[1], $jwtSecret);
         } catch (Exception $e) {
             return null;
         }

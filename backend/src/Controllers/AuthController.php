@@ -8,6 +8,7 @@ use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 use PDO;
 use Exception;
+use Quantis\AIPortfolioAssistant\Middleware\AuthMiddleware;
 use Quantis\AIPortfolioAssistant\Services\Edition;
 
 /**
@@ -583,6 +584,24 @@ class AuthController
             ];
         }
 
+        // An existing account is reached by its email only when Firebase has
+        // verified that address: email/password sign-up lets anyone create a
+        // Firebase user for any address. The account's own Firebase user and a
+        // matching (SMS-verified) phone number still sign in, and so does the
+        // Firebase user scripts/firebase-auth-export.php imported for this row.
+        if ($user
+            && (string) ($user['firebase_uid'] ?? '') !== $firebaseUid
+            && $firebaseUid !== 'local-' . $user['id']
+            && !($hasPhone && ($user['phone'] ?? null) === $phoneNumber)
+            && ($claims['email_verified'] ?? false) !== true) {
+            return [
+                'success' => false,
+                'message' => 'Verify your email address first, then sign in again.',
+                'code' => 'EMAIL_NOT_VERIFIED',
+                'status_code' => 401
+            ];
+        }
+
         // Ledger user ID and plan from registration flow
         $ledgerUserId = trim($userData['ledger_user_id'] ?? $request['body']['ledger_user_id'] ?? '');
         $plan = $this->normalizePlan($userData['plan'] ?? $request['body']['plan'] ?? 'free');
@@ -689,13 +708,16 @@ class AuthController
         $token = $matches[1];
 
         try {
-            $decoded = JWT::decode($token, new Key($this->jwtSecret, 'HS256'));
+            $userId = AuthMiddleware::accessTokenSubject($token, $this->jwtSecret);
+            if ($userId === null) {
+                throw new Exception('not a gpt access token');
+            }
 
             return [
                 'success' => true,
                 'message' => 'Token is valid',
                 'data' => [
-                    'user_id' => $decoded->sub
+                    'user_id' => $userId
                 ],
                 'status_code' => 200
             ];
