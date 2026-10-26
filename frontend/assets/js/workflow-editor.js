@@ -4687,7 +4687,7 @@ class WorkflowEditor {
                         <tr><td class="py-1 pr-3 font-medium text-gray-700 w-40">Install (once)</td><td><code class="text-xs">pip install "agent-framework&gt;=1.10,&lt;2" httpx python-dotenv</code></td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Generated file</td><td><code class="text-xs">python/scripts/&lt;workflow&gt;_maf.py</code> (written via Generate)</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Run</td><td><code class="text-xs">python &lt;workflow&gt;_maf.py "Your prompt here"</code></td></tr>
-                        <tr><td class="py-1 pr-3 font-medium text-gray-700">API keys</td><td>Read from <code class="text-xs">.env</code> via <code class="text-xs">load_dotenv()</code> — e.g. <code class="text-xs">ANTHROPIC_API_KEY</code>, <code class="text-xs">OPENAI_API_KEY</code></td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">API keys</td><td>Your provider keys in SynergyAI: Generate copies them next to the runtime (e.g. <code class="text-xs">ANTHROPIC_API_KEY</code>, <code class="text-xs">OPENAI_API_KEY</code>)</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">MCP &amp; skills</td><td>Run in the script's own environment — no external server required</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Providers</td><td>Claude → <code class="text-xs">AnthropicClient</code>; Gemini / Grok / Kimi / DeepSeek / OpenAI → <code class="text-xs">OpenAIChatCompletionClient</code> + base_url</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">vs LangGraph</td><td>No FastAPI runner needed — the MAF file IS the runtime</td></tr>
@@ -5034,7 +5034,7 @@ class WorkflowEditor {
                         <tr><td class="py-1 pr-3 font-medium text-gray-700 w-40">Install (once)</td><td><code class="text-xs">pip install "nooa[mcp]" "mcp&lt;2" python-dotenv</code></td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Generated file</td><td><code class="text-xs">python/scripts/&lt;workflow&gt;_nooa.py</code> (written via Generate)</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Run</td><td><code class="text-xs">python &lt;workflow&gt;_nooa.py "Your prompt here"</code></td></tr>
-                        <tr><td class="py-1 pr-3 font-medium text-gray-700">API keys</td><td>Read from <code class="text-xs">.env</code> via <code class="text-xs">load_dotenv()</code> — e.g. <code class="text-xs">ANTHROPIC_API_KEY</code>, <code class="text-xs">OPENAI_API_KEY</code></td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">API keys</td><td>Your provider keys in SynergyAI: Generate copies them next to the runtime (e.g. <code class="text-xs">ANTHROPIC_API_KEY</code>, <code class="text-xs">OPENAI_API_KEY</code>)</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">MCP</td><td>Native <code class="text-xs">MCPManager</code> (streamable-http) — note: a selected server exposes ALL its tools to the node</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Skills</td><td>Mandatory post-agent steps on the shared skill filesystem (<code class="text-xs">~/Documents/synergyAI/skills/</code>)</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Providers</td><td>Claude natively via litellm; Gemini / Grok / Kimi / DeepSeek / GLM / OpenAI via OpenAI-compatible endpoints</td></tr>
@@ -6677,7 +6677,7 @@ class WorkflowEditor {
             hint = 'This model only accepts a specific temperature. Update <b>temperature</b> on the agent(s) below in the form, then re-Generate.';
         } else if (/missing .* api key|authenticationerror|invalid.*api.?key|incorrect api key|no auth credentials/i.test(output)) {
             type = 'Missing / invalid API key';
-            hint = 'The provider key is missing or invalid. Re-run <b>Generate</b> to refresh <code>python/.env</code>, or set the key. (Not a form attribute.)';
+            hint = 'The provider key is missing or invalid. Check the key in your SynergyAI provider settings, then <b>Generate</b> again. (Not a form attribute.)';
         } else if (/llm provider not provided|provider not provided/i.test(output)) {
             type = 'Model / provider not set'; attr = 'model';
             hint = 'The model is empty or the provider is unknown. Set a valid <b>model</b> on the agent(s) below.';
