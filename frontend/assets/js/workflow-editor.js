@@ -4241,51 +4241,6 @@ class WorkflowEditor {
         }, 0);
     }
 
-    /**
-     * Setup modal for the Google ADK runtime.
-     * Unlike LangGraph, the ADK-generated file is self-contained — no separate
-     * runner server is needed. The user just installs three packages and runs
-     * the downloaded file directly. Mirrors _showRunnerSetupModal visually.
-     */
-    _showAdkSetupModal() {
-        const cmd = 'pip install google-adk litellm httpx';
-        const backdrop = document.createElement('div');
-        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
-        backdrop.innerHTML = `
-            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
-                <h3 class="text-lg font-semibold text-gray-900 mb-2">
-                    ${this.escapeHtml(this.t('workflow.adkSetup.title') || 'Google ADK — one-time setup')}
-                </h3>
-                <p class="text-sm text-gray-600 mb-3">
-                    ${this.escapeHtml(this.t('workflow.adkSetup.body')
-                        || 'The generated ADK script is self-contained — no separate runner server required. Install the three runtime packages once:')}
-                </p>
-                <div class="relative mb-3">
-                    <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(cmd)}</pre>
-                    <button class="cmd-copy-btn absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="${this.escapeHtml(this.t('workflow.adkSetup.copy') || 'Copy command')}">📋</button>
-                </div>
-                <p class="text-xs text-gray-500 mb-2">
-                    ${this.escapeHtml(this.t('workflow.adkSetup.note')
-                        || 'After installing, click Generate to download the ADK Python file, then run it directly:')}
-                </p>
-                <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 mb-4 overflow-auto">python &lt;workflow&gt;_adk.py "Your prompt here"</pre>
-                <p class="text-xs text-gray-500 mb-4">
-                    ${this.escapeHtml(this.t('workflow.adkSetup.runnerNote')
-                        || 'Unlike LangGraph, the ADK output needs no FastAPI runner — you run the generated file directly with the provider API keys in your environment.')}
-                </p>
-                <div class="flex justify-end">
-                    <button type="button" class="close-btn px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-md">
-                        ${this.escapeHtml(this.t('common.close') || 'Close')}
-                    </button>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(backdrop);
-        const close = () => backdrop.remove();
-        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
-        backdrop.querySelector('.close-btn').addEventListener('click', close);
-        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-btn'), cmd);
-    }
 
     /**
      * Info modal for the Google ADK runtime.
@@ -4300,11 +4255,11 @@ class WorkflowEditor {
                 <h3 class="text-lg font-semibold text-gray-900 mb-2">Google ADK runtime</h3>
                 <p class="text-sm text-gray-600 mb-3">
                     Generated ADK workflows are self-contained Python programs — no separate runner server or
-                    FastAPI process needed. Download the file, install three packages, and run it directly.
+                    FastAPI process needed. To run one outside SynergyAI, <b>Export</b> it and follow the <code class="text-xs">README.md</code> in the zip.
                 </p>
                 <table class="w-full text-xs text-left mb-4">
                     <tbody class="divide-y divide-gray-200">
-                        <tr><td class="py-1 pr-3 font-medium text-gray-700 w-40">Install (once)</td><td><code class="text-xs">pip install google-adk litellm httpx</code></td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700 w-40">Install &amp; run elsewhere</td><td><b>Export</b>, then follow the <code class="text-xs">README.md</code> in the zip: the packages this workflow needs, how to install them, and how to run it</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Generated file</td><td><code class="text-xs">&lt;workflow&gt;_adk.py</code> (downloaded via Generate)</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Run</td><td><code class="text-xs">python &lt;workflow&gt;_adk.py "Your prompt here"</code></td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">API keys</td><td>Set provider keys in your environment (e.g. <code class="text-xs">ANTHROPIC_API_KEY</code>, <code class="text-xs">OPENAI_API_KEY</code>)</td></tr>
@@ -4315,8 +4270,7 @@ class WorkflowEditor {
                 <p class="text-xs text-gray-500 mb-4">
                     The Output-node's <b>Run</b> menu item executes the ADK script through the same local runner
                     (<code class="text-xs">POST ${this.escapeHtml(this._langgraphRunnerBase)}/api/run-file</code>)
-                    used by LangGraph — ensure <code class="text-xs">google-adk litellm httpx</code> are installed
-                    in its venv, or run the file directly from a terminal instead.
+                    used by LangGraph; the Python runtime installed by <b>Setup</b> already includes ADK.
                 </p>
                 <div class="flex justify-end">
                     <button class="info-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
@@ -4514,7 +4468,7 @@ class WorkflowEditor {
 
         menu.querySelector('[data-action="maf-setup"]')?.addEventListener('click', () => {
             menu.remove();
-            this._showMafSetupModal();
+            this._showRunnerSetupModal();
         });
         menu.querySelector('[data-action="maf-generate"]')?.addEventListener('click', () => {
             menu.remove();
@@ -4622,50 +4576,6 @@ class WorkflowEditor {
         if (generated) this._showMafCodeModal(generated.path, generated.code);
     }
 
-    /**
-     * Setup modal for the Microsoft Agent Framework runtime.
-     * Self-contained script — install three packages, run directly.
-     * Mirrors _showAdkSetupModal visually.
-     */
-    _showMafSetupModal() {
-        const cmd = 'pip install "agent-framework>=1.10,<2" httpx python-dotenv';
-        const backdrop = document.createElement('div');
-        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
-        backdrop.innerHTML = `
-            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
-                <h3 class="text-lg font-semibold text-gray-900 mb-2">
-                    ${this.escapeHtml(this.t('workflow.mafSetup.title') || 'Microsoft Agent Framework — one-time setup')}
-                </h3>
-                <p class="text-sm text-gray-600 mb-3">
-                    ${this.escapeHtml(this.t('workflow.mafSetup.body')
-                        || 'The generated MAF script is self-contained — no separate runner server required. Install the three runtime packages once:')}
-                </p>
-                <div class="relative mb-3">
-                    <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(cmd)}</pre>
-                    <button class="cmd-copy-btn absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="${this.escapeHtml(this.t('workflow.mafSetup.copy') || 'Copy command')}">📋</button>
-                </div>
-                <p class="text-xs text-gray-500 mb-2">
-                    ${this.escapeHtml(this.t('workflow.mafSetup.note')
-                        || 'After installing, click Generate to download the MAF Python file, then run it directly:')}
-                </p>
-                <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 mb-4 overflow-auto">python &lt;workflow&gt;_maf.py "Your prompt here"</pre>
-                <p class="text-xs text-gray-500 mb-4">
-                    ${this.escapeHtml(this.t('workflow.mafSetup.runnerNote')
-                        || 'Unlike LangGraph, the MAF output needs no FastAPI runner — you run the generated file directly with the provider API keys in your environment.')}
-                </p>
-                <div class="flex justify-end">
-                    <button type="button" class="close-btn px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-md">
-                        ${this.escapeHtml(this.t('common.close') || 'Close')}
-                    </button>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(backdrop);
-        const close = () => backdrop.remove();
-        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
-        backdrop.querySelector('.close-btn').addEventListener('click', close);
-        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-btn'), cmd);
-    }
 
     /**
      * Info modal for the Microsoft Agent Framework runtime.
@@ -4680,11 +4590,11 @@ class WorkflowEditor {
                 <h3 class="text-lg font-semibold text-gray-900 mb-2">Microsoft Agent Framework runtime</h3>
                 <p class="text-sm text-gray-600 mb-3">
                     Generated MAF workflows are self-contained Python programs — no separate runner server or
-                    FastAPI process needed. Download the file, install three packages, and run it directly.
+                    FastAPI process needed. To run one outside SynergyAI, <b>Export</b> it and follow the <code class="text-xs">README.md</code> in the zip.
                 </p>
                 <table class="w-full text-xs text-left mb-4">
                     <tbody class="divide-y divide-gray-200">
-                        <tr><td class="py-1 pr-3 font-medium text-gray-700 w-40">Install (once)</td><td><code class="text-xs">pip install "agent-framework&gt;=1.10,&lt;2" httpx python-dotenv</code></td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700 w-40">Install &amp; run elsewhere</td><td><b>Export</b>, then follow the <code class="text-xs">README.md</code> in the zip: the packages this workflow needs, how to install them, and how to run it</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Generated file</td><td><code class="text-xs">python/scripts/&lt;workflow&gt;_maf.py</code> (written via Generate)</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Run</td><td><code class="text-xs">python &lt;workflow&gt;_maf.py "Your prompt here"</code></td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">API keys</td><td>Your provider keys in SynergyAI: Generate copies them next to the runtime (e.g. <code class="text-xs">ANTHROPIC_API_KEY</code>, <code class="text-xs">OPENAI_API_KEY</code>)</td></tr>
@@ -4696,8 +4606,7 @@ class WorkflowEditor {
                 <p class="text-xs text-gray-500 mb-4">
                     The Output-node's <b>Run</b> menu item executes the MAF script through the same local runner
                     (<code class="text-xs">POST ${this.escapeHtml(this._langgraphRunnerBase)}/api/run-file</code>)
-                    used by LangGraph — ensure <code class="text-xs">agent-framework httpx python-dotenv</code> are installed
-                    in its venv, or run the file directly from a terminal instead.
+                    used by LangGraph; the Python runtime installed by <b>Setup</b> already includes MAF.
                 </p>
                 <div class="flex justify-end">
                     <button class="info-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
@@ -4967,37 +4876,26 @@ class WorkflowEditor {
     }
 
     /**
-     * Setup modal for the NVIDIA OO Agents runtime.
-     * Self-contained script — install two packages, run directly.
-     * Mirrors _showMafSetupModal visually.
+     * Setup for NOOA: the Python runtime's requirements leave NOOA out (its
+     * mcp<2 pin), so Run needs it added to that runtime's venv once. Running it
+     * elsewhere is the export's README.
      */
-    _showNooaSetupModal() {
+    async _showNooaSetupModal() {
         // "mcp<2": nooa 0.0.8 targets the mcp 1.x SDK API (its own pin is unbounded).
-        const cmd = 'pip install "nooa[mcp]" "mcp<2" python-dotenv';
+        const cmd = './.venv/bin/pip install "nooa[mcp]" "mcp<2"';
+        const folder = (await window.localFs?.getRootHandle?.())?.name || this.localFolderName || 'synergyAI';
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
         backdrop.innerHTML = `
             <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
-                <h3 class="text-lg font-semibold text-gray-900 mb-2">
-                    ${this.escapeHtml(this.t('workflow.nooaSetup.title') || 'NVIDIA OO Agents — one-time setup')}
-                </h3>
-                <p class="text-sm text-gray-600 mb-3">
-                    ${this.escapeHtml(this.t('workflow.nooaSetup.body')
-                        || 'The generated NOOA script is self-contained — no separate runner server required. Install the runtime packages once:')}
-                </p>
+                <h3 class="text-lg font-semibold text-gray-900 mb-2">${this.escapeHtml(this.t('workflow.nooaSetup.title'))}</h3>
+                <p class="text-sm text-gray-600 mb-3">${this.escapeHtml(this.t('workflow.nooaSetup.body', { folder }))}</p>
                 <div class="relative mb-3">
                     <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(cmd)}</pre>
-                    <button class="cmd-copy-btn absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="${this.escapeHtml(this.t('workflow.nooaSetup.copy') || 'Copy command')}">📋</button>
+                    <button class="cmd-copy-btn absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="${this.escapeHtml(this.t('workflow.runnerSetup.copy'))}">📋</button>
                 </div>
-                <p class="text-xs text-gray-500 mb-2">
-                    ${this.escapeHtml(this.t('workflow.nooaSetup.note')
-                        || 'After installing, click Generate to download the NOOA Python file, then run it directly:')}
-                </p>
-                <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 mb-4 overflow-auto">python &lt;workflow&gt;_nooa.py "Your prompt here"</pre>
-                <p class="text-xs text-gray-500 mb-4">
-                    ${this.escapeHtml(this.t('workflow.nooaSetup.runnerNote')
-                        || 'NOOA agents answer by writing and executing Python code (CodeAct) — run the file in an environment you trust, ideally a container or VM.')}
-                </p>
+                <p class="text-xs text-gray-500 mb-2">${this.escapeHtml(this.t('workflow.nooaSetup.note'))}</p>
+                <p class="text-xs text-gray-500 mb-4">${this.escapeHtml(this.t('workflow.nooaSetup.codeAct'))}</p>
                 <div class="flex justify-end">
                     <button type="button" class="close-btn px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-md">
                         ${this.escapeHtml(this.t('common.close') || 'Close')}
@@ -5031,7 +4929,7 @@ class WorkflowEditor {
                 </p>
                 <table class="w-full text-xs text-left mb-4">
                     <tbody class="divide-y divide-gray-200">
-                        <tr><td class="py-1 pr-3 font-medium text-gray-700 w-40">Install (once)</td><td><code class="text-xs">pip install "nooa[mcp]" "mcp&lt;2" python-dotenv</code></td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700 w-40">Install &amp; run elsewhere</td><td><b>Export</b>, then follow the <code class="text-xs">README.md</code> in the zip: the packages this workflow needs, how to install them, and how to run it</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Generated file</td><td><code class="text-xs">python/scripts/&lt;workflow&gt;_nooa.py</code> (written via Generate)</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Run</td><td><code class="text-xs">python &lt;workflow&gt;_nooa.py "Your prompt here"</code></td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">API keys</td><td>Your provider keys in SynergyAI: Generate copies them next to the runtime (e.g. <code class="text-xs">ANTHROPIC_API_KEY</code>, <code class="text-xs">OPENAI_API_KEY</code>)</td></tr>
@@ -5044,8 +4942,7 @@ class WorkflowEditor {
                 <p class="text-xs text-gray-500 mb-4">
                     The Output-node's <b>Run</b> menu item executes the NOOA script through the same local runner
                     (<code class="text-xs">POST ${this.escapeHtml(this._langgraphRunnerBase)}/api/run-file</code>)
-                    used by LangGraph — ensure <code class="text-xs">nooa python-dotenv</code> are installed
-                    in its venv, or run the file directly from a terminal instead.
+                    used by LangGraph. That runtime does not include NOOA: install it there once with the command of this menu's <b>Setup</b>.
                 </p>
                 <div class="flex justify-end">
                     <button class="info-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
@@ -5201,7 +5098,8 @@ class WorkflowEditor {
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Entry point</td><td><code class="text-xs">main.py</code> (FastAPI server on <code class="text-xs">${this.escapeHtml(this._langgraphRunnerBase)}</code>)</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Generated scripts</td><td><code class="text-xs">python/scripts/&lt;workflow&gt;.py</code></td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Requirements</td><td><code class="text-xs">requirements.txt</code> (LangGraph, LangChain, FastAPI, uvicorn, …)</td></tr>
-                        <tr><td class="py-1 pr-3 font-medium text-gray-700">First-time setup</td><td><code class="text-xs">python3 setup.py</code> from the runtime folder</td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">First-time setup</td><td><b>Setup</b> in this menu (the runtime's virtual environment, once)</td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">Run elsewhere</td><td><b>Export</b>, then follow the <code class="text-xs">README.md</code> in the zip: the packages this workflow needs, how to install them, and how to run it</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Start the runner</td><td><code class="text-xs">./.venv/bin/python main.py</code> from the runtime folder (NOT system <code class="text-xs">python3</code> — see note below)</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Standalone CLI run</td><td><code class="text-xs">./.venv/bin/python main.py run scripts/&lt;workflow&gt;.py</code></td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Live endpoints</td><td><code class="text-xs">POST /api/run</code>, <code class="text-xs">POST /api/run-file</code>, <code class="text-xs">GET /health</code></td></tr>

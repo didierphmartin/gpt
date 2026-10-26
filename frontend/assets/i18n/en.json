@@ -1281,6 +1281,12 @@
       "stopServerNone": "No run server was running for this workflow.",
       "stopServerFailed": "Could not reach the runner to stop the server:"
     },
+    "nooaSetup": {
+      "title": "NVIDIA OO Agents — one-time setup",
+      "body": "The Python runtime in {{folder}}/python does not include NOOA. To run NOOA workflows from SynergyAI, add it once: open a terminal in {{folder}}/python and run:",
+      "note": "Then select \"Run\" again in the canvas top menu. To run a NOOA workflow on another machine, Export it and follow the README.md in the zip.",
+      "codeAct": "NOOA agents answer by writing and executing Python code (CodeAct): run them in an environment you trust, ideally a container or VM."
+    },
     "runnerSetup": {
       "title": "Python runtime not installed",
       "body": "Generated scripts run from the \"python\" folder inside {{folder}}, the folder you picked for SynergyAI. That folder needs a Python virtual environment once — a browser cannot create one. Open a terminal in {{folder}}/python and run:",

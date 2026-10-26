@@ -1281,6 +1281,12 @@
       "stopServerNone": "No había ningún servidor de ejecución activo para este flujo de trabajo.",
       "stopServerFailed": "No se pudo contactar con el runner para detener el servidor:"
     },
+    "nooaSetup": {
+      "title": "NVIDIA OO Agents — configuración inicial",
+      "body": "El runtime de Python en {{folder}}/python no incluye NOOA. Para ejecutar flujos NOOA desde SynergyAI, añádelo una vez: abre una terminal en {{folder}}/python y ejecuta:",
+      "note": "Después selecciona de nuevo \"Ejecutar\" en el menú superior del lienzo. Para ejecutar un flujo NOOA en otra máquina, expórtalo y sigue el README.md del zip.",
+      "codeAct": "Los agentes NOOA responden escribiendo y ejecutando código Python (CodeAct): ejecútalos en un entorno de confianza, idealmente un contenedor o una VM."
+    },
     "runnerSetup": {
       "title": "Runtime de Python no instalado",
       "body": "Los scripts generados se ejecutan desde la carpeta \"python\" dentro de {{folder}}, la carpeta que elegiste para SynergyAI. Esa carpeta necesita un entorno virtual de Python una vez — un navegador no puede crearlo. Abre una terminal en {{folder}}/python y ejecuta:",
