@@ -132,7 +132,9 @@ class CompiledPackage:
         for d in (analyzed.get('decisions') or {}).values():
             for c in d['decision']:
                 decision[php_strval(c['key_env'])] = php_strval(c['url_env'])
-        return {'keys': keys, 'decision': decision, 'mcp': analyzed.get('serverSlugs') or {}}
+        # Only a playbook node reads MODEL_NAME (PlaybookEmit.supportBlock(), emitted with the playbook nodes).
+        return {'keys': keys, 'decision': decision, 'mcp': analyzed.get('serverSlugs') or {},
+                'model': "One model for every playbook node, instead of each node's own" if analyzed.get('playbooks') else None}
 
     @staticmethod
     def _optionalEnv(analyzed: dict, layout: str) -> list:

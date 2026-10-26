@@ -2,7 +2,9 @@
 declare(strict_types=1);
 namespace Quantis\AIPortfolioAssistant\Tests\Unit;
 
+use AgentTeam\Services\CompiledPackage;
 use AgentTeam\Services\LangGraphPackage;
+use AgentTeam\Services\PackageDocs;
 use AgentTeam\Services\PythonRequirements;
 use PHPUnit\Framework\TestCase;
 use Quantis\AIPortfolioAssistant\Tests\Unit\Support\DispatcherDemoFixture;
@@ -97,6 +99,33 @@ final class ExportReadmeTest extends TestCase
             }
             self::assertStringContainsString($pins[$t], $files['requirements.txt'], $t);
             self::assertStringContainsString('pip install -r requirements.txt', $files['common.py'], "{$t}: a package installs its requirements.txt");
+        }
+    }
+
+    /** MODEL_NAME is in .env.example and the README's Configure list exactly when the program reads it. */
+    public function testModelNameIsListedOnlyWhenTheProgramReadsIt(): void
+    {
+        $lg = LangGraphPackage::envVariables([]);
+        self::assertSame('One model for every node, instead of each node\'s own', $lg['model'], 'every LangGraph program reads it');
+        self::assertNull(CompiledPackage::envVariables(['playbooks' => []])['model'], 'no playbook node: nothing reads it');
+        $pb = CompiledPackage::envVariables(['playbooks' => ['7' => ['provider' => 'claude']]]);
+        self::assertSame('One model for every playbook node, instead of each node\'s own', $pb['model']);
+
+        $env = PackageDocs::envExample('W', $pb, []);
+        self::assertStringContainsString("# Optional\n# One model for every playbook node, instead of each node's own\n# MODEL_NAME=\n", $env);
+        self::assertStringContainsString("- `MODEL_NAME` -- optional: one model for every playbook node, instead of each node's own.\n",
+            implode("\n", PackageDocs::head('W', [], 'w', $pb)));
+        $none = ['model' => null] + $pb;
+        self::assertStringNotContainsString('MODEL_NAME', PackageDocs::envExample('W', $none, []));
+        self::assertStringNotContainsString('MODEL_NAME', implode("\n", PackageDocs::head('W', [], 'w', $none)));
+
+        // A compiled package lists it exactly when one of its files reads it.
+        foreach (['ADKGenerator', 'MAFGenerator', 'NOOAGenerator'] as $class) {
+            $gen = DispatcherDemoFixture::generator("AgentTeam\\Services\\{$class}", DispatcherDemoFixture::pdo());
+            $files = array_column($gen->generatePackage(DispatcherDemoFixture::WORKFLOW_ID)['files'], 'code', 'path');
+            $reads = array_filter($files, fn($c, $p) => str_ends_with($p, '.py') && str_contains($c, "os.environ.get('MODEL_NAME'"), ARRAY_FILTER_USE_BOTH) !== [];
+            self::assertSame($reads, str_contains($files['.env.example'], '# MODEL_NAME='), $class);
+            self::assertSame($reads, str_contains($files['README.md'], '- `MODEL_NAME` -- optional:'), $class);
         }
     }
 }

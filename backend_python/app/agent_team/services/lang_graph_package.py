@@ -246,12 +246,14 @@ class LangGraphPackage:
         for ad in (facts.get('agentData') or {}).values():
             for c in (ad.get('decision') or []) if ad.get('dispatch') else []:
                 decision[str(c['key_env'])] = str(c['url_env'])
-        return {'keys': keys, 'decision': decision, 'mcp': facts.get('serverSlugs') or {}}
+        # Every LangGraph program reads MODEL_NAME: its model factory is in the script, common.py or each agent server.
+        return {'keys': keys, 'decision': decision, 'mcp': facts.get('serverSlugs') or {},
+                'model': "One model for every node, instead of each node's own"}
 
     @classmethod
     def _optionalEnv(cls, facts: dict, layout: str) -> list:
         """The optional variables a layout program reads, as .env.example lists them: [what it does, KEY=example]."""
-        o = [["One model for every node, instead of each node's own", 'MODEL_NAME=']]
+        o = []
         if layout == 'single':
             o.append(['Where saved outputs go (default: outputs/ next to the script)', 'SYNERGYAI_OUTPUT_ROOT=./outputs'])
         elif layout == 'a2a':
