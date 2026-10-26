@@ -138,9 +138,11 @@ test('emitMaf and skillRunnerBlockForTest are byte-identical to PHP on every var
     ...names.map((n) => ({ class: 'MAFGenerator', method: 'emitMaf', args: [vs[n]] })),
     { class: 'MAFGenerator', method: 'skillRunnerBlockForTest', args: [] },
   ]);
+  // The two generations can straddle a second: compare everything but the Generated stamp.
+  const unstamp = (s: string) => s.replace(/^( {2}Generated: {2})\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/m, '$1<stamp>');
   names.forEach((n, i) => {
     assert.ok(php[i].ok, `${n}: PHP threw ${php[i].error}`);
-    assert.equal(emit(vs[n]), php[i].result, `${n}: emitMaf differs from PHP`);
+    assert.equal(unstamp(emit(vs[n])), unstamp(php[i].result), `${n}: emitMaf differs from PHP`);
   });
   assert.equal(MAFGenerator.skillRunnerBlockForTest(), php[names.length].result);
 });
