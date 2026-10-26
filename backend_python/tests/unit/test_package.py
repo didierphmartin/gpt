@@ -89,6 +89,44 @@ def _me_db():
     return db
 
 
+def _keyed_package_db():
+    db = _me_db()
+    db.execute('INSERT INTO packages (role, capabilities) VALUES (?, ?)', ['user', json.dumps({
+        'providers': {
+            'claude': {'enabled': True, 'default_model': 'claude-sonnet-4-5', 'default_api_key': 'sk-claude-pkg'},
+            'jev': {'enabled': True, 'default_model': None, 'default_api_key': 'jev-pkg-key'},
+            'kimi': {'enabled': False, 'default_model': 'kimi-k2', 'default_api_key': None},
+        },
+        'quota_tokens': 1000,
+    })])
+    return db
+
+
+def test_me_never_returns_a_package_default_key():
+    """PackageControllerMeTest::testMeNeverReturnsAPackageDefaultKey (withoutProviderKeys)."""
+    db = _keyed_package_db()
+    ctl = PackageController(db, {})
+    out = ctl.me({'user_id': 7})
+    wire = json.dumps(out)
+    assert out['success'] is True
+    assert 'default_api_key' not in wire and 'jev-pkg-key' not in wire and 'sk-claude-pkg' not in wire
+    providers = out['capabilities']['providers']
+    assert providers['claude'] == {'enabled': True, 'default_model': 'claude-sonnet-4-5'}
+    assert providers['jev'] == {'enabled': True, 'default_model': None}
+    assert providers['kimi'] == {'enabled': False, 'default_model': 'kimi-k2'}
+    assert out['capabilities']['quota_tokens'] == 1000
+    # The resolver's cached package keeps its keys (PHP copies arrays by value).
+    assert 'jev-pkg-key' in json.dumps(ctl.resolver.resolveForUser(7))
+
+
+def test_admin_get_still_returns_the_keys():
+    """PackageControllerMeTest::testAdminGetStillReturnsTheKeys."""
+    db = _keyed_package_db()
+    db.execute("INSERT INTO users (id, role) VALUES (1, 'admin')")
+    out = PackageController(db, {}).adminGet({'user_id': 1, 'params': {'role': 'user'}}, 'user')
+    assert 'jev-pkg-key' in json.dumps(out)
+
+
 def test_a_custom_roles_user_gets_that_rows_capabilities():
     db = _me_db()
     db.execute("INSERT INTO users (id, role) VALUES (8, 'it-ops-2')")

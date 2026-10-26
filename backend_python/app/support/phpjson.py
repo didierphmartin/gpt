@@ -13,6 +13,20 @@ def dumps(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(',', ':'))
 
 
+def php_json_numbers(value):
+    """PHP json_encode() writes a whole float without its fraction (500.0 -> 500,
+    0.0 -> 0) below 1e17, where it switches to 1.0e+17. Python writes 500.0. Turn
+    those floats into ints so a JSON response carries PHP's number tokens. Copies
+    containers; leaves everything else as is."""
+    if isinstance(value, float):
+        return int(value) if value.is_integer() and abs(value) < 1e17 else value
+    if isinstance(value, dict):
+        return {k: php_json_numbers(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [php_json_numbers(v) for v in value]
+    return value
+
+
 def php_json_encode(value) -> str:
     """json_encode() with PHP's actual defaults — escaped slashes and \\uXXXX for
     non-ASCII. Unlike dumps() above this is NOT cosmetic: use it for blobs written

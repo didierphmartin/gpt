@@ -47,8 +47,11 @@ def _protocol_of(row: dict):
     return DECISION_PROTOCOLS.get(row.get('protocol') or '')
 
 
-def decision_provider_list(rows: list[dict], allowed) -> list[dict]:
-    """`decision_providers` of GET /settings/keys: usable rows the plan allows. Never a key. No rate here."""
+def decision_provider_list(rows: list[dict], allowed, rates: dict | None = None) -> list[dict]:
+    """`decision_providers` of GET /settings/keys and /settings/usage
+    (SettingsController::decisionProviderList): usable rows the plan allows,
+    admin order. Never a key. `rates` is routerRates() keyed by provider."""
+    rates = rates or {}
     out = []
     for row in _decision_rows(rows):
         key = str(row['provider_key'])
@@ -61,7 +64,7 @@ def decision_provider_list(rows: list[dict], allowed) -> list[dict]:
             'protocol': str(row['protocol']),
             'model': str(row.get('model') or protocol['model']),
             'default_url': str(row.get('base_url') or '').strip() or protocol['url'],
-            'rate': None,
+            'rate': rates.get(key),
             'console_url': protocol['console_url'],
         })
     return out

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from app.services.package_resolver import PackageResolver
 from app.support.logger import error_log
-from app.support.phpcompat import is_numeric, php_intval
+from app.support.phpcompat import is_numeric, php_empty, php_intval
 
 
 def router_rows(db) -> list[dict]:
@@ -27,10 +27,13 @@ def package_allowed(db, user_id):
     except Exception as e:  # noqa: BLE001
         error_log('[DecisionAccess] package lookup failed: ' + str(e))
         return lambda key: True
+    if isinstance(providers, list):
+        # PHP is_array() holds for a JSON list too: an allowlist naming no provider key.
+        return lambda key: False
     if not isinstance(providers, dict):
         return lambda key: True
 
     def allowed(key):
         entry = providers.get(key)
-        return isinstance(entry, dict) and bool(entry.get('enabled'))
+        return isinstance(entry, dict) and not php_empty(entry.get('enabled'))
     return allowed

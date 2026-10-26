@@ -51,3 +51,13 @@ def test_render_html_plain_and_raw():
 
 def test_render_streaming_handled_returns_none():
     assert render({'streaming_handled': True}) is None
+
+
+def test_json_response_writes_whole_floats_like_php():
+    """PHP json_encode(500.0) is 500 and (float) '0.00' is 0: no '.0' on the wire (/settings/usage
+    budget_limit, month_cost_usd). Fractions, ints, bools and big floats keep their own form."""
+    from app.support.http import json_response
+    body = json_response(200, {'budget_limit': 500.0, 'cost': 0.0, 'rate': {'input': 0.042, 'output': 2.0},
+                               'list': [1.0, 1.5, True, None, 'x'], 'big': 1e17, 'n': 3}).body
+    assert body == (b'{"budget_limit":500,"cost":0,"rate":{"input":0.042,"output":2},'
+                    b'"list":[1,1.5,true,null,"x"],"big":1e+17,"n":3}')

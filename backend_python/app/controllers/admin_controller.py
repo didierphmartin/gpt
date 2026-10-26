@@ -27,6 +27,7 @@ from app.controllers.requires_admin import require_admin
 from app.providers._http import SHARED_SSL_CONTEXT
 from app.services import edition
 from app.services.login_accounts import LoginAccounts
+from app.services.decision_providers import DecisionProviders
 from app.services.package_resolver import PackageResolver
 from app.services.robot_account import RobotAccount
 from app.services.role_store import RoleStore
@@ -51,7 +52,6 @@ from app.support.phpcompat import (
 from app.support.phpjson import php_json_decode, php_json_encode
 
 VALID_CATEGORIES = ('avatar', 'voice')
-VALID_KEY_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi']
 
 # `_filter_validate_url` (filter_var($url, FILTER_VALIDATE_URL) — needed by
 # createMCPServer, MCPServerController::create) now lives in
@@ -821,7 +821,10 @@ class AdminController:
                 'updated_at': row['updated_at'],
             }
 
-        for provider in VALID_KEY_PROVIDERS:
+        # Include all valid providers with empty state if not set. Decision keys
+        # are listed too: stored per user like LLM keys, never a chat provider.
+        validProviders = self.configuredProviderKeys()
+        for provider in validProviders:
             if provider not in keys:
                 keys[provider] = dict(emptyState)
 
@@ -839,7 +842,7 @@ class AdminController:
             if not isinstance(pkgProviders, (dict, list)):
                 pkgProviders = []
 
-            for provider in VALID_KEY_PROVIDERS:
+            for provider in validProviders:
                 userKey = keys[provider].get('api_key')
                 if userKey is not None and userKey != '':
                     # Personal key set on the user — that wins over the package.
@@ -889,6 +892,10 @@ class AdminController:
 
         self.ensureApiKeysTableExists()
 
+        # Decision keys are accepted like LLM keys; see the settings filter
+        # below for what a decision row may carry.
+        validProviders = self.configuredProviderKeys()
+        decisionKeys = DecisionProviders.keys(self.db)
         savedCount = 0
 
         # Columns that can be updated individually (without requiring an
@@ -907,7 +914,7 @@ class AdminController:
         }
 
         for provider, entry in php_items(keys):
-            if provider not in VALID_KEY_PROVIDERS:
+            if provider not in validProviders:
                 continue
 
             # Back-compat: allow plain string (api_key only)
@@ -930,8 +937,13 @@ class AdminController:
                 updates.append('api_key = VALUES(api_key)')
                 params[':api_key'] = apiKey
 
+            isRouter = provider in decisionKeys
             for inputKey, (col, cast) in settingFields.items():
                 if inputKey not in entry:
+                    continue
+                # A decision row has no model, prompt or sampling to set; its URL
+                # (base_url, a gateway in front of the vendor) it does.
+                if isRouter and inputKey not in ('enabled', 'base_url'):
                     continue
                 cols.append(col)
                 placeholders.append(':' + col)
@@ -996,6 +1008,15 @@ class AdminController:
 
     def ensureCategorySettingsTableExists(self) -> None:
         self._presence.table('user_category_settings')
+
+    def configuredProviderKeys(self) -> list:
+        """Every provider key an admin configured (chat and decision rows): the per-user key slots."""
+        try:
+            return [php_strval(r['provider_key'])
+                    for r in self.db.fetch_all('SELECT provider_key FROM system_llm_settings') or []]
+        except Exception as e:  # noqa: BLE001 -- mirrors PHP catch (Throwable $e)
+            error_log('[AdminController] provider keys lookup failed: ' + str(e))
+            return []
 
     def ensureApiKeysTableExists(self) -> None:
         if self._presence.table('user_api_keys'):

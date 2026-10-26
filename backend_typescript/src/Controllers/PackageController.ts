@@ -18,7 +18,26 @@ export class PackageController {
   async me(ctx: Ctx): Promise<ControllerResult> {
     const userIdInt = /^\d+$/.test(String(ctx.user_id)) ? Number(ctx.user_id) : null;
     const pkg = await new PackageResolver().resolveForUser(userIdInt);
-    return { success: true, role: pkg.role, capabilities: pkg.capabilities, updated_at: pkg.updated_at };
+    return { success: true, role: pkg.role, capabilities: PackageController.withoutProviderKeys(pkg.capabilities), updated_at: pkg.updated_at };
+  }
+
+  /**
+   * The browser sees which providers are on and their default model, never the package's default
+   * keys (the server resolves those per call). The admin endpoints keep the keys: gpt_admin edits
+   * them. Copies, never mutates: the resolved package keeps its keys.
+   */
+  static withoutProviderKeys(capabilities: any): any {
+    const providers = capabilities?.providers;
+    if (providers === null || typeof providers !== 'object') return capabilities;
+    const strip = (entry: any) => {
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return entry;
+      const { default_api_key: _dropped, ...rest } = entry;
+      return rest;
+    };
+    const stripped = Array.isArray(providers)
+      ? providers.map(strip)
+      : Object.fromEntries(Object.entries(providers).map(([name, entry]) => [name, strip(entry)]));
+    return { ...capabilities, providers: stripped };
   }
 
   /** GET /api/v1/admin/packages — every package (admin only), each with its role's name and builtin flag. */

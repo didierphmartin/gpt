@@ -26,7 +26,10 @@ class FakeDb:
 
     def __init__(self, one=None, all_=None, rowcount=1, tables=('user_api_keys', 'user_model_selections',
                                                                 'user_provider_settings', 'user_category_settings'),
-                 columns=True):
+                 columns=True, settings=()):
+        # system_llm_settings rows: the decision rows and their prices are answered by SQL
+        # shape and kept out of `calls` (DecisionProviders::rows, PricingResolver::resolve).
+        self.settings = list(settings)
         self.one = list(one or [])
         self.all_ = list(all_ or [])
         self.rowcount = rowcount
@@ -43,6 +46,8 @@ class FakeDb:
         return None
 
     def fetch_all(self, sql, params=None):
+        if sql.startswith('SELECT * FROM system_llm_settings WHERE api_format = :f'):
+            return [r for r in self.settings if r.get('api_format') == params[':f']]
         p = self._presence(sql)
         if p is not None:
             return p
@@ -50,6 +55,9 @@ class FakeDb:
         return self.all_.pop(0) if self.all_ else []
 
     def fetch_one(self, sql, params=None):
+        if 'price_input_per_1m' in sql:
+            row = next((r for r in self.settings if r['provider_key'] == params[':k']), None)
+            return None if row is None else {k: row.get(k) for k in ('price_input_per_1m', 'price_output_per_1m')}
         self.calls.append((sql, params))
         return self.one.pop(0) if self.one else None
 
@@ -715,3 +723,96 @@ def test_save_keys_endpoints_upsert_clear_and_skip():
         {':user_id': 3, ':provider': 'claude', ':base_url': 'https://gw.corp/anthropic'},
         {':user_id': 3, ':provider': 'openai', ':base_url': None},   # '' clears
     ]
+
+
+# ─── decision providers on /settings (SettingsUsageJevRateTest, JevKeyStorageTest) ───
+
+JEV_ROW = {'provider_key': 'jev', 'display_name': 'Jev', 'api_format': 'router', 'protocol': 'typesafe',
+           'model': '', 'base_url': None, 'enabled': 1, 'sort_order': 100,
+           'price_input_per_1m': '0.042', 'price_output_per_1m': '0'}
+ACME_ROW = {'provider_key': 'acme', 'display_name': 'Acme', 'api_format': 'router', 'protocol': 'typesafe',
+            'model': 'acme-1', 'base_url': 'https://gw.corp/acme', 'enabled': 1, 'sort_order': 50,
+            'price_input_per_1m': None, 'price_output_per_1m': None}
+OFF_ROW = dict(ACME_ROW, provider_key='off', display_name='Off', enabled=0, sort_order=10)
+
+
+def test_rate_of_and_router_rates():
+    from app.services.pricing_resolver import PricingResolver
+    db = FakeDb(settings=[JEV_ROW, ACME_ROW])
+    assert SettingsController.rateOf(PricingResolver(db), 'jev') == {'input': 0.042, 'output': 0.0}
+    assert SettingsController.rateOf(PricingResolver(db), 'acme') is None       # null prices
+    assert SettingsController.rateOf(PricingResolver(db), 'missing') is None    # no row
+    assert SettingsController.routerRates(PricingResolver(db), ['jev', 'acme']) == {
+        'jev': {'input': 0.042, 'output': 0.0}, 'acme': None}
+
+    class Boom(FakeDb):
+        def fetch_one(self, sql, params=None):
+            raise RuntimeError('no table')
+    assert SettingsController.rateOf(PricingResolver(Boom()), 'jev') is None    # query error
+
+
+def test_quota_tokens_used_leaves_decision_providers_out():
+    balances = [{'provider': 'claude', 'total_tokens': '1200'}, {'provider': 'jev', 'total_tokens': '90000'},
+                {'provider': 'acme', 'total_tokens': 70000}, {'provider': 'kimi', 'total_tokens': 300}]
+    assert SettingsController.quotaTokensUsed(balances, ['jev', 'acme']) == 1500
+    assert SettingsController.quotaTokensUsed([{'provider': 'jev', 'total_tokens': 5}], ['jev', 'acme']) == 0
+    assert SettingsController.quotaTokensUsed([], ['jev']) == 0
+
+
+def test_get_usage_reports_rates_quota_and_decision_providers():
+    db = FakeDb(
+        settings=[JEV_ROW, ACME_ROW, OFF_ROW],
+        all_=[[{'provider': 'claude', 'month_requests': 1, 'month_tokens': 10, 'month_cost_usd': '0.00',
+                'total_requests': 1, 'total_tokens': 1200, 'total_cost_usd': '0.00',
+                'monthly_budget_usd': '500.00', 'monthly_request_limit': 10, 'current_month': '2026-10'},
+               {'provider': 'jev', 'month_requests': 1, 'month_tokens': 5, 'month_cost_usd': '0.00',
+                'total_requests': 1, 'total_tokens': 90000, 'total_cost_usd': '0.00',
+                'monthly_budget_usd': '500.00', 'monthly_request_limit': 10, 'current_month': '2026-10'}], []],
+        # lifetime, plan, then PackageResolver: users.role + the packages row
+        one=[{}, {'plan': 'free', 'role': 'user'}, {'role': 'user'},
+             {'capabilities': '{"providers": {"jev": {"enabled": true}, "acme": {"enabled": true}}}',
+              'updated_at': None}])
+    u = c(db).getUsage(ctx())['usage']
+    assert u['rates'] == {'jev': {'input': 0.042, 'output': 0.0}, 'acme': None, 'off': None}
+    assert u['quota_tokens_used'] == 1200
+    assert [d['key'] for d in u['decision_providers']] == ['acme', 'jev']
+    assert u['decision_providers'][0] == {
+        'key': 'acme', 'label': 'Acme', 'protocol': 'typesafe', 'model': 'acme-1',
+        'default_url': 'https://gw.corp/acme', 'rate': None,
+        'console_url': u['decision_providers'][0]['console_url']}
+    assert u['decision_providers'][1]['rate'] == {'input': 0.042, 'output': 0.0}
+    assert list(u) == ['current_month', 'by_provider', 'rates', 'totals', 'lifetime', 'quota_tokens_used',
+                       'plan', 'role', 'free_trial_quota', 'decision_providers']
+
+
+def test_get_usage_without_decision_rows_encodes_like_php():
+    u = c(FakeDb(all_=[[], []], one=[None, None])).getUsage(ctx())['usage']
+    assert u['rates'] == [] and u['decision_providers'] == [] and u['quota_tokens_used'] == 0
+
+
+def test_get_keys_lists_the_allowed_decision_providers_with_rates():
+    db = _keys_db([], package={'capabilities': '{"providers": {"jev": {"enabled": true}, "acme": {"enabled": true}}}',
+                               'updated_at': None}, role='user')
+    db.settings = [JEV_ROW, ACME_ROW, dict(ACME_ROW, provider_key='hidden', sort_order=60)]
+    # getKeys' own package lookup, then decisionProviderList's
+    db.one += [{'role': 'user'}, {'capabilities': '{"providers": {"jev": {"enabled": true}, "acme": {"enabled": true}}}',
+                                  'updated_at': None}]
+    r = SettingsController(db, CONFIG).getKeys(ctx())
+    assert r['rates'] == {'jev': {'input': 0.042, 'output': 0.0}, 'acme': None, 'hidden': None}
+    assert [d['key'] for d in r['decision_providers']] == ['acme', 'jev']
+    assert r['decision_providers'][0]['default_url'] == 'https://gw.corp/acme'
+    assert r['decision_providers'][1]['rate'] == {'input': 0.042, 'output': 0.0}
+    assert list(r)[-3:] == ['rates', 'decision_providers', 'status_code']
+
+
+def test_save_keys_accepts_any_decision_row_key_and_endpoint_only():
+    """JevKeyStorageTest::testSettingsSaveKeysAcceptsAnyDecisionRow + ...StoresTheJevKeyEncrypted:
+    a decision key and its endpoint are saved; it has no model and no system prompt."""
+    db = FakeDb(settings=[ACME_ROW])
+    ctl = c(db)
+    r = ctl.saveKeys(ctx({'keys': {'acme': 'acme-mine'}, 'models': {'acme': 'm'},
+                          'system_prompts': {'acme': 'p'}, 'endpoints': {'acme': 'https://mine.example/acme'}}))
+    assert (r['saved_count'], r['model_count'], r['prompt_count'], r['endpoint_count']) == (1, 0, 0, 1)
+    writes = [p for _, p in db.calls if p and p.get(':provider') == 'acme']
+    assert ctl.decryptApiKey(writes[0][':api_key']) == 'acme-mine'
+    assert writes[1][':base_url'] == 'https://mine.example/acme'

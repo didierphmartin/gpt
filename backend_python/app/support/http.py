@@ -7,7 +7,7 @@ from urllib.parse import parse_qsl
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from app.support.phpjson import dumps
+from app.support.phpjson import dumps, php_json_numbers
 
 BASE_PATH = '/gpt/backend'   # MiddlewareProcessor::buildRequest strips this prefix
 
@@ -18,7 +18,8 @@ class Ctx(dict):
 
 class PhpJSONResponse(JSONResponse):
     def render(self, content) -> bytes:
-        return dumps(content).encode('utf-8')
+        # PHP's json_encode drops a whole float's fraction (budget 500.0 -> 500).
+        return dumps(php_json_numbers(content)).encode('utf-8')
 
 
 def json_response(status: int, body: dict, headers: dict | None = None) -> PhpJSONResponse:

@@ -16,6 +16,12 @@ CONFIG = {'auth': {'jwt_secret': 'test-jwt-secret'}}
 CALLER_ID = 9001
 
 
+# system_llm_settings as an admin configured it: the per-user key slots (configuredProviderKeys)
+# and the decision rows (DecisionProviders::keys). Answered by SQL shape, kept out of `calls`.
+CHAT_ROWS = [{'provider_key': k, 'api_format': 'openai'}
+             for k in ('claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi')]
+
+
 def is_guard_lookup(sql, params):
     return sql == 'SELECT role FROM users WHERE id = :id LIMIT 1' and params == {':id': CALLER_ID}
 
@@ -25,7 +31,8 @@ class FakeDb:
 
     def __init__(self, one=None, all_=None, rowcount=1, insert_id=1,
                  tables=('user_provider_settings', 'user_category_settings', 'user_api_keys'),
-                 columns=True):
+                 columns=True, settings=None):
+        self.settings = list(CHAT_ROWS if settings is None else settings)
         self.one = list(one or [])
         self.all_ = list(all_ or [])
         self.rowcount = rowcount
@@ -42,8 +49,17 @@ class FakeDb:
             return [{'Field': sql.split("'")[1]}] if self.columns else []
         return None
 
+    def _settings(self, sql, params):
+        if sql == 'SELECT provider_key FROM system_llm_settings':
+            return [{'provider_key': r['provider_key']} for r in self.settings]
+        if sql.startswith('SELECT * FROM system_llm_settings WHERE api_format = :f'):
+            return [r for r in self.settings if r.get('api_format') == params[':f']]
+        return None
+
     def fetch_all(self, sql, params=None):
-        p = self._presence(sql)
+        p = self._settings(sql, params)
+        if p is None:
+            p = self._presence(sql)
         if p is not None:
             return p
         self.calls.append((sql, params))
@@ -586,6 +602,29 @@ def test_get_api_keys_empty_state_and_none_source():
         ' supports_tools, system_prompt, enabled, updated_at FROM user_api_keys WHERE user_id = :user_id')
 
 
+def test_get_api_keys_lists_every_configured_row():
+    """AdminController::configuredProviderKeys: the slots are the system_llm_settings rows, chat
+    and decision alike (JevKeyStorageTest::testAdminPerUserKeysAcceptAnyDecisionRow)."""
+    db = _keys_db([], package={'capabilities': '{"providers": {}}', 'updated_at': None})
+    db.settings = CHAT_ROWS[:1] + [{'provider_key': 'gamma4', 'api_format': 'openai'},
+                                   {'provider_key': 'glm', 'api_format': 'openai'},
+                                   {'provider_key': 'gpt6decision', 'api_format': 'router'},
+                                   {'provider_key': 'jev', 'api_format': 'router'}]
+    r = c(db).getApiKeys(ctx(), 3)
+    assert list(r['keys']) == ['claude', 'gamma4', 'glm', 'gpt6decision', 'jev']
+    assert r['keys']['jev']['masked_key'] is None and r['keys']['jev']['source'] == 'none'
+
+
+def test_get_api_keys_no_slots_when_the_settings_lookup_fails():
+    class NoSettings(FakeDb):
+        def _settings(self, sql, params):
+            if sql == 'SELECT provider_key FROM system_llm_settings':
+                raise RuntimeError('no table')
+            return super()._settings(sql, params)
+    db = NoSettings(all_=[[]], one=[{'role': 'user'}, {'role': 'user'}, None])
+    assert c(db).getApiKeys(ctx(), 3)['keys'] == {}
+
+
 def test_get_api_keys_masks_and_sources_user_key():
     db = _keys_db(
         [{'provider': 'kimi', 'api_key': 'sk-abcdWXYZ', 'model': 'kimi-k2', 'base_url': None,
@@ -659,6 +698,25 @@ def test_save_api_keys_string_backcompat_and_unknown_provider_skipped():
         ' ON DUPLICATE KEY UPDATE api_key = VALUES(api_key), updated_at = NOW()',
     ]
     assert db.calls[0][1] == {':user_id': 3, ':provider': 'kimi', ':api_key': 'sk-123'}
+
+
+def test_save_api_keys_accepts_any_configured_row():
+    db = FakeDb(settings=[{'provider_key': 'glm', 'api_format': 'openai'},
+                          {'provider_key': 'acme', 'api_format': 'router'}])
+    r = c(db).saveApiKeys(ctx({'user_id': 3, 'keys': {'acme': 'k-acme', 'glm': 'k-glm', 'kimi': 'k-kimi'}}))
+    assert r['message'] == 'Saved 2 API key(s)'
+    assert [p[':provider'] for _, p in db.calls] == ['acme', 'glm']
+
+
+def test_save_api_keys_decision_row_keeps_only_enabled_and_base_url():
+    db = FakeDb(settings=[{'provider_key': 'acme', 'api_format': 'router'}])
+    c(db).saveApiKeys(ctx({'user_id': 3, 'keys': {'acme': {
+        'api_key': 'k', 'model': 'm', 'base_url': 'https://gw/acme', 'system_prompt': 'p', 'enabled': True}}}))
+    assert sqls(db) == [
+        'INSERT INTO user_api_keys (user_id, provider, api_key, base_url, enabled, created_at, updated_at)'
+        ' VALUES (:user_id, :provider, :api_key, :base_url, :enabled, NOW(), NOW())'
+        ' ON DUPLICATE KEY UPDATE api_key = VALUES(api_key), base_url = VALUES(base_url),'
+        ' enabled = VALUES(enabled), updated_at = NOW()']
 
 
 def test_save_api_keys_settings_only_skips_insert_when_row_absent():
