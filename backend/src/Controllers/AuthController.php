@@ -8,6 +8,7 @@ use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
 use PDO;
 use Exception;
+use Quantis\AIPortfolioAssistant\Middleware\AuthMiddleware;
 use Quantis\AIPortfolioAssistant\Services\Edition;
 
 /**
@@ -689,13 +690,16 @@ class AuthController
         $token = $matches[1];
 
         try {
-            $decoded = JWT::decode($token, new Key($this->jwtSecret, 'HS256'));
+            $userId = AuthMiddleware::accessTokenSubject($token, $this->jwtSecret);
+            if ($userId === null) {
+                throw new Exception('not a gpt access token');
+            }
 
             return [
                 'success' => true,
                 'message' => 'Token is valid',
                 'data' => [
-                    'user_id' => $decoded->sub
+                    'user_id' => $userId
                 ],
                 'status_code' => 200
             ];
