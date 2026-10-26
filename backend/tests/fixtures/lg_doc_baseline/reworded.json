@@ -1,4 +1,9 @@
 {
+  "pip install langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv": {"now": null, "why": "the install line comes from one requirement list (LangGraphPackage::requirementNames, PythonRequirements): pinned in the single file, `pip install -r requirements.txt` in a package"},
+  "pip install fastapi uvicorn langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv": {"now": "pip install -r requirements.txt", "why": "a package's files install its requirements.txt (one requirement list)"},
+  "pip install \"a2a-sdk[http-server]>=1.1,<2\" langgraph langchain-core httpx python-dotenv": {"now": "pip install -r requirements.txt", "why": "the A2A package carries a requirements.txt (one requirement list)"},
+  "pip install fastapi uvicorn \"a2a-sdk[http-server]>=1.1,<2\" langgraph langchain-core httpx pydantic python-dotenv": {"now": "pip install -r requirements.txt", "why": "the A2A package carries a requirements.txt (one requirement list)"},
+  "pip install \"a2a-sdk[http-server]>=1.1,<2\" langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv uvicorn": {"now": "pip install -r requirements.txt", "why": "the A2A package carries a requirements.txt (one requirement list)"},
   "EVENT SINK -- how api.py observes a run (inert for CLI runs)": {"now": "Inert until a host installs a sink (see api.py). With no sink the", "why": "banner doubled the block's own EVENT SINK + GATE RENDEZVOUS banner (analysis C2)"},
   "PLAYBOOK RUNTIME (this workflow has playbook nodes)": {"now": "PLAYBOOK RUNTIME", "why": "banner doubled PlaybookEmit::runtimeBlock's own banner (analysis C2)"},
   "2. Initialize the LLM (Anthropic Claude)": {"now": "2. Run the WorkflowGraph (`graph`, else build_graph()): one Node per agent/playbook", "why": "stale docstring (analysis D7); Task 3: models are built per node on first use (Open question 3); Task 5: run() hands the graph to WorkflowGraph"},

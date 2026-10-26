@@ -350,9 +350,7 @@ class LangGraphGenerator
             'layers' => $gdata['layers'] ?? [],
             'data_flow' => self::dataFlowDoc(),
             'run' => [
-                'deps' => ['pip install langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv',
-                           '# optional, only for the attachment formats you use:',
-                           '#   pip install mammoth (.docx)  python-pptx (.pptx)  openpyxl (.xlsx)  pypdf (.pdf)'],
+                'deps' => [LangGraphPackage::pipInstall($facts, 'single'), ...LangGraphPackage::OPTIONAL_FORMATS_NOTE],
                 'usage' => "python {$safeName}_langgraph.py \"your prompt here\"",
                 'extra' => array_merge(!empty($missing)
                     ? ['# WARNING: these tools are NOT available as MCP servers and will be missing at runtime: ' . self::pythonListRepr($missing)]
@@ -711,7 +709,8 @@ class LangGraphGenerator
         // Suffix the runtime so the file is identifiable alongside *_adk.py / *_maf.py
         // (LangGraph was the original default and previously had no suffix).
         $filename = "{$safeName}_langgraph.py";
-        return ['filename' => $filename, 'code' => $code, 'architecture' => self::architectureDoc($facts, 'single')];
+        return ['filename' => $filename, 'code' => $code, 'architecture' => self::architectureDoc($facts, 'single'),
+            'package_files' => LangGraphPackage::singleFiles($facts, $filename)];
     }
 
     /**
@@ -1640,6 +1639,7 @@ class LangGraphGenerator
         foreach ($layout['agents'] as $nid => $e) {
             $files[] = ['path' => $e['file'], 'code' => $this->emitA2AAgentFile($facts, $layout, (string)$nid)];
         }
+        array_push($files, ...LangGraphPackage::a2aFiles($facts, $layout));
         return self::withArchitecture(['root' => $layout['root'], 'files' => $files], $facts, 'a2a');
     }
 
@@ -1662,7 +1662,7 @@ class LangGraphGenerator
             'workflow' => ['id' => $facts['workflowId'], 'name' => $facts['wfName']],
             'nodes' => $nodes, 'edges' => $facts['edgeList'], 'layers' => $facts['gdata']['layers'] ?? [],
             'data_flow' => self::a2aOrchestratorDataFlowDoc(),
-            'run' => ['deps' => ['pip install "a2a-sdk[http-server]>=1.1,<2" langgraph langchain-core httpx python-dotenv'],
+            'run' => ['deps' => [LangGraphPackage::PIP_REQUIREMENTS],
                       'usage' => 'python orchestrator.py "your prompt here"   [--keep-serving] [--no-spawn]',
                       'extra' => array_merge(['# A2A_BASE_PORT (default 8701) moves the port range; A2A_AGENT_<id>_URL points one agent elsewhere.'],
                           self::decisionDocLines($facts['agentData'] ?? []), self::mcpHeaderDocLines($facts), self::cronDocLines($facts, 'orchestrator.py')),
@@ -1695,6 +1695,7 @@ class LangGraphGenerator
         $L[] = 'from dotenv import load_dotenv';
         $L[] = '# This file lives in <root>/; the runner .env is two levels up (python/.env).';
         $L[] = '_HERE = os.path.dirname(os.path.abspath(__file__))';
+        $L[] = 'load_dotenv(os.path.join(_HERE, ".env"))   # the workflow folder\'s own .env first (never overridden)';
         $L[] = 'load_dotenv(os.path.join(os.path.dirname(os.path.dirname(_HERE)), ".env"))';
         $L[] = 'PACKAGE_DIR = _HERE   # this program\'s folder: a relative Start document path resolves here';
         $L[] = '';
@@ -1781,7 +1782,7 @@ TXT;
         $L[] = '';
         $body = $this->apiPyDocBody($facts,
             'LangGraph A2A run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
-            'pip install fastapi uvicorn "a2a-sdk[http-server]>=1.1,<2" langgraph langchain-core httpx pydantic python-dotenv',
+            LangGraphPackage::PIP_REQUIREMENTS,
             ['# The agent servers start with the first run (see _ensure_agents) and stop with this process.',
              '# No authentication: bind to 127.0.0.1 or a trusted LAN interface only.',
              '# CORS allows loopback origins only. A LAN-hosted frontend adds itself with',
@@ -2348,7 +2349,7 @@ PY;
             'workflow' => ['id' => $facts['workflowId'], 'name' => $facts['wfName']],
             'nodes' => $nodes, 'edges' => $facts['edgeList'], 'layers' => $facts['gdata']['layers'] ?? [],
             'data_flow' => self::a2aAgentDataFlowDoc(),
-            'run' => ['deps' => ['pip install "a2a-sdk[http-server]>=1.1,<2" langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv uvicorn'],
+            'run' => ['deps' => [LangGraphPackage::PIP_REQUIREMENTS],
                       'usage' => 'python ' . $entry['file'] . ' --port ' . $entry['port'] . '   # from the workflow folder; A2A_HOST/A2A_PORT also honoured',
                       'extra' => array_merge(['# Card: http://127.0.0.1:' . $entry['port'] . '/.well-known/agent-card.json  --  JSON-RPC at /'],
                           self::decisionDocLines($facts['agentData'] ?? []), self::mcpHeaderDocLines($facts)),
@@ -2937,7 +2938,7 @@ PY;
         $L[] = 'TO RUN';
         $L[] = '======';
         $L[] = '  # Requires Python 3.10+ (the generated code uses match statements)';
-        $L[] = '  pip install langchain langchain-anthropic langchain-openai langgraph langgraph-swarm httpx pydantic python-dotenv';
+        $L[] = '  ' . LangGraphPackage::PIP_REQUIREMENTS;
         $k = PythonEmitHelpers::providerKeyEnv((string) ($def['provider'] ?? ''));
         $L[] = $k !== null
             ? "  # API key read from ../../../.env: {$k} (" . strtolower((string) $def['provider']) . ')'
@@ -3189,7 +3190,7 @@ PY;
         $L[] = 'TO RUN';
         $L[] = '======';
         $L[] = '  # Requires Python 3.10+ (the generated code uses match statements)';
-        $L[] = '  pip install langchain langchain-anthropic langchain-openai langgraph langgraph-swarm httpx pydantic python-dotenv';
+        $L[] = '  ' . LangGraphPackage::PIP_REQUIREMENTS;
         $keys = [];
         foreach ($members as $nid => $e) {
             $def = $facts['agentData'][$nid] ?? null;
@@ -3407,7 +3408,7 @@ PY;
         $L[] = 'TO RUN';
         $L[] = '======';
         $L[] = '  # Requires Python 3.10+ (the generated code uses match statements)';
-        $L[] = '  pip install langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv';
+        $L[] = '  ' . LangGraphPackage::PIP_REQUIREMENTS;
         $L = array_merge($L, self::providerKeyLines($facts, '../../.env'));
         $L[] = '  imported, not run directly -- see workflow.py';
         $L[] = '  # Everything here is shared: change it once and every node of this workflow follows.';
@@ -3666,7 +3667,7 @@ TXT;
         $esc = fn(string $s): string => str_replace(['\\', '"""'], ['\\\\', str_repeat("'", 3)], $s);
         $body = $this->apiPyDocBody($facts,
             'LangGraph modular run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
-            'pip install fastapi uvicorn langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv',
+            LangGraphPackage::PIP_REQUIREMENTS,
             array_merge(['# No authentication: bind to 127.0.0.1 or a trusted LAN interface only.',
              '# CORS allows loopback origins only. A LAN-hosted frontend adds itself with',
              '#   WORKFLOW_API_ALLOW_ORIGIN=http://host:port   (comma-separated for several)'], $listen ? [
@@ -3706,7 +3707,7 @@ TXT;
         $L[] = '';
         $body = $this->modularDocBody($facts, $layout,
             'LangGraph modular agent module (Python) -- one node; workflow.py drives the graph',
-            ['deps' => ['pip install langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv'],
+            ['deps' => [LangGraphPackage::PIP_REQUIREMENTS],
              'usage' => 'imported by workflow.py as ' . $entry['module'] . ' -- run the workflow, not this file',
              'extra' => ["# Exposes NODE (frozen editor settings) and run_node = make_node(NODE).run; the node logic is common.py's Node classes."],
              'env_path' => '../../../.env'], $nid);
@@ -3854,9 +3855,7 @@ TXT;
         $L[] = '';
         $body = $this->modularDocBody($facts, $layout,
             'LangGraph modular workflow (Python) -- StateGraph over one importable module per node',
-            ['deps' => ['pip install langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv',
-                        '# optional, only for the attachment formats you use:',
-                        '#   pip install mammoth (.docx)  python-pptx (.pptx)  openpyxl (.xlsx)  pypdf (.pdf)'],
+            ['deps' => [LangGraphPackage::PIP_REQUIREMENTS, ...LangGraphPackage::OPTIONAL_FORMATS_NOTE],
              'usage' => 'python workflow.py "your prompt here"',
              'extra' => array_merge(!empty($facts['missing'])
                  ? ['# WARNING: these tools are NOT available as MCP servers and will be missing at runtime: ' . self::pythonListRepr($facts['missing'])]

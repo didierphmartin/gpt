@@ -217,8 +217,14 @@ final class PlaybookEmit
         );
     }
 
-    /** Extra pip requirements a playbook node adds to a non-LangGraph target. */
-    public static function extraDeps(array $analyzed): array
+    /**
+     * The packages a playbook node adds to a non-LangGraph target: the shared interpreter (langchain-core +
+     * langgraph), httpx (a bound #Action calls its MCP server through the shared client) and each playbook
+     * provider's LangChain package.
+     *
+     * @return list<string>
+     */
+    public static function requirementNames(array $analyzed): array
     {
         if (empty($analyzed['playbooks'])) {
             return [];
@@ -234,9 +240,7 @@ final class PlaybookEmit
             // Everything else in the factory is an OpenAI-compatible endpoint.
             $extra[$pkg[$p] ?? 'langchain-openai'] = true;
         }
-        // httpx: a bound #Action calls its MCP server through the shared client.
-        return ['# A playbook node runs the shared interpreter (langchain + langgraph):',
-                'pip install langchain-core langgraph httpx ' . implode(' ', array_keys($extra))];
+        return ['langchain-core', 'langgraph', 'httpx', ...array_keys($extra)];
     }
 
     public static function supportBlock(bool $needsMcpClient): string

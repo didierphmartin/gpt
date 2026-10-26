@@ -16,6 +16,9 @@ class MAFGenerator
     /** The package's framework requirements (CompiledPackage adds the MCP client, .env and the run server). */
     public const FRAMEWORK = ['agent-framework'];
 
+    /** The compile target, as CompiledPackage reads it. */
+    public const TARGET = ['key' => 'maf', 'title' => 'Microsoft Agent Framework', 'framework' => self::FRAMEWORK];
+
     public function __construct(
         private PDO $db,
         private WorkflowRepository $workflowRepo,
@@ -28,11 +31,18 @@ class MAFGenerator
     public function generate(int $workflowId, ?string $userId = null): array
     {
         $analyzed = $this->analyzeWorkflow($workflowId, $userId);
-        $name = preg_replace('/[^a-z0-9_]+/i', '_', $analyzed['workflow']['name']);
+        $filename = self::filename($analyzed);
         return CompiledArchitectureDoc::attach([
-            'filename' => strtolower($name) . '_maf.py',
+            'filename' => $filename,
             'code'     => self::emitMaf($analyzed),
+            'package_files' => CompiledPackage::singleFiles($analyzed, self::TARGET, $filename),
         ], $analyzed, 'maf', 'single');
+    }
+
+    /** The single file's name: <workflow>_maf.py. */
+    private static function filename(array $analyzed): string
+    {
+        return strtolower((string) preg_replace('/[^a-z0-9_]+/i', '_', (string) $analyzed['workflow']['name'])) . '_maf.py';
     }
 
     /** Everything emitMaf() needs, read from the database at compile time (the program itself never reads it). */
@@ -108,7 +118,7 @@ class MAFGenerator
         $analyzed['package'] = true;
         $runNodes = array_map(fn() => self::A2A_RUN_NODE, CompiledA2AEmit::layout($analyzed));
         $files = CompiledPackage::files($analyzed, $skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $documentFiles,
-            array_merge(self::FRAMEWORK, ['a2a-sdk[http-server]>=1.1,<2']), 'Microsoft Agent Framework (A2A)');
+            self::TARGET, 'a2a');
         return CompiledArchitectureDoc::attach(CompiledA2AEmit::package($analyzed, self::packageFiles($analyzed), $runNodes, $files,
             preg_replace('/[^a-z0-9_]+/i', '_', strtolower((string) $analyzed['workflow']['name'])) . '_maf_a2a', 'Microsoft Agent Framework'), $analyzed, 'maf', 'a2a');
     }
@@ -182,7 +192,7 @@ PY;
             true   // api.py also runs the Start's cron / watch loop: POST /listen, GET /live
         );
         $pkg['files'] = array_merge($pkg['files'], $nodeFiles, CompiledPackage::files($analyzed,
-            $this->skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $docs['files'], self::FRAMEWORK, 'Microsoft Agent Framework'));
+            $this->skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $docs['files'], self::TARGET));
         return CompiledArchitectureDoc::attach($pkg, $analyzed, 'maf', 'modular');
     }
 
@@ -634,10 +644,9 @@ TXT;
             'layers' => $analyzed['layers'] ?? [],
             'data_flow' => self::dataFlowDoc(),
             'run' => [
-                'deps' => array_merge(
-                    ['pip install "agent-framework>=1.10,<2" httpx python-dotenv'],
-                    PlaybookEmit::extraDeps($analyzed)),
-                'usage' => 'python this_file.py "your prompt here"',
+                'deps' => !empty($analyzed['package']) ? [CompiledPackage::PIP_REQUIREMENTS]
+                    : [CompiledPackage::pipInstall($analyzed, self::TARGET)],
+                'usage' => 'python ' . (!empty($analyzed['package']) ? 'workflow.py' : self::filename($analyzed)) . ' "your prompt here"',
             ],
             'storage' => ['enabled' => !empty($analyzed['outputStorageEnabled']), 'folder' => $analyzed['outputFolder'] ?? null],
         ]));

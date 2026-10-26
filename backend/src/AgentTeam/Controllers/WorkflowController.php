@@ -259,7 +259,8 @@ class WorkflowController
      * Returns either:
      *   - Multi-file (?a2a=1 or ?modular=1): {success: true, data: {root, files}} (JSON only)
      *   - Single-file with ?download=1: Content-Type: text/x-python (raw source)
-     *   - Single-file default: application/json {filename, code, architecture}
+     *   - Single-file default: application/json {filename, code, architecture, package_files}
+     *     (package_files: the requirements.txt, .env.example and README.md the Export zips beside the script)
      *   - ?format=zip: application/zip (raw bytes)
      */
     public function generatePython(array $request): array
@@ -337,12 +338,13 @@ class WorkflowController
     }
 
     /**
-     * The Export download: one LangGraph generation result as a zip whose
+     * The Export download: one generation result as a zip whose
      * entries all sit under one folder -- the result's root for a package,
      * the script's own name for a single file -- with ARCHITECTURE.md beside
      * the code (a package already lists it among its files; a single file
-     * carries it under 'architecture', null for an ingestion pipeline). The zip is named after the workflow
-     * and the mode: "<workflow>_<mode>.zip".
+     * carries it under 'architecture', null for an ingestion pipeline) and, for a single file, the
+     * requirements.txt, .env.example and README.md it carries under 'package_files'. The zip is named after
+     * the workflow and the mode: "<workflow>_<mode>.zip".
      */
     public static function langGraphZipResponse(array $result, string $mode): array
     {
@@ -355,6 +357,8 @@ class WorkflowController
             if (($result['architecture'] ?? null) !== null) {   // none for an ingestion pipeline
                 $files[] = ['path' => 'ARCHITECTURE.md', 'code' => $result['architecture']];
             }
+            // requirements.txt, .env.example, README.md: the script reads the .env beside it.
+            array_push($files, ...($result['package_files'] ?? []));
         }
         // "dispatcher_demo_modular_swarm" / "dispatcher_demo_langgraph" -> "dispatcher_demo"
         $slug = preg_replace('/_(langgraph|modular|a2a|adk|maf|nooa)(_a2a)?(_swarm)?$/', '', $folder);

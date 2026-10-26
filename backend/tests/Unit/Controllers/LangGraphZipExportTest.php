@@ -44,8 +44,10 @@ final class LangGraphZipExportTest extends TestCase
         $this->assertSame('application/zip', $r['headers']['Content-Type']);
         $this->assertSame('attachment; filename="dispatcher_demo_single.zip"', $r['headers']['Content-Disposition']);
         $e = self::entries($r['raw_body']);
-        $this->assertSame(['dispatcher_demo_langgraph/dispatcher_demo_langgraph.py', 'dispatcher_demo_langgraph/ARCHITECTURE.md'],
-            array_keys($e));
+        $this->assertSame(array_map(fn($p) => "dispatcher_demo_langgraph/{$p}",
+            ['dispatcher_demo_langgraph.py', 'ARCHITECTURE.md', 'requirements.txt', '.env.example', 'README.md']), array_keys($e));
+        $this->assertStringContainsString('python dispatcher_demo_langgraph.py --cron [EXPR]', $e['dispatcher_demo_langgraph/README.md']);
+        $this->assertStringContainsString('# ANTHROPIC_API_KEY=', $e['dispatcher_demo_langgraph/.env.example']);
         $this->assertStringContainsString('"""Standalone LangGraph workflow: Dispatcher demo', $e['dispatcher_demo_langgraph/dispatcher_demo_langgraph.py']);
         $this->assertStringStartsWith('# Dispatcher demo: architecture', $e['dispatcher_demo_langgraph/ARCHITECTURE.md']);
     }

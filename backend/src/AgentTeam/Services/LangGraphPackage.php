@@ -17,20 +17,30 @@ use RuntimeException;
  */
 final class LangGraphPackage
 {
-    /** What every package imports (workflow, common, api), before provider, skill and document extras. */
+    /** What every LangGraph program imports (the single file; a package's workflow, common and agents). */
     private const BASE_REQUIREMENTS = ['langchain', 'langchain-anthropic', 'langchain-openai', 'langgraph', 'httpx',
-        'pydantic', 'python-dotenv', 'fastapi', 'uvicorn'];
+        'pydantic', 'python-dotenv'];
+
+    /** A package's run server (api.py; an A2A agent server serves with uvicorn too). */
+    private const SERVER_REQUIREMENTS = ['fastapi', 'uvicorn'];
+
+    /** The A2A package: its agents are A2A servers, its orchestrator their client. */
+    private const A2A_REQUIREMENTS = ['a2a-sdk[http-server]'];
 
     /** Providers whose LLM factory branch (llmFactoryLines()) imports a package beyond the base ones. */
     private const PROVIDER_REQUIREMENTS = ['gemini' => 'langchain-google-genai', 'google' => 'langchain-google-genai'];
-
-    /** The document converter's lazy imports, by attachment extension (documentConverterBlock()). */
-    private const DOCUMENT_REQUIREMENTS = ['pdf' => 'pypdf', 'docx' => 'mammoth', 'pptx' => 'python-pptx', 'xlsx' => 'openpyxl'];
 
     private const SKIP_NAMES = ['__pycache__', '.DS_Store'];
 
     /** The swarm package's workflow.py builds its graph with create_swarm() (langgraph_swarm). */
     private const SWARM_REQUIREMENTS = ['langgraph-swarm'];
+
+    /** The TO RUN install line of a package's files: the package's requirements.txt holds the list. */
+    public const PIP_REQUIREMENTS = 'pip install -r requirements.txt';
+
+    /** TO RUN note: the document converter's packages are imported only for an attachment of that format. */
+    public const OPTIONAL_FORMATS_NOTE = ['# optional, only for the attachment formats you use:',
+        '#   pip install mammoth (.docx)  python-pptx (.pptx)  openpyxl (.xlsx)  pypdf (.pdf)'];
 
     private const HARNESS = __DIR__ . '/../../../../frontend/assets/py/code_node_harness.py';
 
@@ -49,11 +59,7 @@ final class LangGraphPackage
     public static function files(array $facts, string $skillsRoot, ?StartDocumentStore $documents = null): array
     {
         $skills = self::skillFiles($facts, $skillsRoot);
-        $out = [
-            ['path' => 'requirements.txt', 'code' => self::requirements($facts, $skills)],
-            ['path' => '.env.example', 'code' => self::envExample($facts)],
-            ['path' => 'README.md', 'code' => self::readme($facts)],
-        ];
+        $out = self::docFiles($facts, 'modular', $skills, (string) $facts['safeName'] . (isset($facts['swarm']) ? '_modular_swarm' : '_modular'), 'workflow.py');
         if (($facts['codeData'] ?? []) !== []) {
             $harness = file_get_contents(self::HARNESS);
             if ($harness === false) {
@@ -217,10 +223,26 @@ final class LangGraphPackage
         return array_keys($p);
     }
 
-    /** requirements.txt: one per line, sorted, unique. */
-    private static function requirements(array $facts, array $skillFiles): string
+    /**
+     * The packages a LangGraph program of $layout ('single' | 'modular' | 'a2a') imports: the one list its
+     * requirements.txt, its TO RUN install line and its README come from. $skillFiles: the skills the package
+     * carries (their SKILL.md dependencies); a program that reads its skills from the editor's folder installs
+     * their dependencies at the first run instead.
+     *
+     * @return list<string>
+     */
+    public static function requirementNames(array $facts, string $layout, array $skillFiles = []): array
     {
-        $req = isset($facts['swarm']) ? array_merge(self::BASE_REQUIREMENTS, self::SWARM_REQUIREMENTS) : self::BASE_REQUIREMENTS;
+        $req = self::BASE_REQUIREMENTS;
+        if ($layout !== 'single') {
+            array_push($req, ...self::SERVER_REQUIREMENTS);
+        }
+        if ($layout === 'a2a') {
+            array_push($req, ...self::A2A_REQUIREMENTS);
+        }
+        if (isset($facts['swarm'])) {
+            array_push($req, ...self::SWARM_REQUIREMENTS);
+        }
         foreach (self::providers($facts) as $p) {
             if (isset(self::PROVIDER_REQUIREMENTS[$p])) {
                 $req[] = self::PROVIDER_REQUIREMENTS[$p];
@@ -231,30 +253,50 @@ final class LangGraphPackage
                 array_push($req, ...self::skillDependencies($f['bytes']));
             }
         }
-        foreach ($facts['startDocuments'] ?? [] as $doc) {
-            $ext = strtolower(pathinfo((string) (is_array($doc) ? ($doc['path'] ?? $doc['name'] ?? '') : ''), PATHINFO_EXTENSION));
-            if (isset(self::DOCUMENT_REQUIREMENTS[$ext])) {
-                $req[] = self::DOCUMENT_REQUIREMENTS[$ext];
-            }
-        }
-        $req = array_values(array_unique($req));
-        sort($req, SORT_STRING);
-        return implode("\n", $req) . "\n";
+        array_push($req, ...PythonRequirements::documentNames($facts['startDocuments'] ?? []));
+        return $req;
+    }
+
+    /** The TO RUN install line of a $layout program that has no requirements.txt beside it (the single file). */
+    public static function pipInstall(array $facts, string $layout): string
+    {
+        return PythonRequirements::pipInstall(self::requirementNames($facts, $layout));
     }
 
     /**
-     * .env.example: every variable the program reads, commented. A variable with no value to suggest is
-     * a comment too: an empty KEY= line in a copied .env would mask the runner's python/.env (the program
-     * reads its own .env first, and an empty value counts as set).
+     * The files a single-file export carries beside <name>_langgraph.py: requirements.txt, .env.example and
+     * README.md (the script reads the .env next to it first).
+     *
+     * @return list<array{path:string,code:string}>
      */
-    private static function envExample(array $facts): string
+    public static function singleFiles(array $facts, string $filename): array
     {
-        $swarm = isset($facts['swarm']);   // a swarm writes no run logs
-        $L = [];
-        $L[] = '# Environment of the workflow "' . $facts['wfName'] . '" -- copy this file to .env and fill it in.';
-        $L[] = '# The program reads .env from its own folder first, then from the folder two levels up';
-        $L[] = '# (a local runner\'s .env). A variable already set in the environment is never overridden.';
-        $L[] = '';
+        return self::docFiles($facts, 'single', [], (string) preg_replace('/\.py$/', '', $filename), $filename);
+    }
+
+    /**
+     * requirements.txt, .env.example and README.md of the A2A package ($layout: a2aLayout()).
+     *
+     * @return list<array{path:string,code:string}>
+     */
+    public static function a2aFiles(array $facts, array $layout): array
+    {
+        return self::docFiles($facts + ['a2aAgents' => $layout['agents']], 'a2a', [], (string) $layout['root'], 'orchestrator.py');
+    }
+
+    private static function docFiles(array $facts, string $layout, array $skillFiles, string $folder, string $entry): array
+    {
+        return [
+            ['path' => 'requirements.txt', 'code' => PythonRequirements::txt(self::requirementNames($facts, $layout, $skillFiles))],
+            ['path' => '.env.example', 'code' => PackageDocs::envExample((string) $facts['wfName'], self::envVariables($facts),
+                self::optionalEnv($facts, $layout))],
+            ['path' => 'README.md', 'code' => self::readme($facts, $layout, $folder, $entry)],
+        ];
+    }
+
+    /** The environment the program reads that .env must provide (PackageDocs' $vars). */
+    public static function envVariables(array $facts): array
+    {
         $keys = [];
         foreach (self::providers($facts) as $p) {
             $k = PythonEmitHelpers::providerKeyEnv($p);
@@ -262,175 +304,136 @@ final class LangGraphPackage
                 $keys[$k][] = $p;
             }
         }
-        if ($keys) {
-            $L[] = '# API keys of the LLM providers this workflow uses';
-            foreach ($keys as $k => $provs) {
-                $L[] = '# ' . implode(', ', array_unique($provs));
-                $L[] = "# {$k}=";
-            }
-        } else {
-            $L[] = '# No LLM provider is used by a node of this workflow.';
-        }
-        $L[] = '';
         $decision = [];
         foreach ($facts['agentData'] ?? [] as $ad) {
             foreach (!empty($ad['dispatch']) ? ($ad['decision'] ?? []) : [] as $c) {
                 $decision[(string) $c['key_env']] = (string) $c['url_env'];
             }
         }
-        if ($decision) {
-            $L[] = '# Decision models the dispatchers may route with (each URL variable is optional: a gateway)';
-            foreach ($decision as $key => $url) {
-                $L[] = "# {$key}=";
-                $L[] = "# {$url}=";
-            }
-            $L[] = '';
-        }
-        $slugs = $facts['serverSlugs'] ?? [];
-        if ($slugs) {
-            $L[] = '# MCP servers: the URL compiled in, and the HTTP headers the server needs (never compiled in)';
-            foreach ($slugs as $url => $slug) {
-                $up = strtoupper((string) $slug);
-                $L[] = "MCP_URL_{$up}={$url}";
-                $L[] = '# JSON object of HTTP headers, e.g. {"Authorization": "Bearer …"}';
-                $L[] = "# MCP_HEADERS_{$up}=";
-            }
-            $L[] = '';
-        }
-        $L[] = '# Optional';
-        $L[] = '# One model for every node, instead of each node\'s own';
-        $L[] = '# MODEL_NAME=';
-        $L[] = '# Where saved outputs go (default: outputs/ in this folder)';
-        $L[] = '# SYNERGYAI_OUTPUT_ROOT=./outputs';
-        if (!$swarm) {
-            $L[] = '# Where run logs go (default: runs/ in this folder)';
-            $L[] = '# RUNS_DIR=./runs';
-        }
-        if (self::skillDirs($facts) !== []) {
-            $L[] = '# Where the skills are read from (default: skills/ in this folder)';
-            $L[] = '# SYNERGYAI_SKILLS_DIR=./skills';
-        }
-        return implode("\n", $L) . "\n";
+        return ['keys' => $keys, 'decision' => $decision, 'mcp' => $facts['serverSlugs'] ?? []];
     }
 
-    /** README.md: install, configure, modes, files written, run server, service units, code nodes. */
-    private static function readme(array $facts): string
+    /** The optional variables a $layout program reads, as .env.example lists them: [what it does, KEY=example]. */
+    private static function optionalEnv(array $facts, string $layout): array
+    {
+        $o = [['One model for every node, instead of each node\'s own', 'MODEL_NAME=']];
+        $o[] = match ($layout) {
+            'single' => ['Where saved outputs go (default: outputs/ next to the script)', 'SYNERGYAI_OUTPUT_ROOT=./outputs'],
+            'a2a' => ['Where saved outputs go (default: ~/Documents/synergyAI/outputs)', 'SYNERGYAI_OUTPUT_ROOT=/path/to/outputs'],
+            default => ['Where saved outputs go (default: outputs/ in this folder)', 'SYNERGYAI_OUTPUT_ROOT=./outputs'],
+        };
+        if ($layout !== 'a2a' && !isset($facts['swarm'])) {   // a swarm and the A2A orchestrator write no run logs
+            $o[] = [$layout === 'single' ? 'Where run logs go (default: runs/ next to the script)' : 'Where run logs go (default: runs/ in this folder)',
+                'RUNS_DIR=./runs'];
+        }
+        if (self::skillDirs($facts) !== []) {
+            $o[] = $layout === 'modular'
+                ? ['Where the skills are read from (default: skills/ in this folder)', 'SYNERGYAI_SKILLS_DIR=./skills']
+                : ['Where the skills are read from (default: ' . PackageDocs::EDITOR_SKILLS_DIR . ')', 'SYNERGYAI_SKILLS_DIR=/path/to/skills'];
+        }
+        if ($layout === 'a2a') {
+            $o[] = ['First port of the agent servers, one per agent in order (default: 8701)', 'A2A_BASE_PORT=8701'];
+        }
+        return $o;
+    }
+
+    /** README.md: what the folder is, install, configure, the run modes, files written, run server, service, code nodes. */
+    private static function readme(array $facts, string $layout, string $folder, string $entry): string
     {
         $name = (string) $facts['wfName'];
-        $root = (string) $facts['safeName'] . (isset($facts['swarm']) ? '_modular_swarm' : '_modular');
-        $slug = strtolower(trim((string) preg_replace('/[^a-z0-9]+/i', '-', $name), '-')) ?: 'workflow';
-        // A swarm's workflow.py runs a prompt, or --cron; it has no --watch / --once / --quiet.
         $swarm = isset($facts['swarm']);
-        $mode = $swarm ? 'prompt' : (string) ($facts['startMode'] ?? 'prompt');
-        $def = fn(string $m) => $m === $mode ? ' **(default)**' : '';
-        $L = [];
-        $L[] = "# {$name}";
-        $L[] = '';
-        $L[] = 'A LangGraph program compiled from the SynergyAI workflow editor. It runs on its own: no database,';
-        $L[] = 'no SynergyAI server. Everything it needs is in this folder.';
-        $L[] = '';
-        $L[] = '## Install';
-        $L[] = '';
-        $L[] = '```sh';
-        $L[] = 'python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt';
-        $L[] = 'cp .env.example .env   # then fill in the API keys and MCP headers';
-        $L[] = '```';
-        $L[] = '';
-        $L[] = '## Modes';
-        $L[] = '';
-        $L[] = 'One mode per launch. With no flag the program runs in the mode its Start node set.';
-        $L[] = '';
-        $L[] = '| Command | Mode |';
-        $L[] = '|---|---|';
-        $L[] = '| `python workflow.py ["text"]` | one run on the text, or on the Start\'s prompt' . $def('prompt') . ' |';
-        $L[] = '| `python workflow.py --cron [EXPR]` | a run on each tick of the schedule, until stopped' . $def('cron') . ' |';
-        if (!$swarm) {
-            $L[] = '| `python workflow.py --watch [server.tool {json}]` | a run for each event the trigger reports, until stopped' . $def('watch') . ' |';
-            $L[] = '| `python workflow.py --once "text"` | exactly one run, whatever the default mode |';
+        $skills = self::skillDirs($facts);
+        $intro = match (true) {
+            $layout === 'single' => ['A LangGraph program compiled from the SynergyAI workflow editor, as one Python file: `' . $entry . '`.',
+                'It runs on its own: no database, no SynergyAI server.'],
+            $layout === 'a2a' => ['A LangGraph program compiled from the SynergyAI workflow editor, as A2A agents: each agent node is an',
+                'A2A server of its own (`agents/`), and `orchestrator.py` runs the workflow over them. It runs on its own:',
+                'no database, no SynergyAI server.'],
+            $swarm => ['A LangGraph swarm compiled from the SynergyAI workflow editor: its agents (`agents/`, one file each) hand',
+                'the conversation to one another. It runs on its own: no database, no SynergyAI server. Everything it needs',
+                'is in this folder.'],
+            default => ['A LangGraph program compiled from the SynergyAI workflow editor, with each node in a file of its own',
+                '(`agents/`). It runs on its own: no database, no SynergyAI server. Everything it needs is in this folder.'],
+        };
+        if ($layout !== 'modular') {
+            array_push($intro, ...PackageDocs::editorSkillsNote($skills));
         }
+        $L = PackageDocs::head($name, $intro, $folder, self::envVariables($facts));
+        $L[] = '## Run';
         $L[] = '';
-        if (!$swarm) {
-            $L[] = '`--quiet` prints only the done / failed line of each run; `--verbose` adds the progress lines.';
+        $L[] = 'Run these from the folder, with the environment active.';
+        $L[] = '';
+        if ($layout === 'a2a') {
+            $cron = $facts['defaultCron'] ?? null;
+            $L[] = '```sh';
+            $L[] = 'python orchestrator.py "your prompt"   # one run on the text (no text: the Start node\'s prompt)';
+            $L[] = 'python orchestrator.py --cron [EXPR]   # a run on each tick of a 5-field cron schedule, until stopped';
+            $L[] = '```';
+            $L[] = '';
+            $L[] = $cron !== null ? "Without EXPR, `--cron` uses the Start node's schedule (`{$cron}`)."
+                : '`--cron` needs EXPR: the Start node has no schedule.';
+            $L[] = 'Text goes before `--cron` (after it, it is read as the cron expression). Ctrl-C (or SIGTERM) stops the loop.';
+            $L[] = '';
+            array_push($L, ...self::a2aAgentLines($facts['a2aAgents'] ?? []));
+        } else {
+            array_push($L, ...PackageDocs::modes($entry, $swarm ? 'prompt' : (string) ($facts['startMode'] ?? 'prompt'),
+                $facts['defaultCron'] ?? null, $swarm ? null : ($facts['defaultWatch'] ?? null), !$swarm));
         }
-        $L[] = 'Ctrl-C (or SIGTERM) stops a loop after the current run.';
-        $L[] = '';
         $L[] = '## Files written';
         $L[] = '';
-        $L[] = '- `outputs/` -- the saved results, when output storage is on (`SYNERGYAI_OUTPUT_ROOT` overrides).';
-        if (!$swarm) {
-            $L[] = '- `runs/` -- one `<date>_<run id>.jsonl` event log per run, and `runs/current` (`RUNS_DIR` overrides).';
+        $here = $layout === 'single' ? 'next to the script' : 'in this folder';
+        $L[] = $layout === 'a2a'
+            ? '- `~/Documents/synergyAI/outputs/` -- the saved results, when output storage is on (`SYNERGYAI_OUTPUT_ROOT` overrides).'
+            : "- `outputs/` {$here} -- the saved results, when output storage is on (`SYNERGYAI_OUTPUT_ROOT` overrides).";
+        if ($layout !== 'a2a' && !$swarm) {
+            $L[] = "- `runs/` {$here} -- one `<date>_<run id>.jsonl` event log per run, and `runs/current` (`RUNS_DIR` overrides).";
             $L[] = '  A run with nothing to do leaves no file.';
         }
         $L[] = '';
-        $L[] = '## Run server';
-        $L[] = '';
-        $L[] = '```sh';
-        $L[] = 'python api.py            # HTTP run server: POST /runs, an SSE event stream per run';
-        if (!$swarm) {
-            $L[] = 'python api.py --listen   # the same, plus the default mode running in the background';
+        if ($layout === 'a2a') {
+            array_push($L, ...PackageDocs::runServer(false, ['The agent servers start with its first run and stop when it exits.']));
+        } elseif ($layout === 'modular') {
+            array_push($L, ...PackageDocs::runServer(!$swarm));
         }
-        $L[] = '```';
-        $L[] = '';
-        $L[] = '## Running as a service';
-        $L[] = '';
-        $L[] = "Replace `/path/to/{$root}` with this folder's absolute path.";
-        if ($mode === 'prompt') {
-            $L[] = 'This workflow\'s default is one run, and a service is restarted when it exits: add `--cron EXPR`'
-                . ($swarm ? '' : ' (or `--watch`)') . ' after `workflow.py` so it keeps running.';
+        if ($layout === 'a2a') {
+            $cron = ($facts['defaultCron'] ?? null) !== null;
+            array_push($L, ...PackageDocs::service($name, 'LangGraph', $folder, $entry, $cron ? '--cron' : '', $cron ? 'cron' : 'prompt'));
+        } else {
+            array_push($L, ...PackageDocs::service($name, 'LangGraph', $folder, $entry, '', $swarm ? 'prompt' : (string) ($facts['startMode'] ?? 'prompt')));
         }
-        $L[] = '';
-        $L[] = "macOS (launchd): save as `~/Library/LaunchAgents/ai.synergy.{$slug}.plist`, then";
-        $L[] = "`launchctl load ~/Library/LaunchAgents/ai.synergy.{$slug}.plist`.";
-        $L[] = '';
-        $L[] = '```xml';
-        $L[] = '<?xml version="1.0" encoding="UTF-8"?>';
-        $L[] = '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">';
-        $L[] = '<plist version="1.0">';
-        $L[] = '<dict>';
-        $L[] = '  <key>Label</key>';
-        $L[] = "  <string>ai.synergy.{$slug}</string>";
-        $L[] = '  <key>ProgramArguments</key>';
-        $L[] = '  <array>';
-        $L[] = "    <string>/path/to/{$root}/.venv/bin/python</string>";
-        $L[] = "    <string>/path/to/{$root}/workflow.py</string>";
-        $L[] = '  </array>';
-        $L[] = '  <key>WorkingDirectory</key>';
-        $L[] = "  <string>/path/to/{$root}</string>";
-        $L[] = '  <key>KeepAlive</key>';
-        $L[] = '  <true/>';
-        // In the package folder itself: launchd creates no folder, and a fresh unzip has no runs/.
-        $L[] = '  <key>StandardOutPath</key>';
-        $L[] = "  <string>/path/to/{$root}/service.log</string>";
-        $L[] = '  <key>StandardErrorPath</key>';
-        $L[] = "  <string>/path/to/{$root}/service.log</string>";
-        $L[] = '</dict>';
-        $L[] = '</plist>';
-        $L[] = '```';
-        $L[] = '';
-        $L[] = "Linux (systemd): save as `/etc/systemd/system/{$slug}.service`, then `systemctl enable --now {$slug}`.";
-        $L[] = '';
-        $L[] = '```ini';
-        $L[] = '[Unit]';
-        $L[] = "Description={$name} (LangGraph)";
-        $L[] = 'After=network-online.target';
-        $L[] = '';
-        $L[] = '[Service]';
-        $L[] = "ExecStart=/path/to/{$root}/.venv/bin/python /path/to/{$root}/workflow.py";
-        $L[] = "WorkingDirectory=/path/to/{$root}";
-        $L[] = 'Restart=always';
-        $L[] = '';
-        $L[] = '[Install]';
-        $L[] = 'WantedBy=multi-user.target';
-        $L[] = '```';
-        if (($facts['codeData'] ?? []) !== []) {
-            $L[] = '';
+        if ($layout === 'modular' && ($facts['codeData'] ?? []) !== []) {
             $L[] = '## Editing code nodes';
             $L[] = '';
             $L[] = 'Each code node runs its file in `code/` (`code/start_<name>.py` is the Start option\'s code).';
             $L[] = 'The file is read at each run: an edit takes effect on the next run, with no recompile. The code';
             $L[] = 'runs under the same rules as in the editor (`code_harness.py`): standard library only, network';
             $L[] = 'only through `call_tool`, one of the node\'s exits, its timeout.';
+            $L[] = '';
         }
-        return implode("\n", $L) . "\n";
+        return rtrim(implode("\n", $L), "\n") . "\n";
+    }
+
+    /** The A2A agent servers: what starts them, their files and default URLs. $agents: a2aLayout()['agents']. */
+    private static function a2aAgentLines(array $agents): array
+    {
+        $L = [];
+        $L[] = '### Agent servers';
+        $L[] = '';
+        $L[] = 'The orchestrator starts every agent server at launch and stops them when it ends. `--keep-serving` leaves';
+        $L[] = 'them running; `--no-spawn` starts none and uses servers already running, each at its `A2A_AGENT_<id>_URL`';
+        $L[] = '(default below; `A2A_BASE_PORT` moves the whole range).';
+        $L[] = '';
+        $L[] = '| Node | File | Default URL |';
+        $L[] = '|---|---|---|';
+        foreach ($agents as $nid => $e) {
+            $L[] = "| {$e['display']} ({$nid}) | `{$e['file']}` | http://127.0.0.1:{$e['port']}/ |";
+        }
+        $L[] = '';
+        $first = $agents ? $agents[array_key_first($agents)] : null;
+        if ($first !== null) {
+            $L[] = "To start one by hand: `python {$first['file']} --port {$first['port']}` (`--host` sets the interface).";
+            $L[] = '';
+        }
+        return $L;
     }
 }

@@ -374,7 +374,7 @@ class AdkGeneratorEmitTest extends TestCase
         $this->assertMatchesRegularExpression('/^import .*\btime\b/m', $code,
             '"time" must be imported at module scope (mcpClientBlock uses time.time())');
         // requirements docstring must pin google-adk to the 2.3.x line and include httpx
-        $this->assertStringContainsString('"google-adk>=2.3,<3" litellm httpx', $code,
+        $this->assertStringContainsString('pip install "google-adk>=2.3,<3" "httpx>=0.27.0" litellm "python-dotenv>=1.0.0"', $code,
             'requirements pip-install line must pin google-adk 2.3.x and include httpx');
     }
 

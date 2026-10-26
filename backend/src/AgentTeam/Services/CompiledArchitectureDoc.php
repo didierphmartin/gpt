@@ -211,7 +211,7 @@ final class CompiledArchitectureDoc
                 str_starts_with($p, 'code/') => 'A code node\'s Python, read at every run (edit it here to change the node until the next generation).',
                 $p === 'requirements.txt' => 'The Python packages to install (`pip install -r requirements.txt`).',
                 $p === '.env.example' => 'Every variable the program reads: provider keys, decision-model keys, MCP URLs and headers, output folder.',
-                $p === 'README.md' => 'Install, run, serve.',
+                $p === 'README.md' => 'Install, configure, run, serve.',
                 $p === 'ARCHITECTURE.md' => 'This document.',
                 default => null,
             };

@@ -178,6 +178,7 @@ final class LangGraphArchitectureDoc
                     $rows[] = [$e['file'], $agentRole($e, $nid) . ": a self-contained A2A server (port {$e['port']}): "
                         . 'its `NODE` settings, `run_node = make_node(NODE).run`, the runtime classes it needs and `NodeExecutor`.'];
                 }
+                array_push($rows, ...self::setupRows());
                 $principle = 'Each agent file is one deployable server: its data (`NODE`), '
                     . '`run_node = make_node(NODE).run`, and its own copy of the classes it needs. `orchestrator.py` wires '
                     . 'the graph and never runs a model itself.';
@@ -190,6 +191,16 @@ final class LangGraphArchitectureDoc
         $L[] = '';
         $L[] = $principle;
         return implode("\n", $L);
+    }
+
+    /** The files that install and configure a package (LangGraphPackage), in the order it writes them. */
+    private static function setupRows(): array
+    {
+        return [
+            ['requirements.txt', 'The Python packages to install (`pip install -r requirements.txt`).'],
+            ['.env.example', 'Every variable the program reads: provider keys, MCP URLs and headers, output and run folders.'],
+            ['README.md', 'Install, configure, the run modes, files written, the run server, running as a service.'],
+        ];
     }
 
     /** The modular package's own files (LangGraphPackage): code files, the harness, setup files, skills, documents. */
@@ -206,9 +217,7 @@ final class LangGraphArchitectureDoc
                 }
             }
         }
-        $rows[] = ['requirements.txt', 'The Python packages to install (`pip install -r requirements.txt`).'];
-        $rows[] = ['.env.example', 'Every variable the program reads: provider keys, MCP URLs and headers, output and run folders.'];
-        $rows[] = ['README.md', 'Install, modes, files written, the run server, running as a service.'];
+        array_push($rows, ...self::setupRows());
         foreach (LangGraphPackage::skillDirs($facts) as $d) {
             $rows[] = ["skills/{$d}/", 'Skill "' . self::cell($d) . '", copied with all its files: what `SkillRuntime` runs.'];
         }

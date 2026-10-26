@@ -73,11 +73,12 @@ node output, published to session.state like any other node's result.
 TO RUN
 ======
   # Requires Python 3.10+ (the generated code uses match statements)
-  pip install "google-adk>=2.3,<3" litellm httpx python-dotenv   # 2.3.x: SequentialAgent/ParallelAgent still supported
+  # google-adk 2.3.x: SequentialAgent/ParallelAgent still supported
+  pip install "google-adk>=2.3,<3" "httpx>=0.27.0" litellm "python-dotenv>=1.0.0"
   # API keys read from ../.env for the providers this workflow uses:
   #   ANTHROPIC_API_KEY (claude)
   #   GOOGLE_API_KEY (gemini)
-  python this_file.py "your prompt here"
+  python diamond_adk.py "your prompt here"
   # Output storage (Output node setting): OFF (the result is printed, not saved)
 """
 import asyncio, json, os, subprocess, sys, threading, time, traceback, urllib.request

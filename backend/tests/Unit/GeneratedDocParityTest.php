@@ -140,7 +140,8 @@ class GeneratedDocParityTest extends TestCase
         foreach (['ADK', 'MAF', 'NOOA'] as $t) {
             $this->assertStringContainsString('async def run_playbook_node(', $all[$t], $t);
             $this->assertStringContainsString('PLAYBOOKS = {', $all[$t], $t);
-            $this->assertStringContainsString('pip install langchain-core langgraph', $all[$t], "{$t}: the interpreter's requirement must be stated");
+            $this->assertMatchesRegularExpression('/^  pip install .*"langchain-core>=0\.3\.0" .*"langgraph>=0\.2\.50"/m', $all[$t],
+                "{$t}: the interpreter's requirement must be stated");
         }
     }
 
