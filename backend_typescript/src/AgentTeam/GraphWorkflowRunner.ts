@@ -1640,10 +1640,24 @@ export class GraphWorkflowRunner {
     return null;
   }
 
-  /** Port of GraphWorkflowRunner.php::getDocumentLocalPath. */
-  private getDocumentLocalPath(relativePath: string): string {
+  private static readonly ROOT_FOLDER = 'synergyaichatroot';
+
+  /**
+   * Port of GraphWorkflowRunner.php::getDocumentLocalPath: a file under the storage root folder,
+   * symlinks resolved, or null (as StartDocumentStore does).
+   */
+  private getDocumentLocalPath(relativePath: string): string | null {
     const basePath = this.config.storage_path ?? path.resolve(__dirname, '../../storage');
-    return `${basePath}/${relativePath.replace(/^\/+/, '')}`;
+    let root: string;
+    let target: string;
+    try {
+      root = fs.realpathSync(`${basePath}/${GraphWorkflowRunner.ROOT_FOLDER}`);
+      target = fs.realpathSync(`${basePath}/${relativePath.replace(/^\/+/, '')}`);
+    } catch {
+      return null;
+    }
+    if (!target.startsWith(root + path.sep) || !fs.statSync(target).isFile()) return null;
+    return target;
   }
 
   /**
@@ -1658,20 +1672,21 @@ export class GraphWorkflowRunner {
 
     if (phpEmpty(storagePath) && phpEmpty(fullPath)) return null;
 
-    // Try universalFS first (always null here — see getDocumentStorageAdapter TODO above).
-    const adapter = this.getDocumentStorageAdapter();
-    if (!adapter) {
-      // Fall through to local storage, exactly like PHP does whenever the adapter is
-      // unavailable or throws.
-    }
+    // The path comes from the workflow definition: no '.' or '..' segment
+    const relative = String(!phpEmpty(fullPath) ? fullPath : `${GraphWorkflowRunner.ROOT_FOLDER}/${storagePath}`).replace(/^\/+/, '');
+    if (relative.includes('\0') || /(^|[/\\])\.\.?([/\\]|$)/.test(relative)) return null;
 
-    const localPath = this.getDocumentLocalPath(fullPath || storagePath);
-    if (fs.existsSync(localPath)) {
+    // universalFS first in PHP; always null here (see getDocumentStorageAdapter TODO above), so
+    // straight to local storage, exactly like PHP whenever the adapter is unavailable or throws.
+    this.getDocumentStorageAdapter();
+
+    const localPath = this.getDocumentLocalPath(relative);
+    if (localPath !== null) {
       return fs.readFileSync(localPath);
     }
 
     console.warn(
-      `[GraphWorkflowRunner] readFileRaw: document not found via local fallback (universalFS unreachable from Node): ${localPath}`
+      `[GraphWorkflowRunner] readFileRaw: document not found under the storage root via local fallback (universalFS unreachable from Node): ${relative}`
     );
     return null;
   }
