@@ -872,7 +872,7 @@ class AdminController:
         except Exception as e:  # noqa: BLE001
             error_log('[AdminController] package key overlay failed: ' + str(e))
 
-        return {'success': True, 'user_id': userId, 'keys': keys, 'status_code': 200}
+        return {'success': True, 'user_id': userId, 'keys': php_array(keys), 'status_code': 200}
 
     def saveApiKeys(self, request) -> dict:
         err = require_admin(self.db, request)

@@ -622,7 +622,7 @@ def test_get_api_keys_no_slots_when_the_settings_lookup_fails():
                 raise RuntimeError('no table')
             return super()._settings(sql, params)
     db = NoSettings(all_=[[]], one=[{'role': 'user'}, {'role': 'user'}, None])
-    assert c(db).getApiKeys(ctx(), 3)['keys'] == {}
+    assert c(db).getApiKeys(ctx(), 3)['keys'] == []   # PHP json_encodes the empty keyed array as []
 
 
 def test_get_api_keys_masks_and_sources_user_key():
