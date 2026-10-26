@@ -29,10 +29,11 @@ that exact message. Verified live 2026-09-07:
 Ported verbatim (raise, don't catch) — same precedent as
 mcp_proxy_controller.py's `proxyRequest()` TypeError port.
 
-The task brief's unit-case list mentions a "path traversal guard" for
-listLocalFiles/readLocalFile; PHP 399-479 has no such guard (grep confirms:
-no realpath/`..`/basePath-prefix check anywhere in this class) — ported
-verbatim (no guard added), per "PHP wins over the brief" (constraints.md).
+Storage paths stay inside the user's folder (PHP 3a78665): `safeRelative`
+refuses '.', '..' and NUL segments in the requested path and in the user's
+storage_folder setting, and a read's fileId must lie under
+synergyaichatroot/{storage_folder}/. Local reads resolve under the storage
+root, where listings point (no longer under user_<id>/).
 """
 from __future__ import annotations
 
@@ -43,7 +44,7 @@ from datetime import datetime
 from app.controllers.settings_controller import SettingsController
 from app.support.db_presence import DbPresence
 from app.support.logger import error_log
-from app.support.phpcompat import php_empty, php_tz, php_trim
+from app.support.phpcompat import php_empty, php_strval, php_trim, php_tz
 
 
 def _pathinfo_extension(filename: str) -> str:
@@ -104,6 +105,21 @@ class FileStorageController:
         self.config = config if config is not None else {}
         self._presence = DbPresence(db, 'FileStorageController')
 
+    # ─── safeRelative ───────────────────────────────────────────────────────
+
+    @staticmethod
+    def safeRelative(path: str) -> str | None:
+        """A storage path as 'a/b/c' (no leading or trailing slash), or None
+        when it has a '.' or '..' segment or a NUL byte: paths come from the
+        request and from the user's own settings, and must stay under the
+        user's folder."""
+        if '\0' in path:
+            return None
+        parts = [p for p in path.replace('\\', '/').split('/') if p != '']
+        if any(p in ('.', '..') for p in parts):
+            return None
+        return '/'.join(parts)
+
     # ─── buildFullPath (PHP 35-48) ──────────────────────────────────────────
 
     def buildFullPath(self, userFolder: str, path: str = '') -> str:
@@ -158,11 +174,13 @@ class FileStorageController:
             return {'success': False, 'error': 'Authentication required'}
 
         query = request['query'] if request.get('query') is not None else {}
-        relativePath = query['path'] if query.get('path') is not None else ''
+        relativePath = self.safeRelative(php_strval(query['path'] if query.get('path') is not None else ''))
+        if relativePath is None:
+            return {'success': False, 'error': 'Invalid path', 'items': []}
 
         storageConfig = self.getUserStorageConfig(userId)
         provider = storageConfig['provider']
-        userFolder = storageConfig['folder']
+        userFolder = self.safeRelative(php_strval(storageConfig['folder'])) or ''
 
         if php_empty(userFolder):
             return {
@@ -226,11 +244,18 @@ class FileStorageController:
         storageConfig = self.getUserStorageConfig(userId)
         provider = storageConfig['provider']
 
+        # fileId is the path a listing returned: it must lie inside this user's folder
+        userFolder = self.safeRelative(php_strval(storageConfig['folder'])) or ''
+        relativeFile = self.safeRelative(php_strval(fileId))
+        if userFolder == '' or relativeFile is None \
+                or not relativeFile.startswith(self.buildFullPath(userFolder) + '/'):
+            return {'success': False, 'error': 'File not found'}
+
         try:
             adapter = self.getUniversalFSAdapter(provider)
 
             if adapter is None:
-                return self.readLocalFile(userId, fileId)
+                return self.readLocalFile(relativeFile)
 
             # universalFS live-adapter branch (PHP 319-339) is unreachable —
             # see module docstring.
@@ -306,10 +331,10 @@ class FileStorageController:
 
     # ─── readLocalFile (PHP 457-479) ────────────────────────────────────────
 
-    def readLocalFile(self, userId: int, filePath: str) -> dict:
+    def readLocalFile(self, filePath: str) -> dict:
         basePath = self.config['storage_path'] if self.config.get('storage_path') is not None \
             else SettingsController.DEFAULT_STORAGE_PATH
-        fullPath = basePath + '/user_' + str(userId) + '/' + filePath.lstrip('/')
+        fullPath = basePath + '/' + filePath
 
         if not os.path.isfile(fullPath):
             return {'success': False, 'error': 'File not found'}

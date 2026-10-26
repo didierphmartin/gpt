@@ -217,14 +217,14 @@ def test_read_file_not_found():
 
 def test_read_file_text_content():
     with tempfile.TemporaryDirectory() as tmp:
-        userDir = os.path.join(tmp, 'user_3')
+        userDir = os.path.join(tmp, 'synergyaichatroot', 'x')
         os.makedirs(userDir)
         with open(os.path.join(userDir, 'note.txt'), 'w') as f:
             f.write('hello world')
 
         db = FakeDb(one=[{'storage_provider': 'local', 'storage_folder': 'x'}])
         c = ctl(db, {'storage_path': tmp})
-        result = c.readFile(ctx(query={'fileId': 'note.txt'}, user_id=3))
+        result = c.readFile(ctx(query={'fileId': 'synergyaichatroot/x/note.txt'}, user_id=3))
         assert result == {
             'success': True, 'name': 'note.txt', 'size': 11, 'mimeType': 'text/plain',
             'isBinary': False, 'content': 'hello world', 'encoding': 'utf-8',
@@ -233,7 +233,7 @@ def test_read_file_text_content():
 
 def test_read_file_binary_content_base64():
     with tempfile.TemporaryDirectory() as tmp:
-        userDir = os.path.join(tmp, 'user_3')
+        userDir = os.path.join(tmp, 'synergyaichatroot', 'x')
         os.makedirs(userDir)
         payload = bytes([0x89, 0x50, 0x4E, 0x47, 0x00, 0x01, 0x02, 0x03])
         with open(os.path.join(userDir, 'x.png'), 'wb') as f:
@@ -241,7 +241,7 @@ def test_read_file_binary_content_base64():
 
         db = FakeDb(one=[{'storage_provider': 'local', 'storage_folder': 'x'}])
         c = ctl(db, {'storage_path': tmp})
-        result = c.readFile(ctx(query={'fileId': 'x.png'}, user_id=3))
+        result = c.readFile(ctx(query={'fileId': 'synergyaichatroot/x/x.png'}, user_id=3))
         assert result['success'] is True
         assert result['isBinary'] is True
         assert result['encoding'] == 'base64'
@@ -250,27 +250,18 @@ def test_read_file_binary_content_base64():
         assert base64.b64decode(result['content']) == payload
 
 
-# ─── "path traversal guard" — PHP has none (verified: no realpath/../guard
-# anywhere in 399-479); ported verbatim, no guard added. ────────────────────
+# ─── path containment (PHP 3a78665; full refusal set in test_file_storage_path.py)
 
-def test_read_local_file_has_no_traversal_guard_matches_php():
+def test_read_file_refuses_a_path_leaving_the_users_folder():
     with tempfile.TemporaryDirectory() as tmp:
-        # A file OUTSIDE the user_3 folder, reachable via '../'.
-        secret_dir = os.path.join(tmp, 'user_3', 'sub')
-        os.makedirs(secret_dir)
-        outside = os.path.join(tmp, 'outside.txt')
-        with open(outside, 'w') as f:
+        os.makedirs(os.path.join(tmp, 'synergyaichatroot', 'x'))
+        with open(os.path.join(tmp, 'outside.txt'), 'w') as f:
             f.write('leaked')
 
         db = FakeDb(one=[{'storage_provider': 'local', 'storage_folder': 'x'}])
         c = ctl(db, {'storage_path': tmp})
-        # PHP: $basePath . '/user_3/' . ltrim('../outside.txt', '/') resolves
-        # (via the filesystem, no realpath check) to tmp/outside.txt.
-        result = c.readFile(ctx(query={'fileId': '../outside.txt'}, user_id=3))
-        assert result == {
-            'success': True, 'name': 'outside.txt', 'size': 6, 'mimeType': 'text/plain',
-            'isBinary': False, 'content': 'leaked', 'encoding': 'utf-8',
-        }
+        result = c.readFile(ctx(query={'fileId': 'synergyaichatroot/x/../../outside.txt'}, user_id=3))
+        assert result == {'success': False, 'error': 'File not found'}
 
 
 # ─── guessMimeType (PHP 484-511) ─────────────────────────────────────────────
