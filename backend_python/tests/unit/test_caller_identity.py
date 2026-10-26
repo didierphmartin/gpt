@@ -61,7 +61,9 @@ def test_mcp_get_all_tools_ignores_a_query_user_id():
 
 def test_mcp_proxy_looks_servers_up_as_the_caller():
     db = proxy_t.FakeDb()
-    MCPProxyController(db, {}).forward(proxy_t.ctx(body={'action': 'proxy', 'server_id': 1, 'user_id': VICTIM}))
+    # No jsonrpc: an unresolved server answers 'Unknown MCP server', no network either way.
+    r = MCPProxyController(db, {}).forward(proxy_t.ctx(body={'action': 'proxy', 'server_id': 1, 'user_id': VICTIM}))
+    assert r['error']['message'] == 'Unknown MCP server'
     assert db.calls, 'the server lookup ran'
     assert all(p[-1] == str(ME) for _, p in db.calls)
 

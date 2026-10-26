@@ -369,7 +369,8 @@ def test_proxy_request_echo_and_header_injection(monkeypatch):
             return httpx.Response(200, json={'jsonrpc': '2.0', 'id': payload['id'], 'result': {'tools': []}})
         return httpx.Response(200, json={'jsonrpc': '2.0', 'id': payload.get('id', 1), 'result': {}})
 
-    db = FakeDb(one=[{'headers': '{"Authorization":"Bearer secret"}'}, {'transport': 'http'}])
+    db = FakeDb(one=[{'url': 'http://x.test', 'user_id': '3'},
+                     {'headers': '{"Authorization":"Bearer secret"}'}, {'transport': 'http'}])
     c = proxy(db)
     monkeypatch.setattr(c, '_makeClient', lambda: mock(handler))
 
@@ -492,7 +493,7 @@ def test_discover_tools_caches_and_deletes_first(monkeypatch):
             ]}})
         raise AssertionError(payload)
 
-    db = FakeDb()
+    db = FakeDb(one=[{'url': 'http://x.test', 'user_id': 3}])   # the caller's own server
     c = proxy(db)
     monkeypatch.setattr(c, '_makeClient', lambda: mock(handler))
 
