@@ -372,7 +372,7 @@ print(t, t.args, t.url())`);
     "outlook.wait_for_new {'timeout_s': 30} http://mail.local/mcp"]);
   const cases: Record<string, string> = {
     '"", None': 'this workflow has no event trigger',
-    '"drive.wait", None': "MCP server 'drive' is not used by this workflow (its servers: outlook); set MCP_URL_DRIVE in .env if the server moved",
+    '"drive.wait", None': "MCP server 'drive' is not used by this workflow (its servers: outlook); set the environment variable MCP_URL_DRIVE if the server moved",
     '"outlook", None': 'expected server.tool',
     '"outlook.wait {x", None': 'the arguments are not JSON',
     '"outlook.wait [1]", None': 'must be a JSON object',

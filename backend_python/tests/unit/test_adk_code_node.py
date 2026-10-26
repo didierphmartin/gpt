@@ -133,7 +133,7 @@ def test_headers_merge_and_bad_json_names_the_variable():
     assert out.strip() == 'acc-1'
     rc, out = _run_py(code, '_mcp_headers("http://localhost:8770")', {'MCP_HEADERS_OUTLOOK': '{oops'})
     assert rc != 0
-    assert 'MCP_HEADERS_OUTLOOK in .env is not valid JSON' in out
+    assert 'Environment variable MCP_HEADERS_OUTLOOK is not valid JSON' in out
 
 
 def test_url_override_from_env():

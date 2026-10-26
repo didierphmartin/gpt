@@ -401,7 +401,7 @@ test('login admin reads stay allowed on corporate', async () => {
   const r = await new LoginAdminController(CORP).getUsers(ctx({}, 1));
   assert.notEqual(r.status_code, 403);
   assert.equal(r.available, false);
-  assert.equal(r.message, 'Login DB not reachable — set LOGIN_DB_* in gpt/backend/.env');
+  assert.equal(r.message, 'Login DB not reachable — set the LOGIN_DB_* environment variables');
 });
 
 test('login admin refuses a non-admin caller', async () => {

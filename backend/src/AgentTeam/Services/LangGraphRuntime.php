@@ -2104,7 +2104,7 @@ class WatchTrigger:
         if trigger.url() is None:
             known = ", ".join(sorted(set(MCP_SERVER_SLUGS.values()))) or "none"
             ap.error(f"--watch: MCP server {trigger.server!r} is not used by this workflow (its servers: {known}); "
-                     f"set MCP_URL_{trigger.server.upper()} in .env if the server moved")
+                     f"set the environment variable MCP_URL_{trigger.server.upper()} if the server moved")
         return trigger
 
     def url(self) -> str | None:
@@ -2480,7 +2480,7 @@ def _make_llm(provider: str, model: str, temperature: float = 0.7, max_tokens: i
         raise RuntimeError(
             f"No model specified for provider {p!r}. "
             "Set a model name on the agent in the workflow editor, "
-            "or set MODEL_NAME in .env."
+            "or set the environment variable MODEL_NAME."
         )
     match p:
         case "claude":
@@ -2811,12 +2811,12 @@ class McpClient:
         try:
             extra = json.loads(raw)
         except json.JSONDecodeError:
-            raise RuntimeError(f"{var} in .env is not valid JSON (expected e.g. {{\"Header\": \"value\"}})") from None
+            raise RuntimeError(f"Environment variable {var} is not valid JSON (expected e.g. {{\"Header\": \"value\"}})") from None
         if not isinstance(extra, dict):
-            raise RuntimeError(f"{var} in .env must be a JSON object")
+            raise RuntimeError(f"Environment variable {var} must be a JSON object")
         for k, v in extra.items():
             if not isinstance(v, str) or "\r" in v or "\n" in v or "\r" in str(k) or "\n" in str(k):
-                raise RuntimeError(f"{var} in .env: every header value must be a single-line string (check header {str(k)!r})")
+                raise RuntimeError(f"Environment variable {var}: every header value must be a single-line string (check header {str(k)!r})")
         return {**self.HEADERS, **{str(k): v for k, v in extra.items()}}
 
     @staticmethod

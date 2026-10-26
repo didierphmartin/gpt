@@ -1505,7 +1505,7 @@ class LangGraphGenerator
         $lines[] = '        raise RuntimeError(';
         $lines[] = '            f"No model specified for provider {p!r}. "';
         $lines[] = '            "Set a model name on the agent in the workflow editor, "';
-        $lines[] = '            "or set MODEL_NAME in .env."';
+        $lines[] = '            "or set the environment variable MODEL_NAME."';
         $lines[] = '        )';
         $lines[] = '    match p:';
         $lines[] = '        case "claude":';

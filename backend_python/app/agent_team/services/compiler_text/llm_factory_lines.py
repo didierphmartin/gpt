@@ -36,7 +36,7 @@ LLM_FACTORY_LINES = [
     '        raise RuntimeError(',
     '            f"No model specified for provider {p!r}. "',
     '            "Set a model name on the agent in the workflow editor, "',
-    '            "or set MODEL_NAME in .env."',
+    '            "or set the environment variable MODEL_NAME."',
     '        )',
     '    match p:',
     '        case "claude":',

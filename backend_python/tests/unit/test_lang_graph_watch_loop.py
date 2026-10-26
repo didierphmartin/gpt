@@ -386,7 +386,7 @@ print(t, t.args, t.url())
     assert out == ['None', "outlook.wait_for_new {'args': {'folder': 'Inbox'}}",
                    "outlook.wait_for_new {'timeout_s': 30} http://mail.local/mcp"]
     for args, msg in {'"", None': 'this workflow has no event trigger',
-                      '"drive.wait", None': "MCP server 'drive' is not used by this workflow (its servers: outlook); set MCP_URL_DRIVE in .env if the server moved",
+                      '"drive.wait", None': "MCP server 'drive' is not used by this workflow (its servers: outlook); set the environment variable MCP_URL_DRIVE if the server moved",
                       '"outlook", None': 'expected server.tool', '"outlook.wait {x", None': 'the arguments are not JSON',
                       '"outlook.wait [1]", None': 'must be a JSON object'}.items():
         rc, lines = _run_py(f"WatchTrigger.from_cli(argparse.ArgumentParser(prog='wf'), {args})\n")

@@ -163,12 +163,12 @@ def _mcp_headers(server_url: str) -> dict:
     try:
         extra = json.loads(raw)
     except json.JSONDecodeError:
-        raise RuntimeError(f"{var} in .env is not valid JSON (expected e.g. {{\\"Header\\": \\"value\\"}})") from None
+        raise RuntimeError(f"Environment variable {var} is not valid JSON (expected e.g. {{\\"Header\\": \\"value\\"}})") from None
     if not isinstance(extra, dict):
-        raise RuntimeError(f"{var} in .env must be a JSON object")
+        raise RuntimeError(f"Environment variable {var} must be a JSON object")
     for k, v in extra.items():
         if not isinstance(v, str) or "\\r" in v or "\\n" in v or "\\r" in str(k) or "\\n" in str(k):
-            raise RuntimeError(f"{var} in .env: every header value must be a single-line string (check header {str(k)!r})")
+            raise RuntimeError(f"Environment variable {var}: every header value must be a single-line string (check header {str(k)!r})")
     return {**_MCP_BASE_HEADERS, **{str(k): v for k, v in extra.items()}}
 
 

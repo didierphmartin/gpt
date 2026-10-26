@@ -92,7 +92,7 @@ test('unconfigured databases answer PHP\'s not-reachable shapes', async () => {
   assert.deepEqual(await c.getModels(ctx(1)), { success: false, models: [] });
   assert.deepEqual(await c.getPackages(ctx(1)), { success: false, packages: [] });
   assert.deepEqual(await c.getUsers(ctx(1)), {
-    success: false, available: false, users: [], message: 'Login DB not reachable — set LOGIN_DB_* in gpt/backend/.env',
+    success: false, available: false, users: [], message: 'Login DB not reachable — set the LOGIN_DB_* environment variables',
   });
   assert.deepEqual(await c.setUserRole(ctx(1)), { success: false, message: 'Login DB not reachable' });
 });
