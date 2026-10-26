@@ -10,6 +10,7 @@ from starlette.responses import JSONResponse, Response
 from app.support.phpjson import dumps, php_json_numbers
 
 BASE_PATH = '/gpt/backend'   # MiddlewareProcessor::buildRequest strips this prefix
+MCP_APP_CSP = 'sandbox allow-scripts allow-forms allow-downloads allow-modals'
 
 
 class Ctx(dict):
@@ -63,7 +64,11 @@ def render(result: dict) -> Response | None:
     ctype = result.get('content_type')
     if isinstance(ctype, str) and 'text/html' in ctype:
         body = result.get('html', result.get('error', ''))
-        return _raw(body, status, {'Content-Type': ctype, 'Cache-Control': 'no-cache'})
+        # The HTML comes from an MCP server: run it in an opaque origin
+        # (no allow-same-origin), so it cannot read this site's storage
+        # or session token, even when opened directly.
+        return _raw(body, status, {'Content-Type': ctype, 'Cache-Control': 'no-cache',
+                                   'Content-Security-Policy': MCP_APP_CSP})
     if ctype == 'text/plain':
         return _raw(result.get('error', 'Unknown error'), status, {'Content-Type': 'text/plain'})
     if 'raw_body' in result:

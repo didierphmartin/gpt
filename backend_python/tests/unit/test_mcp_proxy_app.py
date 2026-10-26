@@ -212,7 +212,7 @@ def test_app_proxy_query_addressed_server_is_reached_as_given(monkeypatch):
         method = _json.loads(req.content)['method']
         return httpx.Response(200, json=_rpc(error={'message': 'no such resource'}) if method == 'resources/read' else _rpc(result={}))
 
-    c = app_ctl()
+    c = app_ctl(FakeDb(all_=[[{'url': url}]]))
     monkeypatch.setattr(c, '_makeClient', lambda: mock(handler))
     r = c.getResource(app_ctx({'server': url, 'resource': 'ui://none'}))
     assert r['error'].startswith('Failed to fetch MCP resource')
@@ -230,7 +230,7 @@ def test_app_proxy_falls_back_to_mcp_when_the_url_as_given_is_not_jsonrpc(monkey
         method = _json.loads(req.content)['method']
         return httpx.Response(200, json=_rpc(result={'contents': [{'text': '<p>x</p>'}]}) if method == 'resources/read' else _rpc(result={}))
 
-    c = app_ctl()
+    c = app_ctl(FakeDb(all_=[[{'url': 'http://h/srv'}]]))
     monkeypatch.setattr(c, '_makeClient', lambda: mock(handler))
     r = c.getResource(app_ctx({'server': 'http://h/srv', 'resource': 'ui://x'}))
     assert r['status_code'] == 200
@@ -579,7 +579,7 @@ def test_get_resource_missing_resource():
 
 
 def test_get_resource_init_failure(monkeypatch):
-    c = app_ctl()
+    c = app_ctl(FakeDb(all_=[[{'url': 'http://x.test'}]]))
     monkeypatch.setattr(c, '_makeClient', lambda: mock(lambda r: httpx.Response(500)))
     result = c.getResource(app_ctx({'server': 'http://x.test', 'resource': 'ui://x'}))
     assert result == {'error': 'Failed to initialize MCP session', 'status_code': 502, 'content_type': 'text/plain'}
@@ -599,7 +599,7 @@ def test_get_resource_happy_path(monkeypatch):
             }})
         raise AssertionError(payload)
 
-    c = app_ctl()
+    c = app_ctl(FakeDb(all_=[[{'url': 'http://x.test'}]]))   # trailing slash ignored
     monkeypatch.setattr(c, '_makeClient', lambda: mock(handler))
     result = c.getResource(app_ctx({
         'server': 'http://x.test/', 'resource': 'ui://widget', 'west': '1.5', 'label': 'Widget',
@@ -608,7 +608,7 @@ def test_get_resource_happy_path(monkeypatch):
     assert '<script>' in result['html'] and 'window.MCP_INIT_DATA' in result['html']
     assert result['html'].endswith('<body>hi</body></html>')
     assert '"west":1.5' in result['html'] and '"label":"Widget"' in result['html']
-    assert "window.MCP_SERVER_URL = 'http://x.test/';" in result['html']
+    assert 'window.MCP_SERVER_URL = "http:\\/\\/x.test\\/";' in result['html']
 
 
 def test_get_resource_no_html_content(monkeypatch):
@@ -621,7 +621,7 @@ def test_get_resource_no_html_content(monkeypatch):
             return httpx.Response(200, json={'success': True})
         return httpx.Response(200, json={'jsonrpc': '2.0', 'id': 2, 'result': {'contents': []}})
 
-    c = app_ctl()
+    c = app_ctl(FakeDb(all_=[[{'url': 'http://x.test'}]]))
     monkeypatch.setattr(c, '_makeClient', lambda: mock(handler))
     result = c.getResource(app_ctx({'server': 'http://x.test', 'resource': 'ui://x'}))
     assert result == {'error': 'No HTML content in MCP resource', 'status_code': 502, 'content_type': 'text/plain'}
