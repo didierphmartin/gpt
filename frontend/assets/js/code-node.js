@@ -144,6 +144,11 @@
         return Array.isArray(methods) && methods.includes('organization');
     }
 
+    /** The organization Connect button: for the robot's connections only (forRobot), never a person's own Connect box. */
+    function showsOrganizationButton(tools, forRobot) {
+        return !!forRobot && offersOrganization(tools);
+    }
+
     /**
      * A tools/call JSON-RPC answer as the tool's own JSON payload. A failed call (no answer, a JSON-RPC
      * error, an isError result) comes back as {error, message}; an {"error": code} text keeps its code.
@@ -397,6 +402,6 @@
         return { input, output: r.ok ? r.output_text : r.error, success: !!r.ok, agentName: name, activity, code: r };
     }
 
-    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, hasCall, readCallArgs, writeCallArgs, callTemplate, CONNECT_TOOLS, isConnectable, offersOrganization, toolJson, connectOrganization, parseExits, isPlain, exitsText, exitsLabel, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor,
+    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, hasCall, readCallArgs, writeCallArgs, callTemplate, CONNECT_TOOLS, isConnectable, offersOrganization, showsOrganizationButton, toolJson, connectOrganization, parseExits, isPlain, exitsText, exitsLabel, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor,
              edgesFrom, exitTags, failureResult, routeAfter, runSucceeded, remapExits, normalizeConfig, runData, nodeArgs, runRequest, startAsCode };
 });

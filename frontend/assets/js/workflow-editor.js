@@ -10134,8 +10134,8 @@ class WorkflowEditor {
      * getServer: the server ({id, name, url}) while it is checked, else null. Returns { refresh }.
      * io (optional): {call(server, tool, args), saveKey(server, header, key), listTools?(server)} -- the robot's
      * connections pass their own routes; default: the user's proxy (_mcpToolJson / _saveConnectionKey).
-     * When connect_start's schema offers method "organization", a second button connects the whole
-     * organization at once (CodeNode.connectOrganization).
+     * In the robot's connections (io passed) only, when connect_start's schema offers method "organization",
+     * a second button connects the whole organization at once (CodeNode.connectOrganization).
      */
     _wireServerConnect(el, getServer, io = null) {
         const call = io?.call || ((s, tool, args) => this._mcpToolJson(s, tool, args));
@@ -10153,8 +10153,8 @@ class WorkflowEditor {
         const showOrg = async (server) => {
             if (!orgBtn || orgFor === server.id) return;
             orgFor = server.id;
-            const listed = await listTools(server);
-            orgBtn.style.display = window.CodeNode.offersOrganization(listed?.tools) ? '' : 'none';
+            const listed = io ? await listTools(server) : null;     // a person's own box: never the organization
+            orgBtn.style.display = window.CodeNode.showsOrganizationButton(listed?.tools, !!io) ? '' : 'none';
         };
         const showWho = async () => {
             const server = getServer();
@@ -21628,6 +21628,8 @@ Based on the analysis...
         const label = btn.querySelector('[data-robot-label]') || btn;
         const id = this.currentWorkflowId;
         if (!id) { this.showToast(this.t('workflow.messages.saveFirst'), 'warning'); return; }
+        // The robot copies the saved workflow: unsaved edits would silently not be published.
+        if (!this._unchangedSinceLoad()) { this.showToast(this.t('robot.saveFirst'), 'warning'); return; }
         if (btn.dataset.busy === '1') return;
         const step = PC.publishStep(this._wfPublishState, { type: 'click', key: id });
         clearTimeout(this._wfPublishTimer);

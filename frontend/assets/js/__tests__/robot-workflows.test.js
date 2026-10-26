@@ -14,6 +14,10 @@ const CN = require('../code-node.js');
     assert.ok(!CN.offersOrganization(tools(null)));
     assert.ok(!CN.offersOrganization([{ name: 'whoami' }]));
     assert.ok(!CN.offersOrganization(null));
+    // ... and only in the robot's connections: never in a person's own Connect box.
+    assert.ok(CN.showsOrganizationButton(tools(['device', 'organization']), true));
+    assert.ok(!CN.showsOrganizationButton(tools(['device', 'organization']), false));
+    assert.ok(!CN.showsOrganizationButton(tools(['device']), true));
 
     // connect with io uses the injected call and saveKey
     const calls = [];
@@ -109,6 +113,12 @@ const CN = require('../code-node.js');
     assert.deepStrictEqual(done, { success: true, output: '', node_outputs: { 5: 'filed' }, response_time_ms: 1200 });
     const failed = PC.runResultsData({ status: 'failed', error_message: 'no key', output: null });
     assert.deepStrictEqual(failed, { success: false, output: 'no key', node_outputs: {}, response_time_ms: 0 });
+
+    // Publishing with unsaved changes asks to save first, in every language.
+    for (const lang of ['en', 'es', 'fr']) {
+        const robot = require(`../../i18n/${lang}.json`).robot;
+        assert.ok(typeof robot.saveFirst === 'string' && robot.saveFirst.length > 0, `robot.saveFirst missing in ${lang}`);
+    }
 
     console.log('robot-workflows: all passed');
 })().catch((e) => { console.error(e); process.exit(1); });

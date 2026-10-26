@@ -1419,6 +1419,7 @@
   "robot": {
     "publish": "Publicar en el robot",
     "publishTitle": "Publicar una copia congelada del flujo guardado en el robot",
+    "saveFirst": "Guarda primero el flujo: el robot recibe la versión guardada.",
     "published": "Publicado en el robot.",
     "replaceConfirm": "El robot está ejecutando este flujo: haz clic de nuevo para reemplazarlo",
     "needsServers": "El robot necesita estas conexiones MCP: {{names}}. Añádelas en Conexiones del robot.",

@@ -1419,6 +1419,7 @@
   "robot": {
     "publish": "Publier sur le robot",
     "publishTitle": "Publier une copie figée du workflow enregistré sur le robot",
+    "saveFirst": "Enregistrez d'abord le workflow : le robot reçoit la version enregistrée.",
     "published": "Publié sur le robot.",
     "replaceConfirm": "Le robot exécute ce workflow : cliquez à nouveau pour le remplacer",
     "needsServers": "Le robot a besoin de ces connexions MCP : {{names}}. Ajoutez-les sous Connexions du robot.",

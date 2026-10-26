@@ -1419,6 +1419,7 @@
   "robot": {
     "publish": "Publish to robot",
     "publishTitle": "Publish a frozen copy of the saved workflow to the robot",
+    "saveFirst": "Save the workflow first: the robot gets the saved version.",
     "published": "Published to the robot.",
     "replaceConfirm": "The robot is running this workflow: click again to replace it",
     "needsServers": "The robot needs these MCP connections: {{names}}. Add them under Robot connections.",
