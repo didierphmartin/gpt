@@ -283,6 +283,18 @@ class AuthController:
                                  [email, firebase_uid, phone_number])
         if user and self._is_service_user(user):
             return {'success': False, 'message': 'Invalid or expired authentication token', 'status_code': 401}
+        # An existing account is reached by its email only when Firebase has
+        # verified that address: email/password sign-up lets anyone create a
+        # Firebase user for any address. The account's own Firebase user and a
+        # matching (SMS-verified) phone number still sign in, and so does the
+        # Firebase user scripts/firebase-auth-export.php imported for this row.
+        if (user
+                and str(user.get('firebase_uid') or '') != firebase_uid
+                and firebase_uid != f"local-{user['id']}"
+                and not (verified_phone and user.get('phone') == phone_number)
+                and claims.get('email_verified') is not True):
+            return {'success': False, 'message': 'Verify your email address first, then sign in again.',
+                    'code': 'EMAIL_NOT_VERIFIED', 'status_code': 401}
         ledger_user_id = str(user_data.get('ledger_user_id') or b.get('ledger_user_id') or '').strip()
         plan = normalize_plan(user_data.get('plan') or b.get('plan') or 'free')
         role = role_for_plan(plan)

@@ -109,7 +109,7 @@ def test_paid_plan_resign_in_keeps_custom_and_user_roles_but_promotes_prospect(d
         ('g@x.test', 'guest', 'free')""")
     expect = {'ops@x.test': 'it-ops-2', 'u@x.test': 'user', 'p@x.test': 'user', 'g@x.test': 'user'}
     for email, role in expect.items():
-        claims['claims'] = {'sub': 'uid-' + email, 'email': email}
+        claims['claims'] = {'sub': 'uid-' + email, 'email': email, 'email_verified': True}
         r = auth.firebaseAuth({'body': {'idToken': 'x', 'provider': 'google', 'plan': 'premium'}})
         assert r['success'] is True, email
         got = db.fetch_one('SELECT role, plan FROM users WHERE email = ?', [email])
