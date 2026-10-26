@@ -109,7 +109,7 @@ class RobotSignInTest extends TestCase
         $expect = ['ops@x.test' => 'it-ops-2', 'u@x.test' => 'user', 'p@x.test' => 'user', 'g@x.test' => 'user'];
         foreach ($expect as $email => $role) {
             $c = $this->auth();
-            $c->claims = ['sub' => 'uid-' . $email, 'email' => $email];
+            $c->claims = ['sub' => 'uid-' . $email, 'email' => $email, 'email_verified' => true];
             $r = $c->firebaseAuth(['body' => ['idToken' => 'x', 'provider' => 'google', 'plan' => 'premium']]);
             $this->assertTrue($r['success'], $email);
             $got = $this->db->query("SELECT role, plan FROM users WHERE email = '$email'")->fetch();

@@ -584,6 +584,22 @@ class AuthController
             ];
         }
 
+        // An existing account is reached by its email only when Firebase has
+        // verified that address: email/password sign-up lets anyone create a
+        // Firebase user for any address. The account's own Firebase user and a
+        // matching (SMS-verified) phone number still sign in.
+        if ($user
+            && (string) ($user['firebase_uid'] ?? '') !== $firebaseUid
+            && !($hasPhone && ($user['phone'] ?? null) === $phoneNumber)
+            && ($claims['email_verified'] ?? false) !== true) {
+            return [
+                'success' => false,
+                'message' => 'Verify your email address first, then sign in again.',
+                'code' => 'EMAIL_NOT_VERIFIED',
+                'status_code' => 401
+            ];
+        }
+
         // Ledger user ID and plan from registration flow
         $ledgerUserId = trim($userData['ledger_user_id'] ?? $request['body']['ledger_user_id'] ?? '');
         $plan = $this->normalizePlan($userData['plan'] ?? $request['body']['plan'] ?? 'free');
