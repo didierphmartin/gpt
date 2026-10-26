@@ -83,7 +83,7 @@ for (const [target, method] of TARGETS) {
       const r: any = await c[method](ctx({}));
       assert.equal(r.status_code, 200);
       assert.equal(r.success, true);
-      assert.deepEqual(Object.keys(r.data), ['filename', 'code', 'architecture']);
+      assert.deepEqual(Object.keys(r.data), ['filename', 'code', 'package_files', 'architecture']);
       assert.equal(r.data.filename, `dispatcher_demo_${target}.py`);
       assert.ok(r.data.architecture.length > 0);
       const d: any = await c[method](ctx({ download: '1' }));
@@ -140,7 +140,8 @@ for (const [target, method] of TARGETS) {
       assert.equal(r.headers['Content-Disposition'], `attachment; filename="dispatcher_demo_${target}_single.zip"`);
       assert.equal(r.headers['Content-Length'], String(r.raw_body.length));
       // the script and its ARCHITECTURE.md, as LangGraph's single-file zip
-      assert.deepEqual(zipNames(r.raw_body), [`dispatcher_demo_${target}/dispatcher_demo_${target}.py`, `dispatcher_demo_${target}/ARCHITECTURE.md`]);
+      assert.deepEqual(zipNames(r.raw_body), [`dispatcher_demo_${target}.py`, 'ARCHITECTURE.md', 'requirements.txt', '.env.example', 'README.md']
+        .map((p) => `dispatcher_demo_${target}/${p}`));
     } finally {
       cleanup();
     }

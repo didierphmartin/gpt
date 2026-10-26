@@ -93,7 +93,7 @@ final class ADKPackageTest extends TestCase
         $f = $this->codePackage();
         $this->assertSame("def run(input, call_tool):\n    return {'output': {'got': input}}\n", $f['code/2_c.py']);
         $this->assertSame(file_get_contents(dirname(__DIR__, 3) . '/frontend/assets/py/code_node_harness.py'), $f['code_harness.py']);
-        $this->assertStringContainsString("fastapi\ngoogle-adk\nhttpx\nlitellm\npython-dotenv\nuvicorn\n", $f['requirements.txt']);
+        $this->assertSame("fastapi>=0.115.0\ngoogle-adk>=2.3,<3\nhttpx>=0.27.0\nlitellm\npython-dotenv>=1.0.0\nuvicorn>=0.30.0\n", $f['requirements.txt']);
         $this->assertStringContainsString('MCP_URL_OUTLOOK=http://localhost:8770', $f['.env.example']);
         $this->assertStringContainsString('# MCP_HEADERS_OUTLOOK=', $f['.env.example']);
         $this->assertStringContainsString('reads .env from its own folder first, then from the folder two levels up', $f['.env.example']);
@@ -128,7 +128,7 @@ final class ADKPackageTest extends TestCase
         $a = \Quantis\AIPortfolioAssistant\Tests\Unit\AdkCodeNodeTest::codeAnalyzed();
         $a['playbooks'] = ['7' => ['provider' => 'claude', 'display' => 'P', 'actions' => []]];
         $req = array_column(\AgentTeam\Services\ADKPackage::files($a, sys_get_temp_dir()), 'code', 'path')['requirements.txt'];
-        foreach (['langchain-core', 'langgraph', 'langchain-anthropic'] as $pkg) {
+        foreach (['langchain-core>=0.3.0', 'langgraph>=0.2.50', 'langchain-anthropic>=0.3.0'] as $pkg) {
             $this->assertContains($pkg, explode("\n", trim($req)));
         }
     }

@@ -275,7 +275,7 @@ test('LangGraphPackage.files: harness, requirements, env, readme, skill files (b
   const fl = files(facts(), skillsRoot());
   assert.equal(fl['code_harness.py'].code, fs.readFileSync(path.resolve(__dirname, '../../frontend/assets/py/code_node_harness.py'), 'utf8'));
   assert.ok(fl['requirements.txt'].code.includes('pypdf\n'));
-  assert.ok(fl['requirements.txt'].code.includes('fastapi\n'));
+  assert.ok(fl['requirements.txt'].code.includes('fastapi>=0.115.0\n'));
   assert.ok(fl['.env.example'].code.includes('MCP_URL_OUTLOOK=http://127.0.0.1:8770/mcp'));
   assert.ok(fl['.env.example'].code.includes('MCP_HEADERS_OUTLOOK='));
   assert.ok(fl['.env.example'].code.includes('ANTHROPIC_API_KEY'));
@@ -294,9 +294,12 @@ test('LangGraphPackage.files: harness, requirements, env, readme, skill files (b
 
 test('LangGraphPackage: requirements are sorted and unique', () => {
   const lines = files(facts(), skillsRoot())['requirements.txt'].code.replace(/\n+$/, '').split('\n');
-  assert.deepEqual(lines, [...lines].sort());
-  assert.deepEqual(lines, [...new Set(lines)]);
-  for (const pkg of ['langchain', 'langchain-anthropic', 'langchain-openai', 'langgraph', 'httpx', 'pydantic', 'python-dotenv', 'fastapi', 'uvicorn', 'pypdf']) {
+  const names = lines.map((l: string) => l.split(/[[<>=]/)[0]);   // sorted by package name
+  assert.deepEqual(names, [...names].sort());
+  assert.deepEqual(names, [...new Set(names)]);
+  // the floors the local runner installs (langchain_runner/requirements.txt), on every package it shares
+  for (const pkg of ['langchain>=0.3.0', 'langchain-anthropic>=0.3.0', 'langchain-openai>=0.2.0', 'langgraph>=0.2.50', 'httpx>=0.27.0',
+    'pydantic>=2.8.0', 'python-dotenv>=1.0.0', 'fastapi>=0.115.0', 'uvicorn>=0.30.0', 'pypdf']) {
     assert.ok(lines.includes(pkg), pkg);
   }
 });
@@ -311,10 +314,14 @@ test('LangGraphPackage: .env.example and README', () => {
     assert.match(line, /^[A-Z0-9_]+=\S/, `.env.example sets an empty value: ${line}`);
   }
   const readme = fl['README.md'].code;
-  for (const n of ['python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt', 'cp .env.example .env',
-    '<string>ai.synergy.email-prototype</string>', 'Restart=always', 'python api.py', 'outputs/', 'runs/', 'code/']) assert.ok(readme.includes(n), n);
-  assert.match(readme, /\| `python workflow\.py --watch[^\n]*\(default\)/);
-  assert.equal(readme.split('(default)').length - 1, 1);
+  for (const n of ['python3 -m venv .venv\n. .venv/bin/activate\npip install -r requirements.txt', 'py -m venv .venv\n.venv\\Scripts\\activate\n',
+    'cp .env.example .env', 'copy .env.example .env', 'Python 3.10 or newer', 'cd email_prototype_modular\n',
+    '- `ANTHROPIC_API_KEY` -- required', '- `MCP_HEADERS_OUTLOOK` -- only if the MCP server at <http://127.0.0.1:8770/mcp>',
+    '<string>ai.synergy.email-prototype</string>', 'Restart=always', 'python api.py', 'python api.py --listen',
+    'outputs/', 'runs/', 'code/', 'Task Scheduler']) assert.ok(readme.includes(n), n);
+  // this workflow's START_MODE: a Start option, so no flag watches
+  assert.ok(readme.includes("| `python workflow.py` | the Start node's mode: a run each time its event trigger"));
+  assert.ok(readme.includes('| `python workflow.py --watch [TRIGGER]` |'));
   assert.equal(readme.split('<string>/path/to/email_prototype_modular/service.log</string>').length - 1, 2);
   assert.ok(!readme.includes('runs/service.log'));
 });
@@ -462,7 +469,11 @@ async function pkgGraph(skillDir = 'pdf-report', documents: any[] = []): Promise
 
 /** path => entry of one generation (a single file: its name => {code}). */
 function byPath(result: any): Record<string, any> {
-  if (result.files === undefined) return { [result.filename]: { code: result.code } };
+  if (result.files === undefined) {
+    const single: Record<string, any> = { [result.filename]: { code: result.code } };
+    for (const f of values(result.package_files ?? [])) single[f.path] = f;
+    return single;
+  }
   const out: Record<string, any> = {};
   for (const f of values(result.files)) out[f.path] = f;
   return out;
@@ -481,8 +492,13 @@ function assertSelfContained(files: Record<string, any>, label: string): void {
       assert.ok(!code.includes(needle), `${label} ${p}: ${needle}`);
     }
     if (p === '.env.example' || p === 'README.md') {
+      // The single file and the A2A agents read their skills and outputs from the editor's folders by default:
+      // their README says so. A modular package's README names none.
+      const readsEditorFolders = label.endsWith('single') || label.endsWith('a2a');
       for (const line of code.split('\n')) {
-        if (!line.trimStart().startsWith('#') || p === 'README.md') assert.ok(!line.includes('synergyAI/'), `${label} ${p}: ${line}`);
+        if (p === 'README.md' ? !readsEditorFolders : !line.trimStart().startsWith('#')) {
+          assert.ok(!line.includes('synergyAI/'), `${label} ${p}: ${line}`);
+        }
       }
     } else if (label.endsWith('single')) {
       for (const line of code.split('\n')) {
@@ -504,8 +520,8 @@ test('LangGraphPackageTest::testPackageFiles (generated package)', async () => {
   assert.ok(files['.env.example'].code.includes('MCP_URL_OUTLOOK=http://127.0.0.1:8770/mcp'));
   assert.ok(files['.env.example'].code.includes('# MCP_HEADERS_OUTLOOK='));
   assert.equal(files['skills/pdf-report/logo.png'].encoding, 'base64');
-  assert.match(files['README.md'].code, /\| `python workflow\.py --watch[^\n]*\(default\)/);
-  assert.equal(files['README.md'].code.split('(default)').length - 1, 1);
+  // the Start option's mode, with its trigger by name
+  assert.ok(files['README.md'].code.includes("| `python workflow.py` | the Start node's mode: a run each time its event trigger (`outlook."));
 });
 
 test('LangGraphPackageTest::testCodeModuleReadsItsFile', async () => {
@@ -719,7 +735,9 @@ function mermaidBlocks(doc: string): Record<string, string> {
 }
 
 test('LangGraphArchitectureDocTest::testEveryModeExposesTheDocAndKeepsItsExistingKeys', async () => {
-  assert.deepEqual(Object.keys(await docGenerate('dispatcher_demo', 'single')), ['filename', 'code', 'architecture']);
+  const single = await docGenerate('dispatcher_demo', 'single');
+  assert.deepEqual(Object.keys(single), ['filename', 'code', 'architecture', 'package_files']);
+  assert.deepEqual(single.package_files.map((f: any) => f.path), ['requirements.txt', '.env.example', 'README.md']);
   for (const mode of ['modular', 'a2a']) {
     const r = await docGenerate('dispatcher_demo', mode);
     assert.deepEqual(Object.keys(r), ['root', 'files', 'architecture'], mode);

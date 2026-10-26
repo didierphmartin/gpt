@@ -143,12 +143,16 @@ def _py_results(fx: dict) -> dict:
         call('a2a.package', lambda: CompiledA2AEmit.package(a, ['W\n', 'C\n', [{'path': 'agents/x.py', 'code': 'x'}]], runNodes,
                                                             [{'path': 'requirements.txt', 'code': 'r\n'}], 'root_adk_a2a', 'Google ADK'))
         docs = LangGraphPackage.startDocuments(a.get('startDocuments') or [], None)
-        call('package.files', lambda: CompiledPackage.files({**a, 'package': True}, skillsRoot, docs['files'],
-                                                            ['google-adk>=2.3,<3', 'litellm'], 'Google ADK'))
+        tgt = {'key': 'adk', 'title': 'Google ADK', 'framework': ['google-adk', 'litellm']}
+        for lay in ('modular', 'a2a'):
+            call(f'package.files.{lay}', lambda lay=lay: CompiledPackage.files({**a, 'package': True}, skillsRoot,
+                                                                              docs['files'], tgt, lay))
+        call('package.singleFiles', lambda: CompiledPackage.singleFiles(a, tgt, 'root_adk.py'))
+        call('package.pipInstall', lambda: CompiledPackage.pipInstall(a, tgt))
         for nid in a['code']:
             call(f'package.codePath.{nid}', lambda nid=nid: CompiledPackage.codePath(a, nid))
         call('playbook.docNodes', lambda: PlaybookEmit.docNodes(a))
-        call('playbook.extraDeps', lambda: PlaybookEmit.extraDeps(a))
+        call('playbook.requirementNames', lambda: PlaybookEmit.requirementNames(a))
         call('playbook.supportBlock', lambda: PlaybookEmit.supportBlock(True))
         call('playbook.supportBlock.noMcp', lambda: PlaybookEmit.supportBlock(False))
         call('playbook.metadataBlock', lambda: PlaybookEmit.metadataBlock(a['playbooks']))

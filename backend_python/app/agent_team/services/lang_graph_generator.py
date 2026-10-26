@@ -222,9 +222,7 @@ class LangGraphGenerator(LangGraphLayouts):
             'layers': f['gdata'].get('layers') or [],
             'data_flow': self._dataFlowDoc(),
             'run': {
-                'deps': ['pip install langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv',
-                         '# optional, only for the attachment formats you use:',
-                         '#   pip install mammoth (.docx)  python-pptx (.pptx)  openpyxl (.xlsx)  pypdf (.pdf)'],
+                'deps': [LangGraphPackage.pipInstall(facts, 'single'), *LangGraphPackage.OPTIONAL_FORMATS_NOTE],
                 'usage': f'python {script} "your prompt here"',
                 'extra': ((['# WARNING: these tools are NOT available as MCP servers and will be missing at runtime: '
                             + self._pythonListRepr(missing)] if missing else [])
@@ -477,7 +475,8 @@ class LangGraphGenerator(LangGraphLayouts):
 
         code = '\n'.join(lines)
         # Suffix the runtime so the file is identifiable alongside *_adk.py / *_maf.py.
-        return {'filename': script, 'code': code, 'architecture': self._architectureDoc(facts, 'single')}
+        return {'filename': script, 'code': code, 'architecture': self._architectureDoc(facts, 'single'),
+                'package_files': LangGraphPackage.singleFiles(facts, script)}
 
     def _typeMap(self, facts: dict) -> dict:
         typeMap: dict = {}

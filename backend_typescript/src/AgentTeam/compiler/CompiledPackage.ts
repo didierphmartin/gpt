@@ -1,44 +1,50 @@
 import { readFileSync } from 'node:fs';
-import {
-  array_unique, count, entries, has, implode, is_array, isEmptyArr, oarr, pathExtension, preg_split, sortStrings, str_starts_with,
-  strlen, strtolower, strtoupper, strval, substr, trim, values,
-} from './php';
+import { count, entries, has, is_array, isEmptyArr, preg_replace, strtolower, strval, values } from './php';
+import { CompiledA2AEmit } from './CompiledA2AEmit';
 import { LangGraphPackage } from './LangGraphPackage';
+import { EnvVars, PackageDocs } from './PackageDocs';
 import { PlaybookEmit } from './PlaybookEmit';
 import { PythonEmitHelpers } from './PythonEmitHelpers';
+import { PythonRequirements } from './PythonRequirements';
 import * as path from 'node:path';
 
 /** frontend/assets/py/code_node_harness.py (PHP: HARNESS, from backend/src/AgentTeam/Services). */
 const HARNESS = path.resolve(__dirname, '../../../../frontend/assets/py/code_node_harness.py');
 
+/** A compile target, as CompiledPackage reads it (ADKPackage.TARGET, MAFGenerator.TARGET, NOOAGenerator.TARGET). */
+export type CompiledTarget = { key: string; title: string; framework: readonly string[] };
+
 /**
- * The files that make a compiled ADK, MAF or NOOA package run on its own, in its own folder, as LangGraph's
- * modular package does: requirements.txt, .env.example, README.md, the code-node harness (a copy,
- * code_harness.py), each code node's code (code/), each used skill's folder (skills/) and the
- * Start's documents (start_documents/). workflow.py, common.py and api.py are the target generator's.
- * Mirrors backend/src/AgentTeam/Services/CompiledPackage.php.
+ * The files that make a compiled ADK, MAF or NOOA program run on its own, in its own folder, as LangGraph's
+ * packages do: requirements.txt, .env.example, README.md and, for a package, the code-node harness (a copy,
+ * code_harness.py), each code node's code (code/), each used skill's folder (skills/) and the Start's
+ * documents (start_documents/). workflow.py, common.py and api.py are the target generator's.
+ * layout: 'single' | 'modular' | 'a2a'. Mirrors backend/src/AgentTeam/Services/CompiledPackage.php.
  */
 export class CompiledPackage
 {
-    /** What every package imports besides its framework: the MCP client, .env, the run server. */
-    private static readonly BASE_REQUIREMENTS = ['httpx', 'python-dotenv', 'fastapi', 'uvicorn'];
+    /** What every compiled program imports besides its framework: the MCP client and .env. */
+    private static readonly BASE_REQUIREMENTS = ['httpx', 'python-dotenv'];
 
-    /** The document converter's lazy imports, by attachment extension. */
-    private static readonly DOCUMENT_REQUIREMENTS: Record<string, string> = { pdf: 'pypdf', docx: 'mammoth', pptx: 'python-pptx', xlsx: 'openpyxl' };
+    /** A package's run server (api.py; an A2A agent server serves with uvicorn too). */
+    private static readonly SERVER_REQUIREMENTS = ['fastapi', 'uvicorn'];
+
+    /** The A2A package: its servers are A2A servers, its orchestrator their client. */
+    private static readonly A2A_REQUIREMENTS = ['a2a-sdk[http-server]'];
+
+    /** The TO RUN install line of a package's files: the package's requirements.txt holds the list. */
+    static readonly PIP_REQUIREMENTS = 'pip install -r requirements.txt';
 
     /**
-     * @param analyzed ADKGenerator's analysis, with 'startDocuments' already pointing at start_documents/
+     * @param analyzed the generator's analysis, with 'startDocuments' already pointing at start_documents/
      * @param documentFiles the start_documents/ entries (LangGraphPackage::startDocuments()['files'])
      * @return list of {path, code, encoding?}
      */
-    static async files(analyzed: any, skillsRoot: string, documentFiles: any, framework: any,
-        frameworkTitle: string): Promise<any[]> {
+    static async files(analyzed: any, skillsRoot: string, documentFiles: any, target: CompiledTarget,
+        layout: string = 'modular'): Promise<any[]> {
         const skills: any = await LangGraphPackage.skillFiles({ agentData: analyzed['agents'] ?? [] }, skillsRoot);
-        const out: any[] = [
-            { path: 'requirements.txt', code: CompiledPackage.requirements(analyzed, skills, framework) },
-            { path: '.env.example', code: CompiledPackage.envExample(analyzed) },
-            { path: 'README.md', code: CompiledPackage.readme(analyzed, frameworkTitle) },
-        ];
+        const out: any[] = CompiledPackage.docFiles(analyzed, target, layout, values(skills),
+            CompiledPackage.folder(analyzed, target, layout), layout === 'a2a' ? 'orchestrator.py' : 'workflow.py');
         if (!isEmptyArr(analyzed['code'] ?? [])) {
             let harness: string;
             try {
@@ -60,6 +66,30 @@ export class CompiledPackage
         return out;
     }
 
+    /**
+     * The files a single-file export carries beside its script (filename): requirements.txt, .env.example and
+     * README.md (the script reads the .env next to it first).
+     */
+    static singleFiles(analyzed: any, target: CompiledTarget, filename: string): any[] {
+        return CompiledPackage.docFiles(analyzed, target, 'single', [], filename.replace(/\.py$/, ''), filename);
+    }
+
+    /** The folder a layout export unzips to: the package's root, the single file's name. */
+    private static folder(analyzed: any, target: CompiledTarget, layout: string): string {
+        return preg_replace('/[^a-z0-9_]+/i', '_', strtolower(strval(analyzed['workflow']['name']))) + '_' + target.key
+            + (layout === 'a2a' ? '_a2a' : '');
+    }
+
+    private static docFiles(analyzed: any, target: CompiledTarget, layout: string, skillFiles: any[], folder: string,
+        entry: string): any[] {
+        return [
+            { path: 'requirements.txt', code: PythonRequirements.txt(CompiledPackage.requirementNames(analyzed, target, layout, skillFiles)) },
+            { path: '.env.example', code: PackageDocs.envExample(strval(analyzed['workflow']['name']), CompiledPackage.envVariables(analyzed),
+                CompiledPackage.optionalEnv(analyzed, layout)) },
+            { path: 'README.md', code: CompiledPackage.readme(analyzed, target, layout, folder, entry) },
+        ];
+    }
+
     /** code/<file> of a code node, as files() writes it. */
     static codePath(analyzed: any, nid: string): string {
         return LangGraphPackage.codeFile(nid, analyzed['code'][nid], CompiledPackage.isTrigger(analyzed, nid))['path'];
@@ -73,137 +103,171 @@ export class CompiledPackage
     }
 
     private static providers(analyzed: any): string[] {
-        const p: any = oarr();
+        const p = new Set<string>();
         for (const d of [...values(analyzed['agents'] ?? []), ...values(analyzed['playbooks'] ?? [])]) {
             if ((d['provider'] ?? '') !== '') {
-                p[strtolower(strval(d['provider']))] = true;
+                p.add(strtolower(strval(d['provider'])));
             }
         }
-        return Object.keys(p);
+        return [...p];
     }
 
-    /** requirements.txt: one per line, sorted, unique. */
-    private static requirements(analyzed: any, skillFiles: any, framework: any): string {
-        let req: string[] = [...values<string>(framework), ...CompiledPackage.BASE_REQUIREMENTS];
+    /**
+     * The packages a target program of layout imports: the one list its requirements.txt, its TO RUN install
+     * line and its README come from. skillFiles: the skills the package carries (their SKILL.md dependencies);
+     * the single file reads its skills from the editor's folder and installs their dependencies at the first run.
+     */
+    static requirementNames(analyzed: any, target: CompiledTarget, layout: string, skillFiles: any[] = []): string[] {
+        const req: string[] = [...target.framework, ...CompiledPackage.BASE_REQUIREMENTS];
+        if (layout !== 'single') req.push(...CompiledPackage.SERVER_REQUIREMENTS);
+        if (layout === 'a2a') req.push(...CompiledPackage.A2A_REQUIREMENTS);
         // A playbook node runs the shared interpreter (langchain-core + langgraph + its provider's package).
-        for (const line of values<string>(PlaybookEmit.extraDeps(analyzed))) {
-            if (str_starts_with(line, 'pip install ')) {
-                req.push(...preg_split('/\\s+/', trim(substr(line, strlen('pip install ')))));
-            }
+        req.push(...PlaybookEmit.requirementNames(analyzed));
+        for (const f of skillFiles) {
+            if (f['rel'] === 'SKILL.md') req.push(...LangGraphPackage.skillDependencies(f['bytes']));
         }
-        for (const f of values(skillFiles)) {
-            if (f['rel'] === 'SKILL.md') {
-                req.push(...values<string>(LangGraphPackage.skillDependencies(f['bytes'])));
-            }
-        }
-        for (const doc of values(analyzed['startDocuments'] ?? [])) {
-            const ext = strtolower(pathExtension(strval(is_array(doc) ? (doc['path'] ?? doc['name'] ?? '') : '')));
-            if (Object.hasOwn(CompiledPackage.DOCUMENT_REQUIREMENTS, ext)) {
-                req.push(CompiledPackage.DOCUMENT_REQUIREMENTS[ext]);
-            }
-        }
-        req = sortStrings(values<string>(array_unique(req)).map((r) => strval(r)));
-        return req.join('\n') + '\n';
+        req.push(...PythonRequirements.documentNames(analyzed['startDocuments'] ?? []));
+        return req;
     }
 
-    /** .env.example: every variable the program reads, commented (an empty KEY= would mask the runner's python/.env). */
-    private static envExample(analyzed: any): string {
-        const L: string[] = [];
-        L.push('# Environment of the workflow "' + strval(analyzed['workflow']['name']) + '" -- copy this file to .env and fill it in.');
-        L.push('# The program reads .env from its own folder first, then from the folder two levels up');
-        L.push('# (a local runner\'s .env). A variable already set in the environment is never overridden.');
-        L.push('');
-        const keys: any = oarr();
+    /** The single file's TO RUN install line (no requirements.txt beside the script in the editor's scripts/). */
+    static pipInstall(analyzed: any, target: CompiledTarget): string {
+        return PythonRequirements.pipInstall(CompiledPackage.requirementNames(analyzed, target, 'single'));
+    }
+
+    /** The environment the program reads that .env must provide (PackageDocs' vars). */
+    static envVariables(analyzed: any): EnvVars {
+        const keys = new Map<string, string[]>();
         for (const p of CompiledPackage.providers(analyzed)) {
             const k = PythonEmitHelpers.providerKeyEnv(p);
-            if (k !== null && k !== undefined) {
-                if (!has(keys, k)) keys[k] = [];
-                keys[k].push(p);
+            if (k !== null) {
+                if (!keys.has(k)) keys.set(k, []);
+                keys.get(k)!.push(p);
             }
         }
-        if (count(keys) > 0) {
-            L.push('# API keys of the LLM providers this workflow uses');
-            for (const [k, provs] of entries(keys)) {
-                L.push('# ' + implode(', ', array_unique(provs)));
-                L.push(`# ${k}=`);
-            }
-        } else {
-            L.push('# No LLM provider is used by a node of this workflow.');
-        }
-        L.push('');
-        const decision: any = oarr();
+        const decision = new Map<string, string>();
         for (const d of values(analyzed['decisions'] ?? [])) {
             for (const c of values(d['decision'])) {
-                decision[strval(c['key_env'])] = strval(c['url_env']);
+                decision.set(strval(c['key_env']), strval(c['url_env']));
             }
         }
-        if (count(decision) > 0) {
-            L.push('# Decision models the dispatchers may route with (each URL variable is optional: a gateway)');
-            for (const [key, url] of entries(decision)) {
-                L.push(`# ${key}=`);
-                L.push(`# ${url}=`);
-            }
-            L.push('');
-        }
-        const slugs = analyzed['serverSlugs'] ?? [];
-        if (count(slugs) > 0) {
-            L.push('# MCP servers: the URL compiled in, and the HTTP headers the server needs (never compiled in)');
-            for (const [url, slug] of entries(slugs)) {
-                const up = strtoupper(strval(slug));
-                L.push(`MCP_URL_${up}=${url}`);
-                L.push('# JSON object of HTTP headers, e.g. {"Authorization": "Bearer …"}');
-                L.push(`# MCP_HEADERS_${up}=`);
-            }
-            L.push('');
-        }
-        L.push('# Optional');
-        L.push('# Where saved outputs go (default: outputs/ in this folder)');
-        L.push('# SYNERGYAI_OUTPUT_ROOT=./outputs');
-        if (count(LangGraphPackage.skillDirs({ agentData: analyzed['agents'] ?? [] })) > 0) {
-            L.push('# Where the skills are read from (default: skills/ in this folder)');
-            L.push('# SYNERGYAI_SKILLS_DIR=./skills');
-        }
-        return L.join('\n') + '\n';
+        return { keys, decision, mcp: analyzed['serverSlugs'] ?? [] };
     }
 
-    /** README.md: what the folder is, install, configure, run, serve. */
-    private static readme(analyzed: any, frameworkTitle: string): string {
+    /** The optional variables a layout program reads, as .env.example lists them: [what it does, KEY=example]. */
+    private static optionalEnv(analyzed: any, layout: string): Array<[string, string]> {
+        const single = layout === 'single';
+        const o: Array<[string, string]> = [single
+            ? ['Where saved outputs go (default: ~/Documents/synergyAI/outputs)', 'SYNERGYAI_OUTPUT_ROOT=/path/to/outputs']
+            : ['Where saved outputs go (default: outputs/ in this folder)', 'SYNERGYAI_OUTPUT_ROOT=./outputs']];
+        if (!single) o.push(['Where workflow.py writes its run logs (default: runs/ in this folder)', 'RUNS_DIR=./runs']);
+        if (count(LangGraphPackage.skillDirs({ agentData: analyzed['agents'] ?? [] })) > 0) {
+            o.push(single
+                ? ['Where the skills are read from (default: ' + PackageDocs.EDITOR_SKILLS_DIR + ')', 'SYNERGYAI_SKILLS_DIR=/path/to/skills']
+                : ['Where the skills are read from (default: skills/ in this folder)', 'SYNERGYAI_SKILLS_DIR=./skills']);
+        }
+        if (layout === 'a2a') o.push(['First port of the agent servers, one per node in order (default: 8701)', 'A2A_BASE_PORT=8701']);
+        return o;
+    }
+
+    /** README.md: what the folder is, install, configure, the run modes, run server, service, files. */
+    private static readme(analyzed: any, target: CompiledTarget, layout: string, folder: string, entry: string): string {
         const name = strval(analyzed['workflow']['name']);
-        const L: string[] = [];
-        L.push(`# ${name}`);
-        L.push('');
-        L.push(`A ${frameworkTitle} program compiled from the SynergyAI workflow editor. It runs on its own: no database,`);
-        L.push('no SynergyAI server. Everything it needs is in this folder.');
-        L.push('');
-        L.push('## Install');
-        L.push('');
-        L.push('```sh');
-        L.push('python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt');
-        L.push('cp .env.example .env   # then fill in the API keys and MCP headers');
-        L.push('```');
-        L.push('');
+        const title = target.title;
+        const skills = LangGraphPackage.skillDirs({ agentData: analyzed['agents'] ?? [] });
+        const intro: string[] = layout === 'single'
+            ? [`A ${title} program compiled from the SynergyAI workflow editor, as one Python file: \`${entry}\`.`,
+                'It runs on its own: no database, no SynergyAI server.']
+            : layout === 'a2a'
+                ? [`A ${title} program compiled from the SynergyAI workflow editor, as A2A agents: each node is an A2A`,
+                    'server of its own (`servers/`), and `orchestrator.py` runs the workflow over them. It runs on its own: no',
+                    'database, no SynergyAI server. Everything it needs is in this folder.']
+                : [`A ${title} program compiled from the SynergyAI workflow editor, with each node in a file of its own`,
+                    '(`agents/`). It runs on its own: no database, no SynergyAI server. Everything it needs is in this folder.'];
+        if (layout === 'single') intro.push(...PackageDocs.editorSkillsNote(skills));
+        const L = PackageDocs.head(name, intro, folder, CompiledPackage.envVariables(analyzed));
         L.push('## Run');
         L.push('');
-        L.push('```sh');
-        L.push('python workflow.py "your prompt"   # one run (no text: the Start node\'s prompt)');
-        L.push('python api.py --port 8000          # the run server SynergyAI\'s editor talks to');
-        L.push('```');
+        L.push('Run these from the folder, with the environment active.');
         L.push('');
+        const startMode = strval(analyzed['startMode'] ?? 'prompt');
+        if (layout === 'single') {
+            L.push('```sh');
+            L.push(`python ${entry} "your prompt"   # one run on the text (no text: the Start node's prompt)`);
+            L.push('```');
+            L.push('');
+            L.push('The single file makes one run per launch: it has no schedule or event-trigger mode, and no run server.');
+            L.push('Export with "agents in separate files" for those.');
+            L.push('');
+        } else {
+            if (layout === 'a2a') {
+                L.push('```sh');
+                L.push('python orchestrator.py "your prompt"   # one run over the agent servers (no text: the Start node\'s prompt)');
+                L.push('```');
+                L.push('');
+                L.push(...CompiledPackage.a2aServerLines(CompiledA2AEmit.layout(analyzed)));
+                L.push('`workflow.py` runs the same workflow in one process, without the agent servers, in any of these modes:');
+                L.push('');
+            }
+            L.push(...PackageDocs.modes('workflow.py', startMode, analyzed['defaultCron'] ?? null, analyzed['defaultWatch'] ?? null, true));
+        }
+        L.push('## Files written');
+        L.push('');
+        if (layout === 'single') {
+            L.push('- `~/Documents/synergyAI/outputs/` -- the saved results, when output storage is on (`SYNERGYAI_OUTPUT_ROOT` overrides).');
+        } else {
+            L.push('- `outputs/` in this folder -- the saved results, when output storage is on (`SYNERGYAI_OUTPUT_ROOT` overrides).');
+            L.push('- `runs/` in this folder -- one `<date>_<run id>.jsonl` event log per run of `workflow.py` (`RUNS_DIR` overrides).');
+        }
+        L.push('');
+        if (layout !== 'single') {
+            L.push(...PackageDocs.runServer(layout === 'modular',
+                layout === 'a2a' ? ['The agent servers start with its first run and stop when it exits.'] : []));
+            L.push(...PackageDocs.service(name, title, folder, 'workflow.py', '', startMode));
+        }
         L.push('## Files');
         L.push('');
-        L.push('- `workflow.py` -- the workflow: one node of the canvas per agent / executor, run in the canvas order.');
-        L.push('- `api.py`, `common.py` -- the run server.');
-        if (!isEmptyArr(analyzed['code'] ?? [])) {
+        if (layout === 'single') {
+            L.push(`- \`${entry}\` -- the whole program: the runtime, one node of the canvas per agent / executor, the CLI.`);
+        } else {
+            if (layout === 'a2a') {
+                L.push('- `orchestrator.py` -- walks the canvas, sending each node its input as an A2A task.');
+                L.push('- `servers/` -- one A2A agent server per node.');
+            }
+            L.push('- `workflow.py` -- the workflow: assembles the nodes and runs them; its CLI is above.');
+            L.push('- `agents/` -- one module per node; `common.py` -- the runtime they share.');
+            L.push('- `api.py` -- the run server.');
+        }
+        if (!isEmptyArr(analyzed['code'] ?? []) && layout !== 'single') {
             L.push('- `code/` -- each code node\'s Python, read at every run (edit it here to change the node).');
             L.push('- `code_harness.py` -- the code-node contract (inputs, exits, declared MCP servers, timeout), as the editor runs it.');
         }
-        if (count(LangGraphPackage.skillDirs({ agentData: analyzed['agents'] ?? [] })) > 0) {
+        if (skills.length > 0 && layout !== 'single') {
             L.push('- `skills/` -- the skills the agents run.');
         }
-        if (!isEmptyArr(analyzed['startDocuments'] ?? [])) {
+        if (!isEmptyArr(analyzed['startDocuments'] ?? []) && layout !== 'single') {
             L.push('- `start_documents/` -- the documents attached to the Start node.');
         }
-        L.push('- `outputs/` -- the saved results, when output storage is on (`SYNERGYAI_OUTPUT_ROOT` overrides).');
         return L.join('\n') + '\n';
+    }
+
+    /** The A2A servers: what starts them, their files and default URLs. servers: CompiledA2AEmit.layout(). */
+    private static a2aServerLines(servers: any): string[] {
+        const L: string[] = [];
+        L.push('The orchestrator starts every agent server at its first run and stops them when it ends. `--keep-serving`');
+        L.push('leaves them running; `--no-spawn` starts none and uses servers already running, each at its');
+        L.push('`A2A_AGENT_<id>_URL` (default below; `A2A_BASE_PORT` moves the whole range).');
+        L.push('');
+        L.push('| Node | File | Default URL |');
+        L.push('|---|---|---|');
+        const all = entries(servers);
+        for (const [nid, e] of all) L.push(`| ${strval(e['display'])} (${nid}) | \`${strval(e['file'])}\` | http://127.0.0.1:${strval(e['port'])}/ |`);
+        L.push('');
+        if (all.length) {
+            const first = all[0][1];
+            L.push(`To start one by hand: \`python ${strval(first['file'])} --port ${strval(first['port'])}\` (\`--host\` sets the interface).`);
+            L.push('');
+        }
+        return L;
     }
 }

@@ -38,11 +38,18 @@ class ADKGenerator
     public function generate(int $workflowId, ?string $userId = null): array
     {
         $analyzed = $this->analyzeWorkflow($workflowId, $userId);
-        $name = preg_replace('/[^a-z0-9_]+/i', '_', $analyzed['workflow']['name']);
+        $filename = self::filename($analyzed);
         return CompiledArchitectureDoc::attach([
-            'filename' => strtolower($name) . '_adk.py',
+            'filename' => $filename,
             'code'     => self::emitAdk($analyzed),
+            'package_files' => CompiledPackage::singleFiles($analyzed, ADKPackage::TARGET, $filename),
         ], $analyzed, 'adk', 'single');
+    }
+
+    /** The single file's name: <workflow>_adk.py. */
+    private static function filename(array $analyzed): string
+    {
+        return strtolower((string) preg_replace('/[^a-z0-9_]+/i', '_', (string) $analyzed['workflow']['name'])) . '_adk.py';
     }
 
     /** Everything emitAdk() needs, read from the database at compile time (the program itself never reads it). */
@@ -304,8 +311,7 @@ class ADKGenerator
         CompiledA2AEmit::refuse($analyzed);
         $analyzed['package'] = true;
         $runNodes = array_map(fn() => self::A2A_RUN_NODE, CompiledA2AEmit::layout($analyzed));
-        $files = CompiledPackage::files($analyzed, $skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $documentFiles,
-            array_merge(ADKPackage::FRAMEWORK, ['a2a-sdk[http-server]>=1.1,<2']), 'Google ADK (A2A)');
+        $files = ADKPackage::files($analyzed, $skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $documentFiles, 'a2a');
         return CompiledArchitectureDoc::attach(CompiledA2AEmit::package($analyzed, self::packageFiles($analyzed), $runNodes, $files,
             preg_replace('/[^a-z0-9_]+/i', '_', strtolower((string) $analyzed['workflow']['name'])) . '_adk_a2a', 'Google ADK'), $analyzed, 'adk', 'a2a');
     }
@@ -443,10 +449,10 @@ PY;
             'layers' => $analyzed['layers'] ?? [],
             'data_flow' => self::dataFlowDoc(),
             'run' => [
-                'deps' => array_merge(
-                    ['pip install "google-adk>=2.3,<3" litellm httpx python-dotenv   # 2.3.x: SequentialAgent/ParallelAgent still supported'],
-                    PlaybookEmit::extraDeps($analyzed)),
-                'usage' => 'python this_file.py "your prompt here"',
+                'deps' => !empty($analyzed['package']) ? [CompiledPackage::PIP_REQUIREMENTS]
+                    : ['# google-adk 2.3.x: SequentialAgent/ParallelAgent still supported',
+                       CompiledPackage::pipInstall($analyzed, ADKPackage::TARGET)],
+                'usage' => 'python ' . (!empty($analyzed['package']) ? 'workflow.py' : self::filename($analyzed)) . ' "your prompt here"',
             ],
             'storage' => ['enabled' => !empty($analyzed['outputStorageEnabled']), 'folder' => $analyzed['outputFolder'] ?? null],
         ]));

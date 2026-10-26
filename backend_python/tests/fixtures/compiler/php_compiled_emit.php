@@ -127,12 +127,17 @@ foreach (array_slice($argv, 1) as $path) {
         $call('a2a.package', fn() => CompiledA2AEmit::package($a, ["W\n", "C\n", [['path' => 'agents/x.py', 'code' => 'x']]], $runNodes,
             [['path' => 'requirements.txt', 'code' => "r\n"]], 'root_adk_a2a', 'Google ADK'));
         $docs = LangGraphPackage::startDocuments($a['startDocuments'] ?? [], null);
-        $call('package.files', fn() => CompiledPackage::files(['package' => true] + $a, $skillsRoot, $docs['files'], ['google-adk>=2.3,<3', 'litellm'], 'Google ADK'));
+        $target = ['key' => 'adk', 'title' => 'Google ADK', 'framework' => ['google-adk', 'litellm']];
+        foreach (['modular', 'a2a'] as $layout) {
+            $call("package.files.$layout", fn() => CompiledPackage::files(['package' => true] + $a, $skillsRoot, $docs['files'], $target, $layout));
+        }
+        $call('package.singleFiles', fn() => CompiledPackage::singleFiles($a, $target, 'root_adk.py'));
+        $call('package.pipInstall', fn() => CompiledPackage::pipInstall($a, $target));
         foreach (array_keys((array) $a['code']) as $nid) {
             $call("package.codePath.$nid", fn() => CompiledPackage::codePath($a, (string) $nid));
         }
         $call('playbook.docNodes', fn() => PlaybookEmit::docNodes($a));
-        $call('playbook.extraDeps', fn() => PlaybookEmit::extraDeps($a));
+        $call('playbook.requirementNames', fn() => PlaybookEmit::requirementNames($a));
         $call('playbook.supportBlock', fn() => PlaybookEmit::supportBlock(true));
         $call('playbook.supportBlock.noMcp', fn() => PlaybookEmit::supportBlock(false));
         $call('playbook.metadataBlock', fn() => PlaybookEmit::metadataBlock($a['playbooks']));

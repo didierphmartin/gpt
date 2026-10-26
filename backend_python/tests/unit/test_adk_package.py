@@ -72,7 +72,7 @@ def test_code_node_package_carries_its_own_files():
     f = _code_package()
     assert f['code/2_c.py'] == "def run(input, call_tool):\n    return {'output': {'got': input}}\n"
     assert f['code_harness.py'] == (REPO / 'frontend/assets/py/code_node_harness.py').read_text(encoding='utf-8')
-    assert 'fastapi\ngoogle-adk\nhttpx\nlitellm\npython-dotenv\nuvicorn\n' in f['requirements.txt']
+    assert f['requirements.txt'] == 'fastapi>=0.115.0\ngoogle-adk>=2.3,<3\nhttpx>=0.27.0\nlitellm\npython-dotenv>=1.0.0\nuvicorn>=0.30.0\n'
     assert 'MCP_URL_OUTLOOK=http://localhost:8770' in f['.env.example']
     assert '# MCP_HEADERS_OUTLOOK=' in f['.env.example']
     assert 'reads .env from its own folder first, then from the folder two levels up' in f['.env.example']
@@ -104,5 +104,5 @@ def test_playbook_package_requires_the_interpreter():
     a = code_analyzed()
     a['playbooks'] = {'7': {'provider': 'claude', 'display': 'P', 'actions': []}}
     req = {f['path']: f['code'] for f in ADKPackage.files(a, tempfile.gettempdir())}['requirements.txt']
-    for pkg in ('langchain-core', 'langgraph', 'langchain-anthropic'):
+    for pkg in ('langchain-core>=0.3.0', 'langgraph>=0.2.50', 'langchain-anthropic>=0.3.0'):
         assert pkg in req.strip().split('\n')

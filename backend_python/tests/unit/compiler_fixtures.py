@@ -171,5 +171,7 @@ def file_map(result: dict) -> dict:
     else:
         out[result['filename']] = normalize(result['code'])
         out['<architecture>'] = normalize(result['architecture']) if result.get('architecture') is not None else None
+        for f in result.get('package_files') or []:   # requirements.txt, .env.example, README.md beside the script
+            out['<package_files>/' + f['path']] = normalize(f['code'])
         out['<keys>'] = ','.join(result.keys())
     return out

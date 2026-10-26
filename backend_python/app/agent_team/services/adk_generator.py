@@ -59,6 +59,11 @@ def _safe_name(name: str) -> str:
     return re.sub(r'[^a-z0-9_]+', '_', name, flags=re.IGNORECASE | re.ASCII)
 
 
+def _filename(analyzed: dict) -> str:
+    """The single file's name: <workflow>_adk.py."""
+    return _php_lower(_safe_name(php_strval(analyzed['workflow']['name']))) + '_adk.py'
+
+
 def _addslashes(s: str) -> str:
     return s.replace('\\', '\\\\').replace("'", "\\'").replace('"', '\\"').replace('\x00', '\\0')
 
@@ -74,11 +79,14 @@ def _code_exits(analyzed: dict, p) -> list:
 
 class ADKPackage:
     """The ADK package's own files: CompiledPackage with ADK's framework packages."""
+    # google-adk 2.3.x still supports SequentialAgent/ParallelAgent; litellm carries the non-Gemini providers.
     FRAMEWORK = ['google-adk', 'litellm']
+    # The compile target, as CompiledPackage reads it.
+    TARGET = {'key': 'adk', 'title': 'Google ADK', 'framework': FRAMEWORK}
 
     @classmethod
-    def files(cls, analyzed: dict, skillsRoot: str, documentFiles: list | None = None) -> list:
-        return CompiledPackage.files(analyzed, skillsRoot, documentFiles or [], cls.FRAMEWORK, 'Google ADK')
+    def files(cls, analyzed: dict, skillsRoot: str, documentFiles: list | None = None, layout: str = 'modular') -> list:
+        return CompiledPackage.files(analyzed, skillsRoot, documentFiles or [], cls.TARGET, layout)
 
     @staticmethod
     def codePath(analyzed: dict, nid: str) -> str:
@@ -97,10 +105,11 @@ class ADKGenerator:
     def generate(self, workflowId: int, userId: str | None = None) -> dict:
         """A Google ADK Python script for the workflow: {filename, code, architecture}."""
         analyzed = self._analyzeWorkflow(workflowId, userId)
-        name = _safe_name(analyzed['workflow']['name'])
+        filename = _filename(analyzed)
         return CompiledArchitectureDoc.attach({
-            'filename': _php_lower(name) + '_adk.py',
+            'filename': filename,
             'code': self.emitAdk(analyzed),
+            'package_files': CompiledPackage.singleFiles(analyzed, ADKPackage.TARGET, filename),
         }, analyzed, 'adk', 'single')
 
     def _analyzeWorkflow(self, workflowId: int, userId: str | None) -> dict:
@@ -304,8 +313,7 @@ class ADKGenerator:
         analyzed['package'] = True
         runNodes = {nid: T._class__A2A_RUN_NODE for nid in CompiledA2AEmit.layout(analyzed)}
         root = skillsRoot if skillsRoot is not None else LangGraphPackage.defaultSkillsRoot()
-        files = CompiledPackage.files(analyzed, root, documentFiles or [],
-                                      ADKPackage.FRAMEWORK + ['a2a-sdk[http-server]>=1.1,<2'], 'Google ADK (A2A)')
+        files = ADKPackage.files(analyzed, root, documentFiles or [], 'a2a')
         return CompiledArchitectureDoc.attach(CompiledA2AEmit.package(
             analyzed, cls.packageFiles(analyzed), runNodes, files,
             _safe_name(_php_lower(php_strval(analyzed['workflow']['name']))) + '_adk_a2a', 'Google ADK'),
@@ -388,9 +396,10 @@ class ADKGenerator:
             'layers': analyzed.get('layers') if analyzed.get('layers') is not None else [],
             'data_flow': T.dataFlowDoc__ret,
             'run': {
-                'deps': ['pip install "google-adk>=2.3,<3" litellm httpx python-dotenv   # 2.3.x: SequentialAgent/ParallelAgent still supported']
-                + list(PlaybookEmit.extraDeps(analyzed)),
-                'usage': 'python this_file.py "your prompt here"',
+                'deps': [CompiledPackage.PIP_REQUIREMENTS] if analyzed.get('package')
+                else ['# google-adk 2.3.x: SequentialAgent/ParallelAgent still supported',
+                      CompiledPackage.pipInstall(analyzed, ADKPackage.TARGET)],
+                'usage': 'python ' + ('workflow.py' if analyzed.get('package') else _filename(analyzed)) + ' "your prompt here"',
             },
             'storage': {'enabled': bool(analyzed.get('outputStorageEnabled')), 'folder': analyzed.get('outputFolder')},
         }))

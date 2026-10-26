@@ -94,7 +94,7 @@ def test_package_files():
     assert 'code_harness.py' in files
     assert files['code_harness.py']['code'] == Path(CODE_HARNESS_PATH).read_text(encoding='utf-8')
     assert 'pypdf\n' in files['requirements.txt']['code']
-    assert 'fastapi\n' in files['requirements.txt']['code']
+    assert 'fastapi>=0.115.0\n' in files['requirements.txt']['code']
     assert 'MCP_URL_OUTLOOK=http://127.0.0.1:8770/mcp' in files['.env.example']['code']
     assert 'MCP_HEADERS_OUTLOOK=' in files['.env.example']['code']
     assert 'ANTHROPIC_API_KEY' in files['.env.example']['code']
@@ -111,10 +111,12 @@ def test_package_files():
 
 def test_requirements_are_sorted_and_unique():
     lines = _files()['requirements.txt']['code'].rstrip('\n').split('\n')
-    assert sorted(lines, key=lambda s: s.encode()) == lines
-    assert list(dict.fromkeys(lines)) == lines
-    for pkg in ('langchain', 'langchain-anthropic', 'langchain-openai', 'langgraph', 'httpx', 'pydantic', 'python-dotenv',
-                'fastapi', 'uvicorn', 'pypdf'):
+    names = [re.split(r'[\[<>=]', line)[0] for line in lines]   # sorted by package name
+    assert sorted(names, key=lambda s: s.encode()) == names
+    assert list(dict.fromkeys(names)) == names
+    # the floors the local runner installs (langchain_runner/requirements.txt), on every package it shares
+    for pkg in ('langchain>=0.3.0', 'langchain-anthropic>=0.3.0', 'langchain-openai>=0.2.0', 'langgraph>=0.2.50', 'httpx>=0.27.0',
+                'pydantic>=2.8.0', 'python-dotenv>=1.0.0', 'fastapi>=0.115.0', 'uvicorn>=0.30.0', 'pypdf'):
         assert pkg in lines
 
 
@@ -125,11 +127,15 @@ def test_env_example_and_readme():
     for needle in ('# MODEL_NAME=', '# SYNERGYAI_OUTPUT_ROOT=./outputs', '# RUNS_DIR=./runs'):
         assert needle in env
     readme = files['README.md']['code']
-    for needle in ('python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt', 'cp .env.example .env',
-                   '<string>ai.synergy.email-prototype</string>', 'Restart=always', 'python api.py', 'outputs/', 'runs/', 'code/'):
-        assert needle in readme
-    assert re.search(r'\| `python workflow\.py --watch[^\n]*\(default\)', readme), "this workflow's START_MODE is marked default"
-    assert readme.count('(default)') == 1
+    for needle in ('python3 -m venv .venv\n. .venv/bin/activate\npip install -r requirements.txt', 'py -m venv .venv\n.venv\\Scripts\\activate\n',
+                   'cp .env.example .env', 'copy .env.example .env', 'Python 3.10 or newer', 'cd email_prototype_modular\n',
+                   '- `ANTHROPIC_API_KEY` -- required', '- `MCP_HEADERS_OUTLOOK` -- only if the MCP server at <http://127.0.0.1:8770/mcp>',
+                   '<string>ai.synergy.email-prototype</string>', 'Restart=always', 'python api.py', 'python api.py --listen',
+                   'outputs/', 'runs/', 'code/', 'Task Scheduler'):
+        assert needle in readme, needle
+    # this workflow's START_MODE: a Start option, so no flag watches with the option's trigger
+    assert "| `python workflow.py` | the Start node's mode: a run each time its event trigger (`outlook." in readme
+    assert '| `python workflow.py --watch [TRIGGER]` |' in readme
 
 
 def test_env_example_sets_nothing_empty():
@@ -248,8 +254,11 @@ def _assert_self_contained(files: dict, label: str) -> None:
         assert 'netfo587' not in code, f'{label} {path}'
         assert 'localhost/gpt' not in code, f'{label} {path}'
         if path in ('.env.example', 'README.md'):
+            # The single file and the A2A agents read their skills and outputs from the editor's folders by
+            # default: their README says so. A modular package's README names none.
+            reads_editor_folders = label.endswith('single') or label.endswith('a2a')
             for line in code.split('\n'):
-                if not line.lstrip().startswith('#') or path == 'README.md':
+                if (not reads_editor_folders) if path == 'README.md' else not line.lstrip().startswith('#'):
                     assert 'synergyAI/' not in line, f'{label} {path}: {line}'
         elif label.endswith('single'):
             for line in code.split('\n'):
@@ -261,7 +270,10 @@ def _assert_self_contained(files: dict, label: str) -> None:
 
 def _by_path(result: dict) -> dict:
     if 'files' not in result:
-        return {result['filename']: result['code']}
+        out = {result['filename']: result['code']}
+        for f in result.get('package_files') or []:
+            out[f['path']] = f
+        return out
     return {f['path']: f for f in result['files']}
 
 

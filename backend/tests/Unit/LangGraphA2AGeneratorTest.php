@@ -227,10 +227,10 @@ class LangGraphA2AGeneratorTest extends TestCase
         $m = self::generator()->generate(44, '3', ['a2a' => true]);
         $this->assertSame('dispatcher_demo_a2a', $m['root']);
         $this->assertSame(['orchestrator.py', 'api.py', 'agents/2_techbuddy.py', 'agents/3_it-claims.py', 'agents/4_human-resources.py', 'agents/5_playbook-hr.py',
-            'ARCHITECTURE.md'], array_column($m['files'], 'path'));
+            'requirements.txt', '.env.example', 'README.md', 'ARCHITECTURE.md'], array_column($m['files'], 'path'));
         foreach ($m['files'] as $f) {
-            if ($f['path'] === 'ARCHITECTURE.md') {
-                continue;   // documentation, not Python: see LangGraphArchitectureDocTest
+            if (!str_ends_with($f['path'], '.py')) {
+                continue;   // documentation and setup, not Python: see LangGraphArchitectureDocTest, LangGraphPackageTest
             }
             $this->assertStringContainsString('PROVENANCE', $f['code'], $f['path']);
             if ($f['path'] !== 'api.py') {

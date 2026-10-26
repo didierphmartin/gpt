@@ -274,8 +274,11 @@ for (const fixture of ALL_FIXTURES) {
           else delete f.swarm;
           const pf = deepCopy(f);
           pf.workflow = [];
-          for (const m of ['envExample', 'readme']) {
-            assert.equal((LangGraphPackage as any)[m](f), phpCallX('LangGraphPackage', m, [pf]), `${m} ${startMode} swarm=${swarm}`);
+          for (const layout of ['single', 'modular', 'a2a']) {
+            // requirements.txt, .env.example and README.md of each layout
+            assert.equal(enc((LangGraphPackage as any).docFiles(f, layout, [], 'wf_folder', 'wf_entry.py')),
+              enc(phpCallX('LangGraphPackage', 'docFiles', [pf, layout, [], 'wf_folder', 'wf_entry.py'])), `docFiles ${layout} ${startMode} swarm=${swarm}`);
+            assert.equal(LangGraphPackage.pipInstall(f, layout), phpCallX('LangGraphPackage', 'pipInstall', [pf, layout]), `pipInstall ${layout}`);
           }
           assert.equal(enc((LangGraphPackage as any).providers(f)), enc(phpCallX('LangGraphPackage', 'providers', [pf])));
         }

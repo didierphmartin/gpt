@@ -10,7 +10,7 @@ import { PythonEmitHelpers } from './compiler/PythonEmitHelpers';
 import { CompiledRuntimeEmit } from './compiler/CompiledRuntimeEmit';
 import { CompiledA2AEmit } from './compiler/CompiledA2AEmit';
 import { CompiledArchitectureDoc } from './compiler/CompiledArchitectureDoc';
-import { CompiledPackage } from './compiler/CompiledPackage';
+import { CompiledPackage, CompiledTarget } from './compiler/CompiledPackage';
 import { PlaybookEmit } from './compiler/PlaybookEmit';
 import { RunServerEmitter } from './compiler/RunServerEmitter';
 import { LangGraphPackage, StartDocumentReader } from './compiler/LangGraphPackage';
@@ -680,7 +680,10 @@ if __name__ == "__main__":
  */
 export class NOOAGenerator {
   /** The package's framework requirements (CompiledPackage adds the MCP client, .env and the run server). */
-  static readonly FRAMEWORK = ['nooa'];
+  static readonly FRAMEWORK = ['nooa[mcp]', 'mcp'];
+
+  /** The compile target, as CompiledPackage reads it. */
+  static readonly TARGET: CompiledTarget = { key: 'nooa', title: 'NVIDIA NOOA', framework: NOOAGenerator.FRAMEWORK };
 
   /** An A2A server's run_node: runs this server's node (NODE["id"]) with the runtime in common.py and workflow.py. */
   private static readonly A2A_RUN_NODE = A2A_RUN_NODE;
@@ -695,11 +698,17 @@ export class NOOAGenerator {
 
   async generate(workflowId: number, userId: string | null = null): Promise<any> {
     const analyzed = await this.analyzeWorkflow(workflowId, userId);
-    const name = preg_replace('/[^a-z0-9_]+/i', '_', strval(analyzed['workflow']['name']));
+    const filename = NOOAGenerator.filename(analyzed);
     return CompiledArchitectureDoc.attach({
-      filename: strtolower(name) + '_nooa.py',
+      filename,
       code: NOOAGenerator.emitNooa(analyzed),
+      package_files: CompiledPackage.singleFiles(analyzed, NOOAGenerator.TARGET, filename),
     }, analyzed, 'nooa', 'single');
+  }
+
+  /** The single file's name: <workflow>_nooa.py. */
+  private static filename(analyzed: any): string {
+    return strtolower(preg_replace('/[^a-z0-9_]+/i', '_', strval(analyzed['workflow']['name']))) + '_nooa.py';
   }
 
   /** Everything emitNooa() needs, read from the database at compile time (the program itself never reads it). */
@@ -784,7 +793,7 @@ export class NOOAGenerator {
     analyzed['package'] = true;
     const runNodes = array_map(() => NOOAGenerator.A2A_RUN_NODE, CompiledA2AEmit.layout(analyzed));
     const files = await CompiledPackage.files(analyzed, skillsRoot ?? LangGraphPackage.defaultSkillsRoot(), documentFiles,
-      array_merge(NOOAGenerator.FRAMEWORK, ['a2a-sdk[http-server]>=1.1,<2']), 'NVIDIA NOOA (A2A)');
+      NOOAGenerator.TARGET, 'a2a');
     return CompiledArchitectureDoc.attach(CompiledA2AEmit.package(analyzed, NOOAGenerator.packageFiles(analyzed), runNodes, files,
       preg_replace('/[^a-z0-9_]+/i', '_', strtolower(strval(analyzed['workflow']['name']))) + '_nooa_a2a', 'NVIDIA NOOA'), analyzed, 'nooa', 'a2a');
   }
@@ -812,7 +821,7 @@ export class NOOAGenerator {
       true   // api.py also runs the Start's cron / watch loop: POST /listen, GET /live
     );
     pkg['files'] = array_merge(pkg['files'], nodeFiles, await CompiledPackage.files(analyzed,
-      this.skillsRoot ?? LangGraphPackage.defaultSkillsRoot(), docs.files, NOOAGenerator.FRAMEWORK, 'NVIDIA NOOA'));
+      this.skillsRoot ?? LangGraphPackage.defaultSkillsRoot(), docs.files, NOOAGenerator.TARGET));
     return CompiledArchitectureDoc.attach(pkg, analyzed, 'nooa', 'modular');
   }
 
@@ -1004,11 +1013,10 @@ export class NOOAGenerator {
       layers: analyzed['layers'] ?? [],
       data_flow: NOOAGenerator.dataFlowDoc(),
       run: {
-        deps: array_merge(
-          ['# "mcp<2": nooa 0.0.8 targets the mcp 1.x SDK API (mcp 2.0 changed the client yield shape).',
-            'pip install "nooa[mcp]" "mcp<2" python-dotenv'],
-          PlaybookEmit.extraDeps(analyzed)),
-        usage: 'python this_file.py "your prompt here"',
+        deps: !empty(analyzed['package']) ? [CompiledPackage.PIP_REQUIREMENTS]
+          : ['# "mcp<2": nooa 0.0.8 targets the mcp 1.x SDK API (mcp 2.0 changed the client yield shape).',
+            CompiledPackage.pipInstall(analyzed, NOOAGenerator.TARGET)],
+        usage: 'python ' + (!empty(analyzed['package']) ? 'workflow.py' : NOOAGenerator.filename(analyzed)) + ' "your prompt here"',
       },
       storage: { enabled: !empty(analyzed['outputStorageEnabled'] ?? null), folder: analyzed['outputFolder'] ?? null },
     }));

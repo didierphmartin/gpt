@@ -333,11 +333,11 @@ function phpAnalyzed(fixture: string): any {
   return runPhp(['analyzed', fixturePath(fixture)]);
 }
 
-test('PlaybookEmit: docNodes and extraDeps over the dispatcher_demo analysis', opt, () => {
+test('PlaybookEmit: docNodes and requirementNames over the dispatcher_demo analysis', opt, () => {
   const analyzed = phpAnalyzed('dispatcher_demo');
   const demo = demoPlaybookNode();
   sameValue('no playbooks', () => PlaybookEmit.docNodes(analyzed), 'PlaybookEmit', 'docNodes', [analyzed]);
-  sameValue('extraDeps none', () => PlaybookEmit.extraDeps(analyzed), 'PlaybookEmit', 'extraDeps', [analyzed]);
+  sameValue('requirementNames none', () => PlaybookEmit.requirementNames(analyzed), 'PlaybookEmit', 'requirementNames', [analyzed]);
   const pd = PlaybookEmit.nodeData(demo, AVAILABLE, DEFAULTS, '3');
   const withPb = oarr(entries(analyzed));
   withPb['playbooks'] = oarr([['5', pd]]);
@@ -347,8 +347,8 @@ test('PlaybookEmit: docNodes and extraDeps over the dispatcher_demo analysis', o
     ['5', pd], ['10', { ...pd, provider: 'anthropic' }], ['2', { ...pd, provider: 'Google' }], ['7', { ...pd, provider: 'kimi' }],
     ['8', { ...pd, provider: undefined }],
   ]);
-  sameValue('extraDeps many', () => PlaybookEmit.extraDeps(many), 'PlaybookEmit', 'extraDeps', [many]);
-  sameValue('extraDeps one', () => PlaybookEmit.extraDeps(withPb), 'PlaybookEmit', 'extraDeps', [withPb]);
+  sameValue('requirementNames many', () => PlaybookEmit.requirementNames(many), 'PlaybookEmit', 'requirementNames', [many]);
+  sameValue('requirementNames one', () => PlaybookEmit.requirementNames(withPb), 'PlaybookEmit', 'requirementNames', [withPb]);
 });
 
 /** supportBlock() embeds LangGraphGenerator.llmFactoryLines(): '' when that module loads, else why not. */

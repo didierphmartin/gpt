@@ -98,7 +98,8 @@ test('?format=zip: every layout as one zip under its folder, named <workflow>_<m
     assert.equal(single.headers['Content-Type'], 'application/zip');
     assert.equal(single.headers['Content-Disposition'], 'attachment; filename="dispatcher_demo_single.zip"');
     assert.equal(single.headers['Content-Length'], String(single.raw_body.length));
-    assert.deepEqual(zipNames(single.raw_body), ['dispatcher_demo_langgraph/dispatcher_demo_langgraph.py', 'dispatcher_demo_langgraph/ARCHITECTURE.md']);
+    assert.deepEqual(zipNames(single.raw_body), ['dispatcher_demo_langgraph.py', 'ARCHITECTURE.md', 'requirements.txt', '.env.example', 'README.md']
+      .map((p) => `dispatcher_demo_langgraph/${p}`));
     const mod: any = await c.generatePython(ctx({ format: 'zip', modular: '1' }));
     assert.equal(mod.headers['Content-Disposition'], 'attachment; filename="dispatcher_demo_modular.zip"');
     const names = zipNames(mod.raw_body);

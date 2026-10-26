@@ -114,7 +114,7 @@ final class LangGraphPackageTest extends TestCase
         self::assertArrayHasKey('code_harness.py', $files);
         self::assertSame(file_get_contents(__DIR__ . '/../../../frontend/assets/py/code_node_harness.py'), $files['code_harness.py']['code']);
         self::assertStringContainsString("pypdf\n", $files['requirements.txt']['code']);
-        self::assertStringContainsString("fastapi\n", $files['requirements.txt']['code']);
+        self::assertStringContainsString("fastapi>=0.115.0\n", $files['requirements.txt']['code']);
         self::assertStringContainsString('MCP_URL_OUTLOOK=http://127.0.0.1:8770/mcp', $files['.env.example']['code']);
         self::assertStringContainsString('MCP_HEADERS_OUTLOOK=', $files['.env.example']['code']);
         self::assertStringContainsString('ANTHROPIC_API_KEY', $files['.env.example']['code']);
@@ -133,12 +133,14 @@ final class LangGraphPackageTest extends TestCase
     public function testRequirementsAreSortedAndUnique(): void
     {
         $lines = explode("\n", rtrim($this->files()['requirements.txt']['code'], "\n"));
-        $sorted = $lines;
+        $names = array_map(fn(string $l) => preg_split('/[\[<>=]/', $l)[0], $lines);   // sorted by package name
+        $sorted = $names;
         sort($sorted, SORT_STRING);
-        self::assertSame($sorted, $lines);
-        self::assertSame(array_values(array_unique($lines)), $lines);
-        foreach (['langchain', 'langchain-anthropic', 'langchain-openai', 'langgraph', 'httpx', 'pydantic', 'python-dotenv',
-                  'fastapi', 'uvicorn', 'pypdf'] as $pkg) {
+        self::assertSame($sorted, $names);
+        self::assertSame(array_values(array_unique($names)), $names);
+        // the floors the local runner installs (langchain_runner/requirements.txt), on every package it shares
+        foreach (['langchain>=0.3.0', 'langchain-anthropic>=0.3.0', 'langchain-openai>=0.2.0', 'langgraph>=0.2.50', 'httpx>=0.27.0',
+                  'pydantic>=2.8.0', 'python-dotenv>=1.0.0', 'fastapi>=0.115.0', 'uvicorn>=0.30.0', 'pypdf'] as $pkg) {
             self::assertContains($pkg, $lines);
         }
     }
@@ -152,13 +154,16 @@ final class LangGraphPackageTest extends TestCase
             self::assertStringContainsString($needle, $env);
         }
         $readme = $files['README.md']['code'];
-        foreach (['python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt', 'cp .env.example .env',
-                  '<string>ai.synergy.email-prototype</string>', 'Restart=always', 'python api.py',
-                  'outputs/', 'runs/', 'code/'] as $needle) {
+        foreach (["python3 -m venv .venv\n. .venv/bin/activate\npip install -r requirements.txt", "py -m venv .venv\n.venv\\Scripts\\activate\n",
+                  'cp .env.example .env', 'copy .env.example .env', 'Python 3.10 or newer', "cd email_prototype_modular\n",
+                  '- `ANTHROPIC_API_KEY` -- required', '- `MCP_HEADERS_OUTLOOK` -- only if the MCP server at <http://127.0.0.1:8770/mcp>',
+                  '<string>ai.synergy.email-prototype</string>', 'Restart=always', 'python api.py', 'python api.py --listen',
+                  'outputs/', 'runs/', 'code/', 'Task Scheduler'] as $needle) {
             self::assertStringContainsString($needle, $readme);
         }
-        self::assertMatchesRegularExpression('~\| `python workflow\.py --watch[^\n]*\(default\)~', $readme, 'this workflow\'s START_MODE is marked default');
-        self::assertSame(1, substr_count($readme, '(default)'));
+        // this workflow's START_MODE: a Start option, so no flag watches with the option's trigger
+        self::assertStringContainsString("| `python workflow.py` | the Start node's mode: a run each time its event trigger (`outlook.", $readme);
+        self::assertStringContainsString('| `python workflow.py --watch [TRIGGER]` |', $readme);
     }
 
     /**
@@ -315,8 +320,11 @@ final class LangGraphPackageTest extends TestCase
             self::assertStringNotContainsString('netfo587', $code, "$label $path");
             self::assertStringNotContainsString('localhost/gpt', $code, "$label $path");
             if (in_array($path, ['.env.example', 'README.md'], true)) {
+                // The single file and the A2A agents read their skills and outputs from the editor's folders by
+                // default: their README says so. A modular package's README names none.
+                $readsEditorFolders = str_ends_with($label, 'single') || str_ends_with($label, 'a2a');
                 foreach (explode("\n", $code) as $line) {
-                    if (!str_starts_with(ltrim($line), '#') || $path === 'README.md') {
+                    if ($path === 'README.md' ? !$readsEditorFolders : !str_starts_with(ltrim($line), '#')) {
                         self::assertStringNotContainsString('synergyAI/', $line, "$label $path: $line");
                     }
                 }
@@ -338,7 +346,11 @@ final class LangGraphPackageTest extends TestCase
     private static function byPath(array $result): array
     {
         if (!isset($result['files'])) {
-            return [$result['filename'] => $result['code']];
+            $out = [$result['filename'] => $result['code']];
+            foreach ($result['package_files'] ?? [] as $f) {
+                $out[$f['path']] = $f;
+            }
+            return $out;
         }
         $out = [];
         foreach ($result['files'] as $f) {

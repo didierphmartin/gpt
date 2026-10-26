@@ -16,7 +16,7 @@ class TestMafE2E(CompiledE2EBase):
         return MAFGenerator.emitMaf(analyzed)
 
     def packageFiles(self, analyzed):
-        return CompiledPackage.files(analyzed, tempfile.gettempdir(), [], MAFGenerator.FRAMEWORK, 'Microsoft Agent Framework')
+        return CompiledPackage.files(analyzed, tempfile.gettempdir(), [], MAFGenerator.TARGET)
 
     def packageSources(self, analyzed):
         return MAFGenerator.packageFiles(analyzed)

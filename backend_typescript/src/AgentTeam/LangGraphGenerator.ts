@@ -41,9 +41,9 @@ export interface GeneratedFile {
   encoding?: string;
 }
 
-/** Single file: {filename, code, architecture}; modular / A2A / swarm: {root, files[, architecture]}. */
+/** Single file: {filename, code, architecture, package_files}; modular / A2A / swarm: {root, files[, architecture]}. */
 export type LangGraphResult =
-  | { filename: string; code: string; architecture: string | null }
+  | { filename: string; code: string; architecture: string | null; package_files: GeneratedFile[] }
   | { root: string; files: GeneratedFile[]; architecture?: string | null };
 
 /**
@@ -261,9 +261,7 @@ export class LangGraphGenerator {
         for (let dn of values(docNodes)) {
             docById[dn['id']] = dn;
         }
-        docBody = PythonEmitHelpers.workflowDocBlock({ target: 'LangGraph (Python) -- langgraph StateGraph + LangChain ReAct agents', dispatch_supported: true, workflow: { id: workflowId, name: wfName }, nodes: docNodes, edges: edgeList, layers: gdata['layers'] ?? [], data_flow: LangGraphGenerator.dataFlowDoc(), run: { deps: ['pip install langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv',
-                           '# optional, only for the attachment formats you use:',
-                           '#   pip install mammoth (.docx)  python-pptx (.pptx)  openpyxl (.xlsx)  pypdf (.pdf)'], usage: `python ${safeName}_langgraph.py "your prompt here"`, extra: array_merge(!empty(missing)
+        docBody = PythonEmitHelpers.workflowDocBlock({ target: 'LangGraph (Python) -- langgraph StateGraph + LangChain ReAct agents', dispatch_supported: true, workflow: { id: workflowId, name: wfName }, nodes: docNodes, edges: edgeList, layers: gdata['layers'] ?? [], data_flow: LangGraphGenerator.dataFlowDoc(), run: { deps: [LangGraphPackage.pipInstall(facts, 'single'), ...LangGraphPackage.OPTIONAL_FORMATS_NOTE], usage: `python ${safeName}_langgraph.py "your prompt here"`, extra: array_merge(!empty(missing)
                     ? ['# WARNING: these tools are NOT available as MCP servers and will be missing at runtime: ' + LangGraphGenerator.pythonListRepr(missing)]
                     : [], LangGraphGenerator.decisionDocLines(agentData), LangGraphGenerator.mcpHeaderDocLines(facts), LangGraphGenerator.modeDocLines(`${safeName}_langgraph.py`), LangGraphGenerator.cronDocLines(facts, `${safeName}_langgraph.py`),
                     LangGraphGenerator.watchDocLines(facts, `${safeName}_langgraph.py`),
@@ -616,7 +614,8 @@ export class LangGraphGenerator {
         // Suffix the runtime so the file is identifiable alongside *_adk.py / *_maf.py
         // (LangGraph was the original default and previously had no suffix).
         filename = `${safeName}_langgraph.py`;
-        return { filename: filename, code: code, architecture: LangGraphGenerator.architectureDoc(facts, 'single') };
+        return { filename: filename, code: code, architecture: LangGraphGenerator.architectureDoc(facts, 'single'),
+            package_files: LangGraphPackage.singleFiles(facts, filename) };
     }
 
     /**
@@ -1512,6 +1511,7 @@ export class LangGraphGenerator {
         for (let [nid, e] of entries(layout['agents'])) {
             files.push({ path: e['file'], code: this.emitA2AAgentFile(facts, layout, strval(nid)) });
         }
+        files.push(...LangGraphPackage.a2aFiles(facts, layout));
         return LangGraphGenerator.withArchitecture({ root: layout['root'], files: files }, facts, 'a2a');
     }
 
@@ -1528,7 +1528,7 @@ export class LangGraphGenerator {
         for (let [nid, e] of entries(layout['agents'])) {
             endpoints.push(sprintf('  %-6s %-24s %-32s http://127.0.0.1:%d/   (env A2A_AGENT_%s_URL)', nid, e['display'], e['file'], e['port'], nid));
         }
-        body = PythonEmitHelpers.workflowDocBlock({ target: 'LangGraph A2A orchestrator (Python) -- StateGraph over A2A tasks, one agent process per node', dispatch_supported: true, workflow: { id: facts['workflowId'], name: facts['wfName'] }, nodes: nodes, edges: facts['edgeList'], layers: facts['gdata']['layers'] ?? [], data_flow: LangGraphGenerator.a2aOrchestratorDataFlowDoc(), run: { deps: ['pip install "a2a-sdk[http-server]>=1.1,<2" langgraph langchain-core httpx python-dotenv'], usage: 'python orchestrator.py "your prompt here"   [--keep-serving] [--no-spawn]', extra: array_merge(['# A2A_BASE_PORT (default 8701) moves the port range; A2A_AGENT_<id>_URL points one agent elsewhere.'],
+        body = PythonEmitHelpers.workflowDocBlock({ target: 'LangGraph A2A orchestrator (Python) -- StateGraph over A2A tasks, one agent process per node', dispatch_supported: true, workflow: { id: facts['workflowId'], name: facts['wfName'] }, nodes: nodes, edges: facts['edgeList'], layers: facts['gdata']['layers'] ?? [], data_flow: LangGraphGenerator.a2aOrchestratorDataFlowDoc(), run: { deps: [LangGraphPackage.PIP_REQUIREMENTS], usage: 'python orchestrator.py "your prompt here"   [--keep-serving] [--no-spawn]', extra: array_merge(['# A2A_BASE_PORT (default 8701) moves the port range; A2A_AGENT_<id>_URL points one agent elsewhere.'],
                           LangGraphGenerator.decisionDocLines(facts['agentData'] ?? []), LangGraphGenerator.mcpHeaderDocLines(facts), LangGraphGenerator.cronDocLines(facts, 'orchestrator.py')), env_path: '../../.env' }, storage: { enabled: facts['workflow'].isOutputStorageEnabled(), folder: facts['workflow'].getOutputFolder() } });
         body += '\n\nAGENT ENDPOINTS  (id, name, file, default URL; env override)\n===============\n' + implode('\n', endpoints)
             + '\n\nA2A RUN\n=======\n'
@@ -1555,6 +1555,7 @@ export class LangGraphGenerator {
         L.push('from dotenv import load_dotenv');
         L.push('# This file lives in <root>/; the runner .env is two levels up (python/.env).');
         L.push('_HERE = os.path.dirname(os.path.abspath(__file__))');
+        L.push('load_dotenv(os.path.join(_HERE, ".env"))   # the workflow folder\'s own .env first (never overridden)');
         L.push('load_dotenv(os.path.join(os.path.dirname(os.path.dirname(_HERE)), ".env"))');
         L.push('PACKAGE_DIR = _HERE   # this program\'s folder: a relative Start document path resolves here');
         L.push('');
@@ -1638,7 +1639,7 @@ that child runs. Start and Output nodes are local (no LLM).`;
         L.push('');
         body = this.apiPyDocBody(facts,
             'LangGraph A2A run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
-            'pip install fastapi uvicorn "a2a-sdk[http-server]>=1.1,<2" langgraph langchain-core httpx pydantic python-dotenv',
+            LangGraphPackage.PIP_REQUIREMENTS,
             ['# The agent servers start with the first run (see _ensure_agents) and stop with this process.',
              '# No authentication: bind to 127.0.0.1 or a trusted LAN interface only.',
              '# CORS allows loopback origins only. A LAN-hosted frontend adds itself with',
@@ -2190,7 +2191,7 @@ async def _run_remote_node(nid: str, request_text: str) -> dict:
         // GRAPH NODES line -- GRAPH EDGES and EXECUTION ORDER read 'name' as-is.
         for (let n of values(nodes)) { if (n['id'] === nid) n['marker'] = '<== this agent'; }
         entry = layout['agents'][nid];
-        body = PythonEmitHelpers.workflowDocBlock({ target: 'LangGraph A2A agent (Python) -- one A2A server for this node; the orchestrator drives the graph', dispatch_supported: true, workflow: { id: facts['workflowId'], name: facts['wfName'] }, nodes: nodes, edges: facts['edgeList'], layers: facts['gdata']['layers'] ?? [], data_flow: LangGraphGenerator.a2aAgentDataFlowDoc(), run: { deps: ['pip install "a2a-sdk[http-server]>=1.1,<2" langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv uvicorn'], usage: 'python ' + entry['file'] + ' --port ' + entry['port'] + '   # from the workflow folder; A2A_HOST/A2A_PORT also honoured', extra: array_merge(['# Card: http://127.0.0.1:' + entry['port'] + '/.well-known/agent-card.json  --  JSON-RPC at /'],
+        body = PythonEmitHelpers.workflowDocBlock({ target: 'LangGraph A2A agent (Python) -- one A2A server for this node; the orchestrator drives the graph', dispatch_supported: true, workflow: { id: facts['workflowId'], name: facts['wfName'] }, nodes: nodes, edges: facts['edgeList'], layers: facts['gdata']['layers'] ?? [], data_flow: LangGraphGenerator.a2aAgentDataFlowDoc(), run: { deps: [LangGraphPackage.PIP_REQUIREMENTS], usage: 'python ' + entry['file'] + ' --port ' + entry['port'] + '   # from the workflow folder; A2A_HOST/A2A_PORT also honoured', extra: array_merge(['# Card: http://127.0.0.1:' + entry['port'] + '/.well-known/agent-card.json  --  JSON-RPC at /'],
                           LangGraphGenerator.decisionDocLines(facts['agentData'] ?? []), LangGraphGenerator.mcpHeaderDocLines(facts)), env_path: '../../../.env' }, storage: { enabled: false, folder: null } });
         return body + '\n\nA2A SERVING\n===========\n'
             + `  Skill id:   node-${nid}
@@ -2760,7 +2761,7 @@ def main() -> None:
         L.push('TO RUN');
         L.push('======');
         L.push('  # Requires Python 3.10+ (the generated code uses match statements)');
-        L.push('  pip install langchain langchain-anthropic langchain-openai langgraph langgraph-swarm httpx pydantic python-dotenv');
+        L.push('  ' + LangGraphPackage.PIP_REQUIREMENTS);
         k = PythonEmitHelpers.providerKeyEnv(strval((def['provider'] ?? '')));
         L.push(k !== null
             ? `  # API key read from ../../../.env: ${k} (` + strtolower(strval(def['provider'])) + ')'
@@ -3012,7 +3013,7 @@ def main() -> None:
         L.push('TO RUN');
         L.push('======');
         L.push('  # Requires Python 3.10+ (the generated code uses match statements)');
-        L.push('  pip install langchain langchain-anthropic langchain-openai langgraph langgraph-swarm httpx pydantic python-dotenv');
+        L.push('  ' + LangGraphPackage.PIP_REQUIREMENTS);
         keys = oarr();
         for (let [nid, e] of entries(members)) {
             def = facts['agentData'][nid] ?? null;
@@ -3229,7 +3230,7 @@ def main() -> None:
         L.push('TO RUN');
         L.push('======');
         L.push('  # Requires Python 3.10+ (the generated code uses match statements)');
-        L.push('  pip install langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv');
+        L.push('  ' + LangGraphPackage.PIP_REQUIREMENTS);
         L = array_merge(L, LangGraphGenerator.providerKeyLines(facts, '../../.env'));
         L.push('  imported, not run directly -- see workflow.py');
         L.push('  # Everything here is shared: change it once and every node of this workflow follows.');
@@ -3472,7 +3473,7 @@ once instead of copied per node.`;
         esc = (s: any) => str_replace(['\\', '"""'], ['\\\\', str_repeat('\'', 3)], s);
         body = this.apiPyDocBody(facts,
             'LangGraph modular run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
-            'pip install fastapi uvicorn langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv',
+            LangGraphPackage.PIP_REQUIREMENTS,
             array_merge(['# No authentication: bind to 127.0.0.1 or a trusted LAN interface only.',
              '# CORS allows loopback origins only. A LAN-hosted frontend adds itself with',
              '#   WORKFLOW_API_ALLOW_ORIGIN=http://host:port   (comma-separated for several)'], listen ? [
@@ -3510,7 +3511,7 @@ once instead of copied per node.`;
         L.push('');
         body = this.modularDocBody(facts, layout,
             'LangGraph modular agent module (Python) -- one node; workflow.py drives the graph',
-            { deps: ['pip install langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv'], usage: 'imported by workflow.py as ' + entry['module'] + ' -- run the workflow, not this file', extra: ['# Exposes NODE (frozen editor settings) and run_node = make_node(NODE).run; the node logic is common.py\'s Node classes.'], env_path: '../../../.env' }, nid);
+            { deps: [LangGraphPackage.PIP_REQUIREMENTS], usage: 'imported by workflow.py as ' + entry['module'] + ' -- run the workflow, not this file', extra: ['# Exposes NODE (frozen editor settings) and run_node = make_node(NODE).run; the node logic is common.py\'s Node classes.'], env_path: '../../../.env' }, nid);
         for (let dl of values(explode('\n', esc(body)))) {
             L.push(dl);
         }
@@ -3654,9 +3655,7 @@ once instead of copied per node.`;
         L.push('');
         body = this.modularDocBody(facts, layout,
             'LangGraph modular workflow (Python) -- StateGraph over one importable module per node',
-            { deps: ['pip install langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv',
-                        '# optional, only for the attachment formats you use:',
-                        '#   pip install mammoth (.docx)  python-pptx (.pptx)  openpyxl (.xlsx)  pypdf (.pdf)'], usage: 'python workflow.py "your prompt here"', extra: array_merge(!empty(facts?.['missing'])
+            { deps: [LangGraphPackage.PIP_REQUIREMENTS, ...LangGraphPackage.OPTIONAL_FORMATS_NOTE], usage: 'python workflow.py "your prompt here"', extra: array_merge(!empty(facts?.['missing'])
                  ? ['# WARNING: these tools are NOT available as MCP servers and will be missing at runtime: ' + LangGraphGenerator.pythonListRepr(facts['missing'])]
                  : [], LangGraphGenerator.modeDocLines('workflow.py'), LangGraphGenerator.cronDocLines(facts, 'workflow.py'), LangGraphGenerator.watchDocLines(facts, 'workflow.py')), env_path: '../../.env' }, null, true);
         for (let dl of values(explode('\n', esc(body)))) {

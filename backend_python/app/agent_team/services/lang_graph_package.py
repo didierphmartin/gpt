@@ -15,7 +15,9 @@ import re
 
 from app.agent_team.services.code_node_emit import CodeNodeEmit
 from app.agent_team.services.lang_graph_runtime import CODE_HARNESS_PATH
+from app.agent_team.services.package_docs import PackageDocs
 from app.agent_team.services.python_emit_helpers import PythonEmitHelpers
+from app.agent_team.services.python_requirements import PythonRequirements
 from app.agent_team.services.start_document_store import StartDocumentStore
 
 
@@ -28,16 +30,23 @@ def _unique(items: list) -> list:
 
 
 class LangGraphPackage:
-    # What every package imports (workflow, common, api), before provider, skill and document extras.
+    # What every LangGraph program imports (the single file; a package's workflow, common and agents).
     BASE_REQUIREMENTS = ['langchain', 'langchain-anthropic', 'langchain-openai', 'langgraph', 'httpx',
-                         'pydantic', 'python-dotenv', 'fastapi', 'uvicorn']
+                         'pydantic', 'python-dotenv']
+    # A package's run server (api.py; an A2A agent server serves with uvicorn too).
+    SERVER_REQUIREMENTS = ['fastapi', 'uvicorn']
+    # The A2A package: its agents are A2A servers, its orchestrator their client.
+    A2A_REQUIREMENTS = ['a2a-sdk[http-server]']
     # Providers whose LLM factory branch imports a package beyond the base ones.
     PROVIDER_REQUIREMENTS = {'gemini': 'langchain-google-genai', 'google': 'langchain-google-genai'}
-    # The document converter's lazy imports, by attachment extension.
-    DOCUMENT_REQUIREMENTS = {'pdf': 'pypdf', 'docx': 'mammoth', 'pptx': 'python-pptx', 'xlsx': 'openpyxl'}
     SKIP_NAMES = ['__pycache__', '.DS_Store']
     # The swarm package's workflow.py builds its graph with create_swarm() (langgraph_swarm).
     SWARM_REQUIREMENTS = ['langgraph-swarm']
+    # The TO RUN install line of a package's files: the package's requirements.txt holds the list.
+    PIP_REQUIREMENTS = 'pip install -r requirements.txt'
+    # TO RUN note: the document converter's packages are imported only for an attachment of that format.
+    OPTIONAL_FORMATS_NOTE = ['# optional, only for the attachment formats you use:',
+                             '#   pip install mammoth (.docx)  python-pptx (.pptx)  openpyxl (.xlsx)  pypdf (.pdf)']
 
     @staticmethod
     def defaultSkillsRoot() -> str:
@@ -49,11 +58,8 @@ class LangGraphPackage:
     def files(cls, facts: dict, skillsRoot: str, documents=None) -> list:
         """The package's own files (the code modules, agents and code/ files are the generator's)."""
         skills = cls.skillFiles(facts, skillsRoot)
-        out = [
-            {'path': 'requirements.txt', 'code': cls._requirements(facts, skills)},
-            {'path': '.env.example', 'code': cls._envExample(facts)},
-            {'path': 'README.md', 'code': cls._readme(facts)},
-        ]
+        out = cls._docFiles(facts, 'modular', skills,
+                            str(facts['safeName']) + ('_modular_swarm' if 'swarm' in facts else '_modular'), 'workflow.py')
         if facts.get('codeData'):
             try:
                 with open(CODE_HARNESS_PATH, encoding='utf-8', newline='') as f:
@@ -182,150 +188,175 @@ class LangGraphPackage:
         return list(p.keys())
 
     @classmethod
-    def _requirements(cls, facts: dict, skillFiles: list) -> str:
-        """requirements.txt: one per line, sorted, unique."""
-        req = cls.BASE_REQUIREMENTS + cls.SWARM_REQUIREMENTS if 'swarm' in facts else list(cls.BASE_REQUIREMENTS)
+    def requirementNames(cls, facts: dict, layout: str, skillFiles: list | None = None) -> list:
+        """The packages a LangGraph program of layout ('single' | 'modular' | 'a2a') imports: the one list its
+        requirements.txt, its TO RUN install line and its README come from. skillFiles: the skills the package
+        carries (their SKILL.md dependencies); a program that reads its skills from the editor's folder
+        installs their dependencies at the first run instead."""
+        req = list(cls.BASE_REQUIREMENTS)
+        if layout != 'single':
+            req += cls.SERVER_REQUIREMENTS
+        if layout == 'a2a':
+            req += cls.A2A_REQUIREMENTS
+        if 'swarm' in facts:
+            req += cls.SWARM_REQUIREMENTS
         for p in cls._providers(facts):
             if p in cls.PROVIDER_REQUIREMENTS:
                 req.append(cls.PROVIDER_REQUIREMENTS[p])
-        for f in skillFiles:
+        for f in skillFiles or []:
             if f['rel'] == 'SKILL.md':
                 req += cls.skillDependencies(f['bytes'])
-        for doc in facts.get('startDocuments') or []:
-            path = str((doc.get('path') if doc.get('path') is not None else doc.get('name')) or '') if isinstance(doc, dict) else ''
-            base = os.path.basename(path)
-            ext = base.rsplit('.', 1)[1].lower() if '.' in base else ''
-            if ext in cls.DOCUMENT_REQUIREMENTS:
-                req.append(cls.DOCUMENT_REQUIREMENTS[ext])
-        req = sorted(_unique(req), key=lambda s: s.encode('utf-8'))
-        return '\n'.join(req) + '\n'
+        req += PythonRequirements.documentNames(facts.get('startDocuments') or [])
+        return req
 
     @classmethod
-    def _envExample(cls, facts: dict) -> str:
-        """.env.example: every variable the program reads, commented."""
-        swarm = 'swarm' in facts   # a swarm writes no run logs
-        L = ['# Environment of the workflow "' + facts['wfName'] + '" -- copy this file to .env and fill it in.',
-             '# The program reads .env from its own folder first, then from the folder two levels up',
-             "# (a local runner's .env). A variable already set in the environment is never overridden.",
-             '']
+    def pipInstall(cls, facts: dict, layout: str) -> str:
+        """The TO RUN install line of a layout program that has no requirements.txt beside it (the single file)."""
+        return PythonRequirements.pipInstall(cls.requirementNames(facts, layout))
+
+    @classmethod
+    def singleFiles(cls, facts: dict, filename: str) -> list:
+        """The files a single-file export carries beside <name>_langgraph.py: requirements.txt, .env.example and
+        README.md (the script reads the .env next to it first)."""
+        return cls._docFiles(facts, 'single', [], re.sub(r'\.py$', '', filename), filename)
+
+    @classmethod
+    def a2aFiles(cls, facts: dict, layout: dict) -> list:
+        """requirements.txt, .env.example and README.md of the A2A package (layout: a2aLayout())."""
+        return cls._docFiles({'a2aAgents': layout['agents'], **facts}, 'a2a', [], str(layout['root']), 'orchestrator.py')
+
+    @classmethod
+    def _docFiles(cls, facts: dict, layout: str, skillFiles: list, folder: str, entry: str) -> list:
+        return [
+            {'path': 'requirements.txt', 'code': PythonRequirements.txt(cls.requirementNames(facts, layout, skillFiles))},
+            {'path': '.env.example', 'code': PackageDocs.envExample(str(facts['wfName']), cls.envVariables(facts),
+                                                                    cls._optionalEnv(facts, layout))},
+            {'path': 'README.md', 'code': cls._readme(facts, layout, folder, entry)},
+        ]
+
+    @classmethod
+    def envVariables(cls, facts: dict) -> dict:
+        """The environment the program reads that .env must provide (PackageDocs' vars)."""
         keys: dict = {}
         for p in cls._providers(facts):
             k = PythonEmitHelpers.providerKeyEnv(p)
             if k is not None:
                 keys.setdefault(k, []).append(p)
-        if keys:
-            L.append('# API keys of the LLM providers this workflow uses')
-            for k, provs in keys.items():
-                L.append('# ' + ', '.join(_unique(provs)))
-                L.append(f'# {k}=')
-        else:
-            L.append('# No LLM provider is used by a node of this workflow.')
-        L.append('')
         decision: dict = {}
         for ad in (facts.get('agentData') or {}).values():
             for c in (ad.get('decision') or []) if ad.get('dispatch') else []:
                 decision[str(c['key_env'])] = str(c['url_env'])
-        if decision:
-            L.append('# Decision models the dispatchers may route with (each URL variable is optional: a gateway)')
-            for key, url in decision.items():
-                L.append(f'# {key}=')
-                L.append(f'# {url}=')
-            L.append('')
-        slugs = facts.get('serverSlugs') or {}
-        if slugs:
-            L.append('# MCP servers: the URL compiled in, and the HTTP headers the server needs (never compiled in)')
-            for url, slug in slugs.items():
-                up = str(slug).upper()
-                L.append(f'MCP_URL_{up}={url}')
-                L.append('# JSON object of HTTP headers, e.g. {"Authorization": "Bearer …"}')
-                L.append(f'# MCP_HEADERS_{up}=')
-            L.append('')
-        L.append('# Optional')
-        L.append("# One model for every node, instead of each node's own")
-        L.append('# MODEL_NAME=')
-        L.append('# Where saved outputs go (default: outputs/ in this folder)')
-        L.append('# SYNERGYAI_OUTPUT_ROOT=./outputs')
-        if not swarm:
-            L.append('# Where run logs go (default: runs/ in this folder)')
-            L.append('# RUNS_DIR=./runs')
+        return {'keys': keys, 'decision': decision, 'mcp': facts.get('serverSlugs') or {}}
+
+    @classmethod
+    def _optionalEnv(cls, facts: dict, layout: str) -> list:
+        """The optional variables a layout program reads, as .env.example lists them: [what it does, KEY=example]."""
+        o = [["One model for every node, instead of each node's own", 'MODEL_NAME=']]
+        if layout == 'single':
+            o.append(['Where saved outputs go (default: outputs/ next to the script)', 'SYNERGYAI_OUTPUT_ROOT=./outputs'])
+        elif layout == 'a2a':
+            o.append(['Where saved outputs go (default: ~/Documents/synergyAI/outputs)', 'SYNERGYAI_OUTPUT_ROOT=/path/to/outputs'])
+        else:
+            o.append(['Where saved outputs go (default: outputs/ in this folder)', 'SYNERGYAI_OUTPUT_ROOT=./outputs'])
+        if layout != 'a2a' and 'swarm' not in facts:   # a swarm and the A2A orchestrator write no run logs
+            o.append(['Where run logs go (default: runs/ next to the script)' if layout == 'single'
+                      else 'Where run logs go (default: runs/ in this folder)', 'RUNS_DIR=./runs'])
         if cls.skillDirs(facts):
-            L.append('# Where the skills are read from (default: skills/ in this folder)')
-            L.append('# SYNERGYAI_SKILLS_DIR=./skills')
-        return '\n'.join(L) + '\n'
+            o.append(['Where the skills are read from (default: skills/ in this folder)', 'SYNERGYAI_SKILLS_DIR=./skills']
+                     if layout == 'modular'
+                     else ['Where the skills are read from (default: ' + PackageDocs.EDITOR_SKILLS_DIR + ')', 'SYNERGYAI_SKILLS_DIR=/path/to/skills'])
+        if layout == 'a2a':
+            o.append(['First port of the agent servers, one per agent in order (default: 8701)', 'A2A_BASE_PORT=8701'])
+        return o
+
+    @classmethod
+    def _readme(cls, facts: dict, layout: str, folder: str, entry: str) -> str:
+        """README.md: what the folder is, install, configure, the run modes, files written, run server, service, code nodes."""
+        name = str(facts['wfName'])
+        swarm = 'swarm' in facts
+        skills = cls.skillDirs(facts)
+        if layout == 'single':
+            intro = ['A LangGraph program compiled from the SynergyAI workflow editor, as one Python file: `' + entry + '`.',
+                     'It runs on its own: no database, no SynergyAI server.']
+        elif layout == 'a2a':
+            intro = ['A LangGraph program compiled from the SynergyAI workflow editor, as A2A agents: each agent node is an',
+                     'A2A server of its own (`agents/`), and `orchestrator.py` runs the workflow over them. It runs on its own:',
+                     'no database, no SynergyAI server.']
+        elif swarm:
+            intro = ['A LangGraph swarm compiled from the SynergyAI workflow editor: its agents (`agents/`, one file each) hand',
+                     'the conversation to one another. It runs on its own: no database, no SynergyAI server. Everything it needs',
+                     'is in this folder.']
+        else:
+            intro = ['A LangGraph program compiled from the SynergyAI workflow editor, with each node in a file of its own',
+                     '(`agents/`). It runs on its own: no database, no SynergyAI server. Everything it needs is in this folder.']
+        if layout != 'modular':
+            intro += PackageDocs.editorSkillsNote(skills)
+        L = PackageDocs.head(name, intro, folder, cls.envVariables(facts))
+        L.append('## Run')
+        L.append('')
+        L.append('Run these from the folder, with the environment active.')
+        L.append('')
+        if layout == 'a2a':
+            cron = facts.get('defaultCron')
+            L.append('```sh')
+            L.append('python orchestrator.py "your prompt"   # one run on the text (no text: the Start node\'s prompt)')
+            L.append('python orchestrator.py --cron [EXPR]   # a run on each tick of a 5-field cron schedule, until stopped')
+            L.append('```')
+            L.append('')
+            L.append(f"Without EXPR, `--cron` uses the Start node's schedule (`{cron}`)." if cron is not None
+                     else '`--cron` needs EXPR: the Start node has no schedule.')
+            L.append('Text goes before `--cron` (after it, it is read as the cron expression). Ctrl-C (or SIGTERM) stops the loop.')
+            L.append('')
+            L += cls._a2aAgentLines(facts.get('a2aAgents') or {})
+        else:
+            L += PackageDocs.modes(entry, 'prompt' if swarm else str(facts['startMode'] if facts.get('startMode') is not None else 'prompt'),
+                                   facts.get('defaultCron'), None if swarm else facts.get('defaultWatch'), not swarm)
+        L.append('## Files written')
+        L.append('')
+        here = 'next to the script' if layout == 'single' else 'in this folder'
+        L.append('- `~/Documents/synergyAI/outputs/` -- the saved results, when output storage is on (`SYNERGYAI_OUTPUT_ROOT` overrides).'
+                 if layout == 'a2a'
+                 else f'- `outputs/` {here} -- the saved results, when output storage is on (`SYNERGYAI_OUTPUT_ROOT` overrides).')
+        if layout != 'a2a' and not swarm:
+            L.append(f'- `runs/` {here} -- one `<date>_<run id>.jsonl` event log per run, and `runs/current` (`RUNS_DIR` overrides).')
+            L.append('  A run with nothing to do leaves no file.')
+        L.append('')
+        if layout == 'a2a':
+            L += PackageDocs.runServer(False, ['The agent servers start with its first run and stop when it exits.'])
+        elif layout == 'modular':
+            L += PackageDocs.runServer(not swarm)
+        if layout == 'a2a':
+            cron = facts.get('defaultCron') is not None
+            L += PackageDocs.service(name, 'LangGraph', folder, entry, '--cron' if cron else '', 'cron' if cron else 'prompt')
+        else:
+            L += PackageDocs.service(name, 'LangGraph', folder, entry, '', 'prompt' if swarm else str(facts['startMode'] if facts.get('startMode') is not None else 'prompt'))
+        if layout == 'modular' and facts.get('codeData'):
+            L.append('## Editing code nodes')
+            L.append('')
+            L.append("Each code node runs its file in `code/` (`code/start_<name>.py` is the Start option's code).")
+            L.append('The file is read at each run: an edit takes effect on the next run, with no recompile. The code')
+            L.append('runs under the same rules as in the editor (`code_harness.py`): standard library only, network')
+            L.append("only through `call_tool`, one of the node's exits, its timeout.")
+            L.append('')
+        return '\n'.join(L).rstrip('\n') + '\n'
 
     @staticmethod
-    def _readme(facts: dict) -> str:
-        """README.md: install, configure, modes, files written, run server, service units, code nodes."""
-        name = str(facts['wfName'])
-        root = str(facts['safeName']) + ('_modular_swarm' if 'swarm' in facts else '_modular')
-        slug = re.sub(r'[^a-z0-9]+', '-', name, flags=re.IGNORECASE | re.ASCII).strip('-').lower() or 'workflow'
-        # A swarm's workflow.py runs a prompt, or --cron; it has no --watch / --once / --quiet.
-        swarm = 'swarm' in facts
-        mode = 'prompt' if swarm else str(facts.get('startMode') or 'prompt')
-
-        def default(m: str) -> str:
-            return ' **(default)**' if m == mode else ''
-
-        L = [f'# {name}', '',
-             'A LangGraph program compiled from the SynergyAI workflow editor. It runs on its own: no database,',
-             'no SynergyAI server. Everything it needs is in this folder.', '',
-             '## Install', '', '```sh',
-             'python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt',
-             'cp .env.example .env   # then fill in the API keys and MCP headers',
-             '```', '', '## Modes', '',
-             'One mode per launch. With no flag the program runs in the mode its Start node set.', '',
-             '| Command | Mode |', '|---|---|',
-             '| `python workflow.py ["text"]` | one run on the text, or on the Start\'s prompt' + default('prompt') + ' |',
-             '| `python workflow.py --cron [EXPR]` | a run on each tick of the schedule, until stopped' + default('cron') + ' |']
-        if not swarm:
-            L.append('| `python workflow.py --watch [server.tool {json}]` | a run for each event the trigger reports, until stopped' + default('watch') + ' |')
-            L.append('| `python workflow.py --once "text"` | exactly one run, whatever the default mode |')
+    def _a2aAgentLines(agents: dict) -> list:
+        """The A2A agent servers: what starts them, their files and default URLs. agents: a2aLayout()['agents']."""
+        L = []
+        L.append('### Agent servers')
         L.append('')
-        if not swarm:
-            L.append('`--quiet` prints only the done / failed line of each run; `--verbose` adds the progress lines.')
-        L.append('Ctrl-C (or SIGTERM) stops a loop after the current run.')
-        L += ['', '## Files written', '',
-              '- `outputs/` -- the saved results, when output storage is on (`SYNERGYAI_OUTPUT_ROOT` overrides).']
-        if not swarm:
-            L.append('- `runs/` -- one `<date>_<run id>.jsonl` event log per run, and `runs/current` (`RUNS_DIR` overrides).')
-            L.append('  A run with nothing to do leaves no file.')
-        L += ['', '## Run server', '', '```sh',
-              'python api.py            # HTTP run server: POST /runs, an SSE event stream per run']
-        if not swarm:
-            L.append('python api.py --listen   # the same, plus the default mode running in the background')
-        L += ['```', '', '## Running as a service', '',
-              f"Replace `/path/to/{root}` with this folder's absolute path."]
-        if mode == 'prompt':
-            L.append("This workflow's default is one run, and a service is restarted when it exits: add `--cron EXPR`"
-                     + ('' if swarm else ' (or `--watch`)') + ' after `workflow.py` so it keeps running.')
-        L += ['',
-              f'macOS (launchd): save as `~/Library/LaunchAgents/ai.synergy.{slug}.plist`, then',
-              f'`launchctl load ~/Library/LaunchAgents/ai.synergy.{slug}.plist`.',
-              '', '```xml',
-              '<?xml version="1.0" encoding="UTF-8"?>',
-              '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
-              '<plist version="1.0">', '<dict>', '  <key>Label</key>',
-              f'  <string>ai.synergy.{slug}</string>',
-              '  <key>ProgramArguments</key>', '  <array>',
-              f'    <string>/path/to/{root}/.venv/bin/python</string>',
-              f'    <string>/path/to/{root}/workflow.py</string>',
-              '  </array>', '  <key>WorkingDirectory</key>',
-              f'  <string>/path/to/{root}</string>',
-              '  <key>KeepAlive</key>', '  <true/>',
-              # In the package folder itself: launchd creates no folder, and a fresh unzip has no runs/.
-              '  <key>StandardOutPath</key>',
-              f'  <string>/path/to/{root}/service.log</string>',
-              '  <key>StandardErrorPath</key>',
-              f'  <string>/path/to/{root}/service.log</string>',
-              '</dict>', '</plist>', '```', '',
-              f'Linux (systemd): save as `/etc/systemd/system/{slug}.service`, then `systemctl enable --now {slug}`.',
-              '', '```ini', '[Unit]', f'Description={name} (LangGraph)', 'After=network-online.target', '',
-              '[Service]', f'ExecStart=/path/to/{root}/.venv/bin/python /path/to/{root}/workflow.py',
-              f'WorkingDirectory=/path/to/{root}', 'Restart=always', '', '[Install]', 'WantedBy=multi-user.target', '```']
-        if facts.get('codeData'):
-            L += ['', '## Editing code nodes', '',
-                  "Each code node runs its file in `code/` (`code/start_<name>.py` is the Start option's code).",
-                  'The file is read at each run: an edit takes effect on the next run, with no recompile. The code',
-                  'runs under the same rules as in the editor (`code_harness.py`): standard library only, network',
-                  "only through `call_tool`, one of the node's exits, its timeout."]
-        return '\n'.join(L) + '\n'
+        L.append('The orchestrator starts every agent server at launch and stops them when it ends. `--keep-serving` leaves')
+        L.append('them running; `--no-spawn` starts none and uses servers already running, each at its `A2A_AGENT_<id>_URL`')
+        L.append('(default below; `A2A_BASE_PORT` moves the whole range).')
+        L.append('')
+        L.append('| Node | File | Default URL |')
+        L.append('|---|---|---|')
+        for nid, e in agents.items():
+            L.append(f"| {e['display']} ({nid}) | `{e['file']}` | http://127.0.0.1:{e['port']}/ |")
+        L.append('')
+        if agents:
+            first = next(iter(agents.values()))
+            L.append(f"To start one by hand: `python {first['file']} --port {first['port']}` (`--host` sets the interface).")
+            L.append('')
+        return L

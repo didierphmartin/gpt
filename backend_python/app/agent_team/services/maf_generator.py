@@ -50,9 +50,16 @@ def _safe_name(name: str) -> str:
     return re.sub(r'[^a-z0-9_]+', '_', name, flags=re.IGNORECASE | re.ASCII)
 
 
+def _filename(analyzed: dict) -> str:
+    """The single file's name: <workflow>_maf.py."""
+    return _safe_name(php_strval(analyzed['workflow']['name'])).lower() + '_maf.py'
+
+
 class MAFGenerator:
     """The package's framework requirements (CompiledPackage adds the MCP client, .env and the run server)."""
     FRAMEWORK = ['agent-framework']
+    # The compile target, as CompiledPackage reads it.
+    TARGET = {'key': 'maf', 'title': 'Microsoft Agent Framework', 'framework': FRAMEWORK}
 
     def __init__(self, db, workflowRepo, graphRepo, agentRepo, skillsRoot: str | None = None, startDocuments=None):
         self.db = db
@@ -64,10 +71,11 @@ class MAFGenerator:
 
     def generate(self, workflowId: int, userId: str | None = None) -> dict:
         analyzed = self._analyzeWorkflow(workflowId, userId)
-        name = _safe_name(analyzed['workflow']['name'])
+        filename = _filename(analyzed)
         return CompiledArchitectureDoc.attach({
-            'filename': name.lower() + '_maf.py',
+            'filename': filename,
             'code': self.emitMaf(analyzed),
+            'package_files': CompiledPackage.singleFiles(analyzed, self.TARGET, filename),
         }, analyzed, 'maf', 'single')
 
     def _analyzeWorkflow(self, workflowId: int, userId: str | None) -> dict:
@@ -123,8 +131,7 @@ class MAFGenerator:
         analyzed['package'] = True
         runNodes = {k: T._class__A2A_RUN_NODE for k in CompiledA2AEmit.layout(analyzed)}
         files = CompiledPackage.files(analyzed, skillsRoot if skillsRoot is not None else LangGraphPackage.defaultSkillsRoot(),
-                                      documentFiles or [], cls.FRAMEWORK + ['a2a-sdk[http-server]>=1.1,<2'],
-                                      'Microsoft Agent Framework (A2A)')
+                                      documentFiles or [], cls.TARGET, 'a2a')
         root = _safe_name(php_strval(analyzed['workflow']['name']).lower()) + '_maf_a2a'
         return CompiledArchitectureDoc.attach(
             CompiledA2AEmit.package(analyzed, cls.packageFiles(analyzed), runNodes, files, root, 'Microsoft Agent Framework'),
@@ -151,7 +158,7 @@ class MAFGenerator:
         )
         pkg['files'] = list(pkg['files']) + list(nodeFiles) + CompiledPackage.files(
             analyzed, self.skillsRoot if self.skillsRoot is not None else LangGraphPackage.defaultSkillsRoot(),
-            docs['files'], self.FRAMEWORK, 'Microsoft Agent Framework')
+            docs['files'], self.TARGET)
         return CompiledArchitectureDoc.attach(pkg, analyzed, 'maf', 'modular')
 
     @classmethod
@@ -410,8 +417,9 @@ class MAFGenerator:
             'layers': _first(analyzed.get('layers'), []),
             'data_flow': T.dataFlowDoc__ret,
             'run': {
-                'deps': ['pip install "agent-framework>=1.10,<2" httpx python-dotenv'] + list(PlaybookEmit.extraDeps(analyzed)),
-                'usage': 'python this_file.py "your prompt here"',
+                'deps': [CompiledPackage.PIP_REQUIREMENTS] if not php_empty(analyzed.get('package'))
+                else [CompiledPackage.pipInstall(analyzed, MAFGenerator.TARGET)],
+                'usage': 'python ' + ('workflow.py' if not php_empty(analyzed.get('package')) else _filename(analyzed)) + ' "your prompt here"',
             },
             'storage': {'enabled': not php_empty(analyzed.get('outputStorageEnabled')),
                         'folder': analyzed.get('outputFolder')},

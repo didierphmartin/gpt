@@ -211,7 +211,7 @@ export class CompiledArchitectureDoc
             else if (str_starts_with(p, 'code/')) role = 'A code node\'s Python, read at every run (edit it here to change the node until the next generation).';
             else if (p === 'requirements.txt') role = 'The Python packages to install (`pip install -r requirements.txt`).';
             else if (p === '.env.example') role = 'Every variable the program reads: provider keys, decision-model keys, MCP URLs and headers, output folder.';
-            else if (p === 'README.md') role = 'Install, run, serve.';
+            else if (p === 'README.md') role = 'Install, configure, run, serve.';
             else if (p === 'ARCHITECTURE.md') role = 'This document.';
             else role = null;
             if (str_starts_with(p, 'skills/')) {

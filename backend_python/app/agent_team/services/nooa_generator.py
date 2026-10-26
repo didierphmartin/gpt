@@ -63,9 +63,16 @@ def _max_tokens(ag: dict) -> int:
     return php_intval(_first(ag.get('max_tokens'), 4096)) or 4096
 
 
+def _filename(analyzed: dict) -> str:
+    """The single file's name: <workflow>_nooa.py."""
+    return _name_slug(php_strval(analyzed['workflow']['name'])).lower() + '_nooa.py'
+
+
 class NOOAGenerator:
     """The package's framework requirements (CompiledPackage adds the MCP client, .env and the run server)."""
-    FRAMEWORK = ['nooa']
+    FRAMEWORK = ['nooa[mcp]', 'mcp']
+    # The compile target, as CompiledPackage reads it.
+    TARGET = {'key': 'nooa', 'title': 'NVIDIA NOOA', 'framework': FRAMEWORK}
 
     def __init__(self, db, workflowRepo, graphRepo, agentRepo, skillsRoot: str | None = None, startDocuments=None):
         self.db = db
@@ -77,10 +84,11 @@ class NOOAGenerator:
 
     def generate(self, workflowId: int, userId: str | None = None) -> dict:
         analyzed = self._analyzeWorkflow(workflowId, userId)
-        name = _name_slug(analyzed['workflow']['name'])
+        filename = _filename(analyzed)
         return CompiledArchitectureDoc.attach({
-            'filename': name.lower() + '_nooa.py',
+            'filename': filename,
             'code': self.emitNooa(analyzed),
+            'package_files': CompiledPackage.singleFiles(analyzed, self.TARGET, filename),
         }, analyzed, 'nooa', 'single')
 
     def _analyzeWorkflow(self, workflowId: int, userId: str | None) -> dict:
@@ -141,8 +149,7 @@ class NOOAGenerator:
         analyzed['package'] = True
         runNodes = {k: T._class__A2A_RUN_NODE for k in CompiledA2AEmit.layout(analyzed)}
         files = CompiledPackage.files(analyzed, skillsRoot if skillsRoot is not None else LangGraphPackage.defaultSkillsRoot(),
-                                      documentFiles or [], cls.FRAMEWORK + ['a2a-sdk[http-server]>=1.1,<2'],
-                                      'NVIDIA NOOA (A2A)')
+                                      documentFiles or [], cls.TARGET, 'a2a')
         return CompiledArchitectureDoc.attach(CompiledA2AEmit.package(
             analyzed, cls.packageFiles(analyzed), runNodes, files,
             _name_slug(php_strval(analyzed['workflow']['name']).lower()) + '_nooa_a2a', 'NVIDIA NOOA'),
@@ -168,7 +175,7 @@ class NOOAGenerator:
         )
         pkg['files'] = pkg['files'] + nodeFiles + CompiledPackage.files(
             analyzed, self.skillsRoot if self.skillsRoot is not None else LangGraphPackage.defaultSkillsRoot(),
-            docs['files'], self.FRAMEWORK, 'NVIDIA NOOA')
+            docs['files'], self.TARGET)
         return CompiledArchitectureDoc.attach(pkg, analyzed, 'nooa', 'modular')
 
     @classmethod
@@ -336,9 +343,10 @@ class NOOAGenerator:
             'layers': analyzed.get('layers') or [],
             'data_flow': T.dataFlowDoc__ret,
             'run': {
-                'deps': ['# "mcp<2": nooa 0.0.8 targets the mcp 1.x SDK API (mcp 2.0 changed the client yield shape).',
-                         'pip install "nooa[mcp]" "mcp<2" python-dotenv'] + PlaybookEmit.extraDeps(analyzed),
-                'usage': 'python this_file.py "your prompt here"',
+                'deps': [CompiledPackage.PIP_REQUIREMENTS] if not php_empty(analyzed.get('package'))
+                else ['# "mcp<2": nooa 0.0.8 targets the mcp 1.x SDK API (mcp 2.0 changed the client yield shape).',
+                      CompiledPackage.pipInstall(analyzed, NOOAGenerator.TARGET)],
+                'usage': 'python ' + ('workflow.py' if not php_empty(analyzed.get('package')) else _filename(analyzed)) + ' "your prompt here"',
             },
             'storage': {'enabled': not php_empty(analyzed.get('outputStorageEnabled')),
                         'folder': analyzed.get('outputFolder')},

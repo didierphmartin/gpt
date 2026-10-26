@@ -26,7 +26,10 @@ use PDO;
 class NOOAGenerator
 {
     /** The package's framework requirements (CompiledPackage adds the MCP client, .env and the run server). */
-    public const FRAMEWORK = ['nooa'];
+    public const FRAMEWORK = ['nooa[mcp]', 'mcp'];
+
+    /** The compile target, as CompiledPackage reads it. */
+    public const TARGET = ['key' => 'nooa', 'title' => 'NVIDIA NOOA', 'framework' => self::FRAMEWORK];
 
     public function __construct(
         private PDO $db,
@@ -40,11 +43,18 @@ class NOOAGenerator
     public function generate(int $workflowId, ?string $userId = null): array
     {
         $analyzed = $this->analyzeWorkflow($workflowId, $userId);
-        $name = preg_replace('/[^a-z0-9_]+/i', '_', $analyzed['workflow']['name']);
+        $filename = self::filename($analyzed);
         return CompiledArchitectureDoc::attach([
-            'filename' => strtolower($name) . '_nooa.py',
+            'filename' => $filename,
             'code'     => self::emitNooa($analyzed),
+            'package_files' => CompiledPackage::singleFiles($analyzed, self::TARGET, $filename),
         ], $analyzed, 'nooa', 'single');
+    }
+
+    /** The single file's name: <workflow>_nooa.py. */
+    private static function filename(array $analyzed): string
+    {
+        return strtolower((string) preg_replace('/[^a-z0-9_]+/i', '_', (string) $analyzed['workflow']['name'])) . '_nooa.py';
     }
 
     /** Everything emitNooa() needs, read from the database at compile time (the program itself never reads it). */
@@ -129,7 +139,7 @@ class NOOAGenerator
         $analyzed['package'] = true;
         $runNodes = array_map(fn() => self::A2A_RUN_NODE, CompiledA2AEmit::layout($analyzed));
         $files = CompiledPackage::files($analyzed, $skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $documentFiles,
-            array_merge(self::FRAMEWORK, ['a2a-sdk[http-server]>=1.1,<2']), 'NVIDIA NOOA (A2A)');
+            self::TARGET, 'a2a');
         return CompiledArchitectureDoc::attach(CompiledA2AEmit::package($analyzed, self::packageFiles($analyzed), $runNodes, $files,
             preg_replace('/[^a-z0-9_]+/i', '_', strtolower((string) $analyzed['workflow']['name'])) . '_nooa_a2a', 'NVIDIA NOOA'), $analyzed, 'nooa', 'a2a');
     }
@@ -178,7 +188,7 @@ PY;
             true   // api.py also runs the Start's cron / watch loop: POST /listen, GET /live
         );
         $pkg['files'] = array_merge($pkg['files'], $nodeFiles, CompiledPackage::files($analyzed,
-            $this->skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $docs['files'], self::FRAMEWORK, 'NVIDIA NOOA'));
+            $this->skillsRoot ?? LangGraphPackage::defaultSkillsRoot(), $docs['files'], self::TARGET));
         return CompiledArchitectureDoc::attach($pkg, $analyzed, 'nooa', 'modular');
     }
 
@@ -414,11 +424,10 @@ TXT;
             'layers' => $analyzed['layers'] ?? [],
             'data_flow' => self::dataFlowDoc(),
             'run' => [
-                'deps' => array_merge(
-                    ['# "mcp<2": nooa 0.0.8 targets the mcp 1.x SDK API (mcp 2.0 changed the client yield shape).',
-                     'pip install "nooa[mcp]" "mcp<2" python-dotenv'],
-                    PlaybookEmit::extraDeps($analyzed)),
-                'usage' => 'python this_file.py "your prompt here"',
+                'deps' => !empty($analyzed['package']) ? [CompiledPackage::PIP_REQUIREMENTS]
+                    : ['# "mcp<2": nooa 0.0.8 targets the mcp 1.x SDK API (mcp 2.0 changed the client yield shape).',
+                       CompiledPackage::pipInstall($analyzed, self::TARGET)],
+                'usage' => 'python ' . (!empty($analyzed['package']) ? 'workflow.py' : self::filename($analyzed)) . ' "your prompt here"',
             ],
             'storage' => ['enabled' => !empty($analyzed['outputStorageEnabled']), 'folder' => $analyzed['outputFolder'] ?? null],
         ]));

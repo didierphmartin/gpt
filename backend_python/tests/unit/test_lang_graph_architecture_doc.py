@@ -31,7 +31,8 @@ def _mermaid_blocks(doc: str) -> dict:
 
 def test_every_mode_exposes_the_doc_and_keeps_its_existing_keys():
     single = _generate('dispatcher_demo', 'single')
-    assert list(single) == ['filename', 'code', 'architecture']
+    assert list(single) == ['filename', 'code', 'architecture', 'package_files']
+    assert [f['path'] for f in single['package_files']] == ['requirements.txt', '.env.example', 'README.md']
     for mode in ('modular', 'a2a'):
         r = _generate('dispatcher_demo', mode)
         assert list(r) == ['root', 'files', 'architecture'], mode

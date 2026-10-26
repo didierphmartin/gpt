@@ -42,7 +42,8 @@ class LangGraphArchitectureDocTest extends TestCase
     public function testEveryModeExposesTheDocAndKeepsItsExistingKeys(): void
     {
         $single = $this->generate('dispatcher_demo', 'single');
-        $this->assertSame(['filename', 'code', 'architecture'], array_keys($single));
+        $this->assertSame(['filename', 'code', 'architecture', 'package_files'], array_keys($single));
+        $this->assertSame(['requirements.txt', '.env.example', 'README.md'], array_column($single['package_files'], 'path'));
         foreach (['modular', 'a2a'] as $mode) {
             $r = $this->generate('dispatcher_demo', $mode);
             $this->assertSame(['root', 'files', 'architecture'], array_keys($r), $mode);

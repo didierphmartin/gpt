@@ -272,7 +272,7 @@ test('testHeaderImportsHttpxAndTime', () => {
   const code = ADKGenerator.emitAdk(analyzed());
   assert.match(code, /^import httpx$/m, '"import httpx" must be a top-level module-scope import in the emitted header');
   assert.match(code, /^import .*\btime\b/m, '"time" must be imported at module scope (mcpClientBlock uses time.time())');
-  assert.ok(code.includes('"google-adk>=2.3,<3" litellm httpx'), 'requirements pip-install line must pin google-adk 2.3.x and include httpx');
+  assert.ok(code.includes('pip install "google-adk>=2.3,<3" "httpx>=0.27.0" litellm "python-dotenv>=1.0.0"'), 'requirements pip-install line must pin google-adk 2.3.x and include httpx');
 });
 
 test('testRequiredParamOrderedBeforeOptionalRegardlessOfSchemaOrder', () => {

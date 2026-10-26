@@ -221,7 +221,7 @@ class CompiledArchitectureDoc:
             elif p == '.env.example':
                 role = 'Every variable the program reads: provider keys, decision-model keys, MCP URLs and headers, output folder.'
             elif p == 'README.md':
-                role = 'Install, run, serve.'
+                role = 'Install, configure, run, serve.'
             elif p == 'ARCHITECTURE.md':
                 role = 'This document.'
             else:
