@@ -76,8 +76,11 @@ class GeminiLiveClient {
 
             console.log('[GeminiLive] Connecting to Gemini Live API...');
 
-            // Initialize the API client
-            const ai = new GoogleGenAI({ apiKey: this.apiKey });
+            // Initialize the API client. A single-use Live token (auth_tokens/...)
+            // from /voice/token works on v1alpha only.
+            const ai = new GoogleGenAI(this.apiKey.startsWith('auth_tokens/')
+                ? { apiKey: this.apiKey, httpOptions: { apiVersion: 'v1alpha' } }
+                : { apiKey: this.apiKey });
 
             // Connect to Live API
             this.session = await ai.live.connect({

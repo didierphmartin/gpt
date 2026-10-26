@@ -17,7 +17,6 @@ class GeminiRealtimeAdapter {
         this.model = config.model
             || window.APP_CONFIG?.gemini?.model
             || 'gemini-2.5-flash-native-audio-preview-12-2025';
-        this.apiKey = config.apiKey || window.APP_CONFIG?.gemini?.apiKey || null;
         this.sampleRateInput = config.sampleRateInput || 16000;
         this.sampleRateOutput = config.sampleRateOutput || 24000;
 
@@ -62,10 +61,6 @@ class GeminiRealtimeAdapter {
     // ================================================================
 
     async connect() {
-        if (!this.apiKey) {
-            throw new Error('Gemini API key missing from APP_CONFIG.gemini.apiKey');
-        }
-
         // Lazy-load the SDK from CDN on first connect
         if (!this._GoogleGenAI) {
             const module = await import('https://cdn.jsdelivr.net/npm/@google/genai@1.37.0/dist/web/index.mjs');
@@ -73,7 +68,6 @@ class GeminiRealtimeAdapter {
             this._Modality = module.Modality;
         }
 
-        this.ai = new this._GoogleGenAI({ apiKey: this.apiKey });
         this.sessionId = 'gemini_rt_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9);
         this.audioInputBytes = 0;
         this.audioOutputBytes = 0;
@@ -171,6 +165,10 @@ class GeminiRealtimeAdapter {
         });
 
         try {
+            // Each session (one per handoff) opens with its own single-use
+            // token; the Gemini key stays on the server.
+            const tok = await window.VoiceToken.token('gemini');
+            this.ai = new this._GoogleGenAI({ apiKey: tok.client_secret, httpOptions: { apiVersion: 'v1alpha' } });
             this.session = await this.ai.live.connect({
                 model: this.model,
                 callbacks: {

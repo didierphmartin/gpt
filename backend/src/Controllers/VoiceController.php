@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use PDO;
+use Quantis\AIPortfolioAssistant\Services\GeminiVoiceKey;
 use Quantis\AIPortfolioAssistant\Services\UsageLogger;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
@@ -33,7 +34,7 @@ class VoiceController
     /**
      * Get HTTP client (lazy initialization)
      */
-    private function getHttpClient(): Client
+    protected function getHttpClient(): Client
     {
         if ($this->httpClient === null) {
             $this->httpClient = new Client([
@@ -269,7 +270,7 @@ class VoiceController
      * the permanent API key in client-side code.
      *
      * POST /api/v1/voice/token
-     * Body: { "provider": "grok" }
+     * Body: { "provider": "grok" | "gemini" }
      *
      * Returns:
      * {
@@ -290,11 +291,13 @@ class VoiceController
 
             $provider = $body['provider'] ?? 'grok';
 
-            // Currently only Grok supports ephemeral tokens
+            if ($provider === 'gemini') {
+                return $this->generateGeminiEphemeralToken($request);
+            }
             if ($provider !== 'grok') {
                 return [
                     'success' => false,
-                    'error' => 'Ephemeral tokens are currently only supported for Grok provider',
+                    'error' => 'Unknown voice provider',
                     'status_code' => 400
                 ];
             }
@@ -309,6 +312,86 @@ class VoiceController
                 'status_code' => 500
             ];
         }
+    }
+
+    /** The Gemini key this request's user voices with ('' when none). */
+    private function geminiKey(array $request): string
+    {
+        $userId = $request['user_id'] ?? null;
+        if ($userId === null || !is_numeric($userId)) {
+            return '';
+        }
+        return GeminiVoiceKey::resolve($this->db, $this->config, (int) $userId);
+    }
+
+    /**
+     * Mint a single-use Gemini Live token with the user's Gemini key, so the
+     * browser opens a Live session without ever holding the key. The token
+     * starts one session within a minute and lasts 30 minutes.
+     */
+    private function generateGeminiEphemeralToken(array $request): array
+    {
+        if (!isset($request['user_id'])) {
+            return [
+                'success' => false,
+                'error' => 'Authentication required',
+                'status_code' => 401
+            ];
+        }
+        $apiKey = $this->geminiKey($request);
+        if ($apiKey === '') {
+            return [
+                'success' => false,
+                'error' => 'No Gemini key for voice',
+                'code' => 'NO_GEMINI_KEY',
+                'status_code' => 404
+            ];
+        }
+
+        $now = time();
+        try {
+            // The key goes in a header, never the URL, so no error or log line can carry it.
+            $response = $this->getHttpClient()->post('https://generativelanguage.googleapis.com/v1alpha/auth_tokens', [
+                'headers' => [
+                    'Content-Type' => 'application/json',
+                    'x-goog-api-key' => $apiKey,
+                ],
+                'json' => [
+                    'uses' => 1,
+                    'expireTime' => gmdate('Y-m-d\TH:i:s\Z', $now + 1800),
+                    'newSessionExpireTime' => gmdate('Y-m-d\TH:i:s\Z', $now + 60),
+                ],
+            ]);
+        } catch (GuzzleException $e) {
+            error_log('❌ [VoiceController] HTTP error minting a Gemini voice token');
+            return [
+                'success' => false,
+                'error' => 'Network error while obtaining ephemeral token',
+                'status_code' => 503
+            ];
+        }
+
+        $statusCode = $response->getStatusCode();
+        $responseBody = json_decode((string) $response->getBody(), true);
+        $token = is_array($responseBody) ? (string) ($responseBody['name'] ?? '') : '';
+        if ($statusCode !== 200 || !str_starts_with($token, 'auth_tokens/')) {
+            $errorMessage = is_array($responseBody) ? (string) ($responseBody['error']['message'] ?? 'Unknown error') : 'Unknown error';
+            error_log("❌ [VoiceController] Gemini token error: {$statusCode}");
+            return [
+                'success' => false,
+                'error' => "Failed to obtain ephemeral token: {$errorMessage}",
+                'status_code' => $statusCode !== 200 ? $statusCode : 502
+            ];
+        }
+
+        return [
+            'success' => true,
+            'provider' => 'gemini',
+            'client_secret' => $token,
+            'expires_at' => gmdate('Y-m-d\TH:i:s\Z', $now + 1800),
+            'model' => $this->config['gemini_voice']['model'] ?? 'gemini-2.5-flash-native-audio-preview-12-2025',
+            'status_code' => 200
+        ];
     }
 
     /**
@@ -398,7 +481,7 @@ class VoiceController
     }
 
     /**
-     * Get voice provider configuration (public info only, no API keys)
+     * Get voice provider configuration (public info and whether a key exists, never a key)
      *
      * GET /api/v1/voice/config
      * Query: ?provider=grok|gemini
@@ -429,7 +512,7 @@ class VoiceController
                 'voices' => ['Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Aoede'],
                 'default_voice' => $this->config['gemini_voice']['default_voice'] ?? 'Zephyr',
                 'model' => $this->config['gemini_voice']['model'] ?? 'gemini-2.5-flash-native-audio-preview',
-                'supports_ephemeral_token' => false, // Gemini uses different auth
+                'supports_ephemeral_token' => true,
             ],
         ];
 
@@ -441,17 +524,10 @@ class VoiceController
             ];
         }
 
-        // Gemini has no ephemeral-token endpoint, so a browser client needs the
-        // raw key to open a Live session. Only expose it to JWT users or to app
-        // keys that explicitly carry the 'voice:config' scope (interim brokering
-        // until per-user provider keys / login are in place).
+        // Never a key: only whether this user has one (the mic shows only then).
+        $configs['grok']['available'] = trim((string) ($this->config['grok_voice']['api_key'] ?? '')) !== '';
         if ($provider === 'gemini') {
-            $authType = $request['auth_type'] ?? null;
-            $scopes   = (array) ($request['app_key_scopes'] ?? []);
-            $mayReadKey = ($authType !== 'app_key') || in_array('voice:config', $scopes, true);
-            if ($mayReadKey) {
-                $configs['gemini']['api_key'] = $this->config['gemini_voice']['api_key'] ?? null;
-            }
+            $configs['gemini']['available'] = $this->geminiKey($request) !== '';
         }
 
         return [
