@@ -47,6 +47,13 @@ class FakeGraphRepository:
         return {'nodes': [], 'edges': []}
 
 
+def _root(tmp_path):
+    """The storage root folder document nodes read under."""
+    root = tmp_path / GraphWorkflowRunner.ROOT_FOLDER
+    root.mkdir(exist_ok=True)
+    return root
+
+
 def _make_runner(tmp_path, userId=7, extra_config=None):
     config = {'storage_path': str(tmp_path)}
     if extra_config:
@@ -114,17 +121,21 @@ def test_is_image_file(tmp_path):
 # getDocumentLocalPath / getUserStorageProvider (PHP 3127-3155)
 # ---------------------------------------------------------------------------
 
-def test_get_document_local_path_uses_configured_storage_path(tmp_path):
+def test_get_document_local_path_resolves_under_the_root_folder(tmp_path):
+    (_root(tmp_path) / 'docs').mkdir()
+    (_root(tmp_path) / 'docs' / 'a.txt').write_text('x')
     runner = _make_runner(tmp_path)
-    assert runner._getDocumentLocalPath('docs/a.txt') == str(tmp_path) + '/docs/a.txt'
+    expected = str((tmp_path / 'synergyaichatroot' / 'docs' / 'a.txt').resolve())
+    assert runner._getDocumentLocalPath('synergyaichatroot/docs/a.txt') == expected
     # ltrim($relativePath, '/') -- leading slash stripped, not a full trim.
-    assert runner._getDocumentLocalPath('/docs/a.txt') == str(tmp_path) + '/docs/a.txt'
+    assert runner._getDocumentLocalPath('/synergyaichatroot/docs/a.txt') == expected
+    assert runner._getDocumentLocalPath('synergyaichatroot/docs/missing.txt') is None
+    assert runner._getDocumentLocalPath('synergyaichatroot/docs') is None
 
 
 def test_get_document_local_path_default_base_is_gpt_storage(tmp_path):
     runner = GraphWorkflowRunner(FakeDb(), None, None, FakeGraphRepository(), config={})
-    from app.config import PHP_BACKEND
-    assert runner._getDocumentLocalPath('x.txt') == str(PHP_BACKEND.parent / 'storage') + '/x.txt'
+    assert runner._getDocumentLocalPath('x.txt') is None  # outside <gpt>/storage/synergyaichatroot
 
 
 def test_get_user_storage_provider_prefers_user_row(tmp_path):
@@ -171,8 +182,8 @@ def test_get_document_storage_adapter_no_user_id_logs_and_returns_none(tmp_path)
 # ---------------------------------------------------------------------------
 
 def test_read_file_raw_reads_from_local_fallback(tmp_path):
-    (tmp_path / 'docs').mkdir()
-    (tmp_path / 'docs' / 'a.txt').write_bytes(b'raw bytes here')
+    (_root(tmp_path) / 'docs').mkdir()
+    (_root(tmp_path) / 'docs' / 'a.txt').write_bytes(b'raw bytes here')
     runner = _make_runner(tmp_path)
 
     content = runner._readFileRaw({'path': 'docs/a.txt'})
@@ -180,11 +191,11 @@ def test_read_file_raw_reads_from_local_fallback(tmp_path):
 
 
 def test_read_file_raw_prefers_full_path_over_path(tmp_path):
-    (tmp_path / 'x.txt').write_bytes(b'full path wins')
-    (tmp_path / 'wrong.txt').write_bytes(b'should not be read')
+    (_root(tmp_path) / 'x.txt').write_bytes(b'full path wins')
+    (_root(tmp_path) / 'wrong.txt').write_bytes(b'should not be read')
     runner = _make_runner(tmp_path)
 
-    content = runner._readFileRaw({'path': 'wrong.txt', 'fullPath': 'x.txt'})
+    content = runner._readFileRaw({'path': 'wrong.txt', 'fullPath': 'synergyaichatroot/x.txt'})
     assert content == b'full path wins'
 
 
@@ -234,8 +245,8 @@ def test_read_document_content_local_storage_no_inline_falls_back_to_message(tmp
 # ---------------------------------------------------------------------------
 
 def test_read_document_content_remote_text_file(tmp_path):
-    (tmp_path / 'docs').mkdir()
-    (tmp_path / 'docs' / 'notes.txt').write_text('plain text body', encoding='utf-8')
+    (_root(tmp_path) / 'docs').mkdir()
+    (_root(tmp_path) / 'docs' / 'notes.txt').write_text('plain text body', encoding='utf-8')
     runner = _make_runner(tmp_path)
 
     result = runner._readDocumentContent({
@@ -251,7 +262,7 @@ def test_read_document_content_remote_returns_empty_when_unreadable(tmp_path):
 
 
 def test_read_document_content_invalid_utf8_falls_back_to_latin1(tmp_path):
-    (tmp_path / 'bin.txt').write_bytes(b'\xff\xfe not valid utf-8')
+    (_root(tmp_path) / 'bin.txt').write_bytes(b'\xff\xfe not valid utf-8')
     runner = _make_runner(tmp_path)
     result = runner._readDocumentContent({'name': 'bin.txt', 'mimeType': 'text/plain', 'path': 'bin.txt'})
     assert result == '\xff\xfe not valid utf-8'  # latin-1 round-trip, never raises
@@ -262,7 +273,7 @@ def test_read_document_content_invalid_utf8_falls_back_to_latin1(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_extract_pdf_text_uses_pypdf_for_a_real_pdf(tmp_path):
-    (tmp_path / 'doc.pdf').write_bytes(_build_minimal_pdf('Hello PDF'))
+    (_root(tmp_path) / 'doc.pdf').write_bytes(_build_minimal_pdf('Hello PDF'))
     runner = _make_runner(tmp_path)
 
     text = runner._extractPdfText({'mimeType': 'application/pdf', 'path': 'doc.pdf'})
@@ -276,7 +287,7 @@ def test_extract_pdf_text_unreadable_returns_placeholder(tmp_path):
 
 
 def test_read_document_content_dispatches_pdf_to_extract_pdf_text(tmp_path):
-    (tmp_path / 'doc.pdf').write_bytes(_build_minimal_pdf('Routed via readDocumentContent'))
+    (_root(tmp_path) / 'doc.pdf').write_bytes(_build_minimal_pdf('Routed via readDocumentContent'))
     runner = _make_runner(tmp_path)
 
     result = runner._readDocumentContent({'mimeType': 'application/pdf', 'path': 'doc.pdf', 'name': 'doc.pdf'})
@@ -318,7 +329,7 @@ def test_extract_pdf_text_falls_back_to_basic_extract_when_pypdf_fails(tmp_path)
     """A byte blob that is not a parseable PDF (pypdf raises) but DOES
     contain a stream/endstream pair with literal-string text -- proves the
     extractPdfText -> basicPdfTextExtract fallback chain end to end."""
-    (tmp_path / 'broken.pdf').write_bytes(b"not really a pdf\nstream\n(Fallback text) \nendstream\n")
+    (_root(tmp_path) / 'broken.pdf').write_bytes(b"not really a pdf\nstream\n(Fallback text) \nendstream\n")
     runner = _make_runner(tmp_path)
 
     text = runner._extractPdfText({'mimeType': 'application/pdf', 'path': 'broken.pdf'})
@@ -330,7 +341,7 @@ def test_extract_pdf_text_falls_back_to_basic_extract_when_pypdf_fails(tmp_path)
 # ---------------------------------------------------------------------------
 
 def test_get_document_images_base64_encodes_remote_images(tmp_path):
-    (tmp_path / 'pic.png').write_bytes(b'\x89PNG\r\n\x1a\nfake png bytes')
+    (_root(tmp_path) / 'pic.png').write_bytes(b'\x89PNG\r\n\x1a\nfake png bytes')
     runner = _make_runner(tmp_path)
     node = _node({'documents': [
         {'name': 'pic.png', 'mimeType': 'image/png', 'storage': 'remote', 'path': 'pic.png'},
@@ -367,9 +378,9 @@ def test_get_document_images_skips_non_images(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_build_documents_context_exact_text_with_pdf_txt_and_image(tmp_path):
-    (tmp_path / 'notes.txt').write_text('some notes', encoding='utf-8')
-    (tmp_path / 'report.pdf').write_bytes(_build_minimal_pdf('PDF body text'))
-    (tmp_path / 'photo.png').write_bytes(b'\x89PNG fake bytes')
+    (_root(tmp_path) / 'notes.txt').write_text('some notes', encoding='utf-8')
+    (_root(tmp_path) / 'report.pdf').write_bytes(_build_minimal_pdf('PDF body text'))
+    (_root(tmp_path) / 'photo.png').write_bytes(b'\x89PNG fake bytes')
     runner = _make_runner(tmp_path)
 
     node = _node({'documents': [

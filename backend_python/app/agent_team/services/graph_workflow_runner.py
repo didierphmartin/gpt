@@ -133,6 +133,8 @@ _sleep = time.sleep
 # basicPdfTextExtract's regex scan (PHP 3034-3060), on raw PDF bytes.
 _PDF_STREAM_RE = re.compile(rb'stream\s*(.*?)\s*endstream', re.S)
 _PDF_TEXT_PAREN_RE = re.compile(rb'\((.*?)\)')
+# A '.' or '..' path segment (either slash), refused in document paths
+_DOT_SEGMENT = re.compile(r'(^|[/\\])\.\.?([/\\]|$)')
 
 
 def _pc(providerConfig, key: str):
@@ -202,6 +204,9 @@ class NodeLogFormat:
 
 
 class GraphWorkflowRunner:
+    # Document nodes read only under this storage folder
+    ROOT_FOLDER = 'synergyaichatroot'
+
     def __init__(self, db, agentRepository, agentRunner: Any, graphRepository, config: dict | None = None,
                  playbookRunnerFactory=None):
         """playbookRunnerFactory: fn() -> PlaybookNodeRunner (tests build one with fakes)."""
@@ -2840,6 +2845,12 @@ class GraphWorkflowRunner:
         if php_empty(storagePath) and php_empty(fullPath):
             return None
 
+        # The path comes from the workflow definition: no '.' or '..' segment
+        relative = php_strval(fullPath if not php_empty(fullPath)
+                              else self.ROOT_FOLDER + '/' + php_strval(storagePath)).lstrip('/')
+        if '\0' in relative or _DOT_SEGMENT.search(relative):
+            return None
+
         # Try universalFS first.
         adapter = self._getDocumentStorageAdapter()
         if adapter:
@@ -2849,8 +2860,8 @@ class GraphWorkflowRunner:
             pass  # pragma: no cover
 
         # Fallback to local storage.
-        localPath = self._getDocumentLocalPath(fullPath if not php_empty(fullPath) else storagePath)
-        if os.path.exists(localPath):
+        localPath = self._getDocumentLocalPath(relative)
+        if localPath is not None:
             with open(localPath, 'rb') as fh:
                 return fh.read()
 
@@ -2945,7 +2956,7 @@ class GraphWorkflowRunner:
             return self.config['storage_provider']
         return 'local'
 
-    def _getDocumentLocalPath(self, relativePath: str) -> str:
+    def _getDocumentLocalPath(self, relativePath: str) -> str | None:
         """Get the local storage path for a document (PHP 3151-3155). Default
         base `__DIR__ . '/../../../../storage'` from
         backend/src/AgentTeam/Services walks up 4 levels to `gpt/`, i.e.
@@ -2953,11 +2964,16 @@ class GraphWorkflowRunner:
         walk documented in workflow_output_storage.py's module docstring --
         this constant is one directory name shorter, no `workflow_outputs`
         suffix; identical to `WorkflowController.getLocalStoragePath`'s
-        default)."""
+        default). A file under the storage root folder, symlinks resolved,
+        or None (as StartDocumentStore does)."""
         basePath = self.config.get('storage_path')
         if basePath is None:
             basePath = str(PHP_BACKEND.parent / 'storage')
-        return basePath + '/' + relativePath.lstrip('/')
+        root = os.path.realpath(basePath + '/' + self.ROOT_FOLDER)
+        target = os.path.realpath(basePath + '/' + relativePath.lstrip('/'))
+        if not os.path.isdir(root) or not target.startswith(root + os.sep) or not os.path.isfile(target):
+            return None
+        return target
 
     # ─── Archive to conversation_contexts ────────────────────────────────────
 
