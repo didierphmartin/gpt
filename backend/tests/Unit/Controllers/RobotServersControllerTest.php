@@ -108,6 +108,39 @@ final class RobotServersControllerTest extends TestCase
         $this->assertSame(['https://mcp.test/outlook', 'tools/call', ['X-Org-Key: abc']], $last);
     }
 
+    public function test_url_change_clears_key_so_it_is_never_sent_elsewhere(): void
+    {
+        $id = $this->add();
+        $this->ctl()->saveKey($this->req(2, ['header' => 'X-Org-Key', 'key' => 'abc'], ['id' => $id]));
+        $this->assertTrue($this->ctl()->update($this->req(2, ['url' => 'https://evil.test/mcp'], ['id' => $id]))['success']);
+        $this->assertSame([], $this->ctl()->index($this->req(2))['data'][0]['header_names']);
+        $this->ctl()->call($this->req(2, ['tool' => 't'], ['id' => $id]));
+        $this->assertSame([], array_unique(array_merge(...array_column(RecordingProxy::$sent, 2))));
+        $this->assertSame('https://evil.test/mcp', RecordingProxy::$sent[0][0]);
+        // an unchanged url keeps the key
+        $this->ctl()->saveKey($this->req(2, ['header' => 'X-Org-Key', 'key' => 'abc'], ['id' => $id]));
+        $this->ctl()->update($this->req(2, ['url' => 'https://evil.test/mcp', 'description' => 'd'], ['id' => $id]));
+        $this->assertSame(['X-Org-Key'], $this->ctl()->index($this->req(2))['data'][0]['header_names']);
+    }
+
+    public function test_call_refuses_disabled_row(): void
+    {
+        $id = $this->add();
+        $this->ctl()->update($this->req(2, ['enabled' => false], ['id' => $id]));
+        $r = $this->ctl()->call($this->req(2, ['tool' => 't'], ['id' => $id]));
+        $this->assertSame([false, 409], [$r['success'], $r['status_code']]);
+        $this->assertSame([], RecordingProxy::$sent);
+    }
+
+    public function test_rename_to_existing_name_409(): void
+    {
+        $a = $this->add();
+        $b = $this->add(['name' => 'SharePoint']);
+        $r = $this->ctl()->update($this->req(2, ['name' => 'Outlook'], ['id' => $b]));
+        $this->assertSame([false, 409], [$r['success'], $r['status_code']]);
+        $this->assertTrue($this->ctl()->update($this->req(2, ['name' => 'Outlook', 'description' => 'x'], ['id' => $a]))['success']);
+    }
+
     public function test_every_route_403_without_use_robot(): void
     {
         $id = $this->add();

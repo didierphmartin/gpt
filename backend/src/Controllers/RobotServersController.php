@@ -59,7 +59,8 @@ final class RobotServersController
     {
         return $this->guard($request, function (int $robot) use ($request) {
             $id = $this->id($request);
-            if ($this->row($robot, $id) === null) {
+            $row = $this->row($robot, $id);
+            if ($row === null) {
                 return self::notFound();
             }
             $b = $request['body'] ?? [];
@@ -69,6 +70,13 @@ final class RobotServersController
                 if (isset($b[$f]) && is_string($b[$f])) {
                     if ($f === 'url' && !filter_var(trim($b[$f]), FILTER_VALIDATE_URL)) {
                         return self::fail('Invalid URL format', 400);
+                    }
+                    if ($f === 'name' && trim($b[$f]) !== $row['name'] && $this->row($robot, null, trim($b[$f])) !== null) {
+                        return self::fail('A server with this name already exists', 409);
+                    }
+                    if ($f === 'url' && trim($b[$f]) !== $row['url']) {
+                        // the stored key must never travel to a different host: re-Connect is required
+                        $set[] = 'headers = NULL';
                     }
                     $set[] = "$f = ?";
                     $args[] = trim($b[$f]);
@@ -106,6 +114,9 @@ final class RobotServersController
             $row = $this->row($robot, $id);
             if ($row === null) {
                 return self::notFound();
+            }
+            if (!$row['enabled']) {
+                return self::fail('Server is disabled', 409);
             }
             $b = $request['body'] ?? [];
             if (!is_string($b['tool'] ?? null) || $b['tool'] === '') {
