@@ -11,7 +11,7 @@ import bcrypt
 import jwt
 
 from app.db import Db
-from app.middleware.auth import decode_hs256, hash_user_app_key, user_app_key_pepper
+from app.middleware.auth import AuthMiddleware, decode_hs256, hash_user_app_key, user_app_key_pepper
 from app.services import edition
 from app.services.firebase_tokens import verify_firebase_id_token
 from app.support.logger import error_log
@@ -328,10 +328,13 @@ class AuthController:
         m = re.search(r'Bearer\s+(.*)$', value, re.I)
         if not m:
             return {'success': False, 'message': 'Authorization token required', 'status_code': 401}
-        claims = decode_hs256(m.group(1), self.jwt_secret)
-        if claims is None:
+        try:
+            user_id = AuthMiddleware.access_token_subject(m.group(1), self.jwt_secret)
+        except jwt.PyJWTError:
+            user_id = None
+        if user_id is None:
             return {'success': False, 'message': 'Invalid or expired token', 'status_code': 401}
-        return {'success': True, 'message': 'Token is valid', 'data': {'user_id': claims.get('sub')}, 'status_code': 200}
+        return {'success': True, 'message': 'Token is valid', 'data': {'user_id': user_id}, 'status_code': 200}
 
     def logout(self, request) -> dict:
         return {'success': True, 'message': 'Logout successful', 'status_code': 200}

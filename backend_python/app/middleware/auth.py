@@ -115,9 +115,19 @@ class AuthMiddleware:
 
     def _validate_token(self, token: str) -> int | None:
         try:
-            claims = decode_hs256_or_raise(token, self.jwt_secret)
+            return self.access_token_subject(token, self.jwt_secret)
         except jwt.PyJWTError as e:
             error_log(f'[AuthMiddleware] JWT validation failed: {e}')
+            return None
+
+    @staticmethod
+    def access_token_subject(token: str, jwt_secret: str) -> int | None:
+        """The user id of a gpt access token, or None. Other services (the login
+        service) may sign with the same secret, and a refresh token must not
+        work as a session, so 'iss' and 'type' are both required. Raises
+        jwt.PyJWTError for a bad signature or an expired token."""
+        claims = decode_hs256_or_raise(token, jwt_secret)
+        if claims.get('iss') != 'gpt-chat' or claims.get('type') != 'access':
             return None
         try:
             return int(claims['sub'])
