@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace Quantis\AIPortfolioAssistant\Controllers;
 
-use Firebase\JWT\JWT;
-use Firebase\JWT\Key;
 use PDO;
 use Exception;
 use Quantis\AIPortfolioAssistant\Services\Edition;
@@ -16,16 +14,13 @@ use Quantis\AIPortfolioAssistant\Services\Edition;
  * Handles WebAuthn (biometric) authentication:
  * - Challenge generation for registration/authentication
  * - Credential registration (storing public key)
- * - Credential authentication (verifying signature)
+ * - Credential authentication: off until assertions are verified
  * - Credential removal
  */
 class WebAuthnController
 {
     private PDO $db;
     private array $config;
-    private string $jwtSecret;
-    private int $jwtExpiry;
-    private int $refreshExpiry;
 
     // Challenge expiry in seconds
     private const CHALLENGE_EXPIRY = 120;
@@ -34,13 +29,6 @@ class WebAuthnController
     {
         $this->db = $db;
         $this->config = $config;
-        $this->jwtSecret = (string) ($config['auth']['jwt_secret'] ?? '');
-        if ($this->jwtSecret === '') {
-            // Fail closed: never sign/verify with a weak default secret.
-            throw new \RuntimeException('JWT secret is not configured (set JWT_SECRET).');
-        }
-        $this->jwtExpiry = $config['auth']['jwt_expiry'] ?? 28800; // 8 hours
-        $this->refreshExpiry = $config['auth']['refresh_expiry'] ?? 604800; // 7 days
     }
 
     /**
@@ -49,79 +37,21 @@ class WebAuthnController
     public function challenge(array $request): array
     {
         $action = $request['body']['action'] ?? '';
-        $userId = $request['body']['user_id'] ?? null;
-        $credentialId = $request['body']['credential_id'] ?? null;
-        $email = $request['body']['email'] ?? null;
-        $allowCredentials = [];
 
-        // For registration, require authentication
-        if ($action === 'register') {
-            if (!isset($request['user_id'])) {
-                return [
-                    'success' => false,
-                    'message' => 'Authentication required',
-                    'status_code' => 401
-                ];
-            }
-            $userId = $request['user_id'];
+        // Passkey sign-in is off until assertions are verified (see authenticate()).
+        if ($action !== 'register') {
+            return $this->passkeySignInOff();
         }
 
-        // For authentication, identify the user one of three ways:
-        //   1. credential_id (existing webapp flow — client already has it in localStorage)
-        //   2. email (Chrome-extension flow — can't read webapp localStorage)
-        //   3. neither (discoverable / passkey-from-anywhere flow)
-        if ($action === 'authenticate') {
-            if (!empty($credentialId)) {
-                $stmt = $this->db->prepare("SELECT user_id FROM webauthn_credentials WHERE credential_id = ?");
-                $stmt->execute([$credentialId]);
-                $credential = $stmt->fetch();
-
-                if (!$credential) {
-                    return [
-                        'success' => false,
-                        'message' => 'Credential not found',
-                        'code' => 'CREDENTIAL_NOT_FOUND',
-                        'status_code' => 404
-                    ];
-                }
-
-                $userId = $credential['user_id'];
-            } else if (!empty($email)) {
-                $stmt = $this->db->prepare("SELECT id FROM users WHERE email = ?");
-                $stmt->execute([$email]);
-                $user = $stmt->fetch();
-                if (!$user) {
-                    return [
-                        'success' => false,
-                        'message' => 'No account found for this email',
-                        'code' => 'USER_NOT_FOUND',
-                        'status_code' => 404
-                    ];
-                }
-                $userId = (int)$user['id'];
-
-                $stmt = $this->db->prepare("SELECT credential_id FROM webauthn_credentials WHERE user_id = ?");
-                $stmt->execute([$userId]);
-                $rows = $stmt->fetchAll();
-                if (empty($rows)) {
-                    return [
-                        'success' => false,
-                        'message' => 'No passkey registered for this account. Sign in with email/password and enable biometric login first.',
-                        'code' => 'NO_CREDENTIALS',
-                        'status_code' => 404
-                    ];
-                }
-                $allowCredentials = array_map(fn($row) => [
-                    'id' => $row['credential_id'],
-                    'type' => 'public-key',
-                    'transports' => ['internal']
-                ], $rows);
-            } else {
-                // Discoverable credential flow — no specific user yet.
-                // Use 0 as a placeholder; verification happens at /authenticate.
-                $userId = 0;
-            }
+        // Registration requires a signed-in user
+        if (!isset($request['user_id'])) {
+            return [
+                'success' => false,
+                'message' => 'Authentication required',
+                'status_code' => 401
+            ];
         }
+        $userId = $request['user_id'];
 
         // Generate random challenge (32 bytes, base64url encoded)
         $challengeBytes = random_bytes(32);
@@ -129,20 +59,12 @@ class WebAuthnController
 
         // Store challenge temporarily (in database for simplicity)
         // In production, you might use Redis with TTL.
-        // Skip persistence for unbound discoverable-credential challenges:
-        // we don't know the user yet, the schema's user_id column may be
-        // NOT NULL or carry a FK, and the current authenticate() flow does
-        // not actually re-verify the stored challenge — it trusts the
-        // browser's WebAuthn signature. Once full signature verification is
-        // implemented, store these in a dedicated unbound-challenges table.
-        if ($userId !== 0) {
-            $stmt = $this->db->prepare("
-                INSERT INTO webauthn_challenges (challenge, user_id, action, created_at)
-                VALUES (?, ?, ?, NOW())
-                ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), action = VALUES(action), created_at = NOW()
-            ");
-            $stmt->execute([$challenge, $userId, $action]);
-        }
+        $stmt = $this->db->prepare("
+            INSERT INTO webauthn_challenges (challenge, user_id, action, created_at)
+            VALUES (?, ?, ?, NOW())
+            ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), action = VALUES(action), created_at = NOW()
+        ");
+        $stmt->execute([$challenge, $userId, $action]);
 
         // Get relying party info from config or use defaults
         $rpId = $this->config['webauthn']['rp_id'] ?? $_SERVER['HTTP_HOST'] ?? 'localhost';
@@ -156,7 +78,7 @@ class WebAuthnController
             'challenge' => $challenge,
             'rp_id' => $rpId,
             'rp_name' => $rpName,
-            'allow_credentials' => $allowCredentials,
+            'allow_credentials' => [],
             'status_code' => 200
         ];
     }
@@ -232,93 +154,23 @@ class WebAuthnController
             return $refused;
         }
 
-        $credentialId = $request['body']['credential_id'] ?? '';
-        $clientDataJson = $request['body']['client_data_json'] ?? '';
-        $authenticatorData = $request['body']['authenticator_data'] ?? '';
-        $signature = $request['body']['signature'] ?? '';
+        return $this->passkeySignInOff();
+    }
 
-        if (empty($credentialId) || empty($signature)) {
-            return [
-                'success' => false,
-                'message' => 'Credential ID and signature are required',
-                'status_code' => 400
-            ];
-        }
-
-        // Look up credential
-        $stmt = $this->db->prepare("
-            SELECT wc.*, u.id as uid, u.email, u.first_name, u.last_name, u.kind, u.role, u.plan, u.ledger_user_id, u.provider, u.last_login, u.created_at
-            FROM webauthn_credentials wc
-            JOIN users u ON wc.user_id = u.id
-            WHERE wc.credential_id = ?
-        ");
-        $stmt->execute([$credentialId]);
-        $credential = $stmt->fetch();
-
-        // The robot is a service row: answer as for an unknown credential.
-        if ($credential && ($credential['kind'] ?? 'person') === 'service') {
-            $credential = false;
-        }
-
-        if (!$credential) {
-            return [
-                'success' => false,
-                'message' => 'Credential not found',
-                'code' => 'CREDENTIAL_NOT_FOUND',
-                'status_code' => 404
-            ];
-        }
-
-        // In a full implementation, you would verify the signature using the stored public key
-        // For now, we trust the browser's WebAuthn API did the verification
-        // The signature verification requires CBOR parsing and crypto operations
-        //
-        // TODO: Implement full signature verification using a library like:
-        // - web-auth/webauthn-lib
-        // - lbuchs/webauthn
-        //
-        // For now, we verify that:
-        // 1. The credential exists
-        // 2. The authenticatorData and signature are present (indicating the browser verified biometric)
-
-        if (empty($authenticatorData) || empty($signature)) {
-            return [
-                'success' => false,
-                'message' => 'Invalid authentication data',
-                'status_code' => 400
-            ];
-        }
-
-        $userId = (int)$credential['uid'];
-
-        // Generate JWT tokens
-        $tokens = $this->generateTokens($userId);
-
-        // Update last login
-        $stmt = $this->db->prepare("UPDATE users SET last_login = NOW() WHERE id = ?");
-        $stmt->execute([$userId]);
-
-        error_log("[WebAuthnController] Biometric auth successful: user_id=$userId");
-
-        // Clean up old challenges
-        $this->cleanupChallenges();
-
+    /**
+     * Sign-in with a passkey stays off until authenticate() verifies the
+     * assertion: the stored single-use challenge, origin, rpId hash, the
+     * signature against the stored public key, and the sign counter. Without
+     * that, a credential id alone (handed out by challenge() for any email)
+     * signed anyone in. Registering and deleting passkeys still work.
+     */
+    private function passkeySignInOff(): array
+    {
         return [
-            'success' => true,
-            'message' => 'Authentication successful',
-            'token' => $tokens['access_token'],
-            'user' => [
-                'id' => (string)$userId,
-                'email' => $credential['email'],
-                'first_name' => $credential['first_name'],
-                'last_name' => $credential['last_name'],
-                'role' => $credential['role'] ?? 'prospect',
-                'plan' => $credential['plan'] ?? 'free',
-                'provider' => $credential['provider'] ?? 'webauthn',
-                'last_login' => date('Y-m-d H:i:s'),
-                'created_at' => $credential['created_at'] ?? null,
-            ],
-            'status_code' => 200
+            'success' => false,
+            'message' => 'Passkey sign-in is turned off for now. Sign in with your email and password.',
+            'code' => 'PASSKEY_SIGNIN_OFF',
+            'status_code' => 503
         ];
     }
 
@@ -359,37 +211,6 @@ class WebAuthnController
             'success' => true,
             'message' => $deleted ? 'Credential deleted' : 'Credential not found or not owned by user',
             'status_code' => 200
-        ];
-    }
-
-    /**
-     * Generate JWT access and refresh tokens
-     */
-    private function generateTokens(int $userId): array
-    {
-        $now = time();
-
-        // Access token
-        $accessPayload = [
-            'iss' => 'gpt-chat',
-            'iat' => $now,
-            'exp' => $now + $this->jwtExpiry,
-            'sub' => $userId,
-            'type' => 'access'
-        ];
-
-        // Refresh token
-        $refreshPayload = [
-            'iss' => 'gpt-chat',
-            'iat' => $now,
-            'exp' => $now + $this->refreshExpiry,
-            'sub' => $userId,
-            'type' => 'refresh'
-        ];
-
-        return [
-            'access_token' => JWT::encode($accessPayload, $this->jwtSecret, 'HS256'),
-            'refresh_token' => JWT::encode($refreshPayload, $this->jwtSecret, 'HS256')
         ];
     }
 
