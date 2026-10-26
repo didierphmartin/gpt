@@ -242,7 +242,8 @@ export class WorkflowController {
   /**
    * The Export download (mirrors WorkflowController::langGraphZipResponse): one generation result as a zip
    * whose entries all sit under one folder -- the result's root for a package, the script's own name for a
-   * single file -- with ARCHITECTURE.md beside the code. Named "<workflow>_<mode>.zip".
+   * single file -- with ARCHITECTURE.md beside the code and, for a single file, the requirements.txt,
+   * .env.example and README.md it carries under 'package_files'. Named "<workflow>_<mode>.zip".
    */
   static langGraphZipResponse(result: any, mode: string): ControllerResult {
     let folder: string;
@@ -257,6 +258,8 @@ export class WorkflowController {
         // none for an ingestion pipeline
         files.push({ path: 'ARCHITECTURE.md', code: result.architecture });
       }
+      // requirements.txt, .env.example, README.md: the script reads the .env beside it.
+      files.push(...(result.package_files ?? []));
     }
     // "dispatcher_demo_modular_swarm" / "dispatcher_demo_langgraph" -> "dispatcher_demo"
     const slug = folder.replace(/_(langgraph|modular|a2a|adk|maf|nooa)(_a2a)?(_swarm)?$/, '');

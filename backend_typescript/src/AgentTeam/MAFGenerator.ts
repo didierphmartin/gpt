@@ -10,7 +10,7 @@ import { PythonEmitHelpers } from './compiler/PythonEmitHelpers';
 import { CompiledRuntimeEmit } from './compiler/CompiledRuntimeEmit';
 import { CompiledA2AEmit } from './compiler/CompiledA2AEmit';
 import { CompiledArchitectureDoc } from './compiler/CompiledArchitectureDoc';
-import { CompiledPackage } from './compiler/CompiledPackage';
+import { CompiledPackage, CompiledTarget } from './compiler/CompiledPackage';
 import { PlaybookEmit } from './compiler/PlaybookEmit';
 import { RunServerEmitter } from './compiler/RunServerEmitter';
 import { LangGraphPackage, StartDocumentReader } from './compiler/LangGraphPackage';
@@ -66,6 +66,9 @@ export class MAFGenerator {
   /** The package's framework requirements (CompiledPackage adds the MCP client, .env and the run server). */
   static readonly FRAMEWORK = ['agent-framework'];
 
+  /** The compile target, as CompiledPackage reads it. */
+  static readonly TARGET: CompiledTarget = { key: 'maf', title: 'Microsoft Agent Framework', framework: MAFGenerator.FRAMEWORK };
+
   constructor(
     private readonly workflowRepo: MAFRepositories['workflowRepo'],
     private readonly graphRepo: MAFRepositories['graphRepo'],
@@ -76,11 +79,17 @@ export class MAFGenerator {
 
   async generate(workflowId: number, userId: string | null = null): Promise<any> {
     const analyzed = await this.analyzeWorkflow(workflowId, userId);
-    const name = preg_replace('/[^a-z0-9_]+/i', '_', strval(analyzed['workflow']['name']));
+    const filename = MAFGenerator.filename(analyzed);
     return CompiledArchitectureDoc.attach({
-      filename: strtolower(name) + '_maf.py',
+      filename,
       code: MAFGenerator.emitMaf(analyzed),
+      package_files: CompiledPackage.singleFiles(analyzed, MAFGenerator.TARGET, filename),
     }, analyzed, 'maf', 'single');
+  }
+
+  /** The single file's name: <workflow>_maf.py. */
+  private static filename(analyzed: any): string {
+    return strtolower(preg_replace('/[^a-z0-9_]+/i', '_', strval(analyzed['workflow']['name']))) + '_maf.py';
   }
 
   /** Everything emitMaf() needs, read from the database at compile time (the program itself never reads it). */
@@ -154,7 +163,7 @@ export class MAFGenerator {
     analyzed['package'] = true;
     const runNodes = oarr(entries(CompiledA2AEmit.layout(analyzed)).map(([nid]) => [nid, MAFGenerator.A2A_RUN_NODE] as [string, string]));
     const files = await CompiledPackage.files(analyzed, skillsRoot ?? LangGraphPackage.defaultSkillsRoot(), documentFiles,
-      array_merge(MAFGenerator.FRAMEWORK, ['a2a-sdk[http-server]>=1.1,<2']), 'Microsoft Agent Framework (A2A)');
+      MAFGenerator.TARGET, 'a2a');
     return CompiledArchitectureDoc.attach(CompiledA2AEmit.package(analyzed, MAFGenerator.packageFiles(analyzed), runNodes, files,
       preg_replace('/[^a-z0-9_]+/i', '_', strtolower(strval(analyzed['workflow']['name']))) + '_maf_a2a', 'Microsoft Agent Framework'), analyzed, 'maf', 'a2a');
   }
@@ -236,7 +245,7 @@ def _cli_end(output: str) -> None:
       true,   // api.py also runs the Start's cron / watch loop: POST /listen, GET /live
     );
     pkg['files'] = array_merge(pkg['files'], nodeFiles, await CompiledPackage.files(analyzed,
-      this.skillsRoot ?? LangGraphPackage.defaultSkillsRoot(), docs.files, MAFGenerator.FRAMEWORK, 'Microsoft Agent Framework'));
+      this.skillsRoot ?? LangGraphPackage.defaultSkillsRoot(), docs.files, MAFGenerator.TARGET));
     return CompiledArchitectureDoc.attach(pkg, analyzed, 'maf', 'modular');
   }
 
@@ -650,10 +659,9 @@ FILE MAP (in emission order)
       ['layers', analyzed['layers'] ?? []],
       ['data_flow', MAFGenerator.dataFlowDoc()],
       ['run', oarr<any>([
-        ['deps', array_merge(
-          ['pip install "agent-framework>=1.10,<2" httpx python-dotenv'],
-          PlaybookEmit.extraDeps(analyzed))],
-        ['usage', 'python this_file.py "your prompt here"'],
+        ['deps', !empty(analyzed['package']) ? [CompiledPackage.PIP_REQUIREMENTS]
+          : [CompiledPackage.pipInstall(analyzed, MAFGenerator.TARGET)]],
+        ['usage', 'python ' + (!empty(analyzed['package']) ? 'workflow.py' : MAFGenerator.filename(analyzed)) + ' "your prompt here"'],
       ])],
       ['storage', oarr<any>([['enabled', !empty(analyzed['outputStorageEnabled'])], ['folder', analyzed['outputFolder'] ?? null]])],
     ])));

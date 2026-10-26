@@ -220,7 +220,7 @@ def test_header_imports_httpx_and_time():
     code = ADKGenerator.emitAdk(analyzed())
     assert re.search(r'^import httpx$', code, re.M)
     assert re.search(r'^import .*\btime\b', code, re.M)
-    assert '"google-adk>=2.3,<3" litellm httpx' in code
+    assert 'pip install "google-adk>=2.3,<3" "httpx>=0.27.0" litellm "python-dotenv>=1.0.0"' in code
 
 
 def test_required_param_ordered_before_optional_regardless_of_schema_order():

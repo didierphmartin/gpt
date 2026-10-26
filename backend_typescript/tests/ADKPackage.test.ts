@@ -97,7 +97,7 @@ test('testCodeNodePackageCarriesItsOwnFiles', async () => {
   const f = await codePackage();
   assert.equal(f['code/2_c.py'], "def run(input, call_tool):\n    return {'output': {'got': input}}\n");
   assert.equal(f['code_harness.py'], readFileSync(path.resolve(__dirname, '../../frontend/assets/py/code_node_harness.py'), 'utf8'));
-  assert.ok(f['requirements.txt'].includes('fastapi\ngoogle-adk\nhttpx\nlitellm\npython-dotenv\nuvicorn\n'));
+  assert.equal(f['requirements.txt'], 'fastapi>=0.115.0\ngoogle-adk>=2.3,<3\nhttpx>=0.27.0\nlitellm\npython-dotenv>=1.0.0\nuvicorn>=0.30.0\n');
   assert.ok(f['.env.example'].includes('MCP_URL_OUTLOOK=http://localhost:8770'));
   assert.ok(f['.env.example'].includes('# MCP_HEADERS_OUTLOOK='));
   assert.ok(f['.env.example'].includes('reads .env from its own folder first, then from the folder two levels up'));
@@ -129,7 +129,7 @@ test('testPlaybookPackageRequiresTheInterpreter', async () => {
   const a = codeAnalyzed();
   a['playbooks'] = asPhpArg({ 7: { provider: 'claude', display: 'P', actions: [] } });
   const req = (await ADKPackage.files(a, tmpdir())).find((f: any) => f.path === 'requirements.txt').code;
-  for (const p of ['langchain-core', 'langgraph', 'langchain-anthropic']) {
+  for (const p of ['langchain-core>=0.3.0', 'langgraph>=0.2.50', 'langchain-anthropic>=0.3.0']) {
     assert.ok(req.trim().split('\n').includes(p), p);
   }
 });

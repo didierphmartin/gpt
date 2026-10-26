@@ -83,6 +83,7 @@ class LangGraphLayouts:
         ]
         for nid, e in layout['agents'].items():
             files.append({'path': e['file'], 'code': self._emitA2AAgentFile(facts, layout, nid)})
+        files += LangGraphPackage.a2aFiles(facts, layout)
         return self._withArchitecture({'root': layout['root'], 'files': files}, facts, 'a2a')
 
     def _emitA2AOrchestrator(self, facts: dict, layout: dict) -> str:
@@ -101,7 +102,7 @@ class LangGraphLayouts:
             'workflow': {'id': facts['workflowId'], 'name': facts['wfName']},
             'nodes': nodes, 'edges': facts['edgeList'], 'layers': facts['gdata'].get('layers') or [],
             'data_flow': self._a2aOrchestratorDataFlowDoc(),
-            'run': {'deps': ['pip install "a2a-sdk[http-server]>=1.1,<2" langgraph langchain-core httpx python-dotenv'],
+            'run': {'deps': [LangGraphPackage.PIP_REQUIREMENTS],
                     'usage': 'python orchestrator.py "your prompt here"   [--keep-serving] [--no-spawn]',
                     'extra': (['# A2A_BASE_PORT (default 8701) moves the port range; A2A_AGENT_<id>_URL points one agent elsewhere.']
                               + self._decisionDocLines(facts.get('agentData') or {}) + self._mcpHeaderDocLines(facts)
@@ -131,6 +132,7 @@ class LangGraphLayouts:
               'from dotenv import load_dotenv',
               '# This file lives in <root>/; the runner .env is two levels up (python/.env).',
               '_HERE = os.path.dirname(os.path.abspath(__file__))',
+              'load_dotenv(os.path.join(_HERE, ".env"))   # the workflow folder\'s own .env first (never overridden)',
               'load_dotenv(os.path.join(os.path.dirname(os.path.dirname(_HERE)), ".env"))',
               "PACKAGE_DIR = _HERE   # this program's folder: a relative Start document path resolves here",
               '',
@@ -195,7 +197,7 @@ class LangGraphLayouts:
         L = ['"""Run server for workflow ' + j(facts['wfName']) + ' (A2A)', '']
         body = self._apiPyDocBody(facts,
                                   'LangGraph A2A run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
-                                  'pip install fastapi uvicorn "a2a-sdk[http-server]>=1.1,<2" langgraph langchain-core httpx pydantic python-dotenv',
+                                  LangGraphPackage.PIP_REQUIREMENTS,
                                   ['# The agent servers start with the first run (see _ensure_agents) and stop with this process.',
                                    '# No authentication: bind to 127.0.0.1 or a trusted LAN interface only.',
                                    '# CORS allows loopback origins only. A LAN-hosted frontend adds itself with',
@@ -407,7 +409,7 @@ class LangGraphLayouts:
             'workflow': {'id': facts['workflowId'], 'name': facts['wfName']},
             'nodes': nodes, 'edges': facts['edgeList'], 'layers': facts['gdata'].get('layers') or [],
             'data_flow': self._a2aAgentDataFlowDoc(),
-            'run': {'deps': ['pip install "a2a-sdk[http-server]>=1.1,<2" langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv uvicorn'],
+            'run': {'deps': [LangGraphPackage.PIP_REQUIREMENTS],
                     'usage': 'python ' + entry['file'] + ' --port ' + str(entry['port']) + '   # from the workflow folder; A2A_HOST/A2A_PORT also honoured',
                     'extra': (['# Card: http://127.0.0.1:' + str(entry['port']) + '/.well-known/agent-card.json  --  JSON-RPC at /']
                               + self._decisionDocLines(facts.get('agentData') or {}) + self._mcpHeaderDocLines(facts)),
@@ -621,7 +623,7 @@ class LangGraphLayouts:
               '  imports it and passes the built agent straight into create_swarm().', '',
               'TO RUN', '======',
               '  # Requires Python 3.10+ (the generated code uses match statements)',
-              '  pip install langchain langchain-anthropic langchain-openai langgraph langgraph-swarm httpx pydantic python-dotenv']
+              '  ' + LangGraphPackage.PIP_REQUIREMENTS]
         k = PythonEmitHelpers.providerKeyEnv(php_strval(d.get('provider') or ''))
         L.append(f'  # API key read from ../../../.env: {k} (' + php_strval(d['provider']).lower() + ')'
                  if k is not None else '  # No LLM provider key required.')
@@ -797,7 +799,7 @@ class LangGraphLayouts:
               '  starts a fresh one.', '',
               'TO RUN', '======',
               '  # Requires Python 3.10+ (the generated code uses match statements)',
-              '  pip install langchain langchain-anthropic langchain-openai langgraph langgraph-swarm httpx pydantic python-dotenv']
+              '  ' + LangGraphPackage.PIP_REQUIREMENTS]
         keys: dict = {}
         for nid in members:
             d = facts['agentData'].get(nid)
@@ -955,7 +957,7 @@ class LangGraphLayouts:
               '  is missing or empty.', '',
               'TO RUN', '======',
               '  # Requires Python 3.10+ (the generated code uses match statements)',
-              '  pip install langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv']
+              '  ' + LangGraphPackage.PIP_REQUIREMENTS]
         L += self._providerKeyLines(facts, '../../.env')
         L += ['  imported, not run directly -- see workflow.py',
               '  # Everything here is shared: change it once and every node of this workflow follows.',
@@ -1120,7 +1122,7 @@ class LangGraphLayouts:
         """api.py: the run server; with listen (the modular package) also the Start's cron / watch loop."""
         body = self._apiPyDocBody(facts,
                                   'LangGraph modular run server (Python) -- serves the run protocol the SynergyAI frontend speaks',
-                                  'pip install fastapi uvicorn langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv',
+                                  LangGraphPackage.PIP_REQUIREMENTS,
                                   ['# No authentication: bind to 127.0.0.1 or a trusted LAN interface only.',
                                    '# CORS allows loopback origins only. A LAN-hosted frontend adds itself with',
                                    '#   WORKFLOW_API_ALLOW_ORIGIN=http://host:port   (comma-separated for several)']
@@ -1151,7 +1153,7 @@ class LangGraphLayouts:
         L = ['"""Agent module ' + j(entry['display']) + f' -- node {nid} of workflow ' + j(facts['wfName']), '']
         body = self._modularDocBody(facts, layout,
                                     'LangGraph modular agent module (Python) -- one node; workflow.py drives the graph',
-                                    {'deps': ['pip install langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv'],
+                                    {'deps': [LangGraphPackage.PIP_REQUIREMENTS],
                                      'usage': 'imported by workflow.py as ' + entry['module'] + ' -- run the workflow, not this file',
                                      'extra': ["# Exposes NODE (frozen editor settings) and run_node = make_node(NODE).run; the node logic is common.py's Node classes."],
                                      'env_path': '../../../.env'}, nid)
@@ -1184,9 +1186,7 @@ class LangGraphLayouts:
         L = ['"""LangGraph workflow: ' + facts['wfName'], '']
         body = self._modularDocBody(facts, layout,
                                     'LangGraph modular workflow (Python) -- StateGraph over one importable module per node',
-                                    {'deps': ['pip install langchain langchain-anthropic langchain-openai langgraph httpx pydantic python-dotenv',
-                                              '# optional, only for the attachment formats you use:',
-                                              '#   pip install mammoth (.docx)  python-pptx (.pptx)  openpyxl (.xlsx)  pypdf (.pdf)'],
+                                    {'deps': [LangGraphPackage.PIP_REQUIREMENTS, *LangGraphPackage.OPTIONAL_FORMATS_NOTE],
                                      'usage': 'python workflow.py "your prompt here"',
                                      'extra': ((['# WARNING: these tools are NOT available as MCP servers and will be missing at runtime: '
                                                  + self._pythonListRepr(facts['missing'])] if facts.get('missing') else [])

@@ -126,7 +126,7 @@ test('testPlaybookAndDispatcherSupportIsStatedHonestly', async () => {
   for (const t of ['ADK', 'MAF', 'NOOA']) {
     assert.ok(all[t].includes('async def run_playbook_node('), t);
     assert.ok(all[t].includes('PLAYBOOKS = {'), t);
-    assert.ok(all[t].includes('pip install langchain-core langgraph'), `${t}: the interpreter's requirement must be stated`);
+    assert.match(all[t], /^  pip install .*"langchain-core>=0\.3\.0" .*"langgraph>=0\.2\.50"/m, `${t}: the interpreter's requirement must be stated`);
   }
 });
 

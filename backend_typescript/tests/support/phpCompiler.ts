@@ -77,6 +77,8 @@ export function fileMap(result: any): Record<string, string> {
   } else {
     out[result.filename] = typeof result.code === 'string' ? result.code : String(result.code);
     if (result.architecture !== null && result.architecture !== undefined) out['ARCHITECTURE.md'] = result.architecture;
+    // requirements.txt, .env.example, README.md: what the Export zips beside the script
+    for (const [, f] of entries(result.package_files ?? [])) out[`<package_files>/${(f as any).path}`] = (f as any).code;
   }
   return out;
 }

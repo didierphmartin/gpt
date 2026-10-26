@@ -5,7 +5,9 @@ import {
   array_unique, basename, copy, entries, explode, has, implode, isEmptyArr, is_array, keysOf, mb_check_encoding_utf8,
   pathExtension, preg_replace, preg_split, sortStrings, strtolower, strtoupper, strval, trim, truthy, values, empty,
 } from './php';
+import { EnvVars, PackageDocs } from './PackageDocs';
 import { PythonEmitHelpers } from './PythonEmitHelpers';
+import { PythonRequirements } from './PythonRequirements';
 import { StartDocumentStore } from './StartDocumentStore';
 
 /**
@@ -22,15 +24,18 @@ export type StartDocumentReader = { read(doc: any): Buffer | string | null } | n
 
 export type PackageFile = { path: string; code: string; encoding?: string };
 
-/** What every package imports (workflow, common, api), before provider, skill and document extras. */
+/** What every LangGraph program imports (the single file; a package's workflow, common and agents). */
 const BASE_REQUIREMENTS = ['langchain', 'langchain-anthropic', 'langchain-openai', 'langgraph', 'httpx',
-  'pydantic', 'python-dotenv', 'fastapi', 'uvicorn'];
+  'pydantic', 'python-dotenv'];
+
+/** A package's run server (api.py; an A2A agent server serves with uvicorn too). */
+const SERVER_REQUIREMENTS = ['fastapi', 'uvicorn'];
+
+/** The A2A package: its agents are A2A servers, its orchestrator their client. */
+const A2A_REQUIREMENTS = ['a2a-sdk[http-server]'];
 
 /** Providers whose LLM factory branch imports a package beyond the base ones. */
 const PROVIDER_REQUIREMENTS: Record<string, string> = { gemini: 'langchain-google-genai', google: 'langchain-google-genai' };
-
-/** The document converter's lazy imports, by attachment extension. */
-const DOCUMENT_REQUIREMENTS: Record<string, string> = { pdf: 'pypdf', docx: 'mammoth', pptx: 'python-pptx', xlsx: 'openpyxl' };
 
 const SKIP_NAMES = ['__pycache__', '.DS_Store'];
 
@@ -65,6 +70,13 @@ function toBuf(b: Buffer | string): Buffer {
 }
 
 export class LangGraphPackage {
+  /** The TO RUN install line of a package's files: the package's requirements.txt holds the list. */
+  static readonly PIP_REQUIREMENTS = 'pip install -r requirements.txt';
+
+  /** TO RUN note: the document converter's packages are imported only for an attachment of that format. */
+  static readonly OPTIONAL_FORMATS_NOTE = ['# optional, only for the attachment formats you use:',
+    '#   pip install mammoth (.docx)  python-pptx (.pptx)  openpyxl (.xlsx)  pypdf (.pdf)'];
+
   /** Where the editor keeps the skill folders: the default skills root of the generator. */
   static defaultSkillsRoot(): string {
     const home = process.env.HOME || (() => {
@@ -80,11 +92,8 @@ export class LangGraphPackage {
   /** The package's own files (the code modules, agents and code/ files are the generator's). */
   static files(facts: any, skillsRoot: string, documents: StartDocumentReader = null): PackageFile[] {
     const skills = LangGraphPackage.skillFiles(facts, skillsRoot);
-    const out: PackageFile[] = [
-      { path: 'requirements.txt', code: LangGraphPackage.requirements(facts, skills) },
-      { path: '.env.example', code: LangGraphPackage.envExample(facts) },
-      { path: 'README.md', code: LangGraphPackage.readme(facts) },
-    ];
+    const out: PackageFile[] = LangGraphPackage.docFiles(facts, 'modular', skills,
+      strval(facts['safeName']) + (has(facts, 'swarm') ? '_modular_swarm' : '_modular'), 'workflow.py');
     if (!isEmptyArr(at(facts, 'codeData') ?? [])) {
       let harness: string;
       try {
@@ -225,32 +234,57 @@ export class LangGraphPackage {
     return [...p];
   }
 
-  /** requirements.txt: one per line, sorted, unique. */
-  private static requirements(facts: any, skillFiles: Array<{ rel: string; bytes: Buffer }>): string {
-    let req: string[] = has(facts, 'swarm') ? [...BASE_REQUIREMENTS, ...SWARM_REQUIREMENTS] : [...BASE_REQUIREMENTS];
+  /**
+   * The packages a LangGraph program of layout ('single' | 'modular' | 'a2a') imports: the one list its
+   * requirements.txt, its TO RUN install line and its README come from. skillFiles: the skills the package
+   * carries (their SKILL.md dependencies); a program that reads its skills from the editor's folder installs
+   * their dependencies at the first run instead.
+   */
+  static requirementNames(facts: any, layout: string, skillFiles: Array<{ rel: string; bytes: Buffer }> = []): string[] {
+    const req: string[] = [...BASE_REQUIREMENTS];
+    if (layout !== 'single') req.push(...SERVER_REQUIREMENTS);
+    if (layout === 'a2a') req.push(...A2A_REQUIREMENTS);
+    if (has(facts, 'swarm')) req.push(...SWARM_REQUIREMENTS);
     for (const p of LangGraphPackage.providers(facts)) {
       if (Object.hasOwn(PROVIDER_REQUIREMENTS, p)) req.push(PROVIDER_REQUIREMENTS[p]);
     }
     for (const f of skillFiles) {
       if (f.rel === 'SKILL.md') req.push(...LangGraphPackage.skillDependencies(f.bytes));
     }
-    for (const doc of values(at(facts, 'startDocuments') ?? [])) {
-      const ext = strtolower(pathExtension(strval(is_array(doc) ? (at(doc, 'path') ?? at(doc, 'name') ?? '') : '')));
-      if (Object.hasOwn(DOCUMENT_REQUIREMENTS, ext)) req.push(DOCUMENT_REQUIREMENTS[ext]);
-    }
-    req = values(array_unique(req));
-    sortStrings(req);
-    return implode('\n', req) + '\n';
+    req.push(...PythonRequirements.documentNames(at(facts, 'startDocuments') ?? []));
+    return req;
   }
 
-  /** .env.example: every variable the program reads, commented. */
-  private static envExample(facts: any): string {
-    const swarm = has(facts, 'swarm');
-    const L: string[] = [];
-    L.push('# Environment of the workflow "' + strval(facts['wfName']) + '" -- copy this file to .env and fill it in.');
-    L.push('# The program reads .env from its own folder first, then from the folder two levels up');
-    L.push('# (a local runner\'s .env). A variable already set in the environment is never overridden.');
-    L.push('');
+  /** The TO RUN install line of a layout program that has no requirements.txt beside it (the single file). */
+  static pipInstall(facts: any, layout: string): string {
+    return PythonRequirements.pipInstall(LangGraphPackage.requirementNames(facts, layout));
+  }
+
+  /**
+   * The files a single-file export carries beside <name>_langgraph.py: requirements.txt, .env.example and
+   * README.md (the script reads the .env next to it first).
+   */
+  static singleFiles(facts: any, filename: string): PackageFile[] {
+    return LangGraphPackage.docFiles(facts, 'single', [], filename.replace(/\.py$/, ''), filename);
+  }
+
+  /** requirements.txt, .env.example and README.md of the A2A package (layout: a2aLayout()). */
+  static a2aFiles(facts: any, layout: any): PackageFile[] {
+    return LangGraphPackage.docFiles({ a2aAgents: layout['agents'], ...facts }, 'a2a', [], strval(layout['root']), 'orchestrator.py');
+  }
+
+  private static docFiles(facts: any, layout: string, skillFiles: Array<{ rel: string; bytes: Buffer }>, folder: string,
+    entry: string): PackageFile[] {
+    return [
+      { path: 'requirements.txt', code: PythonRequirements.txt(LangGraphPackage.requirementNames(facts, layout, skillFiles)) },
+      { path: '.env.example', code: PackageDocs.envExample(strval(facts['wfName']), LangGraphPackage.envVariables(facts),
+        LangGraphPackage.optionalEnv(facts, layout)) },
+      { path: 'README.md', code: LangGraphPackage.readme(facts, layout, folder, entry) },
+    ];
+  }
+
+  /** The environment the program reads that .env must provide (PackageDocs' vars). */
+  static envVariables(facts: any): EnvVars {
     const keys = new Map<string, string[]>();
     for (const p of LangGraphPackage.providers(facts)) {
       const k = PythonEmitHelpers.providerKeyEnv(p);
@@ -259,174 +293,128 @@ export class LangGraphPackage {
         keys.get(k)!.push(p);
       }
     }
-    if (keys.size) {
-      L.push('# API keys of the LLM providers this workflow uses');
-      for (const [k, provs] of keys) {
-        L.push('# ' + implode(', ', array_unique(provs)));
-        L.push(`# ${k}=`);
-      }
-    } else {
-      L.push('# No LLM provider is used by a node of this workflow.');
-    }
-    L.push('');
     const decision = new Map<string, string>();
     for (const ad of values(at(facts, 'agentData') ?? [])) {
       for (const c of values(!empty(at(ad, 'dispatch')) ? (at(ad, 'decision') ?? []) : [])) {
         decision.set(strval(c['key_env']), strval(c['url_env']));
       }
     }
-    if (decision.size) {
-      L.push('# Decision models the dispatchers may route with (each URL variable is optional: a gateway)');
-      for (const [key, url] of decision) {
-        L.push(`# ${key}=`);
-        L.push(`# ${url}=`);
-      }
-      L.push('');
-    }
-    const slugs = at(facts, 'serverSlugs') ?? [];
-    if (truthy(slugs)) {
-      L.push('# MCP servers: the URL compiled in, and the HTTP headers the server needs (never compiled in)');
-      for (const [url, s] of entries(slugs)) {
-        const up = strtoupper(strval(s));
-        L.push(`MCP_URL_${up}=${url}`);
-        L.push('# JSON object of HTTP headers, e.g. {"Authorization": "Bearer …"}');
-        L.push(`# MCP_HEADERS_${up}=`);
-      }
-      L.push('');
-    }
-    L.push('# Optional');
-    L.push('# One model for every node, instead of each node\'s own');
-    L.push('# MODEL_NAME=');
-    L.push('# Where saved outputs go (default: outputs/ in this folder)');
-    L.push('# SYNERGYAI_OUTPUT_ROOT=./outputs');
-    if (!swarm) {
-      L.push('# Where run logs go (default: runs/ in this folder)');
-      L.push('# RUNS_DIR=./runs');
-    }
-    if (LangGraphPackage.skillDirs(facts).length) {
-      L.push('# Where the skills are read from (default: skills/ in this folder)');
-      L.push('# SYNERGYAI_SKILLS_DIR=./skills');
-    }
-    return implode('\n', L) + '\n';
+    return { keys, decision, mcp: at(facts, 'serverSlugs') ?? [] };
   }
 
-  /** README.md: install, configure, modes, files written, run server, service units, code nodes. */
-  private static readme(facts: any): string {
+  /** The optional variables a layout program reads, as .env.example lists them: [what it does, KEY=example]. */
+  private static optionalEnv(facts: any, layout: string): Array<[string, string]> {
+    const o: Array<[string, string]> = [['One model for every node, instead of each node\'s own', 'MODEL_NAME=']];
+    o.push(layout === 'single' ? ['Where saved outputs go (default: outputs/ next to the script)', 'SYNERGYAI_OUTPUT_ROOT=./outputs']
+      : layout === 'a2a' ? ['Where saved outputs go (default: ~/Documents/synergyAI/outputs)', 'SYNERGYAI_OUTPUT_ROOT=/path/to/outputs']
+        : ['Where saved outputs go (default: outputs/ in this folder)', 'SYNERGYAI_OUTPUT_ROOT=./outputs']);
+    if (layout !== 'a2a' && !has(facts, 'swarm')) {   // a swarm and the A2A orchestrator write no run logs
+      o.push([layout === 'single' ? 'Where run logs go (default: runs/ next to the script)' : 'Where run logs go (default: runs/ in this folder)',
+        'RUNS_DIR=./runs']);
+    }
+    if (LangGraphPackage.skillDirs(facts).length) {
+      o.push(layout === 'modular'
+        ? ['Where the skills are read from (default: skills/ in this folder)', 'SYNERGYAI_SKILLS_DIR=./skills']
+        : ['Where the skills are read from (default: ' + PackageDocs.EDITOR_SKILLS_DIR + ')', 'SYNERGYAI_SKILLS_DIR=/path/to/skills']);
+    }
+    if (layout === 'a2a') o.push(['First port of the agent servers, one per agent in order (default: 8701)', 'A2A_BASE_PORT=8701']);
+    return o;
+  }
+
+  /** README.md: what the folder is, install, configure, the run modes, files written, run server, service, code nodes. */
+  private static readme(facts: any, layout: string, folder: string, entry: string): string {
     const name = strval(facts['wfName']);
-    const root = strval(facts['safeName']) + (has(facts, 'swarm') ? '_modular_swarm' : '_modular');
-    const sl = strtolower(trim(preg_replace('/[^a-z0-9]+/i', '-', name), '-'));
-    const slugName = truthy(sl) ? sl : 'workflow';
     const swarm = has(facts, 'swarm');
-    const mode = swarm ? 'prompt' : strval(at(facts, 'startMode') ?? 'prompt');
-    const def = (m: string) => (m === mode ? ' **(default)**' : '');
-    const L: string[] = [];
-    L.push(`# ${name}`);
+    const skills = LangGraphPackage.skillDirs(facts);
+    const startMode = strval(at(facts, 'startMode') ?? 'prompt');
+    const defaultCron: string | null = at(facts, 'defaultCron');
+    const intro: string[] = layout === 'single'
+      ? ['A LangGraph program compiled from the SynergyAI workflow editor, as one Python file: `' + entry + '`.',
+        'It runs on its own: no database, no SynergyAI server.']
+      : layout === 'a2a'
+        ? ['A LangGraph program compiled from the SynergyAI workflow editor, as A2A agents: each agent node is an',
+          'A2A server of its own (`agents/`), and `orchestrator.py` runs the workflow over them. It runs on its own:',
+          'no database, no SynergyAI server.']
+        : swarm
+          ? ['A LangGraph swarm compiled from the SynergyAI workflow editor: its agents (`agents/`, one file each) hand',
+            'the conversation to one another. It runs on its own: no database, no SynergyAI server. Everything it needs',
+            'is in this folder.']
+          : ['A LangGraph program compiled from the SynergyAI workflow editor, with each node in a file of its own',
+            '(`agents/`). It runs on its own: no database, no SynergyAI server. Everything it needs is in this folder.'];
+    if (layout !== 'modular') intro.push(...PackageDocs.editorSkillsNote(skills));
+    const L = PackageDocs.head(name, intro, folder, LangGraphPackage.envVariables(facts));
+    L.push('## Run');
     L.push('');
-    L.push('A LangGraph program compiled from the SynergyAI workflow editor. It runs on its own: no database,');
-    L.push('no SynergyAI server. Everything it needs is in this folder.');
+    L.push('Run these from the folder, with the environment active.');
     L.push('');
-    L.push('## Install');
-    L.push('');
-    L.push('```sh');
-    L.push('python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt');
-    L.push('cp .env.example .env   # then fill in the API keys and MCP headers');
-    L.push('```');
-    L.push('');
-    L.push('## Modes');
-    L.push('');
-    L.push('One mode per launch. With no flag the program runs in the mode its Start node set.');
-    L.push('');
-    L.push('| Command | Mode |');
-    L.push('|---|---|');
-    L.push('| `python workflow.py ["text"]` | one run on the text, or on the Start\'s prompt' + def('prompt') + ' |');
-    L.push('| `python workflow.py --cron [EXPR]` | a run on each tick of the schedule, until stopped' + def('cron') + ' |');
-    if (!swarm) {
-      L.push('| `python workflow.py --watch [server.tool {json}]` | a run for each event the trigger reports, until stopped' + def('watch') + ' |');
-      L.push('| `python workflow.py --once "text"` | exactly one run, whatever the default mode |');
+    if (layout === 'a2a') {
+      L.push('```sh');
+      L.push('python orchestrator.py "your prompt"   # one run on the text (no text: the Start node\'s prompt)');
+      L.push('python orchestrator.py --cron [EXPR]   # a run on each tick of a 5-field cron schedule, until stopped');
+      L.push('```');
+      L.push('');
+      L.push(defaultCron !== null ? `Without EXPR, \`--cron\` uses the Start node's schedule (\`${defaultCron}\`).`
+        : '`--cron` needs EXPR: the Start node has no schedule.');
+      L.push('Text goes before `--cron` (after it, it is read as the cron expression). Ctrl-C (or SIGTERM) stops the loop.');
+      L.push('');
+      L.push(...LangGraphPackage.a2aAgentLines(at(facts, 'a2aAgents') ?? []));
+    } else {
+      L.push(...PackageDocs.modes(entry, swarm ? 'prompt' : startMode, defaultCron, swarm ? null : at(facts, 'defaultWatch'), !swarm));
     }
-    L.push('');
-    if (!swarm) {
-      L.push('`--quiet` prints only the done / failed line of each run; `--verbose` adds the progress lines.');
-    }
-    L.push('Ctrl-C (or SIGTERM) stops a loop after the current run.');
-    L.push('');
     L.push('## Files written');
     L.push('');
-    L.push('- `outputs/` -- the saved results, when output storage is on (`SYNERGYAI_OUTPUT_ROOT` overrides).');
-    if (!swarm) {
-      L.push('- `runs/` -- one `<date>_<run id>.jsonl` event log per run, and `runs/current` (`RUNS_DIR` overrides).');
+    const here = layout === 'single' ? 'next to the script' : 'in this folder';
+    L.push(layout === 'a2a'
+      ? '- `~/Documents/synergyAI/outputs/` -- the saved results, when output storage is on (`SYNERGYAI_OUTPUT_ROOT` overrides).'
+      : `- \`outputs/\` ${here} -- the saved results, when output storage is on (\`SYNERGYAI_OUTPUT_ROOT\` overrides).`);
+    if (layout !== 'a2a' && !swarm) {
+      L.push(`- \`runs/\` ${here} -- one \`<date>_<run id>.jsonl\` event log per run, and \`runs/current\` (\`RUNS_DIR\` overrides).`);
       L.push('  A run with nothing to do leaves no file.');
     }
     L.push('');
-    L.push('## Run server');
-    L.push('');
-    L.push('```sh');
-    L.push('python api.py            # HTTP run server: POST /runs, an SSE event stream per run');
-    if (!swarm) {
-      L.push('python api.py --listen   # the same, plus the default mode running in the background');
+    if (layout === 'a2a') {
+      L.push(...PackageDocs.runServer(false, ['The agent servers start with its first run and stop when it exits.']));
+    } else if (layout === 'modular') {
+      L.push(...PackageDocs.runServer(!swarm));
     }
-    L.push('```');
-    L.push('');
-    L.push('## Running as a service');
-    L.push('');
-    L.push(`Replace \`/path/to/${root}\` with this folder's absolute path.`);
-    if (mode === 'prompt') {
-      L.push('This workflow\'s default is one run, and a service is restarted when it exits: add `--cron EXPR`'
-        + (swarm ? '' : ' (or `--watch`)') + ' after `workflow.py` so it keeps running.');
+    if (layout === 'a2a') {
+      const cron = defaultCron !== null;
+      L.push(...PackageDocs.service(name, 'LangGraph', folder, entry, cron ? '--cron' : '', cron ? 'cron' : 'prompt'));
+    } else {
+      L.push(...PackageDocs.service(name, 'LangGraph', folder, entry, '', swarm ? 'prompt' : startMode));
     }
-    L.push('');
-    L.push(`macOS (launchd): save as \`~/Library/LaunchAgents/ai.synergy.${slugName}.plist\`, then`);
-    L.push(`\`launchctl load ~/Library/LaunchAgents/ai.synergy.${slugName}.plist\`.`);
-    L.push('');
-    L.push('```xml');
-    L.push('<?xml version="1.0" encoding="UTF-8"?>');
-    L.push('<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">');
-    L.push('<plist version="1.0">');
-    L.push('<dict>');
-    L.push('  <key>Label</key>');
-    L.push(`  <string>ai.synergy.${slugName}</string>`);
-    L.push('  <key>ProgramArguments</key>');
-    L.push('  <array>');
-    L.push(`    <string>/path/to/${root}/.venv/bin/python</string>`);
-    L.push(`    <string>/path/to/${root}/workflow.py</string>`);
-    L.push('  </array>');
-    L.push('  <key>WorkingDirectory</key>');
-    L.push(`  <string>/path/to/${root}</string>`);
-    L.push('  <key>KeepAlive</key>');
-    L.push('  <true/>');
-    L.push('  <key>StandardOutPath</key>');
-    L.push(`  <string>/path/to/${root}/service.log</string>`);
-    L.push('  <key>StandardErrorPath</key>');
-    L.push(`  <string>/path/to/${root}/service.log</string>`);
-    L.push('</dict>');
-    L.push('</plist>');
-    L.push('```');
-    L.push('');
-    L.push(`Linux (systemd): save as \`/etc/systemd/system/${slugName}.service\`, then \`systemctl enable --now ${slugName}\`.`);
-    L.push('');
-    L.push('```ini');
-    L.push('[Unit]');
-    L.push(`Description=${name} (LangGraph)`);
-    L.push('After=network-online.target');
-    L.push('');
-    L.push('[Service]');
-    L.push(`ExecStart=/path/to/${root}/.venv/bin/python /path/to/${root}/workflow.py`);
-    L.push(`WorkingDirectory=/path/to/${root}`);
-    L.push('Restart=always');
-    L.push('');
-    L.push('[Install]');
-    L.push('WantedBy=multi-user.target');
-    L.push('```');
-    if (!isEmptyArr(at(facts, 'codeData') ?? [])) {
-      L.push('');
+    if (layout === 'modular' && !isEmptyArr(at(facts, 'codeData') ?? [])) {
       L.push('## Editing code nodes');
       L.push('');
       L.push('Each code node runs its file in `code/` (`code/start_<name>.py` is the Start option\'s code).');
       L.push('The file is read at each run: an edit takes effect on the next run, with no recompile. The code');
       L.push('runs under the same rules as in the editor (`code_harness.py`): standard library only, network');
       L.push('only through `call_tool`, one of the node\'s exits, its timeout.');
+      L.push('');
     }
-    return implode('\n', L) + '\n';
+    return implode('\n', L).replace(/\n+$/, '') + '\n';
+  }
+
+  /** The A2A agent servers: what starts them, their files and default URLs. agents: a2aLayout()['agents']. */
+  private static a2aAgentLines(agents: any): string[] {
+    const L: string[] = [];
+    L.push('### Agent servers');
+    L.push('');
+    L.push('The orchestrator starts every agent server at launch and stops them when it ends. `--keep-serving` leaves');
+    L.push('them running; `--no-spawn` starts none and uses servers already running, each at its `A2A_AGENT_<id>_URL`');
+    L.push('(default below; `A2A_BASE_PORT` moves the whole range).');
+    L.push('');
+    L.push('| Node | File | Default URL |');
+    L.push('|---|---|---|');
+    const all = entries(agents);
+    for (const [nid, e] of all) L.push(`| ${strval(e['display'])} (${nid}) | \`${strval(e['file'])}\` | http://127.0.0.1:${strval(e['port'])}/ |`);
+    L.push('');
+    if (all.length) {
+      const first = all[0][1];
+      L.push(`To start one by hand: \`python ${strval(first['file'])} --port ${strval(first['port'])}\` (\`--host\` sets the interface).`);
+      L.push('');
+    }
+    return L;
   }
 }
 

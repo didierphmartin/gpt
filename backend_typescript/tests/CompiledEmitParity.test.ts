@@ -213,23 +213,30 @@ if (!SKIP) {
 
     // package files
     const docs = { startDocuments: [{ name: 'a.pdf', path: 'start_documents/a.pdf' }, { name: 'Report.DOCX' }, 'not an array', { name: 'x.txt', path: 'start_documents/x.txt' }] };
-    const frameworks: Record<string, string[]> = { adk: ['google-adk>=1.0', 'litellm'], maf: ['agent-framework', 'httpx'], nooa: ['nvidia-nooa'] };
+    const frameworks: Record<string, string[]> = { adk: ['google-adk', 'litellm'], maf: ['agent-framework', 'httpx'], nooa: ['nooa[mcp]', 'mcp'] };
     for (const [t, title] of Object.entries(TITLES)) {
-      add(`${f} requirements(${t})`, { class: 'CompiledPackage', method: 'requirements', args: [spec(docs), [], frameworks[t]] },
-        () => P.requirements(ta(docs), [], asPhpArg(frameworks[t])));
+      const target = { key: t, title, framework: frameworks[t] };
+      for (const layout of MODES) {
+        add(`${f} requirementNames(${t}, ${layout})`, { class: 'CompiledPackage', method: 'requirementNames', args: [spec(docs), target, layout, []] },
+          () => P.requirementNames(ta(docs), target, layout, []));
+      }
       const documentFiles = [{ path: 'start_documents/a.pdf', code: 'JVBERi0=', encoding: 'base64' }];
-      add(`${f} files(${t})`, { class: 'CompiledPackage', method: 'files', args: [spec({ package: true, ...docs }), { $skillsRoot: f }, documentFiles, frameworks[t], title] },
-        async () => {
-          const root = skillsRootFor(f);
-          try {
-            return await P.files(ta({ package: true, ...docs }), root, asPhpArg(documentFiles), asPhpArg(frameworks[t]), title);
-          } finally {
-            rmSync(root, { recursive: true, force: true });
-          }
-        });
+      for (const layout of ['modular', 'a2a']) {
+        add(`${f} files(${t}, ${layout})`, { class: 'CompiledPackage', method: 'files', args: [spec({ package: true, ...docs }), { $skillsRoot: f }, documentFiles, target, layout] },
+          async () => {
+            const root = skillsRootFor(f);
+            try {
+              return await P.files(ta({ package: true, ...docs }), root, asPhpArg(documentFiles), target, layout);
+            } finally {
+              rmSync(root, { recursive: true, force: true });
+            }
+          });
+      }
+      add(`${f} singleFiles(${t})`, { class: 'CompiledPackage', method: 'singleFiles', args: [spec(docs), target, `wf_${t}.py`] },
+        () => P.singleFiles(ta(docs), target, `wf_${t}.py`));
+      add(`${f} pipInstall(${t})`, { class: 'CompiledPackage', method: 'pipInstall', args: [spec(docs), target] },
+        () => P.pipInstall(ta(docs), target));
     }
-    add(`${f} envExample`, { class: 'CompiledPackage', method: 'envExample', args: [spec()] }, () => P.envExample(ta()));
-    add(`${f} readme`, { class: 'CompiledPackage', method: 'readme', args: [spec(docs), 'Google ADK'] }, () => P.readme(ta(docs), 'Google ADK'));
   }
 }
 

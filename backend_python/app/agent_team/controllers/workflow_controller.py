@@ -350,7 +350,7 @@ class WorkflowController:
           - ?download=1: single-file mode only, the raw Python (text/x-python).
           - ?format=zip: the same generation for the chosen mode as one zip ("<workflow>_<mode>.zip",
             ARCHITECTURE.md included); wins over download=1.
-        Single-file default: {filename, code, architecture}.
+        Single-file default: {filename, code, architecture, package_files}.
         """
         userId = request['user_id'] if request.get('user_id') is not None else 0
         workflowId = php_intval(id)
@@ -406,7 +406,8 @@ class WorkflowController:
     def langGraphZipResponse(result: dict, mode: str) -> dict:
         """The Export download: one generation result as a zip whose entries all sit under one folder -- the
         result's root for a package, the script's own name for a single file -- with ARCHITECTURE.md beside
-        the code. Named after the workflow and the mode: "<workflow>_<mode>.zip"."""
+        the code and, for a single file, the requirements.txt, .env.example and README.md it carries under
+        'package_files'. Named after the workflow and the mode: "<workflow>_<mode>.zip"."""
         if 'files' in result:
             folder = result['root']
             files = result['files']
@@ -415,6 +416,8 @@ class WorkflowController:
             files = [{'path': result['filename'], 'code': result['code']}]
             if result.get('architecture') is not None:   # none for an ingestion pipeline
                 files.append({'path': 'ARCHITECTURE.md', 'code': result['architecture']})
+            # requirements.txt, .env.example, README.md: the script reads the .env beside it.
+            files += list(result.get('package_files') or [])
         # "dispatcher_demo_modular_swarm" / "dispatcher_demo_langgraph" -> "dispatcher_demo"
         slug = re.sub(r'_(langgraph|modular|a2a|adk|maf|nooa)(_a2a)?(_swarm)?$', '', folder)
         buf = io.BytesIO()

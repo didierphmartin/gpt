@@ -16,7 +16,7 @@ class TestNooaE2E(CompiledE2EBase):
         return NOOAGenerator.emitNooa(analyzed)
 
     def packageFiles(self, analyzed):
-        return CompiledPackage.files(analyzed, tempfile.gettempdir(), [], NOOAGenerator.FRAMEWORK, 'NVIDIA NOOA')
+        return CompiledPackage.files(analyzed, tempfile.gettempdir(), [], NOOAGenerator.TARGET)
 
     def packageSources(self, analyzed):
         return NOOAGenerator.packageFiles(analyzed)

@@ -157,6 +157,7 @@ class LangGraphArchitectureDoc:
                 for nid, e in layout['agents'].items():
                     rows.append([e['file'], agentRole(e, nid) + f': a self-contained A2A server (port {e["port"]}): '
                                  + 'its `NODE` settings, `run_node = make_node(NODE).run`, the runtime classes it needs and `NodeExecutor`.'])
+                rows += cls._setupRows()
                 principle = ('Each agent file is one deployable server: its data (`NODE`), '
                              '`run_node = make_node(NODE).run`, and its own copy of the classes it needs. `orchestrator.py` wires '
                              'the graph and never runs a model itself.')
@@ -168,6 +169,15 @@ class LangGraphArchitectureDoc:
         L.append(principle)
         return '\n'.join(L)
 
+    @staticmethod
+    def _setupRows() -> list:
+        """The files that install and configure a package (LangGraphPackage), in the order it writes them."""
+        return [
+            ['requirements.txt', 'The Python packages to install (`pip install -r requirements.txt`).'],
+            ['.env.example', 'Every variable the program reads: provider keys, MCP URLs and headers, output and run folders.'],
+            ['README.md', 'Install, configure, the run modes, files written, the run server, running as a service.'],
+        ]
+
     @classmethod
     def _packageRows(cls, facts: dict) -> list:
         rows = []
@@ -178,9 +188,7 @@ class LangGraphArchitectureDoc:
                 if 'source_file' in cd:
                     rows.append([cd['source_file'], f'Node {nid} "' + cls._cell(cd['display']) + '" (code): its '
                                  + '`run(input, call_tool)`, read at each run, so an edit takes effect on the next run.'])
-        rows.append(['requirements.txt', 'The Python packages to install (`pip install -r requirements.txt`).'])
-        rows.append(['.env.example', 'Every variable the program reads: provider keys, MCP URLs and headers, output and run folders.'])
-        rows.append(['README.md', 'Install, modes, files written, the run server, running as a service.'])
+        rows += cls._setupRows()
         for d in LangGraphPackage.skillDirs(facts):
             rows.append([f'skills/{d}/', 'Skill "' + cls._cell(d) + '", copied with all its files: what `SkillRuntime` runs.'])
         for doc in facts.get('startDocuments') or []:

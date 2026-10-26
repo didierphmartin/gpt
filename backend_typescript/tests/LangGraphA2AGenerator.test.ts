@@ -118,11 +118,12 @@ test('testA2AOptionReturnsAManifest', { skip: noPy }, async () => {
   assert.equal(m['root'], 'dispatcher_demo_a2a');
   assert.deepEqual(
     m['files'].map((f: any) => f['path']),
-    ['orchestrator.py', 'api.py', 'agents/2_techbuddy.py', 'agents/3_it-claims.py', 'agents/4_human-resources.py', 'agents/5_playbook-hr.py', 'ARCHITECTURE.md'],
+    ['orchestrator.py', 'api.py', 'agents/2_techbuddy.py', 'agents/3_it-claims.py', 'agents/4_human-resources.py', 'agents/5_playbook-hr.py',
+      'requirements.txt', '.env.example', 'README.md', 'ARCHITECTURE.md'],
   );
   for (const f of m['files']) {
-    if (f['path'] === 'ARCHITECTURE.md') {
-      continue; // documentation, not Python: see LangGraphArchitectureDocTest
+    if (!f['path'].endsWith('.py')) {
+      continue; // documentation and setup, not Python: see LangGraphArchitectureDocTest, LangGraphPackageTest
     }
     assert.ok(f['code'].includes('PROVENANCE'), f['path']);
     if (f['path'] !== 'api.py') {

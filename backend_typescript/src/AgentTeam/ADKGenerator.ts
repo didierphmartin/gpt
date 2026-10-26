@@ -88,11 +88,17 @@ export class ADKGenerator {
   /** Generate a Google ADK Python script for the given workflow: {filename, code, architecture}. */
   async generate(workflowId: number, userId: string | null = null): Promise<any> {
     const analyzed = await this.analyzeWorkflow(workflowId, userId);
-    const name = preg_replace('/[^a-z0-9_]+/i', '_', strval(analyzed['workflow']['name']));
+    const filename = ADKGenerator.filename(analyzed);
     return CompiledArchitectureDoc.attach({
-      filename: strtolower(name) + '_adk.py',
+      filename,
       code: ADKGenerator.emitAdk(analyzed),
+      package_files: CompiledPackage.singleFiles(analyzed, ADKPackage.TARGET, filename),
     }, analyzed, 'adk', 'single');
+  }
+
+  /** The single file's name: <workflow>_adk.py. */
+  private static filename(analyzed: any): string {
+    return strtolower(preg_replace('/[^a-z0-9_]+/i', '_', strval(analyzed['workflow']['name']))) + '_adk.py';
   }
 
   /** A workflow's field through its PHP-style getter (WorkflowView, Models\Workflow) or, on a plain record, by name. */
@@ -341,8 +347,7 @@ export class ADKGenerator {
     const analyzed: any = oarr(entries(analyzedIn));   // PHP passes the array by value
     analyzed['package'] = true;
     const runNodes = oarr(keysOf(CompiledA2AEmit.layout(analyzed)).map((k) => [k, ADKGenerator.A2A_RUN_NODE] as [string, string]));
-    const files = await CompiledPackage.files(analyzed, skillsRoot ?? LangGraphPackage.defaultSkillsRoot(), documentFiles,
-      [...ADKPackage.FRAMEWORK, 'a2a-sdk[http-server]>=1.1,<2'], 'Google ADK (A2A)');
+    const files = await ADKPackage.files(analyzed, skillsRoot ?? LangGraphPackage.defaultSkillsRoot(), documentFiles, 'a2a');
     return CompiledArchitectureDoc.attach(CompiledA2AEmit.package(analyzed, ADKGenerator.packageFiles(analyzed), runNodes, files,
       preg_replace('/[^a-z0-9_]+/i', '_', strtolower(strval(analyzed['workflow']['name']))) + '_adk_a2a', 'Google ADK'), analyzed, 'adk', 'a2a');
   }
@@ -469,10 +474,10 @@ async def run_node(request_text: str, trace) -> dict:
       layers: analyzed['layers'] ?? [],
       data_flow: ADKGenerator.dataFlowDoc(),
       run: {
-        deps: [
-          'pip install "google-adk>=2.3,<3" litellm httpx python-dotenv   # 2.3.x: SequentialAgent/ParallelAgent still supported',
-          ...PlaybookEmit.extraDeps(analyzed)],
-        usage: 'python this_file.py "your prompt here"',
+        deps: !empty(analyzed['package']) ? [CompiledPackage.PIP_REQUIREMENTS]
+          : ['# google-adk 2.3.x: SequentialAgent/ParallelAgent still supported',
+            CompiledPackage.pipInstall(analyzed, ADKPackage.TARGET)],
+        usage: 'python ' + (!empty(analyzed['package']) ? 'workflow.py' : ADKGenerator.filename(analyzed)) + ' "your prompt here"',
       },
       storage: { enabled: !empty(analyzed['outputStorageEnabled']), folder: analyzed['outputFolder'] ?? null },
     }));

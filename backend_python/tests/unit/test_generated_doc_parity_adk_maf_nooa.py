@@ -86,7 +86,8 @@ def test_playbook_and_dispatcher_support_is_stated_honestly(target):
     # The three ported targets carry the shared interpreter verbatim.
     assert 'async def run_playbook_node(' in code, target
     assert 'PLAYBOOKS = {' in code, target
-    assert 'pip install langchain-core langgraph' in code, f"{target}: the interpreter's requirement must be stated"
+    assert re.search(r'^  pip install .*"langchain-core>=0\.3\.0" .*"langgraph>=0\.2\.50"', code, re.M), \
+        f"{target}: the interpreter's requirement must be stated"
 
 
 def test_every_target_routes_the_dispatcher_menu():

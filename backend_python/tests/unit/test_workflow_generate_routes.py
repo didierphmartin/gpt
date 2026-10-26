@@ -17,6 +17,8 @@ PHP-truth strings pinned here:
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 from starlette.datastructures import Headers
 
@@ -392,9 +394,28 @@ def test_single_file_zip(target):
     gen, wf, user = _demo_generator(target)
     r = WorkflowController.langGraphZipResponse(gen.generate(wf, user), f'{target}_single')
     assert r['headers']['Content-Disposition'] == f'attachment; filename="dispatcher_demo_{target}_single.zip"'
-    # the script and its ARCHITECTURE.md, as LangGraph's single-file zip
-    assert list(_zip_entries(r['raw_body'])) == [f'dispatcher_demo_{target}/dispatcher_demo_{target}.py',
-                                                 f'dispatcher_demo_{target}/ARCHITECTURE.md']
+    # the script, its ARCHITECTURE.md and what installs and configures it, as LangGraph's single-file zip
+    assert list(_zip_entries(r['raw_body'])) == [f'dispatcher_demo_{target}/{p}' for p in
+                                                 [f'dispatcher_demo_{target}.py', 'ARCHITECTURE.md', 'requirements.txt',
+                                                  '.env.example', 'README.md']]
+
+
+@pytest.mark.parametrize('target', ['adk', 'maf', 'nooa'])
+def test_single_file_readme_and_requirements_match_the_script(target):
+    """The single-file README is the script's own: its file name, its one-run CLI, the .env variables to set,
+    and the requirements.txt beside it holds the pins the script's TO RUN line installs."""
+    gen, wf, user = _demo_generator(target)
+    result = gen.generate(wf, user)
+    files = {f['path']: f['code'] for f in result['package_files']}
+    readme = files['README.md']
+    for needle in (f'cd dispatcher_demo_{target}', f'python dispatcher_demo_{target}.py "your prompt"', 'py -m venv .venv',
+                   '.venv\\Scripts\\activate', 'copy .env.example .env', 'Python 3.10', '`DEEPSEEK_API_KEY` -- required'):
+        assert needle in readme, needle
+    for absent in ('--cron', '--watch', '--listen', 'api.py'):
+        assert absent not in readme, f'{target}: the single file has no {absent}'
+    m = re.search(r'^  (pip install .*)$', result['code'], re.M)
+    pins = [a.strip('"') for a in m.group(1)[len('pip install '):].split(' ')]
+    assert files['requirements.txt'].rstrip('\n').split('\n') == pins, 'TO RUN installs requirements.txt'
 
 
 @pytest.mark.parametrize('target', ['adk', 'maf', 'nooa'])

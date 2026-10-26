@@ -17,7 +17,7 @@ class MafE2ETest extends AdkCodeNodeE2ETest
 
     protected function packageFiles(array $analyzed): array
     {
-        return CompiledPackage::files($analyzed, sys_get_temp_dir(), [], MAFGenerator::FRAMEWORK, 'Microsoft Agent Framework');
+        return CompiledPackage::files($analyzed, sys_get_temp_dir(), [], MAFGenerator::TARGET);
     }
 
     protected function packageSources(array $analyzed): array

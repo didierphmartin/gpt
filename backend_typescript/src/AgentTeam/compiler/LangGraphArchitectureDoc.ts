@@ -168,6 +168,7 @@ export class LangGraphArchitectureDoc {
           rows.push([strval(e['file']), agentRole(e, nid) + `: a self-contained A2A server (port ${strval(e['port'])}): `
             + 'its `NODE` settings, `run_node = make_node(NODE).run`, the runtime classes it needs and `NodeExecutor`.']);
         }
+        rows.push(...LangGraphArchitectureDoc.setupRows());
         principle = 'Each agent file is one deployable server: its data (`NODE`), '
           + '`run_node = make_node(NODE).run`, and its own copy of the classes it needs. `orchestrator.py` wires '
           + 'the graph and never runs a model itself.';
@@ -179,6 +180,15 @@ export class LangGraphArchitectureDoc {
     L.push('');
     L.push(principle);
     return implode('\n', L);
+  }
+
+  /** The files that install and configure a package (LangGraphPackage), in the order it writes them. */
+  private static setupRows(): Array<[string, string]> {
+    return [
+      ['requirements.txt', 'The Python packages to install (`pip install -r requirements.txt`).'],
+      ['.env.example', 'Every variable the program reads: provider keys, MCP URLs and headers, output and run folders.'],
+      ['README.md', 'Install, configure, the run modes, files written, the run server, running as a service.'],
+    ];
   }
 
   /** The modular package's own files (LangGraphPackage): code files, the harness, setup files, skills, documents. */
@@ -194,9 +204,7 @@ export class LangGraphArchitectureDoc {
         }
       }
     }
-    rows.push(['requirements.txt', 'The Python packages to install (`pip install -r requirements.txt`).']);
-    rows.push(['.env.example', 'Every variable the program reads: provider keys, MCP URLs and headers, output and run folders.']);
-    rows.push(['README.md', 'Install, modes, files written, the run server, running as a service.']);
+    rows.push(...LangGraphArchitectureDoc.setupRows());
     for (const d of LangGraphPackage.skillDirs(facts)) {
       rows.push([`skills/${d}/`, 'Skill "' + LangGraphArchitectureDoc.cell(d) + '", copied with all its files: what `SkillRuntime` runs.']);
     }

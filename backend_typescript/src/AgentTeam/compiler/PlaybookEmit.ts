@@ -229,8 +229,12 @@ export class PlaybookEmit
         );
     }
 
-    /** Extra pip requirements a playbook node adds to a non-LangGraph target. */
-    static extraDeps(analyzed: any): string[] {
+    /**
+     * The packages a playbook node adds to a non-LangGraph target: the shared interpreter (langchain-core +
+     * langgraph), httpx (a bound #Action calls its MCP server through the shared client) and each playbook
+     * provider's LangChain package.
+     */
+    static requirementNames(analyzed: any): string[] {
         if (empty(analyzed['playbooks'])) {
             return [];
         }
@@ -246,9 +250,7 @@ export class PlaybookEmit
             // Everything else in the factory is an OpenAI-compatible endpoint.
             extra[Object.prototype.hasOwnProperty.call(pkg, p) ? pkg[p] : 'langchain-openai'] = true;
         }
-        // httpx: a bound #Action calls its MCP server through the shared client.
-        return ['# A playbook node runs the shared interpreter (langchain + langgraph):',
-                'pip install langchain-core langgraph httpx ' + keysOf(extra).join(' ')];
+        return ['langchain-core', 'langgraph', 'httpx', ...keysOf(extra)];
     }
 
     /**

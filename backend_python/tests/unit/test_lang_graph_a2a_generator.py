@@ -101,10 +101,11 @@ def test_a2a_option_returns_a_manifest():
     m = S.demo_generator().generate(44, '3', {'a2a': True})
     assert m['root'] == 'dispatcher_demo_a2a'
     assert [f['path'] for f in m['files']] == ['orchestrator.py', 'api.py', 'agents/2_techbuddy.py', 'agents/3_it-claims.py',
-                                               'agents/4_human-resources.py', 'agents/5_playbook-hr.py', 'ARCHITECTURE.md']
+                                               'agents/4_human-resources.py', 'agents/5_playbook-hr.py',
+                                               'requirements.txt', '.env.example', 'README.md', 'ARCHITECTURE.md']
     for f in m['files']:
-        if f['path'] == 'ARCHITECTURE.md':
-            continue
+        if not f['path'].endswith('.py'):
+            continue   # documentation and setup, not Python
         assert 'PROVENANCE' in f['code'], f['path']
         if f['path'] != 'api.py':
             assert 'GRAPH EDGES' in f['code'], f['path']

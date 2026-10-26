@@ -184,8 +184,10 @@ class PlaybookEmit:
         )
 
     @staticmethod
-    def extraDeps(analyzed: dict) -> list:
-        """Extra pip requirements a playbook node adds to a non-LangGraph target."""
+    def requirementNames(analyzed: dict) -> list:
+        """The packages a playbook node adds to a non-LangGraph target: the shared interpreter (langchain-core +
+        langgraph), httpx (a bound #Action calls its MCP server through the shared client) and each playbook
+        provider's LangChain package."""
         if not analyzed.get('playbooks'):
             return []
         provs: dict = {}
@@ -197,9 +199,7 @@ class PlaybookEmit:
         for p in provs:
             # Everything else in the factory is an OpenAI-compatible endpoint.
             extra[pkg.get(p, 'langchain-openai')] = True
-        # httpx: a bound #Action calls its MCP server through the shared client.
-        return ['# A playbook node runs the shared interpreter (langchain + langgraph):',
-                'pip install langchain-core langgraph httpx ' + ' '.join(extra.keys())]
+        return ['langchain-core', 'langgraph', 'httpx', *extra.keys()]
 
     @staticmethod
     def supportBlock(needsMcpClient: bool) -> str:
