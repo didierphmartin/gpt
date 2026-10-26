@@ -102,7 +102,7 @@ export class ProviderController {
     }
     const cfg = await LLMProviderResolver.getProviderConfig(newProvider);
     if (!cfg) {
-      return { status_code: 400, success: false, error: `Provider '${newProvider}' not available` };
+      return { status_code: 400, success: false, error: `Provider '${newProvider}' is not available` };
     }
     return { success: true, message: `Switched to provider: ${newProvider}`, current_provider: newProvider };
   }
