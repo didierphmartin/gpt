@@ -64,6 +64,22 @@
         robot() { return this.request('GET', '/robot'); }
         robotPlaybooks() { return this.request('GET', '/robot/playbooks'); }
         unpublish(robotId) { return this.request('DELETE', `/robot/playbooks/${robotId}`); }
+        // Workflows: a frozen copy under the robot (a 409 `replaces` while the copy is active, until confirmReplace).
+        publishWorkflow(id, confirmReplace) { return this.request('POST', `/workflows/${id}/publish`, { confirm_replace: !!confirmReplace }); }
+        robotWorkflows() { return this.request('GET', '/robot/workflows'); }
+        unpublishWorkflow(robotId) { return this.request('DELETE', `/robot/workflows/${robotId}`); }
+        activateRobotWorkflow(robotId) { return this.request('POST', `/robot/workflows/${robotId}/activate`); }
+        stopRobotWorkflow(robotId) { return this.request('DELETE', `/robot/workflows/${robotId}/activate`); }
+        robotWorkflowRuns(robotId) { return this.request('GET', `/robot/workflows/${robotId}/executions?limit=20`); }
+        // The robot's own MCP connections (responses carry header NAMES only).
+        robotServers() { return this.request('GET', '/robot/mcp-servers'); }
+        saveRobotServer(data) {
+            const { id, ...fields } = data || {};
+            return id ? this.request('POST', `/robot/mcp-servers/${id}`, fields) : this.request('POST', '/robot/mcp-servers', fields);
+        }
+        deleteRobotServer(id) { return this.request('DELETE', `/robot/mcp-servers/${id}`); }
+        callRobotServer(id, tool, args) { return this.request('POST', `/robot/mcp-servers/${id}/call`, { tool, arguments: args || {} }); }
+        saveRobotKey(id, header, key) { return this.request('POST', `/robot/mcp-servers/${id}/key`, { header, key }); }
     }
 
     // English fallbacks for the pure helpers below (the UI passes its i18n t()).
@@ -71,6 +87,8 @@
         'playbookLibrary.published': 'Published',
         'playbookLibrary.publishedChanged': 'Published (changed since)',
         'playbookLibrary.replacesConfirm': 'Replaces {{key}} published by {{name}} on {{date}}',
+        'robot.replaceConfirm': 'The robot is running this workflow: click again to replace it',
+        'robot.needsServers': 'The robot needs these MCP connections: {{names}}. Add them under Robot connections.',
     };
     const enT = (k, p) => String(EN[k] || k).replace(/\{\{(\w+)\}\}/g, (_, n) => (p && p[n] != null ? String(p[n]) : ''));
     // A row's publish badge ('' when not published, or the caller can't use the robot).
@@ -83,18 +101,35 @@
     // The Publish button's replace confirmation (no browser dialog). State: {armed, key, message}.
     // {type:'click', key} -> confirmReplace only when armed for that same key;
     // {type:'error', error, key} -> a `replaces` answer arms with the message, any other error disarms and says it;
-    // {type:'ok'} -> disarmed, published.
-    function publishStep(state, ev, t = enT) {
+    // {type:'ok'} -> disarmed, published. confirmKey: the armed message's i18n key (a workflow's has its own).
+    function publishStep(state, ev, t = enT, confirmKey = 'playbookLibrary.replacesConfirm') {
         const s = state || { armed: false, key: null, message: '' };
         if (ev.type === 'click') return { ...s, confirmReplace: !!s.armed && s.key === ev.key };
         if (ev.type === 'ok') return { armed: false, key: null, message: '', published: true };
         const err = ev.error || {};
         if (err.kind === 'replaces') {
             const d = err.data || {};
-            return { armed: true, key: ev.key, message: t('playbookLibrary.replacesConfirm',
+            return { armed: true, key: ev.key, message: t(confirmKey,
                 { key: ev.key, name: d.published_by || '', date: String(d.published_at || '').slice(0, 10) }) };
         }
         return { armed: false, key: null, message: err.message || String(err) };
+    }
+
+    // After a workflow publish: the MCP connections the robot still lacks, named ('' when none).
+    function needsServersNotice(names, t = enT) {
+        const list = (Array.isArray(names) ? names : []).map(String).filter(Boolean);
+        return list.length ? t('robot.needsServers', { names: list.join(', ') }) : '';
+    }
+
+    // A row of GET /robot/workflows/{id}/executions in the results view's shape (showWorkflowResults):
+    // `output` holds the node outputs as JSON; a failed run shows its error.
+    function runResultsData(run) {
+        const r = run || {};
+        let nodes = {};
+        try { const o = JSON.parse(r.output || '{}'); if (o && typeof o === 'object' && !Array.isArray(o)) nodes = o; } catch (_) { nodes = {}; }
+        const success = r.status === 'completed' && !r.error_message;
+        return { success, output: success ? '' : String(r.error_message || r.status || ''), node_outputs: nodes,
+            response_time_ms: Number(r.response_time_ms) || 0 };
     }
 
     // A playbook node on the canvas links to the collection by playbook_id. A node saved before the
@@ -203,5 +238,6 @@
     }
 
     return { keyFromTitle, isValidKey, titleOf, toolsUsedOf, cache, PlaybookApi,
-        nodeData, nodeText, nodeSummary, nodeServerNames, runNodeConfig, keyProblem, saveAction, publishLabel, publishStep, armClick, jobLine };
+        nodeData, nodeText, nodeSummary, nodeServerNames, runNodeConfig, keyProblem, saveAction, publishLabel, publishStep, armClick, jobLine,
+        needsServersNotice, runResultsData };
 });
