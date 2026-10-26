@@ -107,10 +107,10 @@ final class CallerIdentityTest extends TestCase
     {
         $proxy = $this->inject(MCPProxyController::class);
         // No jsonrpc: a resolved server answers "JSON-RPC request required";
-        // an unresolved one answers "Server URL required" — no network either way.
+        // an unresolved one answers "Unknown MCP server" — no network either way.
         $r = $proxy->forward(['user_id' => self::ME,
             'body' => ['action' => 'proxy', 'server_id' => 1, 'user_id' => self::VICTIM]]);
-        $this->assertSame('Server URL required', $r['error']['message']);
+        $this->assertSame('Unknown MCP server', $r['error']['message']);
     }
 
     // ---- HumeToolController ----
