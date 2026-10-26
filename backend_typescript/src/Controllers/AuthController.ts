@@ -467,6 +467,25 @@ export class AuthController {
       return { status_code: 401, success: false, message: 'Invalid or expired authentication token' };
     }
 
+    // An existing account is reached by its email only when Firebase has verified that address:
+    // email/password sign-up lets anyone create a Firebase user for any address. The account's own
+    // Firebase user and a matching (SMS-verified) phone number still sign in, and so does the
+    // Firebase user scripts/firebase-auth-export.php imported for this row.
+    if (
+      existing &&
+      String(existing.firebase_uid ?? '') !== firebaseUid &&
+      firebaseUid !== 'local-' + existing.id &&
+      !(hasPhone && (existing.phone ?? null) === phoneNumber) &&
+      (claims.email_verified ?? false) !== true
+    ) {
+      return {
+        status_code: 401,
+        success: false,
+        message: 'Verify your email address first, then sign in again.',
+        code: 'EMAIL_NOT_VERIFIED',
+      };
+    }
+
     let userId: number;
     let respUser: any;
 
