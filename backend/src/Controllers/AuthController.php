@@ -587,9 +587,11 @@ class AuthController
         // An existing account is reached by its email only when Firebase has
         // verified that address: email/password sign-up lets anyone create a
         // Firebase user for any address. The account's own Firebase user and a
-        // matching (SMS-verified) phone number still sign in.
+        // matching (SMS-verified) phone number still sign in, and so does the
+        // Firebase user scripts/firebase-auth-export.php imported for this row.
         if ($user
             && (string) ($user['firebase_uid'] ?? '') !== $firebaseUid
+            && $firebaseUid !== 'local-' . $user['id']
             && !($hasPhone && ($user['phone'] ?? null) === $phoneNumber)
             && ($claims['email_verified'] ?? false) !== true) {
             return [

@@ -34,6 +34,13 @@ class MCPAppController
     {
         $serverUrl = $request['query']['server'] ?? '';
         $resourceUri = $request['query']['resource'] ?? '';
+        if (!is_string($serverUrl) || !is_string($resourceUri)) {
+            return [
+                'error' => 'Invalid server or resource parameter',
+                'status_code' => 400,
+                'content_type' => 'text/plain'
+            ];
+        }
         $west = $request['query']['west'] ?? '';
         $south = $request['query']['south'] ?? '';
         $east = $request['query']['east'] ?? '';

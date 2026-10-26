@@ -24,5 +24,8 @@ class MCPAppRegisteredServerTest extends TestCase
             $this->assertSame(404, $r['status_code'], $server);
             $this->assertSame('Unknown MCP server', $r['error']);
         }
+
+        $r = $c->getResource(['query' => ['server' => ['http://x'], 'resource' => 'ui://x']]);
+        $this->assertSame(400, $r['status_code']);
     }
 }

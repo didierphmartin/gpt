@@ -28,8 +28,9 @@ RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]
 # Code, scripts and data that only run from the command line are never served:
 # an existing .php file there would otherwise execute on request (tests/ has its
 # own .htaccess that denies everything; scheduler/ keeps its token guard).
-RewriteRule ^(scripts|bin|config|database|migrations|schema|examples|docs|resources|vendor)(/|$) - [F,L]
-RewriteRule ^debug\.php$ - [F,L]
+# [NC]: macOS disks ignore case, so /Scripts/ is the same folder.
+RewriteRule ^(scripts|bin|config|database|migrations|schema|examples|docs|resources|vendor)(/|$) - [F,L,NC]
+RewriteRule ^debug\.php$ - [F,L,NC]
 
 # If the file or directory exists, serve it directly
 RewriteCond %{REQUEST_FILENAME} !-f

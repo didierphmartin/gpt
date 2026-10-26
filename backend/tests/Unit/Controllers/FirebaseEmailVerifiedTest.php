@@ -58,6 +58,12 @@ class FirebaseEmailVerifiedTest extends TestCase
         $this->assertSame('uid-boss', $this->db->query('SELECT firebase_uid FROM users WHERE id = 1')->fetchColumn());
     }
 
+    public function test_the_imported_firebase_user_of_the_row_signs_in_unverified(): void
+    {
+        $r = $this->signIn(['sub' => 'local-1', 'email' => 'boss@x.test']);
+        $this->assertSame(200, $r['status_code']);
+    }
+
     public function test_the_accounts_own_firebase_user_signs_in_unverified(): void
     {
         $r = $this->signIn(['sub' => 'uid-own', 'email' => 'own@x.test']);
