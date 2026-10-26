@@ -79,9 +79,9 @@ test('MCP getAllTools ignores a query user_id', async () => {
 });
 
 test('MCP proxy cannot resolve another user\'s server', async () => {
-  // No jsonrpc: a resolved server answers "JSON-RPC request required", an unresolved one "Server URL required".
+  // No jsonrpc: a resolved server answers "JSON-RPC request required", an unresolved one "Unknown MCP server".
   const r: any = await new MCPProxyController().forward(ctx({ action: 'proxy', server_id: 1, user_id: VICTIM }));
-  assert.equal(r.error.message, 'Server URL required');
+  assert.equal(r.error.message, 'Unknown MCP server');
 });
 
 test('Hume tool runs as the caller', async () => {
