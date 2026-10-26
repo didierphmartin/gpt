@@ -183,6 +183,42 @@ final class WorkflowRobotPublisherTest extends TestCase
         $this->assertSame($copy, (int) (new ActiveWorkflowService($this->db))->get($this->robot)['workflow_id']);
     }
 
+    public function test_confirmed_republish_reactivates_the_copy_on_its_new_mode(): void
+    {
+        $copy = $this->publish()['robot_workflow_id'];
+        $active = new ActiveWorkflowService($this->db);
+        $active->activate($this->robot, $copy);
+        $this->assertSame('option', $active->get($this->robot)['mode']);
+        // The source moves from its code option to a daily schedule; the confirmed republish carries that over.
+        $this->db->exec('DELETE FROM scheduled_workflows WHERE workflow_id = ' . self::WF);
+        EventWorkerSchema::row($this->db, self::WF, self::OWNER, 'daily');
+        $this->publish(true);
+        $row = $active->get($this->robot);
+        $this->assertSame([$copy, 'schedule', null], [(int) $row['workflow_id'], $row['mode'],
+            $row['trigger_component_id'] === null ? null : (int) $row['trigger_component_id']]);
+        // A copy republished without any trigger can no longer be active: it is stopped, not left on its old mode.
+        $this->db->exec('DELETE FROM scheduled_workflows WHERE workflow_id = ' . self::WF);
+        $this->publish(true);
+        $this->assertNull($active->get($this->robot));
+    }
+
+    public function test_configs_without_links_are_copied_verbatim(): void
+    {
+        $this->db->prepare('INSERT INTO workflow_nodes (workflow_id, node_type, config) VALUES (?, ?, ?)')
+            ->execute([self::WF, 'agent', '{}']);
+        $this->db->prepare('INSERT INTO workflow_nodes (workflow_id, node_type, config) VALUES (?, ?, ?)')
+            ->execute([self::WF, 'agent', '{"name":"Café","url":"http://x/y"}']);
+        $copy = $this->publish()['robot_workflow_id'];
+        $configs = $this->db->query("SELECT config FROM workflow_nodes WHERE workflow_id = $copy AND node_type = 'agent' ORDER BY id")
+            ->fetchAll(PDO::FETCH_COLUMN);
+        $this->assertSame(['{}', '{"name":"Café","url":"http://x/y"}'], $configs);
+        // A remapped link is re-encoded without escaping unicode or slashes.
+        $this->db->exec("UPDATE workflow_nodes SET config = json_set(config, '$.note', 'é/x') WHERE workflow_id = " . self::WF . " AND node_type = 'code'");
+        $copy = $this->publish()['robot_workflow_id'];
+        $pdf = $this->db->query("SELECT config FROM workflow_nodes WHERE workflow_id = $copy AND node_type = 'code' ORDER BY id")->fetchColumn();
+        $this->assertStringContainsString('"note":"é/x"', $pdf);
+    }
+
     public function test_needs_servers_lists_missing_robot_servers(): void
     {
         $add = $this->db->prepare('INSERT INTO mcp_servers (user_id, name, url, enabled) VALUES (?, ?, ?, ?)');

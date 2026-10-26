@@ -35,7 +35,8 @@ final class WorkflowRobotPublisher
             throw new WorkflowPublishError('not_found', "Workflow #{$workflowId} not found", 404);
         }
         $copyId = $this->copyOf($robotId, $workflowId);
-        if ($copyId !== null && !$confirmReplace && $this->isActive($robotId, $copyId)) {
+        $wasActive = $copyId !== null && $this->isActive($robotId, $copyId);
+        if ($wasActive && !$confirmReplace) {
             throw new WorkflowPublishError('replaces',
                 "The robot is running \"{$src['name']}\": publishing replaces it while it is active.", 409);
         }
@@ -85,6 +86,9 @@ final class WorkflowRobotPublisher
                 throw new WorkflowPublishError($e->kind, $e->getMessage(), $e->status);
             }
             throw $e;
+        }
+        if ($wasActive) {
+            $this->reactivate($robotId, $copyId);
         }
         return ['robot_workflow_id' => $copyId, 'replaced' => $replaced,
             'needs_servers' => $this->missingServers($robotId, $servers)];
@@ -147,6 +151,20 @@ final class WorkflowRobotPublisher
         return $st->fetchColumn() !== false;
     }
 
+    /**
+     * The replaced copy was active: activate it again so its active row's mode and trigger are the new copy's. A copy
+     * that can no longer be active (no trigger, Start unlinked) is deactivated rather than left on its old mode.
+     */
+    private function reactivate(int $robotId, int $copyId): void
+    {
+        $active = new ActiveWorkflowService($this->db);
+        try {
+            $active->activate($robotId, $copyId);
+        } catch (ActiveWorkflowError) {
+            $active->deactivate($robotId, $copyId);
+        }
+    }
+
     /** The node's config with its component links (a code node's, a Start option) pointing at the robot's rows. */
     private function remapConfig(array $node, callable $robotComponent): ?string
     {
@@ -154,10 +172,12 @@ final class WorkflowRobotPublisher
         if (!is_array($cfg)) {
             return $node['config'];
         }
-        $link = function (string $key) use (&$cfg, $robotComponent): void {
+        $changed = false;
+        $link = function (string $key) use (&$cfg, &$changed, $robotComponent): void {
             $id = (int) $cfg[$key];
             $cfg[$key] = $robotComponent($id) ?? throw new WorkflowPublishError('component_missing',
                 "Code component #{$id} used by node \"" . ($cfg['name'] ?? $key) . '" is missing: fix the node before publishing.', 422);
+            $changed = $changed || $cfg[$key] !== $id;
         };
         if (CodeComponentStore::isCodeNode($node['node_type'] ?? null, $cfg) && !empty($cfg['code_component_id'])) {
             $link('code_component_id');
@@ -165,7 +185,8 @@ final class WorkflowRobotPublisher
         if (StartOptionGraph::optionId(['node_type' => $node['node_type'] ?? '', 'config' => $cfg]) !== null) {
             $link('start_option');
         }
-        return json_encode($cfg);
+        // Nothing remapped: the source's text as it is ({} stays {}, not []).
+        return $changed ? json_encode($cfg, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : $node['config'];
     }
 
     /** Insert the robot's copy, or update it in place; returns its id. */
