@@ -438,6 +438,12 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->delete('/api/v1/robot/playbooks/{id:\d+}', ['RobotController', 'unpublish']);
         $r->get('/api/v1/robot/workflows', ['RobotController', 'workflows']);
         $r->delete('/api/v1/robot/workflows/{id:\d+}', ['RobotController', 'unpublishWorkflow']);
+        $r->get('/api/v1/robot/mcp-servers', ['RobotServersController', 'index']);
+        $r->post('/api/v1/robot/mcp-servers', ['RobotServersController', 'create']);
+        $r->post('/api/v1/robot/mcp-servers/{id:\d+}', ['RobotServersController', 'update']);
+        $r->delete('/api/v1/robot/mcp-servers/{id:\d+}', ['RobotServersController', 'destroy']);
+        $r->post('/api/v1/robot/mcp-servers/{id:\d+}/call', ['RobotServersController', 'call']);
+        $r->post('/api/v1/robot/mcp-servers/{id:\d+}/key', ['RobotServersController', 'saveKey']);
 
         // Workflow output storage
         $r->get('/api/v1/workflows/{id:\d+}/outputs', ['AgentTeam:WorkflowController', 'listOutputs']);
