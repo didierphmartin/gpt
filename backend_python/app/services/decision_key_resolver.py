@@ -19,10 +19,10 @@ from app.support.phpcompat import php_empty, php_strval, php_trim
 # ApiKeyCrypto::FALLBACK_SECRET: what the controllers have always used when auth.jwt_secret is unset.
 FALLBACK_SECRET = 'default-encryption-key-change-this'
 
-_NOT_ALLOWED = object()   # PHP packageEntry()'s `false`
+NOT_ALLOWED = object()   # PHP packageEntry()'s `false`
 
 
-def _secret(config: dict) -> str:
+def secret(config: dict) -> str:
     """ApiKeyCrypto::secret: `$config['auth']['jwt_secret'] ?? FALLBACK_SECRET`."""
     auth = config.get('auth') if isinstance(config.get('auth'), dict) else {}
     s = auth.get('jwt_secret')
@@ -41,12 +41,12 @@ class DecisionKeyResolver:
         if php_empty(rowUrl):
             rowUrl = protocol['url']
 
-        package = DecisionKeyResolver._packageEntry(db, userId, providerKey)
-        if package is _NOT_ALLOWED:
+        package = DecisionKeyResolver.packageEntry(db, userId, providerKey)
+        if package is NOT_ALLOWED:
             return {'source': 'not_allowed', **base, 'url': rowUrl}
 
         if userId is not None and userId > 0:
-            userKey, userUrl = DecisionKeyResolver._userRow(db, _secret(config), userId, providerKey)
+            userKey, userUrl = DecisionKeyResolver.userRow(db, secret(config), userId, providerKey)
             if userKey != '':
                 return {'source': 'user', **base, 'key': userKey, 'url': userUrl if userUrl != '' else rowUrl}
 
@@ -67,13 +67,13 @@ class DecisionKeyResolver:
         for row in DecisionProviders.rows(db):
             key = php_strval(row.get('provider_key'))
             if (DecisionProviders.protocolOf(row) is not None
-                    and DecisionKeyResolver._packageEntry(db, userId, key) is not _NOT_ALLOWED):
+                    and DecisionKeyResolver.packageEntry(db, userId, key) is not NOT_ALLOWED):
                 return key
         return None
 
     @staticmethod
     def allowed(db, userId: int | None, providerKey: str) -> bool:
-        return DecisionKeyResolver._packageEntry(db, userId, providerKey) is not _NOT_ALLOWED
+        return DecisionKeyResolver.packageEntry(db, userId, providerKey) is not NOT_ALLOWED
 
     @staticmethod
     def unavailableReason(resolved: dict, providerKey: str) -> str:
@@ -90,9 +90,9 @@ class DecisionKeyResolver:
         return f'no {label} key'
 
     @staticmethod
-    def _packageEntry(db, userId: int | None, providerKey: str):
+    def packageEntry(db, userId: int | None, providerKey: str):
         """The package's entry for this provider, {} when the package sets no provider allowlist,
-        _NOT_ALLOWED when the role may not use it. Same rule as the LLM provider list."""
+        NOT_ALLOWED when the role may not use it. Same rule as the LLM provider list."""
         try:
             caps = PackageResolver(db).resolveForUser(userId).get('capabilities')
             providers = caps.get('providers') if isinstance(caps, dict) else None
@@ -103,11 +103,11 @@ class DecisionKeyResolver:
             return {}
         entry = providers.get(providerKey) if isinstance(providers, dict) else None
         if not isinstance(entry, dict) or php_empty(entry.get('enabled')):
-            return _NOT_ALLOWED
+            return NOT_ALLOWED
         return entry
 
     @staticmethod
-    def _userRow(db, secret: str, userId: int, providerKey: str) -> tuple[str, str]:
+    def userRow(db, secret: str, userId: int, providerKey: str) -> tuple[str, str]:
         """The user's own (key, url); ('', '') when none."""
         try:
             row = db.fetch_one('SELECT * FROM user_api_keys WHERE user_id = :u AND provider = :p AND enabled = 1 LIMIT 1',

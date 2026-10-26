@@ -9,13 +9,21 @@ connections.
 """
 from __future__ import annotations
 
+import time
+
 import httpx
 
 from app.providers._http import SHARED_SSL_CONTEXT
+from app.services.gemini_voice_key import GeminiVoiceKey
 from app.services.usage_logger import UsageLogger
 from app.support.logger import error_log
-from app.support.phpcompat import php_empty, php_floatval, php_intval, php_round, php_strval, php_values
+from app.support.phpcompat import is_numeric, php_empty, php_floatval, php_intval, php_round, php_strval, php_trim
 from app.support.phpjson import php_json_encode
+
+
+def _gmdate(ts: int) -> str:
+    """gmdate('Y-m-d\\TH:i:s\\Z', ts)."""
+    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(ts))
 
 
 class VoiceController:
@@ -215,18 +223,78 @@ class VoiceController:
             # log the user ID if available for tracking.
             provider = body['provider'] if body.get('provider') is not None else 'grok'
 
-            if provider != 'grok':
-                return {
-                    'success': False,
-                    'error': 'Ephemeral tokens are currently only supported for Grok provider',
-                    'status_code': 400,
-                }
-
-            return self.generateGrokEphemeralToken(php_strval(userId) if userId is not None else None)
+            match provider:
+                case 'gemini':
+                    return self.generateGeminiEphemeralToken(request)
+                case 'grok':
+                    return self.generateGrokEphemeralToken(php_strval(userId) if userId is not None else None)
+                case _:
+                    return {'success': False, 'error': 'Unknown voice provider', 'status_code': 400}
 
         except Exception as e:  # noqa: BLE001 — PHP catches \Exception here
             error_log(f"❌ [VoiceController] Error generating ephemeral token: {e}")
             return {'success': False, 'error': f'Failed to generate ephemeral token: {e}', 'status_code': 500}
+
+    # ─── geminiKey / generateGeminiEphemeralToken ───────────────────────────
+
+    def geminiKey(self, request) -> str:
+        """The Gemini key this request's user voices with ('' when none)."""
+        userId = request.get('user_id')
+        if userId is None or not is_numeric(userId):
+            return ''
+        return GeminiVoiceKey.resolve(self.db, self.config, php_intval(userId))
+
+    def generateGeminiEphemeralToken(self, request) -> dict:
+        """Mint a single-use Gemini Live token with the user's Gemini key, so the
+        browser opens a Live session without ever holding the key. The token
+        starts one session within a minute and lasts 30 minutes."""
+        if request.get('user_id') is None:
+            return {'success': False, 'error': 'Authentication required', 'status_code': 401}
+        apiKey = self.geminiKey(request)
+        if apiKey == '':
+            return {'success': False, 'error': 'No Gemini key for voice', 'code': 'NO_GEMINI_KEY', 'status_code': 404}
+
+        now = int(time.time())
+        client = self.getHttpClient()
+        try:
+            try:
+                # The key goes in a header, never the URL, so no error or log line can carry it.
+                response = client.post(
+                    'https://generativelanguage.googleapis.com/v1alpha/auth_tokens',
+                    headers={'Content-Type': 'application/json', 'x-goog-api-key': apiKey},
+                    json={'uses': 1, 'expireTime': _gmdate(now + 1800), 'newSessionExpireTime': _gmdate(now + 60)},
+                )
+            except httpx.RequestError:
+                error_log('❌ [VoiceController] HTTP error minting a Gemini voice token')
+                return {'success': False, 'error': 'Network error while obtaining ephemeral token', 'status_code': 503}
+
+            statusCode = response.status_code
+            try:
+                responseBody = response.json()
+            except ValueError:
+                responseBody = None
+            token = php_strval(responseBody.get('name')) if isinstance(responseBody, dict) else ''
+            if statusCode != 200 or not token.startswith('auth_tokens/'):
+                err = responseBody.get('error') if isinstance(responseBody, dict) else None
+                errorMessage = php_strval(err.get('message')) if isinstance(err, dict) and err.get('message') is not None \
+                    else 'Unknown error'
+                error_log(f'❌ [VoiceController] Gemini token error: {statusCode}')
+                return {'success': False, 'error': f'Failed to obtain ephemeral token: {errorMessage}',
+                        'status_code': statusCode if statusCode != 200 else 502}
+
+            gemini = self.config.get('gemini_voice') if isinstance(self.config.get('gemini_voice'), dict) else {}
+            return {
+                'success': True,
+                'provider': 'gemini',
+                'client_secret': token,
+                'expires_at': _gmdate(now + 1800),
+                'model': gemini['model'] if gemini.get('model') is not None
+                else 'gemini-2.5-flash-native-audio-preview-12-2025',
+                'status_code': 200,
+            }
+        finally:
+            client.close()
+            self._httpClient = None
 
     # ─── generateGrokEphemeralToken (PHP 317-398) ───────────────────────────
 
@@ -315,6 +383,7 @@ class VoiceController:
     # ─── getConfig (PHP 406-462) ─────────────────────────────────────────────
 
     def getConfig(self, request) -> dict:
+        """Public info and whether a key exists, never a key."""
         query = request['query'] if request.get('query') is not None else {}
         provider = query['provider'] if query.get('provider') is not None else 'grok'
 
@@ -352,31 +421,17 @@ class VoiceController:
                     if isinstance(self.config.get('gemini_voice'), dict) and self.config['gemini_voice'].get('model') is not None
                     else 'gemini-2.5-flash-native-audio-preview'
                 ),
-                'supports_ephemeral_token': False,  # Gemini uses different auth
+                'supports_ephemeral_token': True,
             },
         }
 
         if provider not in configs:
             return {'success': False, 'error': 'Unknown voice provider', 'status_code': 400}
 
-        # Gemini has no ephemeral-token endpoint, so a browser client needs the
-        # raw key to open a Live session. Only expose it to JWT users or to app
-        # keys that explicitly carry the 'voice:config' scope (interim brokering
-        # until per-user provider keys / login are in place).
+        # Never a key: only whether this user has one (the mic shows only then).
+        grok = self.config.get('grok_voice') if isinstance(self.config.get('grok_voice'), dict) else {}
+        configs['grok']['available'] = php_trim(php_strval(grok.get('api_key'))) != ''
         if provider == 'gemini':
-            authType = request.get('auth_type')
-            rawScopes = request.get('app_key_scopes')
-            if rawScopes is None:
-                scopes = []
-            elif isinstance(rawScopes, dict):
-                scopes = php_values(rawScopes)
-            elif isinstance(rawScopes, list):
-                scopes = rawScopes
-            else:
-                scopes = [rawScopes]
-            mayReadKey = (authType != 'app_key') or ('voice:config' in scopes)
-            if mayReadKey:
-                gemini = self.config.get('gemini_voice')
-                configs['gemini']['api_key'] = gemini.get('api_key') if isinstance(gemini, dict) else None
+            configs['gemini']['available'] = self.geminiKey(request) != ''
 
         return {'success': True, 'config': configs[provider], 'status_code': 200}

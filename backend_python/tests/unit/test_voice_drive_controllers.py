@@ -237,12 +237,10 @@ def test_get_default_voice_model(provider, expected):
 
 # ─── getEphemeralToken validation (PHP 282-312) ─────────────────────────────
 
-def test_get_ephemeral_token_rejects_non_grok_provider():
+def test_get_ephemeral_token_rejects_unknown_provider():
     c = voice()
-    assert c.getEphemeralToken(ctx({'provider': 'gemini'})) == {
-        'success': False,
-        'error': 'Ephemeral tokens are currently only supported for Grok provider',
-        'status_code': 400,
+    assert c.getEphemeralToken(ctx({'provider': 'bogus'})) == {
+        'success': False, 'error': 'Unknown voice provider', 'status_code': 400,
     }
 
 
@@ -364,6 +362,7 @@ def test_get_config_grok_default_shape():
     assert cfg['supports_ephemeral_token'] is True
     assert cfg['websocket_url'] == 'wss://api.x.ai/v1/realtime'
     assert 'api_key' not in cfg
+    assert cfg['available'] is False
     assert result['status_code'] == 200
 
 
@@ -374,25 +373,15 @@ def test_get_config_unknown_provider():
     }
 
 
-def test_get_config_gemini_jwt_user_gets_api_key():
+def test_get_config_gemini_shape_never_carries_a_key():
+    # Whether a key exists is covered by test_gemini_voice_token.py.
     c = voice(config={'gemini_voice': {'api_key': 'GEMKEY', 'default_voice': 'Puck', 'model': 'm1'}})
-    result = c.getConfig(ctx(query={'provider': 'gemini'}, method='GET', auth_type='jwt'))
-    assert result['config']['api_key'] == 'GEMKEY'
-    assert result['config']['default_voice'] == 'Puck'
-    assert result['config']['model'] == 'm1'
-    assert result['config']['supports_ephemeral_token'] is False
-
-
-def test_get_config_gemini_app_key_without_scope_hides_key():
-    c = voice(config={'gemini_voice': {'api_key': 'GEMKEY'}})
-    result = c.getConfig(ctx(query={'provider': 'gemini'}, method='GET', auth_type='app_key', app_key_scopes=['other:scope']))
-    assert 'api_key' not in result['config']
-
-
-def test_get_config_gemini_app_key_with_scope_gets_key():
-    c = voice(config={'gemini_voice': {'api_key': 'GEMKEY'}})
-    result = c.getConfig(ctx(query={'provider': 'gemini'}, method='GET', auth_type='app_key', app_key_scopes=['voice:config']))
-    assert result['config']['api_key'] == 'GEMKEY'
+    for extra in ({'auth_type': 'jwt'}, {'auth_type': 'app_key', 'app_key_scopes': ['voice:config']}):
+        result = c.getConfig(ctx(query={'provider': 'gemini'}, method='GET', **extra))
+        assert 'api_key' not in result['config'] and 'GEMKEY' not in repr(result)
+        assert result['config']['default_voice'] == 'Puck'
+        assert result['config']['model'] == 'm1'
+        assert result['config']['supports_ephemeral_token'] is True
 
 
 # ─── DriveController.save (PHP 32-49) — exact static payload ───────────────
