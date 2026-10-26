@@ -673,7 +673,7 @@ class VideoEditorController:
         login = self._login()
         if not login:
             return {'success': False, 'available': False, 'users': [],
-                    'message': 'Login DB not reachable — set the LOGIN_DB_* environment variables'}
+                    'message': 'Login DB not reachable — set LOGIN_DB_* in gpt/backend/.env'}
         q = php_trim(php_coalesce((request.get('query') or {}).get('q'), ''))
         try:
             params: dict = {}

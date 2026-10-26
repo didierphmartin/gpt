@@ -585,7 +585,7 @@ export class VideoEditorController {
     if (err) return err;
     const login = await this.login();
     if (!login) {
-      return { success: false, available: false, users: [], message: 'Login DB not reachable — set the LOGIN_DB_* environment variables' };
+      return { success: false, available: false, users: [], message: 'Login DB not reachable — set LOGIN_DB_* in gpt/backend/.env' };
     }
     const q = phpTrim(strVal(ctx.query?.q ?? ''));
     try {

@@ -98,7 +98,7 @@ class LoginAdminController
         if ($err = $this->requireAdmin($request)) return $err;
         $l = $this->login();
         if (!$l) return ['success' => false, 'available' => false,
-            'message' => 'Login DB not reachable — set the LOGIN_DB_* environment variables'];
+            'message' => 'Login DB not reachable — set LOGIN_DB_* in gpt/backend/.env'];
         try {
             $stats = [
                 'total_users' => (int)$l->query("SELECT COUNT(*) FROM users")->fetchColumn(),
@@ -121,7 +121,7 @@ class LoginAdminController
         if ($err = $this->requireAdmin($request)) return $err;
         $l = $this->login();
         if (!$l) return ['success' => false, 'available' => false, 'users' => [],
-            'message' => 'Login DB not reachable — set the LOGIN_DB_* environment variables'];
+            'message' => 'Login DB not reachable — set LOGIN_DB_* in gpt/backend/.env'];
         $q = trim((string)($request['query']['q'] ?? ''));
         $provider = (string)($request['query']['provider'] ?? '');
         $where = []; $p = [];
@@ -242,7 +242,7 @@ class LoginAdminController
         if ($err = $this->requireAdmin($request)) return $err;
         $l = $this->login();
         if (!$l) return ['success' => false, 'available' => false, 'apps' => [],
-            'message' => 'Login DB not reachable — set the LOGIN_DB_* environment variables'];
+            'message' => 'Login DB not reachable — set LOGIN_DB_* in gpt/backend/.env'];
         try {
             $rows = $l->query("SELECT id, app_id, name, key_prefix, entry_point, created_at, last_used_at, revoked_at
                                FROM registered_apps ORDER BY name")->fetchAll();
@@ -266,7 +266,7 @@ class LoginAdminController
         if ($err = $this->requireAdmin($request)) return $err;
         $l = $this->login();
         if (!$l) return ['success' => false, 'available' => false, 'users' => [],
-            'message' => 'Login DB not reachable — set the LOGIN_DB_* environment variables'];
+            'message' => 'Login DB not reachable — set LOGIN_DB_* in gpt/backend/.env'];
         $slug = (string)($request['query']['app'] ?? '');
         $appId = $this->appIdBySlug($l, $slug);
         if ($appId === null) return ['success' => false, 'message' => 'Unknown application'];

@@ -8,7 +8,7 @@ import { phpTrim, phpValidEmail } from '../Support/PhpEmail';
 
 type LoginAdminConfig = EditionConfig & { loginDatabase?: DbConfig };
 
-const NOT_REACHABLE_HINT = 'Login DB not reachable — set the LOGIN_DB_* environment variables';
+const NOT_REACHABLE_HINT = 'Login DB not reachable — set LOGIN_DB_* in gpt/backend/.env';
 
 /** PHP (int) cast. */
 function intVal(v: unknown): number {

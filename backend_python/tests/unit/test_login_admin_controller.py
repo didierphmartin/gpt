@@ -126,20 +126,20 @@ def test_login_db_unreachable_messages():
     ctrl = admin_ctrl(l_db=None)
     assert ctrl.getStats(ctx()) == {
         'success': False, 'available': False,
-        'message': 'Login DB not reachable — set the LOGIN_DB_* environment variables'}
+        'message': 'Login DB not reachable — set LOGIN_DB_* in gpt/backend/.env'}
     assert ctrl.getUsers(ctx()) == {
         'success': False, 'available': False, 'users': [],
-        'message': 'Login DB not reachable — set the LOGIN_DB_* environment variables'}
+        'message': 'Login DB not reachable — set LOGIN_DB_* in gpt/backend/.env'}
     assert ctrl.createUser(ctx(body={'email': 'a@b.com'})) == {
         'success': False, 'message': 'Login DB not reachable'}
     assert ctrl.updateUser(ctx(body={'id': 1})) == {'success': False, 'message': 'Login DB not reachable'}
     assert ctrl.deleteUser(ctx(body={'id': 1})) == {'success': False, 'message': 'Login DB not reachable'}
     assert ctrl.getApps(ctx()) == {
         'success': False, 'available': False, 'apps': [],
-        'message': 'Login DB not reachable — set the LOGIN_DB_* environment variables'}
+        'message': 'Login DB not reachable — set LOGIN_DB_* in gpt/backend/.env'}
     assert ctrl.getAppUsers(ctx(query={'app': 'x'})) == {
         'success': False, 'available': False, 'users': [],
-        'message': 'Login DB not reachable — set the LOGIN_DB_* environment variables'}
+        'message': 'Login DB not reachable — set LOGIN_DB_* in gpt/backend/.env'}
     assert ctrl.setAppUserRole(ctx(body={'app': 'x', 'user_id': 1, 'role': 'user'})) == {
         'success': False, 'message': 'Login DB not reachable'}
     assert ctrl.addAppMember(ctx(body={'app': 'x', 'email': 'a@b.com', 'role': 'user'})) == {
