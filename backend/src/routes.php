@@ -438,6 +438,10 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->delete('/api/v1/robot/playbooks/{id:\d+}', ['RobotController', 'unpublish']);
         $r->get('/api/v1/robot/workflows', ['RobotController', 'workflows']);
         $r->delete('/api/v1/robot/workflows/{id:\d+}', ['RobotController', 'unpublishWorkflow']);
+        $r->post('/api/v1/robot/workflows/{id:\d+}/activate', ['RobotController', 'activateWorkflow']);
+        $r->delete('/api/v1/robot/workflows/{id:\d+}/activate', ['RobotController', 'deactivateWorkflow']);
+        $r->get('/api/v1/robot/workflows/{id:\d+}/executions', ['RobotController', 'workflowExecutions']);
+        $r->get('/api/v1/robot/workflows/{id:\d+}/live', ['RobotController', 'workflowLive']);
         $r->get('/api/v1/robot/mcp-servers', ['RobotServersController', 'index']);
         $r->post('/api/v1/robot/mcp-servers', ['RobotServersController', 'create']);
         $r->post('/api/v1/robot/mcp-servers/{id:\d+}', ['RobotServersController', 'update']);

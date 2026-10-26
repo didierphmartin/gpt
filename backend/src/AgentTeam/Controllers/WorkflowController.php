@@ -1178,7 +1178,12 @@ class WorkflowController
      */
     public function executions(array $request): array
     {
-        $userId = $request['user_id'] ?? 0;
+        return $this->executionsOf((int) ($request['user_id'] ?? 0), $request);
+    }
+
+    /** The executions body for a workflow owned by $userId (the robot's routes pass the robot's id). */
+    public function executionsOf(int $userId, array $request): array
+    {
         $workflowId = (int) ($request['params']['id'] ?? 0);
         $query = $request['query'] ?? [];
 
@@ -1234,7 +1239,12 @@ class WorkflowController
      */
     public function live(array $request): array
     {
-        $userId = (int) ($request['user_id'] ?? 0);
+        return $this->liveOf((int) ($request['user_id'] ?? 0), $request);
+    }
+
+    /** The live stream for a workflow owned by $userId (the robot's routes pass the robot's id). */
+    public function liveOf(int $userId, array $request): array
+    {
         $workflowId = (int) ($request['params']['id'] ?? 0);
         header('Content-Type: text/event-stream');
         header('Cache-Control: no-cache');
