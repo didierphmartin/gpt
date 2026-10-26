@@ -9,6 +9,10 @@ import { isServiceUser } from '../Services/RobotAccount';
 import { Edition } from '../Services/Edition';
 import { SqlConn, connectSql } from '../Services/LoginDb';
 import { DbConfig } from '../config/env';
+import { phpEmpty } from '../Playbook/php';
+
+/** debugAuth reports PHP_VERSION; mirrored constant (XAMPP's PHP), like backend_python. */
+export const PHP_VERSION = '8.2.4';
 
 /** The part of the config AuthController reads beyond the JWT settings. */
 export type AuthConfig = {
@@ -138,7 +142,7 @@ export class AuthController {
     if (refused) return refused;
 
     const { email, password } = ctx.body;
-    if (!email || !password) return { status_code: 400, success: false, message: 'Email and password are required' };
+    if (phpEmpty(email) || phpEmpty(password)) return { status_code: 400, success: false, message: 'Email and password are required' };
 
     const lookup = String(email).trim().toLowerCase();
     let user = await db.selectFrom('users').selectAll().where('email', '=', lookup).executeTakeFirst();
@@ -352,7 +356,7 @@ export class AuthController {
 
   /**
    * GET /api/v1/debug/auth (PHP debugAuth): what the auth middleware established for this request.
-   * PHP reports its PHP_VERSION under php_version; this backend reports its Node.js version there.
+   * php_version mirrors PHP's PHP_VERSION (XAMPP's PHP), as the Python twin does.
    */
   debugAuth(ctx: Ctx): ControllerResult {
     const h = ctx.headers?.['Authorization'] ?? ctx.headers?.['authorization'] ?? '';
@@ -361,7 +365,7 @@ export class AuthController {
       user_id: ctx.user_id ?? null,
       authenticated: ctx.authenticated ?? false,
       has_auth_header: Array.isArray(h) ? h.length > 0 : h !== '' && h !== '0',
-      php_version: process.version,
+      php_version: PHP_VERSION,
       status_code: 200,
     };
   }
@@ -435,7 +439,7 @@ export class AuthController {
     const idToken = ctx.body.idToken ?? '';
     const userData = ctx.body.userData ?? {};
 
-    if (!idToken) return { status_code: 400, success: false, message: 'Invalid authentication data' };
+    if (phpEmpty(idToken)) return { status_code: 400, success: false, message: 'Invalid authentication data' };
 
     const claims = await this.verifyFirebaseIdToken(String(idToken));
     if (!claims) return { status_code: 401, success: false, message: 'Invalid or expired authentication token' };
