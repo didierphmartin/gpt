@@ -19,6 +19,20 @@ type Scheme = 'bearer' | 'appkey' | null;
 export class AuthMiddleware {
   constructor(private readonly publicRoutes: PublicRoute[]) {}
 
+  /**
+   * The user id of a gpt access token, or null. Other services (the login service) may sign with
+   * the same secret, and a refresh token must not work as a session, so 'iss' and 'type' are both
+   * required. Throws when the signature or expiry is bad, like jwt.verify.
+   */
+  static accessTokenSubject(token: string, jwtSecret: string): number | null {
+    const decoded = jwt.verify(token, jwtSecret, { algorithms: ['HS256'] }) as any;
+    if (typeof decoded !== 'object' || decoded === null) return null;
+    if ((decoded.iss ?? '') !== 'gpt-chat' || (decoded.type ?? '') !== 'access') return null;
+    if (decoded.sub === undefined || decoded.sub === null) return null;
+    const parsed = parseInt(String(decoded.sub), 10);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+
   private appKeyPepper(): string {
     const explicit = process.env.USER_APP_KEY_SECRET ?? '';
     if (explicit !== '') return explicit;
@@ -66,12 +80,8 @@ export class AuthMiddleware {
             if (userId !== null) authType = 'user_app_key';
           } else if (scheme === 'bearer') {
             try {
-              const decoded = jwt.verify(token, config.auth.jwtSecret, { algorithms: ['HS256'] }) as any;
-              const parsed = parseInt(String(decoded.sub), 10);
-              if (!Number.isNaN(parsed)) {
-                userId = parsed;
-                authType = 'jwt';
-              }
+              userId = AuthMiddleware.accessTokenSubject(token, config.auth.jwtSecret);
+              if (userId !== null) authType = 'jwt';
             } catch {
               userId = null;
             }
