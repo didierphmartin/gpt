@@ -4,6 +4,7 @@ import path from 'path';
 import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { Ctx, ControllerResult } from '../Support/Http';
+import { phpArrayShape, phpAssoc } from '../Support/PhpJson';
 import { PackageResolver } from '../Services/PackageResolver';
 import { DecisionProviders } from '../Services/DecisionProviders';
 import { RoleStore } from '../Services/RoleStore';
@@ -631,7 +632,7 @@ export class AdminController {
     for (const row of rows) {
       const category = row.category;
       const provider = row.provider;
-      const settings = decodeSettingsColumn(row.settings);
+      const settings = phpArrayShape(decodeSettingsColumn(row.settings));   // json_decode(assoc): {} is [] on the wire
       const enabled = row.enabled !== undefined && row.enabled !== null ? phpBoolVal(row.enabled) : true;
 
       const bucket = result[category];
@@ -649,11 +650,12 @@ export class AdminController {
       }
     }
 
+    // An empty providers map is [] on the wire, as PHP's json_encode writes it.
     return {
       success: true,
       user_id: userId,
-      avatar: result['avatar'],
-      voice: result['voice'],
+      avatar: { ...result['avatar'], providers: phpAssoc(result['avatar'].providers) },
+      voice: { ...result['voice'], providers: phpAssoc(result['voice'].providers) },
       status_code: 200,
     };
   }
@@ -999,7 +1001,7 @@ export class AdminController {
     return {
       success: true,
       user_id: userId,
-      keys,
+      keys: phpAssoc(keys),   // no provider configured and no row: [] on the wire, as PHP writes it
       status_code: 200,
     };
   }

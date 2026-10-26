@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { count, entries, has, is_array, isEmptyArr, preg_replace, strtolower, strval, values } from './php';
+import { count, empty, entries, has, is_array, isEmptyArr, preg_replace, strtolower, strval, values } from './php';
 import { CompiledA2AEmit } from './CompiledA2AEmit';
 import { LangGraphPackage } from './LangGraphPackage';
 import { EnvVars, PackageDocs } from './PackageDocs';
@@ -151,7 +151,9 @@ export class CompiledPackage
                 decision.set(strval(c['key_env']), strval(c['url_env']));
             }
         }
-        return { keys, decision, mcp: analyzed['serverSlugs'] ?? [] };
+        // Only a playbook node reads MODEL_NAME (PlaybookEmit.supportBlock(), emitted with the playbook nodes).
+        return { keys, decision, mcp: analyzed['serverSlugs'] ?? [],
+            model: !empty(analyzed['playbooks'] ?? null) ? 'One model for every playbook node, instead of each node\'s own' : null };
     }
 
     /** The optional variables a layout program reads, as .env.example lists them: [what it does, KEY=example]. */

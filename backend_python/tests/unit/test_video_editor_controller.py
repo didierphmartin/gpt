@@ -132,7 +132,7 @@ def test_login_unreachable_message():
     c, _ = controller(config=NO_VE_CONFIG)
     r = c.getUsers(ctx())
     assert r == {'success': False, 'available': False, 'users': [],
-                 'message': 'Login DB not reachable — set LOGIN_DB_* in gpt/backend/.env'}
+                 'message': 'Login DB not reachable — set the LOGIN_DB_* environment variables'}
 
 
 # ─── getUsageStats ───────────────────────────────────────────────────────────

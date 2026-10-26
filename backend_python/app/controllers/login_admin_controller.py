@@ -104,7 +104,7 @@ class LoginAdminController:
         l = self._login()
         if not l:
             return {'success': False, 'available': False,
-                    'message': 'Login DB not reachable — set LOGIN_DB_* in gpt/backend/.env'}
+                    'message': 'Login DB not reachable — set the LOGIN_DB_* environment variables'}
         try:
             stats = {
                 'total_users': php_intval(self._scalar(l, 'SELECT COUNT(*) FROM users')),
@@ -132,7 +132,7 @@ class LoginAdminController:
         l = self._login()
         if not l:
             return {'success': False, 'available': False, 'users': [],
-                    'message': 'Login DB not reachable — set LOGIN_DB_* in gpt/backend/.env'}
+                    'message': 'Login DB not reachable — set the LOGIN_DB_* environment variables'}
         q = php_trim(php_strval((request.get('query') or {}).get('q', '')))
         provider = php_strval((request.get('query') or {}).get('provider', ''))
         where = []
@@ -287,7 +287,7 @@ class LoginAdminController:
         l = self._login()
         if not l:
             return {'success': False, 'available': False, 'apps': [],
-                    'message': 'Login DB not reachable — set LOGIN_DB_* in gpt/backend/.env'}
+                    'message': 'Login DB not reachable — set the LOGIN_DB_* environment variables'}
         try:
             rows = l.fetch_all(
                 'SELECT id, app_id, name, key_prefix, entry_point, created_at, last_used_at, revoked_at\n'
@@ -314,7 +314,7 @@ class LoginAdminController:
         l = self._login()
         if not l:
             return {'success': False, 'available': False, 'users': [],
-                    'message': 'Login DB not reachable — set LOGIN_DB_* in gpt/backend/.env'}
+                    'message': 'Login DB not reachable — set the LOGIN_DB_* environment variables'}
         slug = php_strval((request.get('query') or {}).get('app', ''))
         appId = self._appIdBySlug(l, slug)
         if appId is None:

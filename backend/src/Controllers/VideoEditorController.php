@@ -589,7 +589,7 @@ class VideoEditorController
         if ($err = $this->requireAdmin($request)) return $err;
         $login = $this->login();
         if (!$login) return ['success' => false, 'available' => false, 'users' => [],
-            'message' => 'Login DB not reachable — set LOGIN_DB_* in gpt/backend/.env'];
+            'message' => 'Login DB not reachable — set the LOGIN_DB_* environment variables'];
         $q = trim((string)($request['query']['q'] ?? ''));
         try {
             $params = [];

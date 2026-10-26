@@ -161,7 +161,9 @@ final class CompiledPackage
                 $decision[(string) $c['key_env']] = (string) $c['url_env'];
             }
         }
-        return ['keys' => $keys, 'decision' => $decision, 'mcp' => $analyzed['serverSlugs'] ?? []];
+        // Only a playbook node reads MODEL_NAME (PlaybookEmit::supportBlock(), emitted with the playbook nodes).
+        return ['keys' => $keys, 'decision' => $decision, 'mcp' => $analyzed['serverSlugs'] ?? [],
+            'model' => !empty($analyzed['playbooks']) ? 'One model for every playbook node, instead of each node\'s own' : null];
     }
 
     /** The optional variables a $layout program reads, as .env.example lists them: [what it does, KEY=example]. */

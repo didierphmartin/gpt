@@ -310,13 +310,15 @@ final class LangGraphPackage
                 $decision[(string) $c['key_env']] = (string) $c['url_env'];
             }
         }
-        return ['keys' => $keys, 'decision' => $decision, 'mcp' => $facts['serverSlugs'] ?? []];
+        // Every LangGraph program reads MODEL_NAME: its model factory is in the script, common.py or each agent server.
+        return ['keys' => $keys, 'decision' => $decision, 'mcp' => $facts['serverSlugs'] ?? [],
+            'model' => 'One model for every node, instead of each node\'s own'];
     }
 
     /** The optional variables a $layout program reads, as .env.example lists them: [what it does, KEY=example]. */
     private static function optionalEnv(array $facts, string $layout): array
     {
-        $o = [['One model for every node, instead of each node\'s own', 'MODEL_NAME=']];
+        $o = [];
         $o[] = match ($layout) {
             'single' => ['Where saved outputs go (default: outputs/ next to the script)', 'SYNERGYAI_OUTPUT_ROOT=./outputs'],
             'a2a' => ['Where saved outputs go (default: ~/Documents/synergyAI/outputs)', 'SYNERGYAI_OUTPUT_ROOT=/path/to/outputs'],

@@ -71,7 +71,7 @@ class AdkCodeNodeTest extends TestCase
         self::assertSame('acc-1', trim($out));
         [$rc, $out] = self::runPy($code, '_mcp_headers("http://localhost:8770")', ['MCP_HEADERS_OUTLOOK' => '{oops']);
         self::assertNotSame(0, $rc);
-        self::assertStringContainsString('MCP_HEADERS_OUTLOOK in .env is not valid JSON', $out);
+        self::assertStringContainsString('Environment variable MCP_HEADERS_OUTLOOK is not valid JSON', $out);
     }
 
     public function testUrlOverrideFromEnv(): void

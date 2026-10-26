@@ -8,6 +8,7 @@ import { config } from '../config/env';
 import { PackageResolver } from '../Services/PackageResolver';
 import { ApiKeyCrypto } from '../Services/ApiKeyCrypto';
 import { Ctx, ControllerResult } from '../Support/Http';
+import { phpAssoc, phpJsonDecodeAssoc } from '../Support/PhpJson';
 
 /**
  * Mirrors src/Controllers/SettingsController.php — user-facing settings: API keys (encrypted),
@@ -129,10 +130,10 @@ export class SettingsController {
       success: true,
       usage: {
         current_month: currentMonth,
-        by_provider: byProvider,
+        by_provider: phpAssoc(byProvider),
         // Rates for usage rows the model catalog does not price (decision providers),
         // read from the admin-editable system_llm_settings row.
-        rates: SettingsController.phpMap(rates),
+        rates: phpAssoc(rates),
         totals: { cost_usd: totalCost, tokens: totalTokens, requests: totalRequests },
         lifetime: {
           input_tokens: Number(lifetime.lifetime_input_tokens ?? 0),
@@ -189,11 +190,6 @@ export class SettingsController {
     const rows = await DecisionProviders.rows();
     if (rows.length === 0) return [];
     return decisionProviderList(rows, await packageAllowed(userId), rates);
-  }
-
-  /** PHP json_encodes an empty array as [] (a non-empty keyed one as an object). */
-  private static phpMap<T>(m: Record<string, T>): Record<string, T> | [] {
-    return Object.keys(m).length === 0 ? [] : m;
   }
 
   /** GET /api/v1/settings/keys */
@@ -259,9 +255,11 @@ export class SettingsController {
     const rates = await SettingsController.routerRates(await DecisionProviders.keys());
     const decision_providers = await SettingsController.decisionProviders(userId, rates);
 
+    // Each map is a PHP array: an empty one is [] on the wire, as PHP's json_encode writes it.
     return {
-      success: true, keys: result, models, package_models: packageModels, locked, system_prompts: systemPrompts, endpoints,
-      rates: SettingsController.phpMap(rates), decision_providers,
+      success: true, keys: phpAssoc(result), models: phpAssoc(models), package_models: phpAssoc(packageModels),
+      locked: phpAssoc(locked), system_prompts: phpAssoc(systemPrompts), endpoints: phpAssoc(endpoints),
+      rates: phpAssoc(rates), decision_providers,
     };
   }
 
@@ -560,21 +558,25 @@ export class SettingsController {
     };
 
     for (const row of rows) {
-      let settings = null;
-      try {
-        settings = row.settings ? (typeof row.settings === 'string' ? JSON.parse(row.settings) : row.settings) : null;
-      } catch {
-        settings = null; // json_decode parity — invalid JSON reads as null
-      }
-      result[row.category].providers[row.provider] = {
+      // PHP: $row['settings'] ? json_decode($row['settings'], true) : null -- a decoded {} is [] on the wire.
+      const settings = row.settings && row.settings !== '0' ? phpJsonDecodeAssoc(row.settings) : null;
+      // PHP auto-vivifies another category but answers only avatar and voice.
+      const bucket = result[row.category] ?? (result[row.category] = { providers: {} });
+      bucket.providers[row.provider] = {
         has_key: !!row.api_key,
         settings,
         enabled: row.enabled !== undefined && row.enabled !== null ? !!Number(row.enabled) : true,
       };
-      if (Number(row.is_active) === 1) result[row.category].active = row.provider;
+      if (Number(row.is_active) === 1) bucket.active = row.provider;
     }
 
-    return { success: true, avatar: result.avatar, voice: result.voice, status_code: 200 };
+    // An empty providers map is [] on the wire, as PHP's json_encode writes it.
+    return {
+      success: true,
+      avatar: { ...result.avatar, providers: phpAssoc(result.avatar.providers) },
+      voice: { ...result.voice, providers: phpAssoc(result.voice.providers) },
+      status_code: 200,
+    };
   }
 
   /**

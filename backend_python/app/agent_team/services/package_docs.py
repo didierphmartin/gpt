@@ -7,7 +7,7 @@ their programs are and which files run them; the environment variables come from
 envVariables()), so .env.example and the README name the same ones.
 
 vars, the environment a program reads: {'keys': {KEY: [provider, ...]}, 'decision': {KEY: URL_KEY},
-'mcp': {url: slug}}.
+'mcp': {url: slug}, 'model': what MODEL_NAME does, or None when the program does not read it}.
 """
 from __future__ import annotations
 
@@ -48,6 +48,9 @@ class PackageDocs:
                 L.append(f'# MCP_HEADERS_{up}=')
             L.append('')
         L.append('# Optional')
+        if vars['model'] is not None:
+            L.append(f"# {vars['model']}")
+            L.append('# MODEL_NAME=')
         for what, line in optional:
             L.append(f'# {what}')
             L.append(f'# {line}')
@@ -125,6 +128,8 @@ class PackageDocs:
             L.append(f'- `MCP_HEADERS_{up}` -- only if the MCP server at <{url}> needs HTTP headers: a JSON object,')
             L.append(f'  e.g. `{{"Authorization": "Bearer …"}}`. `MCP_URL_{up}` is already set to that URL; change it only if')
             L.append('  the server moved.')
+        if vars['model'] is not None:
+            L.append('- `MODEL_NAME` -- optional: ' + vars['model'][:1].lower() + vars['model'][1:] + '.')
         L.append('')
         L.append('The other variables in `.env.example` are optional. The program reads `.env` from its own folder; a')
         L.append('variable already set in the environment wins over `.env`.')

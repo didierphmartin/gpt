@@ -53,7 +53,7 @@ test('testHeadersMergeAndBadJsonNamesTheVariable', { skip: PY_SKIP }, () => {
   assert.equal(out.trim(), 'acc-1');
   [rc, out] = runPy(code, '_mcp_headers("http://localhost:8770")', { MCP_HEADERS_OUTLOOK: '{oops' });
   assert.notEqual(rc, 0);
-  assert.ok(out.includes('MCP_HEADERS_OUTLOOK in .env is not valid JSON'), out);
+  assert.ok(out.includes('Environment variable MCP_HEADERS_OUTLOOK is not valid JSON'), out);
 });
 
 test('testUrlOverrideFromEnv', { skip: PY_SKIP }, () => {

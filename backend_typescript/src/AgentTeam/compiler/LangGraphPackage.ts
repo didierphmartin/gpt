@@ -299,12 +299,13 @@ export class LangGraphPackage {
         decision.set(strval(c['key_env']), strval(c['url_env']));
       }
     }
-    return { keys, decision, mcp: at(facts, 'serverSlugs') ?? [] };
+    // Every LangGraph program reads MODEL_NAME: its model factory is in the script, common.py or each agent server.
+    return { keys, decision, mcp: at(facts, 'serverSlugs') ?? [], model: 'One model for every node, instead of each node\'s own' };
   }
 
   /** The optional variables a layout program reads, as .env.example lists them: [what it does, KEY=example]. */
   private static optionalEnv(facts: any, layout: string): Array<[string, string]> {
-    const o: Array<[string, string]> = [['One model for every node, instead of each node\'s own', 'MODEL_NAME=']];
+    const o: Array<[string, string]> = [];
     o.push(layout === 'single' ? ['Where saved outputs go (default: outputs/ next to the script)', 'SYNERGYAI_OUTPUT_ROOT=./outputs']
       : layout === 'a2a' ? ['Where saved outputs go (default: ~/Documents/synergyAI/outputs)', 'SYNERGYAI_OUTPUT_ROOT=/path/to/outputs']
         : ['Where saved outputs go (default: outputs/ in this folder)', 'SYNERGYAI_OUTPUT_ROOT=./outputs']);

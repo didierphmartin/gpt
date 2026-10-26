@@ -8,9 +8,10 @@ import { count, entries, keysOf, strtolower, strtoupper, strval, trim, preg_repl
  * envVariables()), so .env.example and the README name the same ones.
  * Ported from backend/src/AgentTeam/Services/PackageDocs.php.
  *
- * EnvVars, the environment a program reads: keys KEY => providers, decision KEY => URL_KEY, mcp url => slug.
+ * EnvVars, the environment a program reads: keys KEY => providers, decision KEY => URL_KEY, mcp url => slug,
+ * model: what MODEL_NAME does, or null when the program does not read it.
  */
-export type EnvVars = { keys: Map<string, string[]>; decision: Map<string, string>; mcp: any };
+export type EnvVars = { keys: Map<string, string[]>; decision: Map<string, string>; mcp: any; model: string | null };
 
 export class PackageDocs {
   /** Where the editor keeps skills: a single file reads them from there (SYNERGYAI_SKILLS_DIR overrides). */
@@ -52,6 +53,10 @@ export class PackageDocs {
       L.push('');
     }
     L.push('# Optional');
+    if (vars.model !== null) {
+      L.push(`# ${vars.model}`);
+      L.push('# MODEL_NAME=');
+    }
     for (const [what, line] of optional) {
       L.push(`# ${what}`);
       L.push(`# ${line}`);
@@ -135,6 +140,9 @@ export class PackageDocs {
       L.push(`- \`MCP_HEADERS_${up}\` -- only if the MCP server at <${url}> needs HTTP headers: a JSON object,`);
       L.push(`  e.g. \`{"Authorization": "Bearer …"}\`. \`MCP_URL_${up}\` is already set to that URL; change it only if`);
       L.push('  the server moved.');
+    }
+    if (vars.model !== null) {
+      L.push('- `MODEL_NAME` -- optional: ' + vars.model.charAt(0).toLowerCase() + vars.model.slice(1) + '.');
     }
     L.push('');
     L.push('The other variables in `.env.example` are optional. The program reads `.env` from its own folder; a');

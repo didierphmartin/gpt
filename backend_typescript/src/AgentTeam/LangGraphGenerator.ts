@@ -1379,7 +1379,7 @@ export class LangGraphGenerator {
         lines.push('        raise RuntimeError(');
         lines.push('            f"No model specified for provider {p!r}. "');
         lines.push('            "Set a model name on the agent in the workflow editor, "');
-        lines.push('            "or set MODEL_NAME in .env."');
+        lines.push('            "or set the environment variable MODEL_NAME."');
         lines.push('        )');
         lines.push('    match p:');
         lines.push('        case "claude":');

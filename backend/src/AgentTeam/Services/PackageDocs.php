@@ -12,7 +12,7 @@ namespace AgentTeam\Services;
  * envVariables()), so .env.example and the README name the same ones.
  *
  * $vars, the environment a program reads: ['keys' => [KEY => list<provider>], 'decision' => [KEY => URL_KEY],
- * 'mcp' => [url => slug]].
+ * 'mcp' => [url => slug], 'model' => what MODEL_NAME does, or null when the program does not read it].
  */
 final class PackageDocs
 {
@@ -62,6 +62,10 @@ final class PackageDocs
             $L[] = '';
         }
         $L[] = '# Optional';
+        if ($vars['model'] !== null) {
+            $L[] = "# {$vars['model']}";
+            $L[] = '# MODEL_NAME=';
+        }
         foreach ($optional as [$what, $line]) {
             $L[] = "# {$what}";
             $L[] = "# {$line}";
@@ -150,6 +154,9 @@ final class PackageDocs
             $L[] = "- `MCP_HEADERS_{$up}` -- only if the MCP server at <{$url}> needs HTTP headers: a JSON object,";
             $L[] = "  e.g. `{\"Authorization\": \"Bearer …\"}`. `MCP_URL_{$up}` is already set to that URL; change it only if";
             $L[] = '  the server moved.';
+        }
+        if ($vars['model'] !== null) {
+            $L[] = '- `MODEL_NAME` -- optional: ' . lcfirst($vars['model']) . '.';
         }
         $L[] = '';
         $L[] = 'The other variables in `.env.example` are optional. The program reads `.env` from its own folder; a';

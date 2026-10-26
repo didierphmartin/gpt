@@ -49,6 +49,14 @@ export function phpJsonDecodeAssoc(s: unknown): any {
   }
 }
 
+/**
+ * A keyed PHP array built in a response (provider => value): json_encode writes an EMPTY one as `[]`, not
+ * `{}`. Only the top level is reshaped; the values are the caller's.
+ */
+export function phpAssoc<T>(m: Record<string, T>): Record<string, T> | [] {
+  return Object.keys(m).length === 0 ? [] : m;
+}
+
 /** PHP is_array() of a decoded/request value: a list or an object. */
 export function isPhpArray(v: unknown): v is Record<string, any> | any[] {
   return v !== null && typeof v === 'object';
