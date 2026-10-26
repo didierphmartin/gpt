@@ -181,6 +181,28 @@
     }
 
     /**
+     * Ask again for access to the folder picked earlier. Chromium keeps the
+     * handle but drops the grant (state 'prompt', e.g. after a browser
+     * restart); only a user gesture can restore it, so call this from a click.
+     */
+    async function regrantAccess() {
+        if (!isSupported()) return { ok: false };
+        let handle;
+        try {
+            handle = await idbGet(KEY);
+        } catch {
+            return { ok: false };
+        }
+        if (!handle) return { ok: false };
+        try {
+            const status = await handle.requestPermission({ mode: 'readwrite' });
+            return { ok: status === 'granted', name: handle.name };
+        } catch (e) {
+            return { ok: false, error: e?.message || String(e) };
+        }
+    }
+
+    /**
      * Drop the stored handle so the next call to getRootHandle returns null.
      * Useful for "switch folder" or testing flows.
      */
@@ -311,6 +333,7 @@
         getRootHandle,
         getStatus,
         requestRootAccess,
+        regrantAccess,
         revoke,
         resolvePath,
         ensureStandardSubdirs,

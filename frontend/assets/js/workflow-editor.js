@@ -3630,14 +3630,7 @@ class WorkflowEditor {
             return;
         }
 
-        // Bail with a setup prompt if the user hasn't run setup.py yet.
-        // We probe for python/main.py — the runner's entry file — as the
-        // sentinel for "setup has been done".
-        const runnerEntry = await window.localFs.resolvePath('python/main.py', { create: false, kind: 'file' });
-        if (!runnerEntry) {
-            this._showRunnerSetupModal();
-            return;
-        }
+        if (!await this._ensureRunnerReady()) return;
 
         let generated = null;
         const overlay = this._showGeneratingOverlay(
@@ -3805,12 +3798,7 @@ class WorkflowEditor {
             return;
         }
 
-        // Runner-installed sentinel: python/main.py must exist (same probe as LangGraph).
-        const runnerEntry = await window.localFs.resolvePath('python/main.py', { create: false, kind: 'file' });
-        if (!runnerEntry) {
-            this._showRunnerSetupModal();
-            return;
-        }
+        if (!await this._ensureRunnerReady()) return;
 
         let generated = null;
         const overlay = this._showGeneratingOverlay(
@@ -4117,15 +4105,17 @@ class WorkflowEditor {
         this._wireStopServerItem(menu, null);
         menu.querySelector('[data-action="display-code"]')?.addEventListener('click', async () => {
             menu.remove();
-            const codegenMode = this._codegenOptions().mode;
-            if (!isIngestion && codegenMode !== 'single') {
-                try {
-                    const data = await this._fetchManifest(codegenMode);
-                    this._showLangGraphCodeModal('', data.files, '');
-                } catch (e) { alert(`Could not fetch the generated code: ${e?.message || e}`); }
-                return;
-            }
-            this._showLangGraphCodeModal();
+            await this._withProgress(this.t('workflow.output.generating'), async () => {
+                const codegenMode = this._codegenOptions().mode;
+                if (!isIngestion && codegenMode !== 'single') {
+                    try {
+                        const data = await this._fetchManifest(codegenMode);
+                        await this._showLangGraphCodeModal('', data.files, '');
+                    } catch (e) { alert(`Could not fetch the generated code: ${e?.message || e}`); }
+                    return;
+                }
+                await this._showLangGraphCodeModal();
+            });
         });
         menu.querySelector('[data-action="export"]')?.addEventListener('click', () => {
             menu.remove();
@@ -4228,8 +4218,8 @@ class WorkflowEditor {
         this._wireStopServerItem(menu, 'adk');
         menu.querySelector('[data-action="adk-display-code"]')?.addEventListener('click', () => {
             menu.remove();
-            if (isIngestion) { this._showAdkCodeModal(); return; }
-            this._displayTargetCode('adk');
+            this._withProgress(this.t('workflow.output.generatingAdk'),
+                () => (isIngestion ? this._showAdkCodeModal() : this._displayTargetCode('adk')));
         });
         menu.querySelector('[data-action="adk-architecture"]')?.addEventListener('click', () => {
             menu.remove();
@@ -4376,12 +4366,12 @@ class WorkflowEditor {
             <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-4xl max-h-[85vh] flex flex-col" role="dialog" aria-modal="true">
                 <div class="flex items-center justify-between mb-3">
                     <h3 class="text-lg font-semibold text-gray-900">Generated Google ADK code</h3>
-                    <button class="code-copy-btn text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded">Copy</button>
                 </div>
                 ${savedPath ? `<div class="text-xs text-gray-500 mb-2">Saved to <code class="text-gray-700">${this.escapeHtml(savedPath)}</code></div>` : ''}
                 <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 overflow-auto flex-1 select-all"></pre>
-                <div class="flex justify-end mt-3">
-                    <button class="code-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
+                <div class="flex justify-end gap-2 mt-3">
+                    ${this._codeModalActionsHtml()}
+                    <button class="code-close-btn px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${this.escapeHtml(this.t('common.close') || 'Close')}</button>
                 </div>
             </div>
         `;
@@ -4410,15 +4400,7 @@ class WorkflowEditor {
         const close = () => backdrop.remove();
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
         backdrop.querySelector('.code-close-btn').addEventListener('click', close);
-        backdrop.querySelector('.code-copy-btn').addEventListener('click', async () => {
-            try {
-                await navigator.clipboard.writeText(code);
-                const btn = backdrop.querySelector('.code-copy-btn');
-                const prev = btn.textContent;
-                btn.textContent = 'Copied!';
-                setTimeout(() => { btn.textContent = prev; }, 1200);
-            } catch (e) { /* user selects + copies manually */ }
-        });
+        this._wireCodeModalActions(backdrop, 'adk', close);
     }
 
     /**
@@ -4550,8 +4532,8 @@ class WorkflowEditor {
         this._wireStopServerItem(menu, 'maf');
         menu.querySelector('[data-action="maf-display-code"]')?.addEventListener('click', () => {
             menu.remove();
-            if (isIngestion) { this._showMafCodeModal(); return; }
-            this._displayTargetCode('maf');
+            this._withProgress(this.t('workflow.output.generatingMaf'),
+                () => (isIngestion ? this._showMafCodeModal() : this._displayTargetCode('maf')));
         });
         menu.querySelector('[data-action="maf-architecture"]')?.addEventListener('click', () => {
             menu.remove();
@@ -4598,12 +4580,7 @@ class WorkflowEditor {
         try {
             await this._persistIfDirty();  // flush deferred node edits (max_tokens, etc.) first
 
-            // Runner-installed sentinel: python/main.py must exist (same probe as LangGraph).
-            const runnerEntry = await window.localFs.resolvePath('python/main.py', { create: false, kind: 'file' });
-            if (!runnerEntry) {
-                this._showRunnerSetupModal();
-                return;
-            }
+            if (!await this._ensureRunnerReady()) return;
 
             const resp = await fetch(
                 `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-maf?download=1`,
@@ -4770,12 +4747,12 @@ class WorkflowEditor {
             <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-4xl max-h-[85vh] flex flex-col" role="dialog" aria-modal="true">
                 <div class="flex items-center justify-between mb-3">
                     <h3 class="text-lg font-semibold text-gray-900">Generated Microsoft Agent Framework code</h3>
-                    <button class="code-copy-btn text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded">Copy</button>
                 </div>
                 ${savedPath ? `<div class="text-xs text-gray-500 mb-2">Saved to <code class="text-gray-700">${this.escapeHtml(savedPath)}</code></div>` : ''}
                 <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 overflow-auto flex-1 select-all"></pre>
-                <div class="flex justify-end mt-3">
-                    <button class="code-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
+                <div class="flex justify-end gap-2 mt-3">
+                    ${this._codeModalActionsHtml()}
+                    <button class="code-close-btn px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${this.escapeHtml(this.t('common.close') || 'Close')}</button>
                 </div>
             </div>
         `;
@@ -4804,15 +4781,7 @@ class WorkflowEditor {
         const close = () => backdrop.remove();
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
         backdrop.querySelector('.code-close-btn').addEventListener('click', close);
-        backdrop.querySelector('.code-copy-btn').addEventListener('click', async () => {
-            try {
-                await navigator.clipboard.writeText(code);
-                const btn = backdrop.querySelector('.code-copy-btn');
-                const prev = btn.textContent;
-                btn.textContent = 'Copied!';
-                setTimeout(() => { btn.textContent = prev; }, 1200);
-            } catch (e) { /* user selects + copies manually */ }
-        });
+        this._wireCodeModalActions(backdrop, 'maf', close);
     }
 
     /**
@@ -4907,8 +4876,8 @@ class WorkflowEditor {
         this._wireStopServerItem(menu, 'nooa');
         menu.querySelector('[data-action="nooa-display-code"]')?.addEventListener('click', () => {
             menu.remove();
-            if (isIngestion) { this._showNooaCodeModal(); return; }
-            this._displayTargetCode('nooa');
+            this._withProgress(this.t('workflow.output.generatingNooa'),
+                () => (isIngestion ? this._showNooaCodeModal() : this._displayTargetCode('nooa')));
         });
         menu.querySelector('[data-action="nooa-architecture"]')?.addEventListener('click', () => {
             menu.remove();
@@ -4955,12 +4924,7 @@ class WorkflowEditor {
         try {
             await this._persistIfDirty();  // flush deferred node edits (max_tokens, etc.) first
 
-            // Runner-installed sentinel: python/main.py must exist (same probe as LangGraph).
-            const runnerEntry = await window.localFs.resolvePath('python/main.py', { create: false, kind: 'file' });
-            if (!runnerEntry) {
-                this._showRunnerSetupModal();
-                return;
-            }
+            if (!await this._ensureRunnerReady()) return;
 
             const resp = await fetch(
                 `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-nooa?download=1`,
@@ -5131,12 +5095,12 @@ class WorkflowEditor {
             <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-4xl max-h-[85vh] flex flex-col" role="dialog" aria-modal="true">
                 <div class="flex items-center justify-between mb-3">
                     <h3 class="text-lg font-semibold text-gray-900">Generated NVIDIA OO Agents code</h3>
-                    <button class="code-copy-btn text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded">Copy</button>
                 </div>
                 ${savedPath ? `<div class="text-xs text-gray-500 mb-2">Saved to <code class="text-gray-700">${this.escapeHtml(savedPath)}</code></div>` : ''}
                 <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 overflow-auto flex-1 select-all"></pre>
-                <div class="flex justify-end mt-3">
-                    <button class="code-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
+                <div class="flex justify-end gap-2 mt-3">
+                    ${this._codeModalActionsHtml()}
+                    <button class="code-close-btn px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${this.escapeHtml(this.t('common.close') || 'Close')}</button>
                 </div>
             </div>
         `;
@@ -5165,15 +5129,7 @@ class WorkflowEditor {
         const close = () => backdrop.remove();
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
         backdrop.querySelector('.code-close-btn').addEventListener('click', close);
-        backdrop.querySelector('.code-copy-btn').addEventListener('click', async () => {
-            try {
-                await navigator.clipboard.writeText(code);
-                const btn = backdrop.querySelector('.code-copy-btn');
-                const prev = btn.textContent;
-                btn.textContent = 'Copied!';
-                setTimeout(() => { btn.textContent = prev; }, 1200);
-            } catch (e) { /* user selects + copies manually */ }
-        });
+        this._wireCodeModalActions(backdrop, 'nooa', close);
     }
 
     /**
@@ -6039,6 +5995,14 @@ class WorkflowEditor {
             return;
         }
         const mode = this._codegenOptions().mode || 'single';
+        // Compiling the workflow and drawing its diagrams takes seconds: show
+        // that something is happening until the finished document is on screen.
+        await this._withProgress(this.t('workflow.output.langgraphArchitectureLoading'),
+            () => this._renderArchitectureModal(target, mode));
+    }
+
+    /** _showLangGraphArchitectureModal's work, under its progress overlay. */
+    async _renderArchitectureModal(target, mode) {
         let data;
         try {
             if (mode === 'single') {
@@ -6070,6 +6034,7 @@ class WorkflowEditor {
         }
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
+        backdrop.style.display = 'none';  // shown once its diagrams are drawn, when the progress overlay goes
         backdrop.innerHTML = `
             <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-4xl max-h-[85vh] flex flex-col" role="dialog" aria-modal="true">
                 <div class="flex items-center justify-between mb-3">
@@ -6089,7 +6054,11 @@ class WorkflowEditor {
         const close = () => backdrop.remove();
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
         backdrop.querySelector('.arch-close-btn').addEventListener('click', close);
-        if (typeof window.renderMermaidIn === 'function') await window.renderMermaidIn(body);
+        try {
+            if (typeof window.renderMermaidIn === 'function') await window.renderMermaidIn(body);
+        } finally {
+            backdrop.style.display = '';
+        }
     }
 
     /** A failed Export/Architecture request: a toast when the app has one, else an alert. */
@@ -6107,7 +6076,33 @@ class WorkflowEditor {
      * (/workflows/<id>/generate-python) backs the Generate action that
      * downloads the file.
      */
-    async _showLangGraphCodeModal(savedPath = '', providedCode = null, filename = '') {
+    /**
+     * The code views' in-context actions, beside Close: Run and Export do what
+     * the canvas menu items of the same target do (same code structure), so the
+     * user can act on the code they are reading. An ingestion workflow runs
+     * server-side and has no package to export, so it gets Run only.
+     */
+    _codeModalActionsHtml() {
+        const btn = (cls, label, primary) => `<button class="${cls} px-4 py-2 text-sm font-medium rounded ${primary
+            ? 'text-white bg-blue-600 hover:bg-blue-700' : 'text-gray-700 bg-gray-100 hover:bg-gray-200'}">${this.escapeHtml(label)}</button>`;
+        return (this._isIngestionWorkflow() ? '' : btn('code-export-btn', this.t('workflow.output.langgraphExport'), false))
+            + btn('code-run-btn', this.t('workflow.output.langgraphRun'), true);
+    }
+
+    /** Wire _codeModalActionsHtml's buttons. Run closes the code view: the run shows in its own overlay. */
+    _wireCodeModalActions(backdrop, target, close) {
+        backdrop.querySelector('.code-run-btn')?.addEventListener('click', () => {
+            close();
+            if (this._isIngestionWorkflow()) this._runIngestion();
+            else if (target === 'langgraph') this._runLangGraphScript();
+            else this._runCompiledTarget(target);
+        });
+        backdrop.querySelector('.code-export-btn')?.addEventListener('click', () => {
+            this._exportLangGraphZip(target === 'langgraph' ? null : target);
+        });
+    }
+
+    async _showLangGraphCodeModal(savedPath = '', providedCode = null, filename = '', target = 'langgraph') {
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
             return;
@@ -6152,7 +6147,6 @@ class WorkflowEditor {
             <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-4xl max-h-[85vh] flex flex-col" role="dialog" aria-modal="true">
                 <div class="flex items-center justify-between mb-3">
                     <h3 class="text-lg font-semibold text-gray-900">${this._isIngestionWorkflow() ? 'Generated ingestion script (standalone Python)' : 'Generated LangGraph code'}</h3>
-                    <button class="code-copy-btn text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded">Copy</button>
                 </div>
                 ${files ? `<div class="flex items-center gap-2 mb-2">
                     <label class="text-xs text-gray-500">File</label>
@@ -6168,8 +6162,9 @@ class WorkflowEditor {
                 </div>`
                 : (savedPath ? `<div class="text-xs text-gray-500 mb-2">Saved to <code class="text-gray-700">${this.escapeHtml(savedPath)}</code></div>` : '')}
                 <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 overflow-auto flex-1 select-all"></pre>
-                <div class="flex justify-end mt-3">
-                    <button class="code-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
+                <div class="flex justify-end gap-2 mt-3">
+                    ${this._codeModalActionsHtml()}
+                    <button class="code-close-btn px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${this.escapeHtml(this.t('common.close') || 'Close')}</button>
                 </div>
             </div>
         `;
@@ -6210,15 +6205,7 @@ class WorkflowEditor {
         const close = () => backdrop.remove();
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
         backdrop.querySelector('.code-close-btn').addEventListener('click', close);
-        backdrop.querySelector('.code-copy-btn').addEventListener('click', async () => {
-            try {
-                await navigator.clipboard.writeText(code);
-                const btn = backdrop.querySelector('.code-copy-btn');
-                const prev = btn.textContent;
-                btn.textContent = 'Copied!';
-                setTimeout(() => { btn.textContent = prev; }, 1200);
-            } catch (e) { /* user just selects + copies manually */ }
-        });
+        this._wireCodeModalActions(backdrop, target, close);
         // Ingestion: save the script to the chosen location (default langchain_runner).
         const saveBtn = backdrop.querySelector('.code-save-btn');
         if (saveBtn) saveBtn.addEventListener('click', async () => {
@@ -6364,7 +6351,7 @@ class WorkflowEditor {
         try {
             await this._persistIfDirty();
             const data = await this._writeManifest(opts.mode, target);
-            this._showLangGraphCodeModal('', data.files, '');
+            this._showLangGraphCodeModal('', data.files, '', target);
         } catch (e) { alert(`Could not generate the workflow package: ${e?.message || e}`); }
     }
 
@@ -6374,7 +6361,7 @@ class WorkflowEditor {
         if (mode === 'single') return this._targetUi(target).code();
         try {
             const data = await this._fetchManifest(mode, target);
-            this._showLangGraphCodeModal('', data.files, '');
+            this._showLangGraphCodeModal('', data.files, '', target);
         } catch (e) { alert(`Could not fetch the generated code: ${e?.message || e}`); }
     }
 
@@ -6730,52 +6717,121 @@ class WorkflowEditor {
     }
 
     /**
-     * Modal shown the first time the user clicks "Generate" if
-     * the synergyAI/python/ folder hasn't been provisioned yet. Tells
-     * them how to run setup.py once.
+     * True when <granted folder>/python/ can run a compiled script; otherwise
+     * shows the Setup modal and returns false.
+     *
+     * The runner files are the browser's job: when main.py is missing (the
+     * wizard's deployRunner failed, or the folder predates it) they are written
+     * here, through the handle. Only the virtualenv needs a terminal, so only a
+     * missing .venv (its pyvenv.cfg, the same on every OS) opens the modal --
+     * once the user has run its command, Generate goes straight through.
      */
-    _showRunnerSetupModal() {
+    async _ensureRunnerReady() {
+        const files = await this._ensureRunnerFiles();
+        const venv = await window.localFs.resolvePath('python/.venv/pyvenv.cfg', { create: false, kind: 'file' });
+        if (!files.ok || !venv) {
+            await this._showRunnerSetupModal(files);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Make sure <granted folder>/python/ holds the runner files the venv
+     * command needs (main.py, requirements.txt), copying them in when either is
+     * missing. @returns {Promise<{ok: boolean, error: string|null}>}
+     */
+    async _ensureRunnerFiles() {
+        const probe = (path) => window.localFs.resolvePath(path, { create: false, kind: 'file' });
+        const present = async () => !!(await probe('python/main.py')) && !!(await probe('python/requirements.txt'));
+        if (await present()) return { ok: true, error: null };
+        const res = await window.localFs.deployRunner();
+        if (await present()) return { ok: true, error: null };
+        return { ok: false, error: res.error || (res.skipped.length ? res.skipped.join(', ') : 'unknown error') };
+    }
+
+    /**
+     * Modal with the one terminal step the runner needs: creating its
+     * virtualenv inside <granted folder>/python/. The command reads
+     * requirements.txt from that folder, so the runner files are copied in
+     * first -- which needs the folder grant. When the grant is missing the
+     * modal says what to do and offers the click that fixes it (Chromium drops
+     * the grant on restart and only a user gesture restores it), then redraws.
+     * `files` is _ensureRunnerFiles()'s result, when the caller already has it.
+     */
+    async _showRunnerSetupModal(files = null) {
         // The install wizard already wrote the runner into <granted folder>/python/
         // (localFs.deployRunner), because a page cannot learn that folder's
         // absolute path and so could never tell setup.py where to install. What
         // is left needs a process, which a browser has none of: the virtualenv.
-        // So this prints the venv command, relative to the folder the user
-        // picked -- they know where that is, and nothing here can be wrong on
-        // their machine. The CLI route (setup.py --force, from a checkout)
+        // So this prints the venv command, run from <picked folder>/python --
+        // the user knows where that is, and nothing here can be wrong on their
+        // machine. The CLI route (setup.py --force, from a checkout)
         // remains for anyone installing without the wizard.
-        const folder = this.localFolderName || (this.t('workflow.runnerSetup.yourFolder') || 'your Synergy folder');
-        const cmd = `cd python && python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt`;
+        const cmd = `python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt`;
+        const esc = (s) => this.escapeHtml(s);
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
-        backdrop.innerHTML = `
-            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
-                <h3 class="text-lg font-semibold text-gray-900 mb-2">
-                    ${this.escapeHtml(this.t('workflow.runnerSetup.title') || 'Python runtime not installed')}
-                </h3>
-                <p class="text-sm text-gray-600 mb-3">
-                    ${this.escapeHtml(this.t('workflow.runnerSetup.body')
-                        || `The install wizard put the runner in the "python" folder of ${folder}. It needs a virtual environment once — a browser cannot create one. Open a terminal in that folder and run:`)}
-                </p>
-                <div class="relative mb-3">
-                    <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${this.escapeHtml(cmd)}</pre>
-                    <button class="cmd-copy-btn absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="${this.escapeHtml(this.t('workflow.runnerSetup.copy') || 'Copy command')}">📋</button>
-                </div>
-                <p class="text-xs text-gray-500 mb-4">
-                    ${this.escapeHtml(this.t('workflow.runnerSetup.note')
-                        || 'That builds one shared venv for the LangGraph, ADK, MAF and NOOA runtimes. Then start the runner from the same folder: ./.venv/bin/python main.py — not bare python3, or the generated scripts run without their packages. Compiled workflows need a real folder on disk: a local Python process runs them, so browser-only storage (OPFS) cannot host them — chat and Pyodide skills still work there.')}
-                </p>
-                <div class="flex justify-end">
-                    <button type="button" class="close-btn px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-md">
-                        ${this.escapeHtml(this.t('common.close') || 'Close')}
-                    </button>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(backdrop);
         const close = () => backdrop.remove();
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
-        backdrop.querySelector('.close-btn').addEventListener('click', close);
-        this._wireCmdCopyBtn(backdrop.querySelector('.cmd-copy-btn'), cmd);
+        document.body.appendChild(backdrop);
+
+        const render = async () => {
+            const status = window.localFs?.getStatus ? await window.localFs.getStatus() : { state: 'unsupported' };
+            const folder = status.name || 'synergyAI';
+            let content = '';
+            let action = null;  // { label, run } for the fix-it button
+            if (status.state === 'unsupported') {
+                content = `<p class="text-sm text-gray-700 mb-4">${esc(this.t('workflow.runnerSetup.unsupported'))}</p>`;
+            } else if (status.state === 'prompt') {
+                content = `<p class="text-sm text-gray-700 mb-4">${esc(this.t('workflow.runnerSetup.regrant', { folder }))}</p>`;
+                action = { label: this.t('workflow.runnerSetup.regrantButton', { folder }), run: () => window.localFs.regrantAccess() };
+            } else if (status.state !== 'granted') {
+                content = `<p class="text-sm text-gray-700 mb-4">${esc(this.t('workflow.runnerSetup.pickFolder'))}</p>`;
+                action = { label: this.t('workflow.runnerSetup.pickFolderButton'), run: () => window.localFs.requestRootAccess('synergyAI') };
+            } else {
+                files = files || await this._ensureRunnerFiles();
+                const venv = files.ok && await window.localFs.resolvePath('python/.venv/pyvenv.cfg', { create: false, kind: 'file' });
+                if (!files.ok) {
+                    content = `<p class="text-sm text-red-700 mb-4">${esc(this.t('workflow.runnerSetup.copyFailed', { folder, error: files.error }))}</p>`;
+                    action = { label: this.t('workflow.runnerSetup.retryButton'), run: async () => ({ ok: true }) };
+                } else if (venv) {
+                    content = `<p class="text-sm text-gray-700 mb-4">${esc(this.t('workflow.runnerSetup.ready', { folder }))}</p>`;
+                } else {
+                    content = `
+                        <p class="text-sm text-gray-600 mb-3">${esc(this.t('workflow.runnerSetup.body', { folder }))}</p>
+                        <div class="relative mb-3">
+                            <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${esc(cmd)}</pre>
+                            <button class="cmd-copy-btn absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="${esc(this.t('workflow.runnerSetup.copy') || 'Copy command')}">📋</button>
+                        </div>
+                        <p class="text-xs text-gray-500 mb-4">${esc(this.t('workflow.runnerSetup.note'))}</p>`;
+                }
+            }
+            backdrop.innerHTML = `
+                <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
+                    <h3 class="text-lg font-semibold text-gray-900 mb-2">
+                        ${esc(this.t('workflow.runnerSetup.title') || 'Python runtime not installed')}
+                    </h3>
+                    ${content}
+                    <div class="flex justify-end gap-2">
+                        ${action ? `<button type="button" class="fix-btn px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded-md">${esc(action.label)}</button>` : ''}
+                        <button type="button" class="close-btn px-4 py-2 text-sm ${action ? 'bg-gray-100 text-gray-700 hover:bg-gray-200' : 'bg-blue-600 text-white hover:bg-blue-700'} rounded-md">
+                            ${esc(this.t('common.close') || 'Close')}
+                        </button>
+                    </div>
+                </div>
+            `;
+            backdrop.querySelector('.close-btn').addEventListener('click', close);
+            const copyBtn = backdrop.querySelector('.cmd-copy-btn');
+            if (copyBtn) this._wireCmdCopyBtn(copyBtn, cmd);
+            backdrop.querySelector('.fix-btn')?.addEventListener('click', async () => {
+                const res = await action.run();
+                if (res?.cancelled) return;
+                files = null;  // the folder changed or came back: check its files again
+                await render();
+            });
+        };
+        await render();
     }
 
     /**
@@ -6790,6 +6846,16 @@ class WorkflowEditor {
      * python doc is done (success or error).
      * @returns {{close: () => void}}
      */
+    /** Run `work` (async) under the progress overlay, closing it however `work` ends. */
+    async _withProgress(label, work) {
+        const overlay = this._showGeneratingOverlay(label);
+        try {
+            return await work();
+        } finally {
+            overlay.close();
+        }
+    }
+
     _showGeneratingOverlay(label) {
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';

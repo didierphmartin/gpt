@@ -1214,6 +1214,7 @@
       "langgraphStop": "Stop",
       "langgraphExport": "Export",
       "langgraphArchitecture": "Architecture",
+      "langgraphArchitectureLoading": "Building the architecture document…",
       "langgraphExportFailed": "Export failed",
       "langgraphArchitectureFailed": "Could not load the architecture",
       "langgraphExportUnsupported": "Export is not available on this backend",
@@ -1282,9 +1283,17 @@
     },
     "runnerSetup": {
       "title": "Python runtime not installed",
-      "body": "Compiled scripts run from ~/Documents/synergyAI/python/ (venv: .venv). Install or update the runtime once — open a terminal and run:",
+      "body": "Generated scripts run from the \"python\" folder inside {{folder}}, the folder you picked for SynergyAI. That folder needs a Python virtual environment once — a browser cannot create one. Open a terminal in {{folder}}/python and run:",
       "copy": "Copy command",
-      "note": "This installs both the LangGraph and Google ADK runtimes into one shared venv at ~/Documents/synergyAI/python/.venv (plus the PyPI packages your skills declare). Re-run any time to pick up new dependencies. After it finishes, click Generate again."
+      "copyFailed": "Could not copy the Python runner (main.py, requirements.txt) into {{folder}}/python: {{error}}. Check that SynergyAI still has access to that folder, then try again.",
+      "regrant": "Your browser needs your permission again to use the {{folder}} folder (browsers forget it after a restart). Click \"Allow access to {{folder}}\", then choose \"Allow\" in the browser prompt.",
+      "regrantButton": "Allow access to {{folder}}",
+      "pickFolder": "SynergyAI has no local folder yet. Click \"Choose folder\", select your SynergyAI folder (usually Documents/synergyAI, or create it), then choose \"Allow\" in the browser prompt.",
+      "pickFolderButton": "Choose folder",
+      "unsupported": "Compiled workflows run on your computer, which needs a browser that can use local folders. Open SynergyAI in Chrome, Edge or Brave and try again.",
+      "retryButton": "Try again",
+      "ready": "Close this and select \"Generate\" again in the canvas top menu.",
+      "note": "That builds one shared venv for the LangGraph, ADK and MAF runtimes (a NOOA package lists its own pip command at the top of its generated script). Then, from the same folder, start the runner with ./.venv/bin/python main.py — not bare python3, or the scripts run without their packages. After it finishes, select \"Generate\" again in the canvas top menu."
     },
     "worker": "worker",
     "mcpServers": "MCP SERVERS",

@@ -1214,6 +1214,7 @@
       "langgraphStop": "Detener",
       "langgraphExport": "Exportar",
       "langgraphArchitecture": "Arquitectura",
+      "langgraphArchitectureLoading": "Generando el documento de arquitectura…",
       "langgraphExportFailed": "La exportación falló",
       "langgraphArchitectureFailed": "No se pudo cargar la arquitectura",
       "langgraphExportUnsupported": "La exportación no está disponible en este backend",
@@ -1282,9 +1283,17 @@
     },
     "runnerSetup": {
       "title": "Runtime de Python no instalado",
-      "body": "Los scripts compilados se ejecutan desde ~/Documents/synergyAI/python/ (venv: .venv). Instala o actualiza el runtime una vez — abre una terminal y ejecuta:",
+      "body": "Los scripts generados se ejecutan desde la carpeta \"python\" dentro de {{folder}}, la carpeta que elegiste para SynergyAI. Esa carpeta necesita un entorno virtual de Python una vez — un navegador no puede crearlo. Abre una terminal en {{folder}}/python y ejecuta:",
       "copy": "Copiar comando",
-      "note": "Esto instala los runtimes de LangGraph y Google ADK en un venv compartido en ~/Documents/synergyAI/python/.venv (además de los paquetes PyPI que declaran tus skills). Vuelve a ejecutarlo cuando quieras para obtener nuevas dependencias. Cuando termine, haz clic en Generar de nuevo."
+      "copyFailed": "No se pudo copiar el runner de Python (main.py, requirements.txt) en {{folder}}/python: {{error}}. Comprueba que SynergyAI sigue teniendo acceso a esa carpeta y vuelve a intentarlo.",
+      "regrant": "Tu navegador necesita de nuevo tu permiso para usar la carpeta {{folder}} (los navegadores lo olvidan tras reiniciarse). Haz clic en \"Permitir acceso a {{folder}}\" y elige \"Permitir\" en el aviso del navegador.",
+      "regrantButton": "Permitir acceso a {{folder}}",
+      "pickFolder": "SynergyAI aún no tiene una carpeta local. Haz clic en \"Elegir carpeta\", selecciona tu carpeta de SynergyAI (normalmente Documentos/synergyAI, o créala) y elige \"Permitir\" en el aviso del navegador.",
+      "pickFolderButton": "Elegir carpeta",
+      "unsupported": "Los flujos compilados se ejecutan en tu ordenador, lo que requiere un navegador que pueda usar carpetas locales. Abre SynergyAI en Chrome, Edge o Brave e inténtalo de nuevo.",
+      "retryButton": "Reintentar",
+      "ready": "Cierra esto y selecciona de nuevo \"Generar\" en el menú superior del lienzo.",
+      "note": "Esto crea un venv compartido para los runtimes de LangGraph, ADK y MAF (un paquete NOOA indica su propio comando pip al inicio de su script generado). Después, desde la misma carpeta, inicia el runner con ./.venv/bin/python main.py — no con python3 a secas, o los scripts se ejecutan sin sus paquetes. Cuando termine, selecciona de nuevo \"Generar\" en el menú superior del lienzo."
     },
     "worker": "worker",
     "mcpServers": "SERVIDORES MCP",
