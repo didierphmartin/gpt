@@ -25,6 +25,20 @@ export class FileStorageController {
   // htdocs/storage, from src/Controllers and dist/Controllers alike.
   private static readonly STORAGE_BASE = path.resolve(__dirname, '../../../../storage');
 
+  constructor(private readonly storageBase: string = FileStorageController.STORAGE_BASE) {}
+
+  /**
+   * A storage path as 'a/b/c' (no leading or trailing slash), or null when it has a '.' or '..'
+   * segment or a NUL byte: paths come from the request and from the user's own settings, and must
+   * stay under the user's folder.
+   */
+  private static safeRelative(p: string): string | null {
+    if (p.includes('\0')) return null;
+    const parts = p.replace(/\\/g, '/').split('/').filter((x) => x !== '');
+    if (parts.some((x) => x === '.' || x === '..')) return null;
+    return parts.join('/');
+  }
+
   /**
    * Build the full path including the root folder
    * Structure: synergyaichatroot/{user_folder}/{path}
@@ -72,12 +86,15 @@ export class FileStorageController {
     }
 
     // Get parameters from query string
-    const relativePath = String(ctx.query.path ?? ''); // Path relative to user's folder
+    const relativePath = FileStorageController.safeRelative(String(ctx.query.path ?? '')); // Path relative to user's folder
+    if (relativePath === null) {
+      return { success: false, error: 'Invalid path', items: [] };
+    }
 
     // Get user's storage config
     const storageConfig = await this.getUserStorageConfig(userId);
     const provider = storageConfig.provider;
-    const userFolder = storageConfig.folder;
+    const userFolder = FileStorageController.safeRelative(String(storageConfig.folder ?? '')) ?? '';
 
     // Check if storage folder is configured
     if (!userFolder) {
@@ -134,9 +151,17 @@ export class FileStorageController {
       return { success: false, error: 'File ID is required' };
     }
 
+    // fileId is the path a listing returned: it must lie inside this user's folder
+    const storageConfig = await this.getUserStorageConfig(userId);
+    const userFolder = FileStorageController.safeRelative(String(storageConfig.folder ?? '')) ?? '';
+    const relativeFile = FileStorageController.safeRelative(fileId);
+    if (userFolder === '' || relativeFile === null || !relativeFile.startsWith(this.buildFullPath(userFolder) + '/')) {
+      return { success: false, error: 'File not found' };
+    }
+
     try {
       // No universalFS adapter in the TS backend — read from local storage.
-      return await this.readLocalFile(userId, fileId);
+      return await this.readLocalFile(relativeFile);
     } catch (e: any) {
       console.error('[FileStorageController] readFile error: ' + (e?.message ?? e));
       return { success: false, error: e?.message ?? 'Read failed' };
@@ -148,8 +173,7 @@ export class FileStorageController {
    * Uses the same structure: storage/{ROOT_FOLDER}/{user_folder}/{path}
    */
   private async listLocalFiles(_userId: number, relPath: string): Promise<ControllerResult> {
-    const basePath = FileStorageController.STORAGE_BASE;
-    const fullPath = basePath + '/' + relPath.replace(/^\/+/, '');
+    const fullPath = this.storageBase + '/' + relPath.replace(/^\/+/, '');
 
     const dirStat = await fs.stat(fullPath).catch(() => null);
     if (!dirStat || !dirStat.isDirectory()) {
@@ -206,9 +230,8 @@ export class FileStorageController {
   }
 
   /** Read local file (fallback) */
-  private async readLocalFile(userId: number, filePath: string): Promise<ControllerResult> {
-    const basePath = FileStorageController.STORAGE_BASE;
-    const fullPath = basePath + '/user_' + userId + '/' + filePath.replace(/^\/+/, '');
+  private async readLocalFile(filePath: string): Promise<ControllerResult> {
+    const fullPath = this.storageBase + '/' + filePath;
 
     const st = await fs.stat(fullPath).catch(() => null);
     if (!st || !st.isFile()) {
