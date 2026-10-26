@@ -94,13 +94,12 @@ def test_firebase_for_robot_is_refused_and_touches_nothing(db, auth, claims, rob
     assert row_count(db) == 2
 
 
-def test_webauthn_for_robot_is_credential_not_found(db, robot_id):
+def test_webauthn_for_robot_gives_no_token(db, robot_id):
     db.execute(f"INSERT INTO webauthn_credentials (user_id, credential_id) VALUES ({robot_id}, 'cred-r')")
     w = WebAuthnController(db, {'auth': {'jwt_secret': SECRET}})
     r = w.authenticate({'body': {'credential_id': 'cred-r', 'signature': 's', 'authenticator_data': 'a',
                                  'client_data_json': 'c'}})
-    assert r['status_code'] == 404
-    assert r['code'] == 'CREDENTIAL_NOT_FOUND'
+    assert r['code'] == 'PASSKEY_SIGNIN_OFF'
     assert 'token' not in r
 
 
