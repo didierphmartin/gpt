@@ -3,6 +3,7 @@ import { initFileLogging } from './Services/Logger';
 import { config } from './config/env';
 import { MiddlewareProcessor } from './Middleware/MiddlewareProcessor';
 import { router } from './routes';
+import { routeMiss } from './Support/RouteMiss';
 
 // Mirror all console output into a log file (the Node equivalent of PHP's error_log).
 // File: backend_typescript/logs/backend.log. All request handling happens after this,
@@ -62,10 +63,8 @@ app.use(middleware.auth.handle);
 // Routes.
 app.use(router);
 
-// 404 — matches index.php route-miss envelope.
-app.use((req: Request, res: Response) => {
-  res.status(404).json({ success: false, error: 'Endpoint not found', uri: req.path });
-});
+// 405 / 404 — matches index.php's route-miss envelopes.
+app.use(routeMiss(router));
 
 // Fallback error handler.
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

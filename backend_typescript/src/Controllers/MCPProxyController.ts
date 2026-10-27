@@ -1,6 +1,7 @@
 import { db } from '../db/pools';
 import { McpEndpoint } from '../Services/McpEndpoint';
 import { Ctx, ControllerResult } from '../Support/Http';
+import { phpStr } from '../Playbook/php';
 
 /** Per-call error slot so concurrent requests don't clobber each other's message. */
 interface ErrRef {
@@ -50,7 +51,7 @@ export class MCPProxyController {
       default:
         return {
           success: false,
-          error: { code: -32600, message: 'Unknown action: ' + action },
+          error: { code: -32600, message: 'Unknown action: ' + (action !== null && typeof action === 'object' ? 'Array' : phpStr(action)) },
           status_code: 400,
         };
     }

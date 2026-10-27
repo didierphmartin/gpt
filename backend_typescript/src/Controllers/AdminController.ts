@@ -3581,14 +3581,6 @@ Return ONLY the JSON array, no explanation or markdown.`;
           pricingUrl: 'https://platform.moonshot.cn/docs/pricing',
           lastUpdated: null,
         },
-        {
-          provider: 'gamma4',
-          displayName: 'Gamma4',
-          category: 'llm',
-          tiers: [{ name: 'Gemma-4-E4B-it', price: '$0.00', unit: '/ 1M input tokens', details: 'Free' }],
-          pricingUrl: null,
-          lastUpdated: null,
-        },
       ],
       voice: [
         {

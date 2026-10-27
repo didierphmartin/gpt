@@ -2,12 +2,13 @@
  * The TS Express app, built without listening — a mirror of src/index.ts (which builds the app
  * inline and calls app.listen(config.port) on import, so it cannot be mounted in-process).
  * Keep in step with src/index.ts: CORS, the PHP-style JSON body parser, global auth, the router,
- * the 404 envelope and the fallback error handler. Process-level handlers and file logging are
+ * the 405/404 envelopes and the fallback error handler. Process-level handlers and file logging are
  * left out (the test process owns those).
  */
 import express, { Request, Response, NextFunction, Express } from 'express';
 import { MiddlewareProcessor } from '../../src/Middleware/MiddlewareProcessor';
 import { router } from '../../src/routes';
+import { routeMiss } from '../../src/Support/RouteMiss';
 
 export function buildApp(): Express {
   const app = express();
@@ -45,9 +46,7 @@ export function buildApp(): Express {
   app.use(middleware.auth.handle);
   app.use(router);
 
-  app.use((req: Request, res: Response) => {
-    res.status(404).json({ success: false, error: 'Endpoint not found', uri: req.path });
-  });
+  app.use(routeMiss(router));
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     console.error('[app error]', err);

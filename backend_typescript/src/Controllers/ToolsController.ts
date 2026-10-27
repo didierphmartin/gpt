@@ -15,10 +15,7 @@ import { SearchFunctions } from '../Functions/SearchFunctions';
  * POST /api/v1/tools/execute         — executes a single tool by name (realtime audio runner).
  * POST /api/v1/tools/classify-intent — asks a cheap LLM whether a transcript implied a tool call.
  *
- * Parity note (list): PHP filters MCP servers by the role-based package allowlist. list() predates
- * the TS PackageResolver and still loads the caller's servers with no allowlist (show all), like
- * ProviderController.list. execute() below DOES apply the allowlist (PackageResolver has since
- * landed) — wire it into list() when revisiting.
+ * list() and execute() both filter MCP servers by the caller's role-based package allowlist, as PHP does.
  */
 export class ToolsController {
   private readonly toolsManager: ToolsManager;
@@ -62,7 +59,7 @@ export class ToolsController {
     if (typeFilter === 'all' || typeFilter === 'mcp') {
       try {
         const mcpLoader = new MCPToolsLoader();
-        await mcpLoader.loadToolsForUser(ctx.user_id ?? null, null);
+        await mcpLoader.loadToolsForUser(ctx.user_id ?? null, await this.resolvePackageMcpAllowlist(ctx));
 
         if (mcpLoader.hasTools()) {
           for (const tool of mcpLoader.getToolDefinitions()) {

@@ -18,7 +18,7 @@ function ctx(over: Record<string, any> = {}): any {
 test('debugAuth reports the identity the middleware established', () => {
   const r = new AuthController().debugAuth(ctx({ user_id: 5, authenticated: true, headers: { authorization: 'Bearer t' } }));
   assert.deepEqual(r, {
-    success: true, user_id: 5, authenticated: true, has_auth_header: true, php_version: process.version, status_code: 200,
+    success: true, user_id: 5, authenticated: true, has_auth_header: true, php_version: '8.2.4', status_code: 200,
   });
 });
 
@@ -27,6 +27,16 @@ test('debugAuth without an identity or header', () => {
   assert.equal(r.user_id, null);
   assert.equal(r.authenticated, false);
   assert.equal(r.has_auth_header, false);
+});
+
+test("login and firebase treat '0' as empty, like PHP empty()", async () => {
+  const auth = new AuthController();
+  const login = await auth.login(ctx({ method: 'POST', body: { email: '0', password: 'x' } }));
+  assert.equal(login.status_code, 400);
+  assert.equal(login.message, 'Email and password are required');
+  const fb = await auth.firebaseAuth(ctx({ method: 'POST', body: { provider: 'google', idToken: '0' } }));
+  assert.equal(fb.status_code, 400);
+  assert.equal(fb.message, 'Invalid authentication data');
 });
 
 function registered(method: string, path: string): boolean {

@@ -21,6 +21,11 @@ type Handler = (params: any, context: DelegationContext) => Promise<any>;
 export class AgentDelegationFunctions {
   constructor(private repository: AgentRepository, private runner: AgentRunner) {}
 
+  /** PHP AgentDelegationFunctions::getToolNames(): the names the provider list advertises (no complete_task). */
+  static getToolNames(): string[] {
+    return ['delegate_to_agent', 'list_available_agents', 'run_agents_parallel'];
+  }
+
   static toolNames(): string[] {
     return ['delegate_to_agent', 'list_available_agents', 'complete_task', 'run_agents_parallel'];
   }

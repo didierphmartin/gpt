@@ -5,6 +5,9 @@ import { MCPToolsLoader } from '../Services/MCPToolsLoader';
 import { SearchFunctions } from '../Functions/SearchFunctions';
 import { LLMProviderResolver } from '../Services/LLMProviderResolver';
 import { chatProviderRows } from '../Services/ProviderKinds';
+import { PackageResolver } from '../Services/PackageResolver';
+import { AgentDelegationFunctions } from '../AgentTeam/AgentDelegationFunctions';
+import { phpEmpty } from '../Playbook/php';
 
 /** Mirrors src/Controllers/ProviderController.php (the provider picker's data source). */
 export class ProviderController {
@@ -45,21 +48,47 @@ export class ProviderController {
     }));
   }
 
+  /**
+   * The provider names the caller's package enables (providers[name].enabled truthy), or null when the
+   * package has no providers entry ("show everything"). Mirrors resolvePackageAllowedProviders.
+   */
+  private async resolvePackageAllowedProviders(userId: number | null): Promise<string[] | null> {
+    try {
+      const pkg: any = await new PackageResolver().resolveForUser(userId);
+      const providers = pkg?.capabilities?.providers ?? null;
+      if (providers === null || typeof providers !== 'object') return null;
+      return Object.entries(providers)
+        .filter(([, cfg]: [string, any]) => cfg !== null && typeof cfg === 'object' && !phpEmpty(cfg.enabled))
+        .map(([name]) => name);
+    } catch (e: any) {
+      console.error('[ProviderController] Package allowlist resolution failed: ' + (e?.message ?? e));
+      return null;
+    }
+  }
+
   /** GET /api/v1/providers */
   async list(ctx: Ctx): Promise<ControllerResult> {
     try {
-      const allProviders = await this.getProvidersFromDatabase();
+      let allProviders = await this.getProvidersFromDatabase();
       const userId = ctx.user_id;
+      const userIdForPackage = userId !== null && userId !== undefined && /^\d+$/.test(String(userId)) ? Number(userId) : null;
 
-      // Built-in function names + the user's MCP tool names (package allowlist not yet ported → all).
+      // Package-based allowlist: keep only providers the caller's role-based package has enabled.
+      const allowedProviders = await this.resolvePackageAllowedProviders(userIdForPackage);
+      if (allowedProviders !== null) allProviders = allProviders.filter((p) => allowedProviders.includes(p.name ?? ''));
+
+      // Built-in function names + the GLOBAL MCP servers' tool names the package allows (PHP loads
+      // with no user, so private servers are not listed) + the delegation tools.
       const functions = this.toolsManager.getRegisteredFunctions();
       try {
+        const mcpAllowlist = await new PackageResolver().allowedMcpServers(userIdForPackage);
         const mcp = new MCPToolsLoader();
-        await mcp.loadToolsForUser(userId ?? null);
+        await mcp.loadToolsForUser(null, mcpAllowlist);
         for (const name of mcp.getTools().keys()) functions.push(name);
-      } catch {
-        /* fail soft */
+      } catch (e: any) {
+        console.error('ProviderController: Failed to load MCP tools: ' + (e?.message ?? e));
       }
+      for (const name of AgentDelegationFunctions.getToolNames()) functions.push(name);
 
       let userHasCustomKeys = false;
       let userEnabledProviders: string[] = [];
@@ -102,7 +131,7 @@ export class ProviderController {
     }
     const cfg = await LLMProviderResolver.getProviderConfig(newProvider);
     if (!cfg) {
-      return { status_code: 400, success: false, error: `Provider '${newProvider}' not available` };
+      return { status_code: 400, success: false, error: `Provider '${newProvider}' is not available` };
     }
     return { success: true, message: `Switched to provider: ${newProvider}`, current_provider: newProvider };
   }
