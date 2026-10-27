@@ -4361,7 +4361,7 @@
     <script src="assets/js/startup-tasks.js?v=20260903-playbook-author"></script>
     <script src="assets/js/account-store.js?v=20260529-account-store"></script>
     <script src="assets/js/auth.js?v=20260928-corporate-login"></script>
-    <script src="assets/js/config.js"></script>
+    <script src="assets/js/config.js?v=20261026-nokeys"></script>
     <script src="assets/js/i18n.js"></script>
     <!-- Voice dependencies (used by voice dictation) -->
     <script src="assets/js/audio-streamer.js"></script>
@@ -4439,7 +4439,12 @@
         });
         btn.addEventListener('click', () => vd.toggle());
         window.voiceDictation = vd;
-        // The mic shows only once the server confirms a voice key.
+        // The mic shows only once the server confirms a voice key: now when the
+        // session is resumed (startup tasks may already have run), and after a
+        // fresh sign-in.
+        if (localStorage.getItem('token')) {
+          vd.refreshAvailability();
+        }
         if (window.startupTasks) {
           window.startupTasks.register('voice-dictation-key', () => vd.refreshAvailability(),
             { label: 'Voice', icon: '🎙️', desc: 'Checking the voice key' });
