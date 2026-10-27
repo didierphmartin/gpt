@@ -1,7 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { installFakeDb } from './support/fakeDb';
 import { McpEndpoint } from '../src/Services/McpEndpoint';
 import { MCPAppController } from '../src/Controllers/MCPAppController';
+
+// The app route only reaches registered servers: register the one a test reaches.
+const register = (url: string) =>
+  installFakeDb((sqlText) => (/FROM mcp_servers WHERE enabled = 1/.test(sqlText) ? [{ url }] : []));
 
 // The proxy and the tools loader import the DB pools, which read required env
 // vars at load time (no connection is made); dummy values keep this test offline.
@@ -198,6 +203,7 @@ test('app proxy: a query-addressed server is reached as given', async () => {
     return new Response(rpc(m === 'resources/read' ? { error: { message: 'no such resource' } } : { result: {} }), { status: 200 });
   }) as any;
   try {
+    register(url);
     const r = await new MCPAppController().getResource({ ...ctx({}), method: 'GET', query: { server: url, resource: 'ui://none' } });
     assert.match(r.raw_body, /^Failed to fetch MCP resource/);
     assert.ok(hits.every((h) => h === url), hits.join());
@@ -216,6 +222,7 @@ test('app proxy: falls back to /mcp when the URL as given is not JSON-RPC', asyn
     return new Response(rpc(m === 'resources/read' ? { result: { contents: [{ text: '<p>x</p>' }] } } : { result: {} }), { status: 200 });
   }) as any;
   try {
+    register('http://h/srv');
     const r = await new MCPAppController().getResource({ ...ctx({}), method: 'GET', query: { server: 'http://h/srv', resource: 'ui://x' } });
     assert.equal(r.status_code, 200);
     assert.equal(hits[0], 'http://h/srv');
