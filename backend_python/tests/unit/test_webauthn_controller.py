@@ -30,12 +30,11 @@ def test_challenge_register_requires_auth_and_stores_the_challenge():
     assert any('INSERT INTO webauthn_challenges' in s for s, _ in db.calls)
 
 
-def test_sign_in_challenge_is_off_and_reads_nothing():
-    for body in ({'action': 'authenticate', 'credential_id': 'x'}, {'action': 'authenticate', 'email': 'x'},
-                 {'action': 'authenticate'}, {}):
+def test_sign_in_challenge_without_id_or_email_reads_nothing():
+    for body in ({'action': 'authenticate'}, {}):
         db = FakeDb()
         r = WebAuthnController(db, CONFIG).challenge(ctx(body))
-        assert r['code'] == 'PASSKEY_SIGNIN_OFF' and r['status_code'] == 503
+        assert r['status_code'] == 400 and 'challenge' not in r
         assert db.calls == []
 
 
@@ -49,10 +48,10 @@ def test_register_and_delete():
     assert WebAuthnController(FakeDb(rowcount=1), CONFIG).delete(ctx({'credential_id': 'x'}, user_id=3))['message'] == 'Credential deleted'
 
 
-def test_authenticate_is_off_and_issues_no_token():
+def test_authenticate_with_a_missing_field_reads_nothing():
     db = FakeDb()
     r = WebAuthnController(db, CONFIG).authenticate(ctx({'credential_id': 'x', 'signature': 's', 'authenticator_data': 'a'}))
     assert r == {'success': False,
-                 'message': 'Passkey sign-in is turned off for now. Sign in with your email and password.',
-                 'code': 'PASSKEY_SIGNIN_OFF', 'status_code': 503}
+                 'message': 'Credential ID, client data, authenticator data and signature are required',
+                 'status_code': 400}
     assert db.calls == []

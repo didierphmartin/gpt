@@ -99,7 +99,7 @@ def test_webauthn_for_robot_gives_no_token(db, robot_id):
     w = WebAuthnController(db, {'auth': {'jwt_secret': SECRET}})
     r = w.authenticate({'body': {'credential_id': 'cred-r', 'signature': 's', 'authenticator_data': 'a',
                                  'client_data_json': 'c'}})
-    assert r['code'] == 'PASSKEY_SIGNIN_OFF'
+    assert r['code'] == 'CREDENTIAL_NOT_FOUND'
     assert 'token' not in r
 
 

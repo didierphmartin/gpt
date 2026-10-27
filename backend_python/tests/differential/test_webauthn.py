@@ -8,7 +8,8 @@ def test_challenge_and_authenticate_error_parity(both):
     same(*both('POST', '/api/v1/webauthn/challenge', json={'action': 'register'}, auth=False))
     same(*both('POST', '/api/v1/webauthn/challenge', json={'action': 'authenticate', 'credential_id': 'nope'}, auth=False))
     same(*both('POST', '/api/v1/webauthn/challenge', json={'action': 'authenticate', 'email': 'nobody@example.invalid'}, auth=False))
-    a, b = both('POST', '/api/v1/webauthn/challenge', json={'action': 'authenticate'}, auth=False, headers={'Host': 'localhost'})
+    same(*both('POST', '/api/v1/webauthn/challenge', json={'action': 'authenticate'}, auth=False))  # 400 EMAIL_REQUIRED
+    a, b = both('POST', '/api/v1/webauthn/challenge', json={'action': 'register'}, headers={'Host': 'localhost'})
     assert a.status_code == b.status_code == 200
     assert {k: v for k, v in a.json().items() if k != 'challenge'} == {k: v for k, v in b.json().items() if k != 'challenge'}
     same(*both('POST', '/api/v1/webauthn/authenticate', json={'credential_id': 'x'}, auth=False))
