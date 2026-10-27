@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use Quantis\AIPortfolioAssistant\Services\ToolsManager;
+use Quantis\AIPortfolioAssistant\Services\VoiceKeys;
 use Quantis\AIPortfolioAssistant\Services\HumeToolSyncService;
 use Quantis\AIPortfolioAssistant\Config\Configuration;
 use Quantis\AIPortfolioAssistant\Functions\WatchlistFunctions;
@@ -207,7 +208,7 @@ class HumeToolController
                 ];
             }
 
-            $apiKey = $this->config['hume_evi']['api_key'] ?? '';
+            $apiKey = VoiceKeys::resolve($this->db, $this->config, null, 'hume');
             $baseUrl = $this->config['hume_evi']['base_url'] ?? 'https://api.hume.ai/v0/evi';
 
             $httpClient = new \GuzzleHttp\Client(['timeout' => 30]);

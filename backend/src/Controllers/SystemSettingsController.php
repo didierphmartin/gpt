@@ -27,8 +27,8 @@ class SystemSettingsController
     private array $config;
 
     // Allowed API formats for validation
-    // 'router' marks a non-chat row (Jev): it only stores a key; see ProviderKinds.
-    private const ALLOWED_API_FORMATS = ['openai', 'anthropic', 'gemini', 'custom', ProviderKinds::ROUTER_FORMAT];
+    // 'router' (Jev) and 'voice' (Hume) mark non-chat rows: they only store a key; see ProviderKinds.
+    private const ALLOWED_API_FORMATS = ['openai', 'anthropic', 'gemini', 'custom', ProviderKinds::ROUTER_FORMAT, ProviderKinds::VOICE_FORMAT];
 
     // Top-level provider keys that have dedicated config sections
     private const TOP_LEVEL_PROVIDERS = ['claude', 'openai', 'gemini', 'grok', 'deepseek', 'kimi', 'gamma4', 'glm'];
@@ -408,16 +408,14 @@ class SystemSettingsController
         }
 
         // A decision provider (router row) names a registered protocol; a
-        // row's kind is fixed at creation, so 'router' on a chat key, or a
-        // chat format on a decision key, is refused.
+        // row's kind (chat, decision, voice) is fixed at creation.
         $isRouter = $apiFormat === ProviderKinds::ROUTER_FORMAT;
         $existingFormat = $this->existingApiFormat($providerKey);
-        if ($existingFormat !== null && ($existingFormat === ProviderKinds::ROUTER_FORMAT) !== $isRouter) {
+        if ($existingFormat !== null && self::kindOf($existingFormat) !== self::kindOf($apiFormat)) {
+            $names = ['chat' => 'an LLM', 'router' => 'a decision provider', 'voice' => 'a voice provider'];
             return [
                 'success' => false,
-                'error' => $isRouter
-                    ? "Provider '$providerKey' is an LLM; it cannot become a decision provider"
-                    : "Provider '$providerKey' is a decision provider; it cannot become an LLM",
+                'error' => "Provider '$providerKey' is {$names[self::kindOf($existingFormat)]}; it cannot become {$names[self::kindOf($apiFormat)]}",
                 'status_code' => 400
             ];
         }
@@ -463,6 +461,13 @@ class SystemSettingsController
             $model = $model ?: $protocol['model'];
         } else {
             $body['protocol'] = null;
+        }
+        if ($apiFormat === ProviderKinds::VOICE_FORMAT) {
+            // Only the key is used: no endpoint, streaming or tools.
+            $body['chat_endpoint'] = null;
+            $body['streaming'] = 0;
+            $body['supports_tools'] = 0;
+            $model = $model ?: $providerKey;
         }
 
         if (!$model) {
@@ -569,6 +574,12 @@ class SystemSettingsController
                 'status_code' => 500
             ];
         }
+    }
+
+    /** 'router', 'voice' or 'chat': the kind of row an api_format makes. */
+    private static function kindOf(string $apiFormat): string
+    {
+        return in_array($apiFormat, ProviderKinds::NON_CHAT_FORMATS, true) ? $apiFormat : 'chat';
     }
 
     /** api_format of an existing row, null when the key is new. */

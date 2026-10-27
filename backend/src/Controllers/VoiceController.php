@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use PDO;
-use Quantis\AIPortfolioAssistant\Services\GeminiVoiceKey;
+use Quantis\AIPortfolioAssistant\Services\VoiceKeys;
 use Quantis\AIPortfolioAssistant\Services\UsageLogger;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\GuzzleException;
@@ -286,9 +286,6 @@ class VoiceController
             $body = $request['body'] ?? [];
             $userId = $request['user_id'] ?? null;
 
-            // Authentication is optional for voice token generation
-            // but we log the user ID if available for tracking
-
             $provider = $body['provider'] ?? 'grok';
 
             if ($provider === 'gemini') {
@@ -302,7 +299,14 @@ class VoiceController
                 ];
             }
 
-            return $this->generateGrokEphemeralToken($userId !== null ? (string) $userId : null);
+            if ($userId === null) {
+                return [
+                    'success' => false,
+                    'error' => 'Authentication required',
+                    'status_code' => 401
+                ];
+            }
+            return $this->generateGrokEphemeralToken($request);
 
         } catch (\Exception $e) {
             error_log("❌ [VoiceController] Error generating ephemeral token: " . $e->getMessage());
@@ -314,14 +318,14 @@ class VoiceController
         }
     }
 
-    /** The Gemini key this request's user voices with ('' when none). */
-    private function geminiKey(array $request): string
+    /** The key this request's user voices with on $provider ('' when none or signed out). */
+    private function voiceKey(array $request, string $provider): string
     {
         $userId = $request['user_id'] ?? null;
         if ($userId === null || !is_numeric($userId)) {
             return '';
         }
-        return GeminiVoiceKey::resolve($this->db, $this->config, (int) $userId);
+        return VoiceKeys::resolve($this->db, $this->config, (int) $userId, $provider);
     }
 
     /**
@@ -338,7 +342,7 @@ class VoiceController
                 'status_code' => 401
             ];
         }
-        $apiKey = $this->geminiKey($request);
+        $apiKey = $this->voiceKey($request, 'gemini');
         if ($apiKey === '') {
             return [
                 'success' => false,
@@ -397,17 +401,18 @@ class VoiceController
     /**
      * Generate Grok ephemeral token by calling xAI API
      */
-    private function generateGrokEphemeralToken(?string $userId): array
+    private function generateGrokEphemeralToken(array $request): array
     {
+        $userId = (string) $request['user_id'];
         $grokVoiceConfig = $this->config['grok_voice'] ?? [];
-        $apiKey = $grokVoiceConfig['api_key'] ?? '';
+        $apiKey = $this->voiceKey($request, 'grok');
 
-        if (empty($apiKey)) {
-            error_log("❌ [VoiceController] Grok voice API key not configured");
+        if ($apiKey === '') {
             return [
                 'success' => false,
-                'error' => 'Grok voice API key not configured on server',
-                'status_code' => 500
+                'error' => 'No Grok key for voice',
+                'code' => 'NO_GROK_KEY',
+                'status_code' => 404
             ];
         }
 
@@ -454,12 +459,7 @@ class VoiceController
                 ];
             }
 
-            // Log token generation for tracking (optional)
-            if ($userId) {
-                error_log("✅ [VoiceController] Generated Grok ephemeral token for user {$userId}");
-            } else {
-                error_log("✅ [VoiceController] Generated Grok ephemeral token (anonymous)");
-            }
+            error_log("✅ [VoiceController] Generated Grok ephemeral token for user {$userId}");
 
             return [
                 'success' => true,
@@ -525,9 +525,8 @@ class VoiceController
         }
 
         // Never a key: only whether this user has one (the mic shows only then).
-        $configs['grok']['available'] = trim((string) ($this->config['grok_voice']['api_key'] ?? '')) !== '';
-        if ($provider === 'gemini') {
-            $configs['gemini']['available'] = $this->geminiKey($request) !== '';
+        if (isset($configs[$provider])) {
+            $configs[$provider]['available'] = $this->voiceKey($request, $provider) !== '';
         }
 
         return [

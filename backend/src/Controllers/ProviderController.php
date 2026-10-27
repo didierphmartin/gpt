@@ -230,9 +230,9 @@ class ProviderController
 
             $providers = [];
             foreach ($rows as $row) {
-                // A router row (Jev) stores a key here but cannot chat: never
-                // offer it in a provider picker.
-                if (ProviderKinds::isRouterRow($row)) {
+                // A router row (Jev) or voice row (Hume) stores a key here but
+                // cannot chat: never offer it in a provider picker.
+                if (!ProviderKinds::isChatRow($row)) {
                     continue;
                 }
                 $providers[] = [
