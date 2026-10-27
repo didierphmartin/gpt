@@ -25,7 +25,10 @@ class HumeToolSyncService
     public function __construct(array $config, ?PDO $pdo = null)
     {
         $this->config = $config;
-        $this->apiKey = $config['hume_evi']['api_key'] ?? '';
+        // The admin's Hume voice row in the DB, else the server's .env key.
+        $this->apiKey = $pdo !== null
+            ? VoiceKeys::resolve($pdo, $config, null, 'hume')
+            : trim((string) ($config['hume_evi']['api_key'] ?? ''));
         $this->baseUrl = $config['hume_evi']['base_url'] ?? 'https://api.hume.ai/v0/evi';
         $this->pdo = $pdo;
 

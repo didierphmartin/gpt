@@ -6,6 +6,7 @@ import { config } from '../src/config/env';
 import { ApiKeyCrypto } from '../src/Services/ApiKeyCrypto';
 import { ToolsManager } from '../src/Services/ToolsManager';
 import { ChatController } from '../src/Controllers/ChatController';
+import { ProviderController } from '../src/Controllers/ProviderController';
 import { Ctx } from '../src/Support/Http';
 
 /**
@@ -380,6 +381,17 @@ test('the context snapshot reports memory and skill flags', () => {
   assert.equal(snap.skill_content, '# Skill');
   assert.deepEqual(snap.tools, []);
   assert.equal(snap.model, null);
+});
+
+test("an unknown provider is 'not found' on the chat path, as LLMManager::chat says", async () => {
+  const res = await chat({ message: 'x', provider: 'no-such-provider', tools: [] });
+  assert.equal(res.jsonBody.error, "Provider 'no-such-provider' not found");
+});
+
+test("providers/switch says an unknown provider 'is not available', as AIPortfolioAssistant::setProvider", async () => {
+  const r = await new ProviderController().switch(ctx({ provider: 'no-such-provider' }));
+  assert.equal(r.status_code, 400);
+  assert.equal(r.error, "Provider 'no-such-provider' is not available");
 });
 
 test('verify names an unavailable verifier', async () => {

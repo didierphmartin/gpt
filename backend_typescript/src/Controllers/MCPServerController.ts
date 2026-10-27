@@ -2,6 +2,22 @@ import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { PackageResolver } from '../Services/PackageResolver';
 import { Ctx, ControllerResult } from '../Support/Http';
+import { phpJsonDecodeAssoc, phpJsonEncode } from '../Support/PhpJson';
+import { filterValidateUrl } from '../Support/PhpUrl';
+import { phpEmpty } from '../Playbook/php';
+
+/** PHP (int) cast of a DB value (MySQL returns SUM() as a decimal string). */
+function phpInt(v: any): number {
+  if (v === null || v === undefined || v === false) return 0;
+  if (v === true) return 1;
+  const n = parseInt(String(v), 10);
+  return Number.isNaN(n) ? 0 : n;
+}
+
+/** PHP `(is_array($headers) && $headers) ? json_encode($headers) : null`. */
+function headersJson(headers: any): string | null {
+  return headers !== null && typeof headers === 'object' && Object.keys(headers).length ? phpJsonEncode(headers) : null;
+}
 
 // PHP (bool) cast semantics (false for null/0/""/"0"/false; true otherwise).
 function phpBoolVal(v: any): boolean {
@@ -19,6 +35,23 @@ function phpBoolVal(v: any): boolean {
  * package's MCP allowlist (PackageResolver.allowedMcpServers — null = unrestricted). Fail-open on error.
  */
 export class MCPServerController {
+  /** Allowed MCP transports (PHP MCPServerController::TRANSPORTS). */
+  static readonly TRANSPORTS = ['http', 'sse'];
+
+  /** null/empty => 'http'; a known value (case-insensitive) => canonical; anything else => null. */
+  static normalizeTransport(value: any): string | null {
+    if (value === null || value === undefined) return 'http';
+    if (typeof value !== 'string') return null;
+    const v = value.trim().toLowerCase();
+    if (v === '') return 'http';
+    return MCPServerController.TRANSPORTS.includes(v) ? v : null;
+  }
+
+  /** 'mcp_app' when at least one cached tool exposes a UI resource, else 'mcp'. */
+  static deriveServerType(uiToolCount: number): string {
+    return uiToolCount > 0 ? 'mcp_app' : 'mcp';
+  }
+
   private resolveUserId(ctx: Ctx): string {
     if (ctx.user_id != null) return String(ctx.user_id);
     return '';
@@ -52,31 +85,37 @@ export class MCPServerController {
     return typeof serverName === 'string' && allow.includes(serverName);
   }
 
-  private isValidUrl(url: string): boolean {
-    try {
-      const u = new URL(url);
-      return !!u.protocol;
-    } catch {
-      return false;
-    }
-  }
-
   /** GET /api/v1/mcp/servers */
   async list(ctx: Ctx): Promise<ControllerResult> {
     const userId = this.resolveUserId(ctx);
     const hasUser = userId !== '';
+    // The sidebar needs disabled private servers too (to re-enable them); chat-side callers keep the enabled-only default.
+    const includeDisabled = !phpEmpty((ctx.query as any)?.include_disabled);
     let q = db
       .selectFrom('mcp_servers as s')
       .leftJoin('mcp_server_tools as t', 't.server_id', 's.id')
       .selectAll('s')
-      .select((eb) => [eb.fn.count('t.id').as('tool_count'), sql<number>`SUM(CASE WHEN t.has_ui = 1 THEN 1 ELSE 0 END)`.as('ui_tool_count')])
-      .where('s.enabled', '=', 1);
+      .select((eb) => [eb.fn.count('t.id').as('tool_count'), sql<number>`SUM(CASE WHEN t.has_ui = 1 THEN 1 ELSE 0 END)`.as('ui_tool_count')]);
+    if (!includeDisabled) q = q.where('s.enabled', '=', 1);
     q = hasUser ? q.where((eb) => eb.or([eb('s.user_id', 'is', null), eb('s.user_id', '=', userId)])) : q.where('s.user_id', 'is', null);
     const rows = (await q.groupBy('s.id').orderBy('s.name').execute()) as any[];
 
     const overrides = await this.loadOverrides(userId);
     const allow = await this.allowList(userId);
     const servers = rows.filter((r) => this.isEffective(Number(r.id), r.user_id, r.name, overrides, allow));
+    for (const s of servers) {
+      s.tool_count = phpInt(s.tool_count ?? 0);
+      s.ui_tool_count = phpInt(s.ui_tool_count ?? 0);
+      s.enabled = phpInt(s.enabled ?? 1);
+      s.is_mock = phpInt(s.is_mock ?? 0);
+      s.transport = MCPServerController.normalizeTransport(s.transport ?? null) ?? 'http';
+      s.server_type = MCPServerController.deriveServerType(s.ui_tool_count);
+      // Never expose a global server's headers to users — they may contain admin-managed credentials.
+      // Only the caller's own private servers get their headers decoded.
+      const isGlobal = s.user_id === null || s.user_id === undefined;
+      const headers = isGlobal ? null : phpJsonDecodeAssoc(s.headers);
+      s.headers = phpEmpty(headers) ? null : headers;
+    }
     return { success: true, servers };
   }
 
@@ -96,7 +135,8 @@ export class MCPServerController {
     const allow = await this.allowList(userId);
     if (!this.isEffective(Number(row.id), row.user_id, row.name, overrides, allow)) return { status_code: 404, success: false, error: 'Server not found' };
 
-    const tools = await db.selectFrom('mcp_server_tools').selectAll().where('server_id', '=', Number(serverId)).orderBy('tool_name').execute();
+    const tools = (await db.selectFrom('mcp_server_tools').selectAll().where('server_id', '=', Number(serverId)).orderBy('tool_name').execute()) as any[];
+    for (const t of tools) t.input_schema = phpJsonDecodeAssoc(t.input_schema);
     return { success: true, tools };
   }
 
@@ -115,6 +155,7 @@ export class MCPServerController {
 
     const overrides = await this.loadOverrides(userId);
     const allow = await this.allowList(userId);
+    for (const t of rows) t.input_schema = phpJsonDecodeAssoc(t.input_schema);
     const tools = rows.filter((t) => this.isEffective(Number(t.server_id), t.server_user_id, t.server_name, overrides, allow));
     return { success: true, tools };
   }
@@ -126,17 +167,19 @@ export class MCPServerController {
     const name = String(input.name ?? '').trim();
     const url = String(input.url ?? '').trim();
     const description = String(input.description ?? '').trim();
-    const headers = input.headers ?? null;
-    const headersJson = headers && typeof headers === 'object' && Object.keys(headers).length ? JSON.stringify(headers) : null;
+    const headersEncoded = headersJson(input.headers ?? null);
 
-    if (!name || !url) return { status_code: 400, success: false, error: 'Name and URL are required' };
-    if (!this.isValidUrl(url)) return { status_code: 400, success: false, error: 'Invalid URL format' };
+    const transport = MCPServerController.normalizeTransport(input.transport ?? null);
+    if (transport === null) return { status_code: 400, success: false, error: 'Invalid transport (expected "http" or "sse")' };
+
+    if (phpEmpty(name) || phpEmpty(url)) return { status_code: 400, success: false, error: 'Name and URL are required' };
+    if (!filterValidateUrl(url)) return { status_code: 400, success: false, error: 'Invalid URL format' };
 
     try {
       const res = await db
         .insertInto('mcp_servers')
         // is_mock: a test double of a real service (the Settings "Mock server" box); shown as "mock".
-        .values({ user_id: String(userId), name, url, description, headers: headersJson, is_mock: input.is_mock ? 1 : 0 } as any)
+        .values({ user_id: String(userId), name, url, description, headers: headersEncoded, transport, is_mock: phpEmpty(input.is_mock) ? 0 : 1 } as any)
         .executeTakeFirst();
       return { success: true, server_id: String(res.insertId), message: 'Server added successfully' };
     } catch (e: any) {
@@ -157,11 +200,19 @@ export class MCPServerController {
     const description = String(input.description ?? '').trim();
 
     if (!serverId) return { status_code: 400, success: false, error: 'Server ID required' };
-    if (!name || !url) return { status_code: 400, success: false, error: 'Name and URL are required' };
+    if (phpEmpty(name) || phpEmpty(url)) return { status_code: 400, success: false, error: 'Name and URL are required' };
 
-    // is_mock only when the key is present, so a form that doesn't send it keeps it (PHP parity).
     const sets: Record<string, unknown> = { name, url, description };
-    if ('is_mock' in input) sets.is_mock = input.is_mock ? 1 : 0;
+    // Transport only when the key is present: omitting it must not silently reset SSE servers to 'http'.
+    if ('transport' in input) {
+      const transport = MCPServerController.normalizeTransport(input.transport);
+      if (transport === null) return { status_code: 400, success: false, error: 'Invalid transport (expected "http" or "sse")' };
+      sets.transport = transport;
+    }
+    // is_mock only when the key is present, so a form that doesn't send it keeps it (PHP parity).
+    if ('is_mock' in input) sets.is_mock = phpEmpty(input.is_mock) ? 0 : 1;
+    // Headers only when the key is present: {} or null clears them, an object replaces them.
+    if ('headers' in input) sets.headers = headersJson(input.headers);
     const res = await db
       .updateTable('mcp_servers')
       .set(sets as any)
@@ -258,7 +309,7 @@ export class MCPServerController {
     // Globals + this user's private servers, with tool counts.
     const rows = (
       await sql<any>`
-        SELECT s.id, s.name, s.url, s.user_id, s.enabled, COUNT(t.id) AS tool_count
+        SELECT s.id, s.name, s.url, s.user_id, s.enabled, s.is_mock, COUNT(t.id) AS tool_count
         FROM mcp_servers s
         LEFT JOIN mcp_server_tools t ON t.server_id = s.id
         WHERE s.user_id IS NULL OR s.user_id = ${uid}
@@ -282,6 +333,7 @@ export class MCPServerController {
         name: row.name,
         url: row.url,
         is_global: isGlobal,
+        is_mock: phpBoolVal(row.is_mock ?? false),
         tool_count: Number(row.tool_count),
         effective_on: effective,
       });

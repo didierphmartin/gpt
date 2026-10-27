@@ -1522,6 +1522,7 @@ class SettingsPanel {
             vdSelect.value = (saved === 'gemini' || saved === 'grok') ? saved : 'gemini';
             vdSelect.addEventListener('change', (e) => {
                 localStorage.setItem('voiceDictationProvider', e.target.value);
+                window.voiceDictation?.refreshAvailability();
             });
         }
 
@@ -3798,6 +3799,7 @@ class SettingsPanel {
 
             if (data.success) {
                 this.showNotification('API keys saved successfully', 'success');
+                window.voiceDictation?.refreshAvailability(); // a new Gemini key shows the mic
 
                 // Clear input fields
                 for (const provider of this.allKeyProviders()) {

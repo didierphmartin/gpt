@@ -91,7 +91,7 @@ final class DecisionKeyResolver
      *
      * @return array|false
      */
-    private static function packageEntry(PDO $db, ?int $userId, string $providerKey): array|false
+    public static function packageEntry(PDO $db, ?int $userId, string $providerKey): array|false
     {
         try {
             $providers = (new PackageResolver($db))->resolveForUser($userId)['capabilities']['providers'] ?? null;
@@ -110,7 +110,7 @@ final class DecisionKeyResolver
     }
 
     /** @return array{0: string, 1: string} the user's own [key, url]; ['', ''] when none. */
-    private static function userRow(PDO $db, string $secret, int $userId, string $providerKey): array
+    public static function userRow(PDO $db, string $secret, int $userId, string $providerKey): array
     {
         try {
             $stmt = $db->prepare("SELECT * FROM user_api_keys WHERE user_id = :u AND provider = :p AND enabled = 1 LIMIT 1");

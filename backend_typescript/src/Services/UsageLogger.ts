@@ -220,8 +220,12 @@ export async function getTransactions(
       conditions.push(sql`status = ${filters.status}`);
     }
 
+    // PHP's PDO answers the json columns as their JSON text; mysql2 would parse them, so they are
+    // re-selected as CHAR (a later column of the same name wins in the mysql2 row object).
     return (
-      await sql<any>`SELECT * FROM llm_usage_transactions
+      await sql<any>`SELECT *, CAST(functions_called AS CHAR) AS functions_called,
+          CAST(mcp_tools_called AS CHAR) AS mcp_tools_called, CAST(request_metadata AS CHAR) AS request_metadata
+        FROM llm_usage_transactions
         WHERE ${sql.join(conditions, sql` AND `)}
         ORDER BY created_at DESC
         LIMIT ${sql.lit(Math.trunc(limit))} OFFSET ${sql.lit(Math.trunc(offset))}`.execute(db)

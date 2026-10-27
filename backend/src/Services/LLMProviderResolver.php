@@ -24,6 +24,9 @@ use Exception;
  *     `config['routers'][<key>]` and NEVER among the providers: a router
  *     answers closed questions only, so it must not become a chat provider or
  *     a fallback (see ProviderKinds).
+ *   - voice rows (`api_format = 'voice'`, e.g. `hume`) → under
+ *     `config['voice_providers'][<key>]`, never among the providers either
+ *     (see VoiceKeys).
  */
 class LLMProviderResolver
 {
@@ -63,6 +66,8 @@ class LLMProviderResolver
 
                 if (ProviderKinds::isRouterRow($row)) {
                     $config['routers'][$key] = array_merge($config['routers'][$key] ?? [], $built);
+                } elseif (ProviderKinds::isVoiceRow($row)) {
+                    $config['voice_providers'][$key] = array_merge($config['voice_providers'][$key] ?? [], $built);
                 } elseif (in_array($key, self::ROOT_PROVIDERS, true)) {
                     $existing = $config[$key] ?? [];
                     $config[$key] = array_merge($existing, $built);

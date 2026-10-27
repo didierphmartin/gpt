@@ -565,7 +565,7 @@ export class ChatController {
       const executor = ChatController.executorFor(tools, plan.serverTools, input.toolsFilter);
       // PHP's streaming path never applies the max_tokens / temperature overrides.
       const resolved = await this.resolveProvider(provider, userId, executor);
-      if (!resolved) throw new Error(`Provider '${provider}' not available`);
+      if (!resolved) throw new Error(`Provider '${provider}' not found`);
       const result: ChatResult = await resolved.impl.streamChat(opts, sse);
       const responseTimeMs = Date.now() - started;
 
@@ -656,7 +656,7 @@ export class ChatController {
       const tools = await this.loadToolSet(userId, { sessionSearch: true, toolsFilter: input.toolsFilter });
       const executor = ChatController.executorFor(tools, plan.serverTools, input.toolsFilter);
       const resolved = await this.resolveProvider(provider, userId, executor, { max_tokens: input.maxTokens, temperature: input.temperature });
-      if (!resolved) throw new Error(`Provider '${provider}' not available`);
+      if (!resolved) throw new Error(`Provider '${provider}' not found`);
       started = Date.now();
       const result = await resolved.impl.chat(opts);
       const responseTimeMs = Date.now() - started;

@@ -11,6 +11,7 @@ import {
   agentToApiArray,
 } from '../AgentTeam/AgentRepository';
 import { AgentRunner } from '../AgentTeam/AgentRunner';
+import { agentBuiltinTools } from '../AgentTeam/AgentToolsRegistry';
 import { StreamContext } from '../AgentTeam/StreamContext';
 import { SSEStream } from '../Services/SseStream';
 import { PlaybookStore } from '../Playbook/PlaybookStore';
@@ -21,9 +22,8 @@ import { PlaybookAgentTools } from '../AgentTeam/PlaybookAgentTools';
  *
  * executions is a plain DB read of agent_executions (runner not needed). run/chat use the engine.
  *
- * listTools depends on the runner's ToolsManager + MCPToolsLoader (the execution engine, not
- * ported) — builtin/mcp tool discovery fails open to empty lists; the hard-coded delegation tools
- * are preserved so the response shape stays faithful.  // ToolsManager/MCPToolsLoader not ported — fail-open
+ * listTools lists the runner's built-in tools (agentBuiltinTools), no MCP tools (PHP never loads
+ * the runner's MCPToolsLoader there) and the hard-coded delegation tools.
  */
 export class AgentController {
   private repository = new AgentRepository();
@@ -323,8 +323,11 @@ export class AgentController {
 
   /** GET /api/v1/agents/tools */
   async listTools(_ctx: Ctx): Promise<ControllerResult> {
-    // ToolsManager/MCPToolsLoader not ported — fail-open (empty builtin + mcp).
-    const builtinTools: any[] = [];
+    // PHP's runner ToolsManager holds the search/portfolio/watchlist/analysis functions; its
+    // MCPToolsLoader is never loaded on this path, so the mcp list is always empty.
+    const builtinTools: any[] = agentBuiltinTools()
+      .getToolDefinitions()
+      .map((tool) => ({ name: tool.name, description: tool.description ?? '', type: 'builtin' }));
     const mcpTools: any[] = [];
 
     const delegationTools = [

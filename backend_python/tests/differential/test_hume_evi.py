@@ -18,21 +18,9 @@ callback route — see evi_webhook_controller.py's module docstring for the
 full citation. There is therefore no "invalid signature" / "missing
 signature" case to compare; this file instead compares the one
 deterministic, network-free path: the "missing tool_name" 400 validation.
-A payload with a valid tool_name IS compared, but only for STATUS + BODY
-SHAPE (not exact message text): EVIWebhookController.php:53/63 call two
-methods (`getAvailableTools()`, `executeTool()`) that do not exist on
-ToolsManager, so every such payload throws in PHP today (an uncaught "Call
-to undefined method" \\Error, caught by index.php's outer
-`catch (Throwable $e)`) -- verified live:
-  PHP: 500 {"success":false,"error":"Call to undefined method
-       Quantis\\AIPortfolioAssistant\\Services\\ToolsManager::getAvailableTools()"}
-  Py:  500 {"success":false,"error":"'ToolsManager' object has no attribute
-       'getAvailableTools'"}
-Same status code, same {success, error} shape, `success=False` both sides --
-the message text is inherently language-specific (PHP's undefined-method
-wording vs Python's AttributeError wording) and not a meaningful byte-parity
-target, so `test_evi_webhook_valid_tool_name_500_shape_parity` below asserts
-shape, not `same()`.
+A payload whose tool_name the webhook's tool set does not register
+(get_portfolios: the webhook's assistant has no database, so only the
+search functions) is compared exactly: 404 "Tool not found" on both.
 """
 import pytest
 
@@ -81,14 +69,5 @@ def test_evi_webhook_missing_tool_name_parity(both):
     same(*both('POST', '/api/v1/evi/webhook', json={'parameters': {}}, auth=False))
 
 
-def test_evi_webhook_valid_tool_name_500_shape_parity(both):
-    # See module docstring: PHP's undefined-method bug means ANY tool_name
-    # that clears validation crashes to a 500 on both backends today. Status
-    # + body SHAPE must match exactly; the message text is language-specific
-    # and intentionally excluded from the comparison.
-    a, b = both('POST', '/api/v1/evi/webhook', json={'tool_name': 'get_portfolios', 'parameters': {}}, auth=False)
-    assert a.status_code == b.status_code == 500, (a.status_code, b.status_code, a.text, b.text)
-    ja, jb = a.json(), b.json()
-    assert set(ja.keys()) == set(jb.keys()) == {'success', 'error'}, (ja, jb)
-    assert ja['success'] is False and jb['success'] is False
-    assert isinstance(ja['error'], str) and isinstance(jb['error'], str) and ja['error'] and jb['error']
+def test_evi_webhook_unregistered_tool_name_parity(both):
+    same(*both('POST', '/api/v1/evi/webhook', json={'tool_name': 'get_portfolios', 'parameters': {}}, auth=False))

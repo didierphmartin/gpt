@@ -144,15 +144,16 @@ export class LangGraphGenerator {
    */
   private async loadMcpToolsWithServers(userId: string | null = null): Promise<any[]> {
     // Global servers plus the caller's own registrations — the same
-    // registry chat and the browser runner see (MCPToolsLoader).
+    // registry chat and the browser runner see (MCPToolsLoader). input_schema is
+    // re-selected as CHAR: PDO answers a json column as its text, mysql2 would parse it.
     const withUser = userId !== null && userId !== '';
     const rows = (
       await (withUser
-        ? sql<any>`SELECT t.*, s.name AS server_name, s.url AS server_url
+        ? sql<any>`SELECT t.*, CAST(t.input_schema AS CHAR) AS input_schema, s.name AS server_name, s.url AS server_url
                 FROM mcp_server_tools t
                 JOIN mcp_servers s ON t.server_id = s.id
                 WHERE s.enabled = 1 AND (s.user_id IS NULL OR s.user_id = ${userId})`
-        : sql<any>`SELECT t.*, s.name AS server_name, s.url AS server_url
+        : sql<any>`SELECT t.*, CAST(t.input_schema AS CHAR) AS input_schema, s.name AS server_name, s.url AS server_url
                 FROM mcp_server_tools t
                 JOIN mcp_servers s ON t.server_id = s.id
                 WHERE s.enabled = 1 AND (s.user_id IS NULL)`
@@ -167,6 +168,8 @@ export class LangGraphGenerator {
       let schema: any = null;
       if (is_string(schemaRaw) && schemaRaw !== '') {
         schema = jsonDecodeStd(schemaRaw);
+      } else if (schemaRaw !== null && typeof schemaRaw === 'object' && !Buffer.isBuffer(schemaRaw)) {
+        schema = jsonDecodeStd(JSON.stringify(schemaRaw)); // a JSON column the driver already parsed
       }
       row['input_schema'] = schema;
       out.push(row);

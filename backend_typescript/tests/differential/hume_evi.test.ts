@@ -8,11 +8,8 @@
  * computed tool) are compared.
  *
  * `POST /evi/webhook`: PHP's EVIWebhookController has no signature verification, so there is no
- * signature case. Compared: the "missing tool_name" 400, and — status + body SHAPE only — a valid
- * tool_name: EVIWebhookController.php:53/63 call `getAvailableTools()` / `executeTool()`, which do
- * not exist on ToolsManager, so PHP 500s ("Call to undefined method ..."); the TS port (see
- * EVIWebhookController.ts) mirrors the bug as a 500 {success:false, error} with its own message.
- * The message text is language-specific, so that case asserts shape, not `same()`.
+ * signature case. Compared: the "missing tool_name" 400, and an unregistered tool_name (the webhook's
+ * assistant has no database, so only the search functions: get_portfolios is a 404).
  *
  * Read-only.
  */
@@ -47,13 +44,7 @@ dtest('test_evi_webhook_missing_tool_name_parity', async (hx) => {
   same(...(await hx.both('POST', '/api/v1/evi/webhook', { json: { parameters: {} }, auth: false })));
 });
 
-dtest('test_evi_webhook_valid_tool_name_500_shape_parity', async (hx) => {
-  const [a, b] = await hx.both('POST', '/api/v1/evi/webhook', { json: { tool_name: 'get_portfolios', parameters: {} }, auth: false });
-  assert.ok(a.status === 500 && b.status === 500, `${a.status} ${b.status}\n${a.text}\n${b.text}`);
-  const ja = a.json();
-  const jb = b.json();
-  assert.deepStrictEqual(Object.keys(ja).sort(), ['error', 'success']);
-  assert.deepStrictEqual(Object.keys(jb).sort(), ['error', 'success']);
-  assert.ok(ja.success === false && jb.success === false);
-  assert.ok(typeof ja.error === 'string' && ja.error && typeof jb.error === 'string' && jb.error);
+dtest('test_evi_webhook_unregistered_tool_name_parity', async (hx) => {
+  // The webhook's assistant has no database, so only the search functions: get_portfolios is a 404.
+  same(...(await hx.both('POST', '/api/v1/evi/webhook', { json: { tool_name: 'get_portfolios', parameters: {} }, auth: false })));
 });

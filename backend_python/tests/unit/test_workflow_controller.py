@@ -393,18 +393,14 @@ def test_executions_custom_limit_offset():
 # runEvents
 # ============================================================================
 
-def test_run_events_unauthenticated_returns_200_error_body():
-    # PHP's http_response_code(401) here is dead code (backend/index.php:149
-    # derives the real status from $result['status_code'] ?? 200, and this
-    # method's return arrays never carry that key) -- verified live against
-    # the Apache-hosted PHP backend, 2026-09-07. Always 200 on the wire.
+def test_run_events_unauthenticated_returns_401():
     r = wc().runEvents(ctx(user_id=0, params={'runId': 'a' * 32}), 'a' * 32)
-    assert r == {'error': 'Authentication required'}
+    assert r == {'error': 'Authentication required', 'status_code': 401}
 
 
-def test_run_events_invalid_run_id_returns_200_error_body():
+def test_run_events_invalid_run_id_returns_400():
     r = wc().runEvents(ctx(params={'runId': 'not-hex'}), 'not-hex')
-    assert r == {'error': 'Invalid runId'}
+    assert r == {'error': 'Invalid runId', 'status_code': 400}
 
 
 def test_run_events_reads_params_dict_not_positional_arg():
@@ -420,10 +416,10 @@ def test_run_events_reads_params_dict_not_positional_arg():
     assert r['error'] == 'Run not found'
 
 
-def test_run_events_not_found_returns_200_error_body(tmp_path):
+def test_run_events_not_found_returns_404(tmp_path):
     run_id = 'b' * 32
     r = wc(config={'workflow_runs_dir': str(tmp_path)}).runEvents(ctx(params={'runId': run_id}), run_id)
-    assert r == {'error': 'Run not found'}
+    assert r == {'error': 'Run not found', 'status_code': 404}
 
 
 def test_run_events_success_reads_log(tmp_path):

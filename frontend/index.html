@@ -4134,7 +4134,7 @@
                     type="button"
                     title="Dictate your prompt"
                     aria-label="Dictate your prompt"
-                    class="flex-shrink-0 self-stretch px-2.5 md:px-3 py-2 md:py-3 text-gray-500 hover:text-blue-600 hover:bg-blue-50 border border-gray-300 rounded-lg transition flex items-center justify-center"
+                    class="hidden flex-shrink-0 self-stretch px-2.5 md:px-3 py-2 md:py-3 text-gray-500 hover:text-blue-600 hover:bg-blue-50 border border-gray-300 rounded-lg transition flex items-center justify-center"
                 >
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -4361,24 +4361,25 @@
     <script src="assets/js/startup-tasks.js?v=20260903-playbook-author"></script>
     <script src="assets/js/account-store.js?v=20260529-account-store"></script>
     <script src="assets/js/auth.js?v=20260928-corporate-login"></script>
-    <script src="assets/js/config.js"></script>
+    <script src="assets/js/config.js?v=20261026-nokeys"></script>
     <script src="assets/js/i18n.js"></script>
     <!-- Voice dependencies (used by voice dictation) -->
     <script src="assets/js/audio-streamer.js"></script>
-    <script src="assets/js/gemini-live-client.js"></script>
+    <script src="assets/js/voice-token.js?v=20261026-voicetoken"></script>
+    <script src="assets/js/gemini-live-client.js?v=20261026-voicetoken"></script>
     <script src="assets/js/grok-live-client.js"></script>
     <script src="assets/js/mcp-client.js?v=20261005-is-mock"></script>
     <script src="assets/js/mcp-app-host.js"></script>
     <!-- Local File System bootstrap — exposes window.localFs for skills,
          workflows, artifacts. Must load before settings-panel uses it. -->
     <script src="assets/js/local-fs.js?v=20261026-regrant"></script>
-    <script src="assets/js/settings-panel.js?v=20261008-decision2"></script>
+    <script src="assets/js/settings-panel.js?v=20261026-voicetoken"></script>
     <script src="assets/js/agent-teams-panel.js?v=20261005-flush-on-clear"></script>
     <!-- Drawflow workflow editor -->
     <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.js"></script>
     <script src="assets/js/grok-realtime-adapter.js"></script>
-    <script src="assets/js/gemini-realtime-adapter.js"></script>
-    <script src="assets/js/voice-dictation.js?v=20260610-voicedictate8"></script>
+    <script src="assets/js/gemini-realtime-adapter.js?v=20261026-voicetoken"></script>
+    <script src="assets/js/voice-dictation.js?v=20261026-voicetoken"></script>
     <script src="assets/js/workflow-realtime-runner.js"></script>
     <!-- Folder-backed Skills service. Reads <root>/skills/*/SKILL.md.
          Must load after local-fs.js (uses window.localFs) and before
@@ -4438,6 +4439,16 @@
         });
         btn.addEventListener('click', () => vd.toggle());
         window.voiceDictation = vd;
+        // The mic shows only once the server confirms a voice key: now when the
+        // session is resumed (startup tasks may already have run), and after a
+        // fresh sign-in.
+        if (localStorage.getItem('token')) {
+          vd.refreshAvailability();
+        }
+        if (window.startupTasks) {
+          window.startupTasks.register('voice-dictation-key', () => vd.refreshAvailability(),
+            { label: 'Voice', icon: '🎙️', desc: 'Checking the voice key' });
+        }
       })();
     </script>
     <!-- driver.js library + onboarding tour. Library first so the tour can use it. -->

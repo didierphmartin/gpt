@@ -7,8 +7,7 @@ import {
   agentToArray,
 } from '../AgentTeam/AgentRepository';
 import { AgentRunner } from '../AgentTeam/AgentRunner';
-import { ToolsManager } from '../Services/ToolsManager';
-import { MCPToolsLoader } from '../Services/MCPToolsLoader';
+import { agentBuiltinTools } from '../AgentTeam/AgentToolsRegistry';
 
 /**
  * Mirrors src/AgentTeam/Controllers/AgentMCPController.php — the MCP (Model Context Protocol)
@@ -25,10 +24,9 @@ import { MCPToolsLoader } from '../Services/MCPToolsLoader';
  * -32600. All JSON-RPC responses (success AND error) go out as HTTP 200 through the normal
  * handle() wrapper — the envelope {jsonrpc, id, result|error} IS the body.
  *
- * tools/list + tools/call use the runner's ToolsManager/MCPToolsLoader in PHP. Here builtin
- * function tools are not ported, so the ToolsManager is empty — builtin discovery fails open to []
- * and tools/call always reports "Tool not found" (same fail-open as AgentController.listTools);
- * MCP tool discovery is real (DB-backed, per user).
+ * tools/list + tools/call use the runner's ToolsManager in PHP: the search, portfolio, watchlist and
+ * analysis functions (agentBuiltinTools). The runner's MCPToolsLoader is never loaded on this path,
+ * so no MCP tools are listed or callable.
  */
 
 /** Mirrors PHP's \InvalidArgumentException → JSON-RPC -32601 mapping. */
@@ -325,10 +323,9 @@ export class AgentMCPController {
    * List available tools
    */
   private async listTools(userId: number): Promise<Record<string, any>> {
-    // Built-in tools — ToolsManager is empty in TS (builtins not ported, fail-open).
-    const toolsManager = new ToolsManager();
-    const mcpLoader = new MCPToolsLoader();
-    await mcpLoader.loadToolsForUser(userId); // fails soft internally
+    // PHP's runner ToolsManager (search/portfolio/watchlist/analysis); its MCPToolsLoader is never
+    // loaded on this path, so no MCP tools are listed.
+    const toolsManager = agentBuiltinTools();
 
     const tools: any[] = [];
 
@@ -339,16 +336,6 @@ export class AgentMCPController {
         description: tool.description ?? '',
         inputSchema: tool.input_schema ?? {},
         type: 'builtin',
-      });
-    }
-
-    // MCP tools
-    for (const tool of mcpLoader.getToolDefinitions()) {
-      tools.push({
-        name: tool.name,
-        description: tool.description ?? '',
-        inputSchema: tool.input_schema ?? {},
-        type: 'mcp',
       });
     }
 
@@ -371,7 +358,7 @@ export class AgentMCPController {
       {
         name: 'list_available_agents',
         description: 'List agents available for delegation',
-        inputSchema: { type: 'object', properties: {} },
+        inputSchema: { type: 'object', properties: [] }, // PHP 'properties' => [] encodes as []
         type: 'delegation',
       },
       {
@@ -398,8 +385,7 @@ export class AgentMCPController {
 
   /**
    * Call a tool directly. PHP routes through the runner's ToolsManager (builtins only — MCP tools
-   * are NOT callable here); the TS ToolsManager registers no builtins, so this faithfully reports
-   * "Tool not found" for every name until Functions/* are ported.
+   * are NOT callable here).
    */
   private async callTool(userId: number, params: any): Promise<Record<string, any>> {
     const toolName = String(params.name ?? '');
@@ -409,7 +395,7 @@ export class AgentMCPController {
       throw new InvalidArgument('Tool name is required');
     }
 
-    const toolsManager = new ToolsManager();
+    const toolsManager = agentBuiltinTools();
 
     if (!toolsManager.hasFunction(toolName)) {
       throw new InvalidArgument(`Tool not found: ${toolName}`);

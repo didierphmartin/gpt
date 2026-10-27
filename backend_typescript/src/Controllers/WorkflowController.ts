@@ -770,19 +770,15 @@ export class WorkflowController {
   }
 
   async toolResult(ctx: Ctx): Promise<ControllerResult> {
-    // NB: PHP toolResult calls http_response_code(401/400) then returns an array WITHOUT a
-    // 'status_code' key — so index.php's dispatcher resets the code to `$result['status_code'] ?? 200`
-    // = 200. The 401/400 are therefore dead; the observable status is 200 with the error body. We mirror
-    // that (no status_code on the error returns). Auth is really enforced by the global middleware anyway.
     const userId = this.getUserId(ctx);
     if (!userId) {
-      return { error: 'Authentication required' };
+      return { error: 'Authentication required', status_code: 401 };
     }
 
     const body: any = ctx.body ?? {};
     const toolCallId = String(body.tool_call_id ?? '');
     if (toolCallId === '' || !/^[a-f0-9]{32}$/.test(toolCallId)) {
-      return { error: 'Invalid tool_call_id' };
+      return { error: 'Invalid tool_call_id', status_code: 400 };
     }
 
     // Pass the WHOLE body — it carries { tool_call_id, success, output, log_messages?, outputs?, error? }.

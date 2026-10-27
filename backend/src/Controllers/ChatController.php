@@ -55,9 +55,9 @@ class ChatController
         }
         try {
             $stmt = $this->db->query(
-                // Router rows (Jev) are not chat providers: never wire them up.
+                // Router rows (Jev) and voice rows (Hume) are not chat providers: never wire them up.
                 "SELECT provider_key FROM system_llm_settings WHERE enabled = 1"
-                . " AND (api_format IS NULL OR api_format <> '" . ProviderKinds::ROUTER_FORMAT . "')"
+                . " AND (api_format IS NULL OR api_format NOT IN ('" . implode("', '", ProviderKinds::NON_CHAT_FORMATS) . "'))"
                 . " ORDER BY sort_order ASC"
             );
             $keys = $stmt->fetchAll(PDO::FETCH_COLUMN);

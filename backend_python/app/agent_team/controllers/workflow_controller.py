@@ -989,21 +989,15 @@ class WorkflowController:
     # ========================================================================
 
     def toolResult(self, request) -> dict:
-        """PHP 1035-1054. PHP's `http_response_code(401)`/`http_response_code
-        (400)` calls here are dead code for the exact reason documented on
-        `runEvents()` above: `backend/index.php:149` always derives the
-        final HTTP status from `$result['status_code'] ?? 200`, and neither
-        of this method's early-return arrays carries a `status_code` key —
-        so every branch of this endpoint answers 200 on live PHP, error body
-        included. No `status_code` key here either, for the same reason."""
+        """PHP toolResult(): each error return carries its status_code."""
         userId = request['user_id'] if request.get('user_id') is not None else 0
         if not userId:
-            return {'error': 'Authentication required'}
+            return {'error': 'Authentication required', 'status_code': 401}
 
         body = request['body'] if request.get('body') is not None else {}
         toolCallId = php_strval(body['tool_call_id']) if body.get('tool_call_id') is not None else ''
         if toolCallId == '' or not _RUN_ID_RE.match(toolCallId):
-            return {'error': 'Invalid tool_call_id'}
+            return {'error': 'Invalid tool_call_id', 'status_code': 400}
 
         bridge = SkillToolBridge()
         bridge.writeResult(toolCallId, body)
@@ -1112,30 +1106,20 @@ class WorkflowController:
         there — exactly like PHP reads `$request['params']['runId']` —
         sidesteps the coercion entirely.
 
-        No `status_code` key on ANY branch here — deliberately, matching PHP.
-        PHP's `http_response_code($code)` calls in this method (1163, 1169,
-        1178) are dead: `backend/index.php:149` computes the actual HTTP
-        status purely from `$result['status_code'] ?? 200`, ignoring
-        whatever `http_response_code()` the controller already called, and
-        `runEvents`'s return arrays never carry a `status_code` key. So this
-        endpoint is 200 on EVERY branch on live PHP, including the 401/400/
-        404-shaped error bodies — verified live (differential run against
-        the Apache-hosted PHP backend, 2026-09-07). `app/support/http.py`'s
-        `render()` has the identical `result.get('status_code', 200)`
-        default, so omitting the key here reproduces the same behavior."""
+        Each error return carries its status_code, as in PHP."""
         userId = request['user_id'] if request.get('user_id') is not None else 0
         if not userId:
-            return {'error': 'Authentication required'}
+            return {'error': 'Authentication required', 'status_code': 401}
 
         params = request['params'] if request.get('params') is not None else {}
         runIdStr = php_strval(params['runId'] if params.get('runId') is not None else '')
         if not _RUN_ID_RE.match(runIdStr):
-            return {'error': 'Invalid runId'}
+            return {'error': 'Invalid runId', 'status_code': 400}
 
         log = WorkflowRunLog(WorkflowRunLog.defaultDir(self.config))
         events = log.read(runIdStr)
         if events is None:
-            return {'error': 'Run not found'}
+            return {'error': 'Run not found', 'status_code': 404}
 
         return {'run_id': runIdStr, 'events': events}
 

@@ -480,12 +480,13 @@ class AIPortfolioAssistant
         // Everything declared in config['providers'] (DB-driven via
         // system_llm_settings): deepseek/gemini/grok/kimi resolve to their
         // dedicated classes through the map; the rest get CustomProvider.
-        // Router rows (Jev) never land here (LLMProviderResolver files them
-        // under config['routers']); filtered again so a hand-built config
+        // Router rows (Jev) and voice rows (Hume) never land here
+        // (LLMProviderResolver files them under config['routers'] and
+        // config['voice_providers']); filtered again so a hand-built config
         // cannot turn one into a chat provider or a fallback.
         $customProviders = array_filter(
             $this->config->get('providers', []),
-            fn($providerConfig) => !is_array($providerConfig) || !ProviderKinds::isRouterRow($providerConfig)
+            fn($providerConfig) => !is_array($providerConfig) || ProviderKinds::isChatRow($providerConfig)
         );
         foreach ($customProviders as $name => $providerConfig) {
             if (empty($providerConfig['base_url'])) {

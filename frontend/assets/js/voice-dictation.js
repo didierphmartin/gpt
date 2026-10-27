@@ -60,24 +60,11 @@
             this.stop();
         }
 
-        // Grok realtime rejects raw API keys from the browser (x.ai returns 400).
-        // Mint a short-lived ephemeral token server-side — the same endpoint the
-        // Voice Panel used — and use its client_secret as the credential.
-        async _mintGrokToken() {
-            const headers = { 'Content-Type': 'application/json' };
-            const jwt = window.authManager?.token || localStorage.getItem('token') || localStorage.getItem('auth_token');
-            if (jwt) headers['Authorization'] = `Bearer ${jwt}`;
-            const resp = await fetch(window.apiUrl('/voice/token'), {
-                method: 'POST', headers, credentials: 'include',
-                body: JSON.stringify({ provider: 'grok' }),
-            });
-            if (!resp.ok) {
-                const detail = await resp.text().catch(() => '');
-                throw new Error(`Failed to mint Grok voice token (${resp.status}). ${detail}`.trim());
-            }
-            const j = await resp.json().catch(() => ({}));
-            if (!j || !j.success || !j.client_secret) throw new Error((j && j.error) || 'Grok token response missing client_secret.');
-            return j.client_secret;
+        // Show the mic only when the selected provider has a voice key.
+        async refreshAvailability() {
+            const ok = !!(global.VoiceToken && await global.VoiceToken.available(this.getProvider()));
+            if (this.buttonEl) this.buttonEl.classList.toggle('hidden', !ok);
+            return ok;
         }
 
         _applyTranscript(text, isFinal) {
@@ -97,15 +84,11 @@
         async start() {
             if (this.isRecording) return;
             const provider = this.getProvider();
-            const config = (window.APP_CONFIG && window.APP_CONFIG[provider]) || {};
+            const config = (window.APP_CONFIG && window.APP_CONFIG[provider]) || {}; // non-secret settings only
             // Use the SAME clients the Voice Panel uses (verified working):
             // gemini → GeminiLiveClient, grok → GrokLiveClient. Both share a
             // config-based callback interface.
             const ClientClass = provider === 'gemini' ? window.GeminiLiveClient : window.GrokLiveClient;
-            if (!config.apiKey) {
-                this.onError(`No ${provider} voice key configured — set the Voice provider in Settings → Account.`);
-                return;
-            }
             if (!ClientClass || !window.AudioStreamer) {
                 this.onError(`Voice component not loaded for ${provider}.`);
                 return;
@@ -113,8 +96,9 @@
             const existing = (this.inputEl.value || '').replace(/\s+$/, '');
             this._base = existing ? existing + ' ' : '';
             try {
-                // Grok needs an ephemeral token; Gemini uses the configured key directly.
-                const apiKey = provider === 'grok' ? await this._mintGrokToken() : config.apiKey;
+                // A short-lived token minted server-side; the key never reaches the browser.
+                const tok = await global.VoiceToken.token(provider);
+                const apiKey = tok.client_secret;
                 this._streamer = new window.AudioStreamer({
                     onAudioData: (b64) => { if (this._client && (!this._client.isReady || this._client.isReady())) this._client.sendAudio(b64); },
                 });
@@ -142,7 +126,7 @@
                     onClose: () => { if (this.isRecording) this.stop(); },
                 };
                 if (provider === 'gemini') {
-                    clientConfig.model = config.model || 'gemini-2.5-flash-native-audio-preview-12-2025';
+                    clientConfig.model = tok.model || config.model || 'gemini-2.5-flash-native-audio-preview-12-2025';
                     clientConfig.voiceName = config.voiceName || 'Kore';
                 } else {
                     clientConfig.voice = config.voice || 'Ara';

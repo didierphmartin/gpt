@@ -15,11 +15,6 @@ import { SearchFunctions } from '../Functions/SearchFunctions';
  *    Neither applyDbSettings nor AIPortfolioAssistant is ported to TS; like ChatController and
  *    ToolsController, the registry here is a plain ToolsManager with the Functions/* classes that
  *    exist so far (SearchFunctions only), so fewer tools are available until the rest are ported.
- *  - Latent PHP bug, deliberately NOT reproduced: the PHP controller calls
- *    $toolsManager->getAvailableTools() and ->executeTool(), which do not exist on ToolsManager —
- *    every payload with a valid tool_name dies with "Call to undefined method" (a 500 via
- *    index.php's Throwable handler). This port implements the evident intent using the real
- *    ToolsManager API: getRegisteredFunctions() + execute().
  */
 export class EVIWebhookController {
   private readonly toolsManager: ToolsManager;
