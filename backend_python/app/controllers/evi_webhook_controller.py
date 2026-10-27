@@ -49,42 +49,16 @@ class EVIWebhookController:
             assistant = AIPortfolioAssistant(config)
             toolsManager = assistant.getToolsManager()
 
-            # PHP BUG (EVIWebhookController.php:53,63): calls `getAvailableTools()`
-            # and `executeTool()` on the ToolsManager returned by getToolsManager().
-            # Neither method exists on ToolsManager — its interface
-            # (Contracts/FunctionExecutorInterface.php) only declares
-            # execute/hasFunction/getRegisteredFunctions/getToolDefinitions/
-            # registerFunction/isMCPTool; `executeTool()` only exists on the
-            # unrelated MCPToolsLoader class. In PHP this is a "Call to
-            # undefined method" \Error, which `catch (Exception $e)` below does
-            # NOT catch (Error doesn't extend Exception) — it propagates to
-            # index.php's outer `catch (Throwable $e)` (index.php:192-206),
-            # which returns the SAME {'success': false, 'error': <message>,
-            # status_code: 500} shape this method's own catch block returns for
-            # any other exception. So any payload whose tool_name clears
-            # validation above always ends in a 500 today; only the literal
-            # exception-message text differs between "Call to undefined
-            # method ToolsManager::getAvailableTools()" (PHP) and Python's
-            # AttributeError text. Reproduced literally rather than "fixed"
-            # (e.g. by routing through hasFunction()/execute() like
-            # HumeToolController and ToolsController do) because the intended
-            # design here is genuinely ambiguous (executeTool() takes no
-            # userId/context arg, unlike ToolsManager.execute()) and this is a
-            # public, unauthenticated, external-callback endpoint — silently
-            # changing its behavior during a port is riskier than preserving
-            # the crash for whoever eventually fixes the PHP bug. Unlike PHP,
-            # Python's AttributeError IS an Exception subclass, so it IS
-            # caught by the `except Exception` below (still a 500 either way).
-            availableTools = toolsManager.getAvailableTools()
-
-            if toolName not in availableTools:
+            # Check if tool exists
+            if not toolsManager.hasFunction(str(toolName)):
                 return {
                     'success': False,
                     'error': f"Tool not found: {toolName}",
                     'status_code': 404,
                 }
 
-            result = toolsManager.executeTool(toolName, parameters)
+            # Execute the tool
+            result = toolsManager.execute(str(toolName), parameters)
 
             return {
                 'success': True,

@@ -623,27 +623,22 @@ def test_runPlaybookNode_exception_sends_named_error_frame(monkeypatch):
 # toolResult
 # ============================================================================
 
-def test_toolResult_unauthenticated_returns_error_without_status_code():
+def test_toolResult_unauthenticated_returns_401():
     c = controller()
     r = c.toolResult(ctx(user_id=0))
-    # No status_code key -- PHP's http_response_code(401) is dead code here,
-    # same as runEvents (see workflow_controller.py's toolResult docstring):
-    # backend/index.php always derives the final status from
-    # `$result['status_code'] ?? 200`.
-    assert r == {'error': 'Authentication required'}
-    assert 'status_code' not in r
+    assert r == {'error': 'Authentication required', 'status_code': 401}
 
 
 def test_toolResult_missing_tool_call_id_returns_invalid():
     c = controller()
     r = c.toolResult(ctx(body={}))
-    assert r == {'error': 'Invalid tool_call_id'}
+    assert r == {'error': 'Invalid tool_call_id', 'status_code': 400}
 
 
 def test_toolResult_malformed_tool_call_id_returns_invalid():
     c = controller()
     r = c.toolResult(ctx(body={'tool_call_id': 'not-32-hex-chars'}))
-    assert r == {'error': 'Invalid tool_call_id'}
+    assert r == {'error': 'Invalid tool_call_id', 'status_code': 400}
 
 
 def test_toolResult_success_writes_result_via_bridge(monkeypatch, tmp_path):

@@ -1155,15 +1155,13 @@ class WorkflowController
     {
         $userId = $request['user_id'] ?? 0;
         if (!$userId) {
-            http_response_code(401);
-            return ['error' => 'Authentication required'];
+            return ['error' => 'Authentication required', 'status_code' => 401];
         }
 
         $body = $request['body'] ?? [];
         $toolCallId = isset($body['tool_call_id']) ? (string) $body['tool_call_id'] : '';
         if ($toolCallId === '' || !preg_match('/^[a-f0-9]{32}$/', $toolCallId)) {
-            http_response_code(400);
-            return ['error' => 'Invalid tool_call_id'];
+            return ['error' => 'Invalid tool_call_id', 'status_code' => 400];
         }
 
         $bridge = new \AgentTeam\Services\SkillToolBridge();
@@ -1287,14 +1285,12 @@ class WorkflowController
     {
         $userId = $request['user_id'] ?? 0;
         if (!$userId) {
-            http_response_code(401);
-            return ['error' => 'Authentication required'];
+            return ['error' => 'Authentication required', 'status_code' => 401];
         }
 
         $runId = (string) ($request['params']['runId'] ?? '');
         if (!preg_match('/^[a-f0-9]{32}$/', $runId)) {
-            http_response_code(400);
-            return ['error' => 'Invalid runId'];
+            return ['error' => 'Invalid runId', 'status_code' => 400];
         }
 
         $log = new \AgentTeam\Services\WorkflowRunLog(
@@ -1302,8 +1298,7 @@ class WorkflowController
         );
         $events = $log->read($runId);
         if ($events === null) {
-            http_response_code(404);
-            return ['error' => 'Run not found'];
+            return ['error' => 'Run not found', 'status_code' => 404];
         }
 
         return ['run_id' => $runId, 'events' => $events];

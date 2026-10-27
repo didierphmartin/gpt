@@ -8,8 +8,7 @@ PHP-truth strings copied verbatim:
 No signature/HMAC check exists anywhere in the PHP source for this route (see
 the controller module docstring) — there is nothing to unit-test there; this
 file instead documents that absence and focuses on payload validation and the
-documented undefined-method PHP bug (getAvailableTools()/executeTool() do not
-exist on ToolsManager) that makes every payload past validation end in a 500.
+the hasFunction()/execute() lookup.
 """
 from app.controllers.evi_webhook_controller import EVIWebhookController
 
@@ -26,17 +25,15 @@ def req(body=None):
 
 
 class FakeToolsManager:
-    """A ToolsManager stand-in that DOES implement getAvailableTools()/executeTool(),
-    representing the 'if the PHP bug were fixed' behaviour some tests exercise
-    to pin the shape callers would see once someone fixes EVIWebhookController.php."""
+    """A ToolsManager stand-in: hasFunction() over `available`, execute() via exec_fn."""
     def __init__(self, available=(), exec_fn=None):
         self._available = list(available)
         self._exec_fn = exec_fn
 
-    def getAvailableTools(self):
-        return self._available
+    def hasFunction(self, name):
+        return name in self._available
 
-    def executeTool(self, name, arguments):
+    def execute(self, name, arguments, context=None):
         return self._exec_fn(name, arguments)
 
 
@@ -84,27 +81,21 @@ def test_null_tool_name_is_400():
     }
 
 
-# ─── the real ToolsManager has neither getAvailableTools() nor executeTool() ──
-# (PHP: an undefined-method \Error, uncaught by `catch (Exception $e)`, that
-# propagates to index.php's outer Throwable handler for the SAME 500 shape;
-# Python's AttributeError IS caught locally here — see the controller docstring).
+# ─── tool lookup ─────────────────────────────────────────────────────────────
 
-def test_real_toolsmanager_lacks_getavailabletools_yields_500(monkeypatch):
+def test_real_toolsmanager_unknown_tool_is_404(monkeypatch):
     from app.services.tools_manager import ToolsManager
     closed = []
     assistant_cls = make_fake_assistant_class(ToolsManager(), closed=closed)
     patch_common(monkeypatch, assistant_cls)
 
     ctl = EVIWebhookController(Db(), CFG)
-    r = ctl.handleWebhook(req(body={'tool_name': 'anything', 'parameters': {}}))
-    assert r['success'] is False and r['status_code'] == 500
-    assert 'getAvailableTools' in r['error']
-    assert closed == [True]  # assistant still closed on the exception path
+    r = ctl.handleWebhook(req(body={'tool_name': 'get_portfolios', 'parameters': {}}))
+    assert r == {'success': False, 'error': 'Tool not found: get_portfolios', 'status_code': 404}
+    assert closed == [True]
 
 
-# ─── behaviour once getAvailableTools()/executeTool() exist (pins the intended shape) ──
-
-def test_tool_not_found_is_404_when_toolsmanager_supports_lookup(monkeypatch):
+def test_tool_not_found_is_404(monkeypatch):
     tm = FakeToolsManager(available=['other_tool'])
     assistant_cls = make_fake_assistant_class(tm)
     patch_common(monkeypatch, assistant_cls)

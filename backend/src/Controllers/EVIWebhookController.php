@@ -50,8 +50,7 @@ class EVIWebhookController
             $toolsManager = $assistant->getToolsManager();
 
             // Check if tool exists
-            $availableTools = $toolsManager->getAvailableTools();
-            if (!in_array($toolName, $availableTools)) {
+            if (!$toolsManager->hasFunction((string) $toolName)) {
                 return [
                     'success' => false,
                     'error' => "Tool not found: {$toolName}",
@@ -60,7 +59,7 @@ class EVIWebhookController
             }
 
             // Execute the tool
-            $result = $toolsManager->executeTool($toolName, $parameters);
+            $result = $toolsManager->execute((string) $toolName, (array) $parameters);
 
             return [
                 'success' => true,
