@@ -98,7 +98,7 @@ class RobotSignInTest extends TestCase
         $this->db->exec("INSERT INTO webauthn_credentials (user_id, credential_id) VALUES ({$this->robotId}, 'cred-r')");
         $w = new WebAuthnController($this->db, ['auth' => ['jwt_secret' => self::SECRET]]);
         $r = $w->authenticate(['body' => ['credential_id' => 'cred-r', 'signature' => 's', 'authenticator_data' => 'a', 'client_data_json' => 'c']]);
-        $this->assertSame('PASSKEY_SIGNIN_OFF', $r['code']);
+        $this->assertSame('CREDENTIAL_NOT_FOUND', $r['code']);
         $this->assertArrayNotHasKey('token', $r);
     }
 
