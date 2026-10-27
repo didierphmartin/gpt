@@ -15,7 +15,12 @@ use AgentTeam\Services\ActiveWorkflowService;
 use AgentTeam\Services\LiveFeed;
 use AgentTeam\Services\LiveStream;
 use AgentTeam\Services\WorkflowRunLog;
+use AgentTeam\Services\WorkflowPublishError;
+use AgentTeam\Services\WorkflowRobotPublisher;
 use Quantis\AIPortfolioAssistant\AIPortfolioAssistant;
+use Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentStore;
+use Quantis\AIPortfolioAssistant\Services\RobotAccount;
+use Quantis\AIPortfolioAssistant\Services\RobotPolicy;
 use Quantis\AIPortfolioAssistant\Services\MCPToolsLoader;
 use Quantis\AIPortfolioAssistant\Services\LLMProviderResolver;
 use PDO;
@@ -1175,7 +1180,12 @@ class WorkflowController
      */
     public function executions(array $request): array
     {
-        $userId = $request['user_id'] ?? 0;
+        return $this->executionsOf((int) ($request['user_id'] ?? 0), $request);
+    }
+
+    /** The executions body for a workflow owned by $userId (the robot's routes pass the robot's id). */
+    public function executionsOf(int $userId, array $request): array
+    {
         $workflowId = (int) ($request['params']['id'] ?? 0);
         $query = $request['query'] ?? [];
 
@@ -1231,7 +1241,12 @@ class WorkflowController
      */
     public function live(array $request): array
     {
-        $userId = (int) ($request['user_id'] ?? 0);
+        return $this->liveOf((int) ($request['user_id'] ?? 0), $request);
+    }
+
+    /** The live stream for a workflow owned by $userId (the robot's routes pass the robot's id). */
+    public function liveOf(int $userId, array $request): array
+    {
         $workflowId = (int) ($request['params']['id'] ?? 0);
         header('Content-Type: text/event-stream');
         header('Cache-Control: no-cache');
@@ -1353,6 +1368,29 @@ class WorkflowController
                 'error' => $e->getMessage(),
                 'status_code' => 500
             ];
+        }
+    }
+
+    /**
+     * POST /api/v1/workflows/{id}/publish  body {confirm_replace?: bool}
+     * Publish the user's workflow to the robot as a frozen copy (WorkflowRobotPublisher).
+     */
+    public function publish(array $request): array
+    {
+        $userId = (int) ($request['user_id'] ?? 0);
+        if ($userId <= 0) {
+            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
+        }
+        if (!(new RobotPolicy($this->db, $this->config))->canUse($userId)) {
+            return ['success' => false, 'error' => "Your role can't publish to the robot", 'kind' => 'forbidden', 'status_code' => 403];
+        }
+        try {
+            $data = (new WorkflowRobotPublisher($this->db, new CodeComponentStore($this->db)))->publish($userId,
+                (int) ($request['params']['id'] ?? 0), RobotAccount::ensure($this->db),
+                ($request['body']['confirm_replace'] ?? false) === true);
+            return ['success' => true, 'data' => $data, 'status_code' => 200];
+        } catch (WorkflowPublishError $e) {
+            return ['success' => false, 'error' => $e->getMessage(), 'kind' => $e->kind, 'status_code' => $e->status];
         }
     }
 

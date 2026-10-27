@@ -574,6 +574,17 @@ class WorkflowEditor {
             });
         }
 
+        // Top-left "Publish to robot": only for a caller whose role may use the robot (GET /robot can_use).
+        const publishRobotBtn = document.getElementById('wf-publish-robot');
+        if (publishRobotBtn && !publishRobotBtn.dataset.robotBound) {
+            publishRobotBtn.dataset.robotBound = '1';
+            publishRobotBtn.addEventListener('click', () => this._publishWorkflowToRobot(publishRobotBtn));
+            const robot = window.playbooksLibrary?.robotInfo
+                ? window.playbooksLibrary.robotInfo()
+                : this._playbookApi().robot().then((b) => b.data || {}).catch(() => ({}));
+            robot.then((r) => { publishRobotBtn.style.display = r?.can_use ? 'flex' : 'none'; });
+        }
+
         // Shared genesis on-ramp used by both the toolbar button above and the
         // sidebar workflow ⋮ menu: one reflection call → approval overlay.
         // Callers own any button busy-state; this method owns the in-flight
@@ -10051,17 +10062,7 @@ class WorkflowEditor {
      * (no answer, a JSON-RPC error, an isError result) comes back as {error, message}.
      */
     async _mcpToolJson(server, tool, args = {}) {
-        const rpc = await this._mcpProxyToolCall(server, tool, args);
-        if (!rpc) return { error: 'network_error', message: `no answer from ${server?.name || 'the server'}` };
-        if (rpc.error) return { error: 'network_error', message: typeof rpc.error === 'string' ? rpc.error : (rpc.error.message || 'error') };
-        const text = rpc.result?.content?.[0]?.text;
-        if (rpc.result?.isError) {
-            // An {"error": code, "message": ...} text keeps its code (not_connected, reconnect_needed...).
-            try { const e = JSON.parse(text); if (e && typeof e.error === 'string') return e; } catch (_) { /* plain text */ }
-            return { error: 'tool_error', message: String(text || 'tool error') };
-        }
-        if (rpc.result?.structuredContent && typeof rpc.result.structuredContent === 'object') return rpc.result.structuredContent;
-        try { return JSON.parse(text); } catch (_) { return { error: 'bad_result', message: String(text ?? '') }; }
+        return window.CodeNode.toolJson(await this._mcpProxyToolCall(server, tool, args), server?.name);
     }
 
     /**
@@ -10083,6 +10084,7 @@ class WorkflowEditor {
             <div style="display:flex; align-items:center; gap:12px;">
                 <strong style="font-size:13px;">${this.escapeHtml(serverName)}</strong>
                 <button type="button" class="storage-config-btn connect-btn">${t('connect')}</button>
+                <button type="button" class="storage-config-btn connect-org-btn" style="display:none;">${this.escapeHtml(this.t('robot.connectOrganization'))}</button>
                 <div class="connect-status" style="font-size:13px;"></div>
             </div>
             <div class="connect-device" style="display:none; margin-top:8px; font-size:14px;"></div>
@@ -10094,21 +10096,37 @@ class WorkflowEditor {
      * code to enter at a sign-in page, connect_status reports it, and once connected hands out the
      * connection key with the header it goes in (credential_header); whoami names the account.
      * getServer: the server ({id, name, url}) while it is checked, else null. Returns { refresh }.
+     * io (optional): {call(server, tool, args), saveKey(server, header, key), listTools?(server)} -- the robot's
+     * connections pass their own routes; default: the user's proxy (_mcpToolJson / _saveConnectionKey).
+     * In the robot's connections (io passed) only, when connect_start's schema offers method "organization",
+     * a second button connects the whole organization at once (CodeNode.connectOrganization).
      */
-    _wireServerConnect(el, getServer) {
+    _wireServerConnect(el, getServer, io = null) {
+        const call = io?.call || ((s, tool, args) => this._mcpToolJson(s, tool, args));
+        const saveKey = io?.saveKey || ((s, header, key) => this._saveConnectionKey(s, header, key));
+        const listTools = io?.listTools || ((s) => this._mcpProxyListToolEntries(s));
         const q = (c) => el.querySelector(c);
-        const status = q('.connect-status'), device = q('.connect-device'), btn = q('.connect-btn');
+        const status = q('.connect-status'), device = q('.connect-device'), btn = q('.connect-btn'), orgBtn = q('.connect-org-btn');
         const t = (k, p) => this.t(`workflow.connect.${k}`, p);
         const failed = (r) => t('failed', { status: r.message || r.error || r.status || 'error' });
         const sayDevice = (text) => { device.style.display = 'block'; device.textContent = text; };
         // A server-supplied URL in an href: http(s) only, quotes escaped.
         const href = (u) => (/^https?:\/\//i.test(String(u || '')) ? this.escapeHtml(String(u)).replace(/"/g, '&quot;') : '#');
         let connecting = false;   // one sign-in at a time: a refresh mid sign-in must not re-enable Connect
+        let orgFor = null;        // the server id whose tools/list decided the organization button
+        const showOrg = async (server) => {
+            if (!orgBtn || orgFor === server.id) return;
+            orgFor = server.id;
+            const listed = io ? await listTools(server) : null;     // a person's own box: never the organization
+            orgBtn.style.display = window.CodeNode.showsOrganizationButton(listed?.tools, !!io) ? '' : 'none';
+        };
         const showWho = async () => {
             const server = getServer();
             btn.disabled = connecting || !server;
+            if (orgBtn) orgBtn.disabled = btn.disabled;
             if (!server) return;
-            const who = await this._mcpToolJson(server, 'whoami');
+            showOrg(server);
+            const who = await call(server, 'whoami');
             btn.textContent = t(who.error === 'reconnect_needed' ? 'reconnect' : 'connect');
             if (who.account) { status.textContent = t('connected', { account: who.account }); return; }
             switch (who.error) {
@@ -10118,7 +10136,7 @@ class WorkflowEditor {
             }
         };
         const connect = async (server) => {
-            const start = await this._mcpToolJson(server, 'connect_start', { method: 'device' });
+            const start = await call(server, 'connect_start', { method: 'device' });
             if (start.error) { sayDevice(failed(start)); return; }
             device.style.display = 'block';
             device.innerHTML = t('deviceCode', {
@@ -10135,14 +10153,14 @@ class WorkflowEditor {
             };
             while (Date.now() < deadline && el.isConnected) {
                 await new Promise((r) => setTimeout(r, 3000));
-                const st = await this._mcpToolJson(server, 'connect_status', { connect_id: start.connect_id });
+                const st = await call(server, 'connect_status', { connect_id: start.connect_id });
                 switch (st.status) {
                     case 'pending':
                         continue;
                     case 'connected': {
                         if (!st.connection_key) { sayDevice(failed({ status: 'connected without a key' })); return; }
                         if (!st.credential_header) { sayDevice(failed({ message: t('noHeader') })); return; }
-                        const saved = await this._saveConnectionKey(server, st.credential_header, st.connection_key);
+                        const saved = await saveKey(server, st.credential_header, st.connection_key);
                         if (!saved?.success) { sayDevice(failed({ message: saved?.error })); return; }
                         device.style.display = 'none';
                         await showWho();
@@ -10167,16 +10185,27 @@ class WorkflowEditor {
             }
             if (el.isConnected) sayDevice(failed({ status: 'expired' }));
         };
-        btn.addEventListener('click', async () => {
+        // One click at a time across both buttons.
+        const run = async (action) => {
             const server = getServer();
             if (connecting || !server) return;
             connecting = true;
             btn.disabled = true;
-            try { await connect(server); } finally {
+            if (orgBtn) orgBtn.disabled = true;
+            try { await action(server); } finally {
                 connecting = false;
                 btn.disabled = !getServer();
+                if (orgBtn) orgBtn.disabled = btn.disabled;
             }
-        });
+        };
+        btn.addEventListener('click', () => run(connect));
+        // The organization: connected at once, its key saved under the server's header (never shown).
+        orgBtn?.addEventListener('click', () => run(async (server) => {
+            device.style.display = 'none';
+            const r = await window.CodeNode.connectOrganization({ call, saveKey }, server);
+            if (r.error) { sayDevice(failed(r)); return; }
+            await showWho();
+        }));
         return { refresh: showWho };
     }
 
@@ -21551,6 +21580,44 @@ Based on the analysis...
             .forEach(b => b.classList.toggle('hidden', b.id !== 'tab-system-prompt'));
         this.switchAgentModalTab('system-prompt');
         await this._addPlaybookPublishButton();
+    }
+
+    /**
+     * Publish the saved workflow to the robot (a frozen copy). A `replaces` answer (the robot's copy is active)
+     * arms the button (PlaybookCollection.publishStep); a second click on the same workflow confirms. The notice
+     * names the MCP connections the robot still lacks (needs_servers).
+     */
+    async _publishWorkflowToRobot(btn) {
+        const PC = window.PlaybookCollection;
+        const label = btn.querySelector('[data-robot-label]') || btn;
+        const id = this.currentWorkflowId;
+        if (!id) { this.showToast(this.t('workflow.messages.saveFirst'), 'warning'); return; }
+        // The robot copies the saved workflow: unsaved edits would silently not be published.
+        if (!this._unchangedSinceLoad()) { this.showToast(this.t('robot.saveFirst'), 'warning'); return; }
+        if (btn.dataset.busy === '1') return;
+        const step = PC.publishStep(this._wfPublishState, { type: 'click', key: id });
+        clearTimeout(this._wfPublishTimer);
+        btn.dataset.busy = '1';
+        try {
+            const res = await this._playbookApi().publishWorkflow(id, step.confirmReplace);
+            this._wfPublishState = null;
+            label.textContent = this.t('robot.publish');
+            const notice = PC.needsServersNotice(res.data?.needs_servers, this.t.bind(this));
+            this.showNotification(notice ? `${this.t('robot.published')} ${notice}` : this.t('robot.published'), 'success');
+            if (window.playbooksLibrary?.tab === 'robot') window.playbooksLibrary.loadTree();
+        } catch (e) {
+            this._wfPublishState = PC.publishStep(step, { type: 'error', error: e, key: id }, this.t.bind(this), 'robot.replaceConfirm');
+            if (this._wfPublishState.armed) {
+                label.textContent = this._wfPublishState.message;
+                this._wfPublishTimer = setTimeout(() => { this._wfPublishState = null; label.textContent = this.t('robot.publish'); }, 6000);
+            } else {
+                label.textContent = this.t('robot.publish');
+                this.showNotification(this._wfPublishState.message, 'error');
+                this._wfPublishState = null;
+            }
+        } finally {
+            btn.dataset.busy = '0';
+        }
     }
 
     /** The form's Publish button, next to Save, only when the caller can use the robot. */

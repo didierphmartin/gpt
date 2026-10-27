@@ -401,6 +401,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->get('/api/v1/workflows/runs/{runId:[a-f0-9]{32}}/events', ['AgentTeam:WorkflowController', 'runEvents']);
         $r->post('/api/v1/workflows/{id:\d+}/toggle', ['AgentTeam:WorkflowController', 'toggle']);
         $r->post('/api/v1/workflows/{id:\d+}/duplicate', ['AgentTeam:WorkflowController', 'duplicate']);
+        $r->post('/api/v1/workflows/{id:\d+}/publish', ['AgentTeam:WorkflowController', 'publish']);
 
         // Playbook registration-time validation (spec T4): parse + resolve
         // bindings against the caller's MCP tools/agents, no run created.
@@ -435,6 +436,18 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->get('/api/v1/robot', ['RobotController', 'show']);
         $r->get('/api/v1/robot/playbooks', ['RobotController', 'playbooks']);
         $r->delete('/api/v1/robot/playbooks/{id:\d+}', ['RobotController', 'unpublish']);
+        $r->get('/api/v1/robot/workflows', ['RobotController', 'workflows']);
+        $r->delete('/api/v1/robot/workflows/{id:\d+}', ['RobotController', 'unpublishWorkflow']);
+        $r->post('/api/v1/robot/workflows/{id:\d+}/activate', ['RobotController', 'activateWorkflow']);
+        $r->delete('/api/v1/robot/workflows/{id:\d+}/activate', ['RobotController', 'deactivateWorkflow']);
+        $r->get('/api/v1/robot/workflows/{id:\d+}/executions', ['RobotController', 'workflowExecutions']);
+        $r->get('/api/v1/robot/workflows/{id:\d+}/live', ['RobotController', 'workflowLive']);
+        $r->get('/api/v1/robot/mcp-servers', ['RobotServersController', 'index']);
+        $r->post('/api/v1/robot/mcp-servers', ['RobotServersController', 'create']);
+        $r->post('/api/v1/robot/mcp-servers/{id:\d+}', ['RobotServersController', 'update']);
+        $r->delete('/api/v1/robot/mcp-servers/{id:\d+}', ['RobotServersController', 'destroy']);
+        $r->post('/api/v1/robot/mcp-servers/{id:\d+}/call', ['RobotServersController', 'call']);
+        $r->post('/api/v1/robot/mcp-servers/{id:\d+}/key', ['RobotServersController', 'saveKey']);
 
         // Workflow output storage
         $r->get('/api/v1/workflows/{id:\d+}/outputs', ['AgentTeam:WorkflowController', 'listOutputs']);

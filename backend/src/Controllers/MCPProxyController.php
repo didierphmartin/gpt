@@ -342,7 +342,7 @@ class MCPProxyController
      * there directly. A JSON-RPC reply, even an error, means the endpoint was
      * found: its error is reported, no further candidate is tried.
      */
-    private function sendToMCPServer(string $serverUrl, array $request, bool $expectResponse = true, array $extraHeaders = [], string $transport = 'http'): ?array
+    protected function sendToMCPServer(string $serverUrl, array $request, bool $expectResponse = true, array $extraHeaders = [], string $transport = 'http'): ?array
     {
         $key = $transport . ' ' . $serverUrl;
         $candidates = isset($this->endpoints[$key]) ? [$this->endpoints[$key]] : McpEndpoint::candidates($serverUrl, $transport);
@@ -611,7 +611,7 @@ class MCPProxyController
     /**
      * Ensure required tables exist
      */
-    private function ensureTablesExist(): void
+    protected function ensureTablesExist(): void
     {
         $this->db->exec("
             CREATE TABLE IF NOT EXISTS mcp_servers (

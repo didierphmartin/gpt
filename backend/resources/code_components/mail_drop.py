@@ -7,6 +7,8 @@
 #   source       where it came from, and `release`: the tool call that takes it out of the drop folder, made by
 #                the node that finishes the job. Until then the email stays and is handed on again after its
 #                10-minute lease (up to 3 attempts).
+# On an organization connection the email also carries `mailbox` / `mailbox_name` (the VIP whose mailbox it came
+# from); they are copied into document.meta and source under the same names, and absent otherwise.
 # File content is never in the package: each part says how to fetch it, so run records stay small.
 
 def _attachment(mail_id, att):
@@ -39,7 +41,11 @@ def run(input, call_tool):
         "text": mail.get("body_text") or "",
         "renditions": {"pdf": {"server": "outlook", "tool": "mail_to_pdf", "args": {"mail_id": mail_id}}},
     }
+    for k in ("mailbox", "mailbox_name"):
+        if mail.get(k):
+            document["meta"][k] = mail[k]
     source = {"server": "outlook", "id": mail_id, "folder": folder, "attempt": mail.get("attempt"),
               "release": {"server": "outlook", "tool": "move_mail", "args": {"mail_id": mail_id, "folder": done}}}
+    source.update({k: mail[k] for k in ("mailbox", "mailbox_name") if mail.get(k)})
     return {"route": "dropped_mail", "output": {"document": document, "attachments": attachments,
                                        "not_fetched": cloud, "source": source}}

@@ -137,6 +137,51 @@
         return CONNECT_TOOLS.every((n) => have.has(n));
     }
 
+    /** Does connect_start's input schema (tools/list entries) offer method "organization"? Only a server configured for it does. */
+    function offersOrganization(tools) {
+        const start = (Array.isArray(tools) ? tools : []).find((x) => x && x.name === 'connect_start');
+        const methods = start?.inputSchema?.properties?.method?.enum;
+        return Array.isArray(methods) && methods.includes('organization');
+    }
+
+    /** The organization Connect button: for the robot's connections only (forRobot), never a person's own Connect box. */
+    function showsOrganizationButton(tools, forRobot) {
+        return !!forRobot && offersOrganization(tools);
+    }
+
+    /**
+     * A tools/call JSON-RPC answer as the tool's own JSON payload. A failed call (no answer, a JSON-RPC
+     * error, an isError result) comes back as {error, message}; an {"error": code} text keeps its code.
+     */
+    function toolJson(rpc, serverName) {
+        if (!rpc) return { error: 'network_error', message: `no answer from ${serverName || 'the server'}` };
+        if (rpc.error) return { error: 'network_error', message: typeof rpc.error === 'string' ? rpc.error : (rpc.error.message || 'error') };
+        const text = rpc.result?.content?.[0]?.text;
+        if (rpc.result?.isError) {
+            try { const e = JSON.parse(text); if (e && typeof e.error === 'string') return e; } catch (_) { /* plain text */ }
+            return { error: 'tool_error', message: String(text || 'tool error') };
+        }
+        if (rpc.result?.structuredContent && typeof rpc.result.structuredContent === 'object') return rpc.result.structuredContent;
+        try { return JSON.parse(text); } catch (_) { return { error: 'bad_result', message: String(text ?? '') }; }
+    }
+
+    /**
+     * The organization connect: connect_start {method:"organization"} answers at once, connect_status hands
+     * out the key once, and io.saveKey stores it under the header the server names. io = {call(server, tool,
+     * args) -> tool JSON, saveKey(server, header, key) -> {success, error?}}. Returns {ok, account} or {error, message}.
+     */
+    async function connectOrganization(io, server) {
+        const start = await io.call(server, 'connect_start', { method: 'organization' });
+        if (start.error) return start;
+        const st = await io.call(server, 'connect_status', { connect_id: start.connect_id });
+        if (st.error) return st;
+        if (st.status !== 'connected') return { error: String(st.status || 'error'), message: st.message || String(st.status || 'not connected') };
+        if (!st.connection_key || !st.credential_header) return { error: 'no_key', message: 'connected without a key' };
+        const saved = await io.saveKey(server, st.credential_header, st.connection_key);
+        if (!saved?.success) return { error: 'save_failed', message: saved?.error || 'could not save the key' };
+        return { ok: true, account: st.account || '' };
+    }
+
     function validateConfig(cfg) {
         const errs = [];
         if (!String(cfg.code || '').includes('def run(')) errs.push('The code must define run(input, call_tool).');
@@ -357,6 +402,6 @@
         return { input, output: r.ok ? r.output_text : r.error, success: !!r.ok, agentName: name, activity, code: r };
     }
 
-    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, hasCall, readCallArgs, writeCallArgs, callTemplate, CONNECT_TOOLS, isConnectable, parseExits, isPlain, exitsText, exitsLabel, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor,
+    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, hasCall, readCallArgs, writeCallArgs, callTemplate, CONNECT_TOOLS, isConnectable, offersOrganization, showsOrganizationButton, toolJson, connectOrganization, parseExits, isPlain, exitsText, exitsLabel, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor,
              edgesFrom, exitTags, failureResult, routeAfter, runSucceeded, remapExits, normalizeConfig, runData, nodeArgs, runRequest, startAsCode };
 });
