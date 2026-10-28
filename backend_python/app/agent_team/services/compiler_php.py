@@ -288,6 +288,15 @@ def json_to_python(value, force_object: bool = False) -> str:
     return raw.replace(': true', ': True').replace(': false', ': False').replace(': null', ': None')
 
 
+_PY_WORDS = {'true': 'True', 'false': 'False', 'null': 'None'}
+
+
+def py_literal(value) -> str:
+    """PythonEmitHelpers::pyLiteral(): a one-line Python literal, compact JSON with the bare true / false / null
+    (never those words inside a string) spelled True / False / None."""
+    return re.sub(r'"(?:[^"\\]|\\.)*"|\b(?:true|false|null)\b', lambda m: _PY_WORDS.get(m.group(0), m.group(0)), j(value))
+
+
 def py_str(s: str) -> str:
     """PythonEmitHelpers::pyStr(): a Python double-quoted literal."""
     s = s.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')

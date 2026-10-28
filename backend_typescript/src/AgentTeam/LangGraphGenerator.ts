@@ -3566,8 +3566,9 @@ once instead of copied per node.`;
         L.push(indent + '    "mcp_servers": ' + j(cd['mcp_servers']) + ',');
         L.push(indent + '    "timeout_s": ' + intval(cd['timeout_s']) + ',');
         L.push(indent + '    "exit_targets": ' + j(toObject(cd['exit_targets'])) + ',');
-        L.push(indent + '    "args": ' + j(toObject((cd['args'] ?? []))) + ',   # the code\'s ARGS');
-        L.push(indent + '    "arg_decls": ' + j(values(cd['arg_decls'] ?? [])) + ',   # defaults and required, per argument');
+        // Values that may hold booleans or null are Python literals (True / False / None).
+        L.push(indent + '    "args": ' + PythonEmitHelpers.pyLiteral(toObject((cd['args'] ?? []))) + ',   # the code\'s ARGS');
+        L.push(indent + '    "arg_decls": ' + PythonEmitHelpers.pyLiteral(values(cd['arg_decls'] ?? [])) + ',   # defaults and required, per argument');
         // The modular package reads the code from its file at each run (an edit takes effect on the
         // next run); the single file embeds it.
         L.push(((cd?.['source_file']) != null)

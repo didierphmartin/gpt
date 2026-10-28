@@ -117,15 +117,38 @@ def test_arguments_are_compiled_in():
 
 
 def test_node_literal_has_arg_decls_and_execute_passes_meta():
-    """The argument declarations are compiled in, and the node's run fills ARGS from its parents' meta."""
+    """The argument declarations are compiled in as Python (a "required": true declaration imports: no NameError
+    on true), in both packagings, and the node's run fills ARGS from its parents' meta and the declared default."""
     g = _code_graph()
-    g['nodes'][1]['config']['arg_decls'] = [{'name': 'folder', 'required': True}]
+    g['nodes'][1]['config']['arg_decls'] = [{'name': 'folder', 'required': True}, {'name': 'note', 'default': None}]
+    g['nodes'][1]['config']['args'] = {'flag': False}
     code = _generate(g)
-    assert '"arg_decls": [{"name":"folder","required":true}]' in code
+    assert '"arg_decls": [{"name":"folder","required":True},{"name":"note","default":None}]' in code
+    assert '"args": {"flag":False}' in code
     assert 'meta=CODE_HARNESS.received_meta(' in code
     assert '"arg_decls": []' in _generate(_code_graph())
-    byPath = S.files_of(_generate_with(g, {'modular': True}))
-    assert '"arg_decls": [{"name":"folder","required":true}]' in '\n'.join(byPath.values())
+    files = {'single/wf.py': code}
+    files.update({'modular/' + p: c for p, c in S.files_of(_generate_with(g, {'modular': True})).items() if p.endswith('.py')})
+    for p, c in files.items():
+        compile(c, p, 'exec')   # a SyntaxError fails the test
+    # the NODE literal evaluates: the declarations come back as Python values
+    m = re.search(r'"arg_decls": (\[.*\]),   #', code)
+    assert eval(m.group(1)) == [{'name': 'folder', 'required': True}, {'name': 'note', 'default': None}]
+
+
+def test_the_compiled_run_applies_a_declared_default():
+    """A compiled node whose argument is required and declared with a default runs with that default in ARGS."""
+    S.venv()
+    g = _code_graph()
+    g['nodes'][1]['config'] = {'type': 'code', 'name': 'Echo args', 'exits': ['next'], 'mcp_servers': [],
+                               'timeout_s': 30, 'args': {},
+                               'arg_decls': [{'name': 'folder', 'default': 'Inbox', 'required': True}],
+                               'code': "def run(input, call_tool):\n    return 'folder=' + str(ARGS.get('folder'))\n"}
+    g['edges'] = [{'from': '1', 'to': '2', 'from_port': 'output_1'}, {'from': '2', 'to': '3', 'from_port': 'output_1'}]
+    g['nodes'].pop()
+    rc, out = _run_once(_generate(g))
+    assert rc == 0, out
+    assert 'folder=Inbox' in out
 
 
 def _run_once(code: str) -> tuple:
