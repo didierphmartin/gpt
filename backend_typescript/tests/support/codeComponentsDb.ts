@@ -4,7 +4,7 @@ import { installSqliteDb, Sqlite } from './sqliteSchemaDb';
 export const SCHEMA = `
 CREATE TABLE code_components (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL,
   description TEXT, code TEXT NOT NULL, exits TEXT NOT NULL, mcp_servers TEXT NOT NULL, timeout_s INTEGER NOT NULL DEFAULT 30,
-  start_trigger TEXT, created_at TEXT, updated_at TEXT, UNIQUE (user_id, name));
+  start_trigger TEXT, args TEXT, provides TEXT, created_at TEXT, updated_at TEXT, UNIQUE (user_id, name));
 CREATE TABLE agent_workflows (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, name TEXT);
 CREATE TABLE workflow_nodes (id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_id INTEGER, node_type TEXT, agent_id INTEGER, config TEXT,
   pos_x INTEGER, pos_y INTEGER, drawflow_node_id TEXT);

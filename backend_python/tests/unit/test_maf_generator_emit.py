@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 
 from app.agent_team.services.maf_generator import MAFGenerator
+from tests.unit.test_adk_code_node import code_analyzed
 
 
 def _analyzed() -> dict:
@@ -141,3 +142,13 @@ def test_mcp_tools_emitted():
     # MCP tools are bound as PLAIN callables (MAF auto-wraps), never ADK's FunctionTool wrapper.
     assert 'FunctionTool(' not in code
     assert '"web_search": _tool_web_search' in code
+
+
+def test_code_node_carries_arg_decls_and_passes_meta():
+    """A code node's CODE_NODES entry carries its argument declarations; its run fills ARGS from the parents' meta."""
+    a = code_analyzed()
+    a['code']['2']['arg_decls'] = [{'name': 'folder', 'required': True}]
+    code = MAFGenerator.emitMaf(a)
+    assert 'meta=CODE_HARNESS.received_meta(parents)' in code
+    assert 'arg_decls=cfg.get("arg_decls")' in code
+    assert re.search(r'"arg_decls": \[\s*\{\s*"name": "folder",\s*"required": True\s*\}\s*\]', code)

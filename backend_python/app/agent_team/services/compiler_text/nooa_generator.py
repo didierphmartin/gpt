@@ -491,7 +491,8 @@ async def _run_graph(prompt: str) -> str:
                 Progress.node_start(name, f"code -- exits={cfg['exits']}, mcp_servers={cfg['mcp_servers']}")
                 res = await asyncio.to_thread(CODE_HARNESS.execute, source, value, cfg["exits"], cfg["mcp_servers"],
                                               _code_transport, cfg["timeout_s"], node_name=name,
-                                              args=cfg.get("args"))
+                                              args=cfg.get("args"), arg_decls=cfg.get("arg_decls"),
+                                              meta=CODE_HARNESS.received_meta(parents))
                 for call in res["tool_calls"]:
                     Progress.note(f"[tool] {call['server']}.{call['tool']} ok={call['ok']} ({call['ms']} ms)")
                 if res["stdout"]:

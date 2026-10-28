@@ -66,6 +66,19 @@ final class CodeNodeExecutorTest extends TestCase
         self::assertSame('{}', $out['result']['output_text']);
     }
 
+    public function testRequestCarriesArgDecls(): void
+    {
+        // The declared default reaches ARGS only when the request carries arg_decls; the parent's meta fills {m}.
+        $code = "def run(input, call_tool):\n    return {'route': 'a', 'output': [ARGS['folder'], ARGS['v']]}\n";
+        $node = self::node($code);
+        $node['config']['args'] = ['folder' => '', 'v' => 'x/{m}'];
+        $node['config']['arg_decls'] = [['name' => 'folder', 'default' => 'Inbox', 'required' => true], ['name' => 'v']];
+        $out = $this->exec()->run($node, [], [2], '3', [['name' => 'P', 'text' => '{"meta":{"m":"V"}}']], '');
+        $this->assertRan($out);
+        self::assertSame('["Inbox", "x/V"]', $out['result']['output_text']);
+        self::assertSame($node['config']['arg_decls'], $out['data']['arg_decls']);
+    }
+
     public function testUnknownServerIsRefusedBeforeRunning(): void
     {
         $this->expectExceptionMessage('is not one of your MCP servers');

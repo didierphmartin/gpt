@@ -13,9 +13,11 @@ def ok_result(data):
     return {"content": [{"type": "text", "text": json.dumps(data)}], "structuredContent": data}
 
 
-def run(source, input=None, exits=("next",), servers=(), transport=None, timeout_s=5, threaded=True, args=None):
+def run(source, input=None, exits=("next",), servers=(), transport=None, timeout_s=5, threaded=True, args=None,
+        arg_decls=None, meta=None):
     transport = transport or (lambda s, t, a: ok_result({}))
-    return h.execute(source, input, list(exits), list(servers), transport, timeout_s, threaded=threaded, args=args)
+    return h.execute(source, input, list(exits), list(servers), transport, timeout_s, threaded=threaded, args=args,
+                     arg_decls=arg_decls, meta=meta)
 
 
 class DecodeInput(unittest.TestCase):
@@ -262,6 +264,97 @@ class ArgsGlobal(unittest.TestCase):
         self.assertEqual(run(self.SRC)["output_text"], "null")
         self.assertEqual(run("def run(i, c):\n    return ARGS == {}\n", args=[])["output_text"], "true")
         self.assertEqual(run("def run(i, c):\n    return ARGS == {}\n", args=None, threaded=False)["output_text"], "true")
+
+
+P = lambda name, obj, start=False: {"name": name, "text": json.dumps(obj), "start": start}
+ECHO = "def run(i, c):\n    return {'args': ARGS}\n"
+
+
+class ArgsAndMetaTest(unittest.TestCase):
+    def test_received_meta_none_without_parents(self):
+        self.assertIsNone(h.received_meta([]))
+
+    def test_received_meta_merges_later_wins_and_skips_text(self):
+        got = h.received_meta([P("A", {"meta": {"a": "1", "x": "A"}}), {"name": "B", "text": "plain", "start": False},
+                               P("C", {"meta": {"x": "C"}})])
+        self.assertEqual(got, {"a": "1", "x": "C"})
+
+    def test_received_meta_reads_start_parent(self):
+        self.assertEqual(h.received_meta([P("start", {"meta": {"m": "v"}}, start=True)]), {"m": "v"})
+
+    def test_fill(self):
+        self.assertEqual(h.fill_args({"folder": "VIP/{mailbox_name}"}, [], {"mailbox_name": "Albert"}), {"folder": "VIP/Albert"})
+
+    def test_default_used_and_filled(self):
+        d = [{"name": "sub", "default": "{received} - {from}"}]
+        self.assertEqual(h.fill_args({}, d, {"received": "2026-10-28 0930", "from": "a@x"}), {"sub": "2026-10-28 0930 - a@x"})
+        self.assertEqual(h.fill_args({"sub": ""}, d, {"received": "r", "from": "f"}), {"sub": "r - f"})
+
+    def test_escapes(self):
+        self.assertEqual(h.fill_args({"v": "{{x}} {y}"}, [], {"y": "1"}), {"v": "{x} 1"})
+
+    def test_value_without_placeholder_unchanged(self):
+        v = '{"a":{"b":1}} {{ }} {not an id}'
+        self.assertEqual(h.fill_args({"v": v}, [], {}), {"v": v})
+
+    def test_non_text_untouched(self):
+        self.assertEqual(h.fill_args({"n": 3, "b": True}, [], {}), {"n": 3, "b": True})
+
+    def test_no_fill_when_meta_none(self):
+        self.assertEqual(h.fill_args({"v": "{x}"}, [], None), {"v": "{x}"})
+
+    def test_missing_placeholder_message(self):
+        with self.assertRaises(h.ArgumentError) as cm:
+            h.fill_args({"v": "{mailbox_name}"}, [], {"from": "a", "subject": "s"})
+        self.assertEqual(str(cm.exception), "placeholder {mailbox_name} has no value (provided before this node: from, subject)")
+        with self.assertRaises(h.ArgumentError) as cm:
+            h.fill_args({"v": "{x}"}, [], {})
+        self.assertEqual(str(cm.exception), "placeholder {x} has no value (nothing is provided before this node)")
+
+    def test_required(self):
+        with self.assertRaises(h.ArgumentError) as cm:
+            h.fill_args({}, [{"name": "folder", "required": True}], {})
+        self.assertEqual(str(cm.exception), "argument folder is required")
+
+    def test_missing_placeholder_takes_error_exit_and_skips_code(self):
+        src = "def run(i, c):\n    c('s', 't', {})\n    return {'route': 'ok', 'output': {}}\n"
+        for threaded in (True, False):
+            r = run(src, {}, ["ok", "error"], servers=["s"], args={"v": "{x}"}, meta={"m": "1"}, threaded=threaded)
+            self.assertEqual(r["route"], "error")
+            self.assertEqual(r["tool_calls"], [])
+            out = json.loads(r["output_text"])
+            self.assertTrue(out["error"].startswith("ArgumentError: placeholder {x} has no value"))
+            self.assertEqual(out["meta"], {"m": "1"})
+
+    def test_missing_placeholder_fails_without_error_exit(self):
+        r = run(ECHO, {}, ["next"], args={"v": "{x}"}, meta={})
+        self.assertFalse(r["ok"])
+        self.assertTrue(r["error"].startswith("ArgumentError: placeholder {x} has no value"))
+
+    def test_non_dict_own_meta_left_untouched(self):
+        for m in (None, {"a": "1"}):
+            r = run("def run(i, c):\n    return {'meta': 'x'}\n", {}, ["next"], meta=m)
+            self.assertEqual(r["output_text"], json.dumps({"meta": "x"}))
+
+    def test_meta_carried_through_plain_output(self):
+        r = run("def run(i, c):\n    return {'files': []}\n", {}, ["next"], meta={"from": "a"})
+        self.assertEqual(json.loads(r["output_text"]), {"files": [], "meta": {"from": "a"}})
+
+    def test_meta_overlaid_by_own(self):
+        r = run("def run(i, c):\n    return {'meta': {'from': 'b', 'k': 'v'}}\n", {}, ["next"], meta={"from": "a", "s": "1"})
+        self.assertEqual(json.loads(r["output_text"])["meta"], {"from": "b", "s": "1", "k": "v"})
+
+    def test_meta_on_code_error_route(self):
+        r = run("def run(i, c):\n    return {'route': 'error', 'output': {'reason': 'x'}}\n", {}, ["ok", "error"], meta={"a": "1"})
+        self.assertEqual(json.loads(r["output_text"]), {"reason": "x", "meta": {"a": "1"}})
+
+    def test_no_meta_key_added_when_empty(self):
+        r = run("def run(i, c):\n    return {'x': 1}\n", {}, ["next"], meta={})
+        self.assertEqual(json.loads(r["output_text"]), {"x": 1})
+
+    def test_text_output_untouched(self):
+        r = run("def run(i, c):\n    return 'hi'\n", {}, ["next"], meta={"a": "1"})
+        self.assertEqual(r["output_text"], "hi")
 
 
 if __name__ == "__main__":

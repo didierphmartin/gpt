@@ -89,12 +89,13 @@ class WorkflowGraphRepository:
                     or php_empty(cfg.get('code_component_id'))):
                 continue
             c = codeStore.get(ownerId(), php_intval(cfg['code_component_id']))
-            for k in ('code', 'exits', 'mcp_servers', 'timeout_s', 'code_component_missing'):
+            for k in ('code', 'exits', 'mcp_servers', 'timeout_s', 'arg_decls', 'provides', 'code_component_missing'):
                 cfg.pop(k, None)
             if c is None:
                 cfg['code_component_missing'] = True
             else:
-                cfg.update({'code': c['code'], 'exits': c['exits'], 'mcp_servers': c['mcp_servers'], 'timeout_s': c['timeout_s']})
+                cfg.update({'code': c['code'], 'exits': c['exits'], 'mcp_servers': c['mcp_servers'], 'timeout_s': c['timeout_s'],
+                            'arg_decls': c['args'], 'provides': c['provides']})
             row['config'] = cfg
 
         # A Start on a Start option shows the option's exits as its ports: read like a linked code node's.
@@ -218,7 +219,7 @@ class WorkflowGraphRepository:
             drop += ('playbook', 'playbook_missing')
         # A linked code node stores only the link; its body and the missing flag are derived on read.
         if node_type == 'code' and config.get('code_component_id') is not None:
-            drop += ('code', 'exits', 'mcp_servers', 'timeout_s', 'code_component_missing')
+            drop += ('code', 'exits', 'mcp_servers', 'timeout_s', 'arg_decls', 'provides', 'code_component_missing')
         # A Start on a Start option stores only the option; its exits, label and missing flag are derived on read.
         if node_type == 'start':
             drop += ('exits', 'start_option_label', 'start_option_missing')

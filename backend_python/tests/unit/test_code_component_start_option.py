@@ -303,6 +303,28 @@ def lr_node(db, type, cfg):
     db.execute('INSERT INTO workflow_nodes (workflow_id, node_type, config) VALUES (1, ?, ?)', [type, jenc(cfg)])
 
 
+def test_hydrated_node_has_declaration_cache(lr):
+    args = [{'name': 'folder', 'required': True}]
+    id = CodeComponentStore(lr).save(3, None, {**POLL, 'args': args, 'provides': [{'name': 'from'}]})['id']
+    lr_node(lr, 'code', {'name': 'Poll', 'code_component_id': id, 'arg_decls': [{'name': 'stale'}], 'provides': []})
+    cfg = WorkflowGraphRepository(lr).getNodes(1)[0]['config']
+    assert cfg['arg_decls'] == args
+    assert cfg['provides'] == [{'name': 'from'}]
+
+
+def test_save_strips_declaration_cache(lr):
+    repo = WorkflowGraphRepository(lr)
+    full = {'name': 'Poll', 'code_component_id': 7, 'arg_decls': [{'name': 'a'}], 'provides': [{'name': 'b'}], 'args': {'a': 'x'}}
+    a = repo.createNode(1, {'node_type': 'code', 'config': full})
+    b = repo.createNode(1, {'node_type': 'code', 'config': {'name': 'Poll', 'code_component_id': 7}})
+    repo.updateNode(b, {'node_type': 'code', 'config': full})
+    for id in (a, b):
+        cfg = stored(lr, id)
+        assert 'arg_decls' not in cfg
+        assert 'provides' not in cfg
+        assert cfg['args'] == {'a': 'x'}
+
+
 def test_get_nodes_fills_the_component_for_the_owner(lr):
     id = CodeComponentStore(lr).save(3, None, POLL)['id']
     # Saved exits are stale (another workflow changed the component since): the component wins.
@@ -445,6 +467,15 @@ def test_the_graph_runs_the_component_after_start(se):
     frm = [[str(e['from_node_id']), e['from_port']] for e in g['edges']]
     assert frm == [[code, 'output_1'], [code, 'output_2'], [code, 'output_3'], [str(se.start), 'output_1']]
     assert str(g['edges'][-1]['to_node_id']) == code
+
+
+def test_expanded_start_carries_arg_decls(se):
+    args = [{'name': 'folder', 'required': True}]
+    se.store.save(3, se.cid, {**POLL, 'args': args})
+    g = WorkflowGraphRepository(se.db).getGraph(1)
+    code = str(StartOptionGraph.ID_OFFSET + se.start)
+    node = [n for n in g['nodes'] if str(n['id']) == code][0]
+    assert node['config']['arg_decls'] == args
 
 
 def test_a_plain_start_is_not_expanded():

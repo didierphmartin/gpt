@@ -56,7 +56,8 @@ final class WorkflowRobotPublisher
                     }
                     $mine = $this->components->save($robotId, null, ['name' => $c['name'], 'description' => $c['description'],
                         'code' => $c['code'], 'exits' => $c['exits'], 'mcp_servers' => $c['mcp_servers'],
-                        'timeout_s' => $c['timeout_s'], 'confirm_drop_links' => true]);
+                        'timeout_s' => $c['timeout_s'], 'args' => $c['args'], 'provides' => $c['provides'],
+                        'confirm_drop_links' => true]);
                     if ($c['start_trigger'] !== null) {
                         $this->components->setStartTrigger($robotId, $mine['id'], $c['start_trigger']);
                     }

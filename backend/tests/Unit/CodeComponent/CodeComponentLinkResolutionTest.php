@@ -28,6 +28,31 @@ final class CodeComponentLinkResolutionTest extends TestCase
         $this->db->prepare('INSERT INTO workflow_nodes (workflow_id, node_type, config) VALUES (1, ?, ?)')->execute([$type, json_encode($cfg)]);
     }
 
+    public function testHydratedNodeHasDeclarationCache(): void
+    {
+        $args = [['name' => 'folder', 'required' => true]];
+        $id = (new CodeComponentStore($this->db))->save(3, null, CodeComponentStoreTest::POLL + ['args' => $args, 'provides' => [['name' => 'from']]])['id'];
+        $this->node('code', ['name' => 'Poll', 'code_component_id' => $id, 'arg_decls' => [['name' => 'stale']], 'provides' => []]);
+        $cfg = (new WorkflowGraphRepository($this->db))->getNodes(1)[0]['config'];
+        $this->assertSame($args, $cfg['arg_decls']);
+        $this->assertSame([['name' => 'from']], $cfg['provides']);
+    }
+
+    public function testSaveStripsDeclarationCache(): void
+    {
+        $repo = new WorkflowGraphRepository($this->db);
+        $full = ['name' => 'Poll', 'code_component_id' => 7, 'arg_decls' => [['name' => 'a']], 'provides' => [['name' => 'b']], 'args' => ['a' => 'x']];
+        $a = $repo->createNode(1, ['node_type' => 'code', 'config' => $full]);
+        $b = $repo->createNode(1, ['node_type' => 'code', 'config' => ['name' => 'Poll', 'code_component_id' => 7]]);
+        $repo->updateNode($b, ['node_type' => 'code', 'config' => $full]);
+        foreach ([$a, $b] as $id) {
+            $stored = json_decode((string) $this->db->query("SELECT config FROM workflow_nodes WHERE id = $id")->fetchColumn(), true);
+            $this->assertArrayNotHasKey('arg_decls', $stored);
+            $this->assertArrayNotHasKey('provides', $stored);
+            $this->assertSame(['a' => 'x'], $stored['args']);
+        }
+    }
+
     public function testGetNodesFillsTheComponentForTheOwner(): void
     {
         $id = (new CodeComponentStore($this->db))->save(3, null, CodeComponentStoreTest::POLL)['id'];

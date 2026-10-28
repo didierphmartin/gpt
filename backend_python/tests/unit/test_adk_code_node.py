@@ -180,3 +180,15 @@ def test_wf64_shape_routes_through_gates_and_nests_code_in_dispatcher():
 
 def test_ungated_workflow_unchanged():
     assert '_Gate(' not in ADKGenerator.emitAdk(mcp_analyzed())
+
+
+def test_code_agent_carries_arg_decls_and_passes_meta():
+    """The node's argument declarations are compiled in, and its run fills ARGS from the parents' meta."""
+    a = code_analyzed()
+    a['code']['2']['arg_decls'] = [{'name': 'folder', 'required': True}]
+    code = ADKGenerator.emitAdk(a)
+    assert 'meta=CODE_HARNESS.received_meta(parents)' in code
+    assert 'arg_decls=self.arg_decls' in code
+    assert re.search(r'arg_decls=\[\s*\{\s*"name": "folder",\s*"required": True\s*\}\s*\]', code)
+    rc, out = py_compile(code)
+    assert rc == 0, out

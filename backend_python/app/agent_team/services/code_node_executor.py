@@ -51,6 +51,7 @@ class CodeNodeExecutor:
             'source': data['source'], 'exits': data['exits'], 'timeout_s': data['timeout_s'],
             'parents': parents, 'user_prompt': userPrompt, 'name': data['display'],
             'args': _object(cfgArgs if isinstance(cfgArgs, (dict, list)) else {}),
+            'arg_decls': data['arg_decls'],
             'servers': {slug: s for slug, s in servers.items() if slug in data['mcp_servers']},
         }
         return {'data': data, 'result': self._spawn(request, data['timeout_s'] + KILL_GRACE_S)}

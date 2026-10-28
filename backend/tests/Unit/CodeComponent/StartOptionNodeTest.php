@@ -93,6 +93,16 @@ final class StartOptionNodeTest extends TestCase
         $this->assertSame($code, (string) end($g['edges'])['to_node_id']);
     }
 
+    public function testExpandedStartCarriesArgDecls(): void
+    {
+        $args = [['name' => 'folder', 'required' => true]];
+        $this->store->save(3, $this->cid, CodeComponentStoreTest::POLL + ['args' => $args]);
+        $g = (new WorkflowGraphRepository($this->db))->getGraph(1);
+        $code = (string) (StartOptionGraph::ID_OFFSET + $this->start);
+        $node = array_values(array_filter($g['nodes'], fn($n) => (string) $n['id'] === $code))[0];
+        $this->assertSame($args, $node['config']['arg_decls']);
+    }
+
     public function testAPlainStartIsNotExpanded(): void
     {
         $graph = ['nodes' => [['id' => 5, 'node_type' => 'start', 'config' => ['type' => 'start']]],

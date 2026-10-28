@@ -70,6 +70,31 @@ test('link: unlinked and non-code nodes are untouched', async () => {
   assert.deepEqual(nodes[1].config, { code_component_id: 5 });
 });
 
+test('link: testHydratedNodeHasDeclarationCache', async () => {
+  linkSetup();
+  const args = [{ name: 'folder', required: true }];
+  const id = (await store.save(3, null, { ...POLL, args, provides: [{ name: 'from' }] })).id;
+  node1('code', { name: 'Poll', code_component_id: id, arg_decls: [{ name: 'stale' }], provides: [] });
+  const cfg = (await repo.getNodes(1))[0].config;
+  assert.deepEqual(cfg.arg_decls, args);
+  assert.deepEqual(cfg.provides, [{ name: 'from' }]);
+});
+
+test('link: testSaveStripsDeclarationCache', async () => {
+  linkSetup();
+  const full = { name: 'Poll', code_component_id: 7, arg_decls: [{ name: 'a' }], provides: [{ name: 'b' }], args: { a: 'x' } };
+  await repo.saveGraph(1, [{ id: 'a', node_type: 'code', config: { ...full } },
+    { id: 'b', node_type: 'code', config: { name: 'Poll', code_component_id: 7 } }], []);
+  const [a, b] = d.prepare('SELECT id FROM workflow_nodes ORDER BY id').all().map((r: any) => Number(r.id));
+  await repo.updateNode(b, { node_type: 'code', config: { ...full } });
+  for (const id of [a, b]) {
+    const cfg = stored(id);
+    assert.ok(!('arg_decls' in cfg));
+    assert.ok(!('provides' in cfg));
+    assert.deepEqual(cfg.args, { a: 'x' });
+  }
+});
+
 test('link: create (saveGraph) and update store only the link', async () => {
   linkSetup();
   const full = { name: 'Poll', code_component_id: 7, code: 'x', exits: ['a'], mcp_servers: ['O'],
@@ -168,6 +193,16 @@ test('start option: the graph runs the component after Start', async () => {
   const from = g.edges.map((e) => [String(e.from_node_id), e.from_port]);
   assert.deepEqual(from, [[code, 'output_1'], [code, 'output_2'], [code, 'output_3'], [String(start), 'output_1']]);
   assert.equal(String(g.edges[g.edges.length - 1].to_node_id), code);
+});
+
+test('start option: testExpandedStartCarriesArgDecls', async () => {
+  const { cid, start } = await startSetup();
+  const args = [{ name: 'folder', required: true }];
+  await store.save(3, cid, { ...POLL, args });
+  const g = await repo.getGraph(1);
+  const code = String(StartOptionGraph.ID_OFFSET + start);
+  const n = g.nodes.find((x) => String(x.id) === code)!;
+  assert.deepEqual(n.config.arg_decls, args);
 });
 
 test('start option: a plain Start is not expanded', async () => {

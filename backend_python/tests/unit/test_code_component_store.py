@@ -26,6 +26,78 @@ def error(fn) -> CodeComponentError:
     return e.value
 
 
+ARGS = [{'name': 'folder', 'description': 'd', 'required': True}, {'name': 'subfolder', 'default': '{received}'}]
+
+
+def test_save_and_read_args_provides(store):
+    row = store.save(3, None, {**POLL, 'args': ARGS, 'provides': [{'name': 'from'}]})
+    assert row['args'] == ARGS
+    assert row['provides'] == [{'name': 'from'}]
+    assert store.get(3, row['id'])['args'] == ARGS
+    assert store.list(3)[0]['args'] == ARGS
+
+
+def test_update_without_args_keeps_them(store):
+    id = store.save(3, None, {**POLL, 'args': ARGS, 'provides': [{'name': 'from'}]})['id']
+    row = store.save(3, id, {**POLL, 'description': 'changed'})
+    assert row['args'] == ARGS
+    assert row['provides'] == [{'name': 'from'}]
+    row = store.save(3, id, {**POLL, 'args': [], 'provides': []})
+    assert row['args'] == []
+    assert row['provides'] == []
+
+
+def test_create_without_args_stores_empty_lists(store, db):
+    row = store.save(3, None, POLL)
+    assert row['args'] == []
+    assert row['provides'] == []
+    assert db.fetch_one('SELECT args, provides FROM code_components WHERE id = ?', [row['id']]) == {'args': '[]', 'provides': '[]'}
+
+
+def test_null_columns_read_as_empty_lists(store, db):
+    id = store.save(3, None, POLL)['id']
+    db.execute('UPDATE code_components SET args = NULL, provides = NULL')
+    row = store.get(3, id)
+    assert row['args'] == []
+    assert row['provides'] == []
+
+
+@pytest.mark.parametrize('extra', [
+    pytest.param({'args': [{'name': '1x'}]}, id='digit first'),
+    pytest.param({'args': [{'name': 'a'}, {'name': 'a'}]}, id='duplicate arg'),
+    pytest.param({'provides': [{'name': 'a'}, {'name': 'a'}]}, id='duplicate provided'),
+    pytest.param({'args': [{'name': 'a', 'required': 'yes'}]}, id='required not bool'),
+    pytest.param({'args': [{'name': 'a', 'default': 3}]}, id='default not string'),
+    pytest.param({'provides': [{'name': 'a', 'description': 3}]}, id='description not string'),
+    pytest.param({'args': [{'name': f'a{i}'} for i in range(1, 22)]}, id='too many'),
+    pytest.param({'args': 'x'}, id='not a list'),
+    pytest.param({'provides': ['x']}, id='entry not an object'),
+    pytest.param({'args': [{'name': 'a\n'}]}, id='trailing newline'),
+    pytest.param({'args': None}, id='null'),
+])
+def test_rejects_bad_args(store, extra):
+    e = error(lambda: store.save(3, None, {**POLL, **extra}))
+    assert e.kind == 'invalid'
+    assert e.status == 422
+
+
+def test_bad_args_messages(store):
+    def m(x):
+        return str(error(lambda: store.save(3, None, {**POLL, **x})))
+    assert m({'args': [{'name': '1x'}]}) == 'Argument and provided names are letters, digits and _, not starting with a digit (got "1x").'
+    assert m({'args': [{'name': 'a'}, {'name': 'a'}]}) == 'Argument "a" is listed twice.'
+    assert m({'provides': [{'name': 'a'}, {'name': 'a'}]}) == 'Provided name "a" is listed twice.'
+    assert m({'args': 'x'}) == 'args must be a list of {name, description, default, required}.'
+    assert m({'provides': ['x']}) == 'provides must be a list of {name, description}.'
+    assert m({'args': [{'name': f'a{i}'} for i in range(1, 22)]}) == 'At most 20 arguments and 20 provided names.'
+
+
+def test_declarations_keep_known_keys_only(store):
+    row = store.save(3, None, {**POLL, 'args': [{'name': 'a', 'x': 1, 'required': False}], 'provides': {}})
+    assert row['args'] == [{'name': 'a', 'required': False}]
+    assert row['provides'] == []
+
+
 def test_save_round_trips_typed_fields(store):
     row = store.save(3, None, POLL)
     assert isinstance(row['id'], int)

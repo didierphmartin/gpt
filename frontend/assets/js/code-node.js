@@ -363,7 +363,8 @@
     /** The worker request for one code-node run (the editor's Run walk), args included as the server sends them. */
     function runRequest(d, parents, userPrompt) {
         return { code: d.code || '', exits: d.exits || ['next'], servers: (d.mcp_servers || []).map(slug),
-            timeout_s: Number(d.timeout_s) || 30, parents, user_prompt: userPrompt, name: d.name || 'Code', args: nodeArgs(d.args) };
+            timeout_s: Number(d.timeout_s) || 30, parents, user_prompt: userPrompt, name: d.name || 'Code', args: nodeArgs(d.args),
+            arg_decls: Array.isArray(d.arg_decls) ? d.arg_decls : [] };
     }
 
     /**
@@ -402,6 +403,70 @@
         return { input, output: r.ok ? r.output_text : r.error, success: !!r.ok, agentName: name, activity, code: r };
     }
 
-    return { EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, hasCall, readCallArgs, writeCallArgs, callTemplate, CONNECT_TOOLS, isConnectable, offersOrganization, showsOrganizationButton, toolJson, connectOrganization, parseExits, isPlain, exitsText, exitsLabel, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor,
+    const PLACEHOLDER_RE = /\{\{|\}\}|\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
+    function startOptions() {
+        if (typeof module === 'object' && module.exports) return require('./start-options.js');
+        return globalThis.StartOptions;
+    }
+
+    /** The argument fields a node shows: its component's declarations, else what the code reads. */
+    function argFieldsFor(d) {
+        const decls = Array.isArray(d?.arg_decls) ? d.arg_decls : [];
+        if (decls.length) {
+            return decls.map((a) => ({ name: a.name, description: a.description || '', default: a.default ?? '', required: !!a.required }));
+        }
+        return startOptions().argFields(d?.code).map((f) => ({ name: f.name, description: '', default: f.default ?? '', required: false }));
+    }
+
+    /** The {identifier} placeholders in a text, in order, each once ({{ and }} are literal braces). */
+    function placeholderNames(text) {
+        const out = [];
+        for (const m of String(text ?? '').matchAll(PLACEHOLDER_RE)) if (m[1] && !out.includes(m[1])) out.push(m[1]);
+        return out;
+    }
+
+    /**
+     * What the nodes before this one provide: [{name, description, from}], the nearest node winning a name.
+     * dataOf(id) returns {stop: true} for a node that does not pass meta on (any node but a code node or the
+     * Start: an agent, dispatcher or playbook outputs text): the walk neither collects from it nor goes past it.
+     */
+    function upstreamProvides(nodeId, parentsOf, dataOf) {
+        const seen = new Set([String(nodeId)]);
+        const out = new Map();
+        let level = [nodeId];
+        while (level.length) {
+            const next = [];
+            for (const id of level) {
+                for (const p of parentsOf(id) || []) {
+                    if (seen.has(String(p))) continue;
+                    seen.add(String(p));
+                    const d = dataOf(p) || {};
+                    if (d.stop) continue;
+                    next.push(p);
+                    for (const e of d.provides || []) {
+                        if (!out.has(e.name)) out.set(e.name, { name: e.name, description: e.description || '', from: d.name || 'Start' });
+                    }
+                }
+            }
+            level = next;
+        }
+        return [...out.values()];
+    }
+
+    /** Save checks: required fields left empty (no default), and placeholders nothing before the node provides. */
+    function argProblems(fields, values, available = []) {
+        const missing = [];
+        const unknown = [];
+        for (const f of fields || []) {
+            const v = String(values?.[f.name] ?? '');
+            const empty = v === '';
+            if (f.required && empty && String(f.default ?? '') === '') missing.push(f.name);
+            for (const n of placeholderNames(empty ? f.default : v)) if (!available.includes(n) && !unknown.includes(n)) unknown.push(n);
+        }
+        return { missing, unknown };
+    }
+
+    return { argFieldsFor, placeholderNames, upstreamProvides, argProblems, EXIT_RE, TEMPLATES, DEFAULT_TEMPLATE, slug, hasCall, readCallArgs, writeCallArgs, callTemplate, CONNECT_TOOLS, isConnectable, offersOrganization, showsOrganizationButton, toolJson, connectOrganization, parseExits, isPlain, exitsText, exitsLabel, validateConfig, exitForPort, portForExit, targetsForExit, parentsFor,
              edgesFrom, exitTags, failureResult, routeAfter, runSucceeded, remapExits, normalizeConfig, runData, nodeArgs, runRequest, startAsCode };
 });

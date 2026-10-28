@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 
 from app.agent_team.services.code_node_emit import CodeNodeEmit
-from app.agent_team.services.compiler_php import ascii_translit, j, json_to_python, obj, py_str
+from app.agent_team.services.compiler_php import array_values, ascii_translit, j, json_to_python, obj, py_str
 from app.agent_team.services.compiler_text import compiled_runtime_emit as T
 from app.agent_team.services.dispatcher_decision_facts import DispatcherDecisionFacts
 from app.agent_team.services.lang_graph_runtime import CODE_HARNESS_PATH, LangGraphRuntime
@@ -275,7 +275,7 @@ class CompiledRuntimeEmit:
         entry = {'display': cd['display'], 'exits': cd['exits'], 'mcp_servers': cd['mcp_servers'],
                  'timeout_s': cd['timeout_s'],
                  'exit_targets': obj({k: [php_strval(x) for x in ids] for k, ids in cd['exit_targets'].items()}),
-                 'args': obj(_first(cd.get('args'), []))}
+                 'args': obj(_first(cd.get('args'), [])), 'arg_decls': array_values(cd.get('arg_decls'))}
         if analyzed.get('package'):
             entry['source_file'] = CompiledPackage.codePath(analyzed, id_)   # code/<file>, read at each run
         else:

@@ -912,6 +912,27 @@
       "confirmUnlisted": "Ce test va appeler des outils de {{servers}}, dont les outils n'ont pas pu être listés. Continuer ?",
       "codeChanged": "Le code a changé depuis cette proposition ; vérifiez la comparaison mise à jour, puis cliquez à nouveau sur Accepter."
     },
+    "codeArgs": {
+      "intro": "Les valeurs que lit le code de ce nœud. Vide : la valeur par défaut (en gris) s'applique. * = obligatoire.",
+      "none": "Ce code ne lit aucun argument.",
+      "available": "Marqueurs disponibles",
+      "availableHint": "Cliquez sur l'un d'eux pour l'insérer dans le dernier champ utilisé. Il est remplacé par sa valeur à l'exécution du nœud.",
+      "from": "de {{node}}",
+      "noneAvailable": "Rien avant ce nœud ne fournit de marqueurs.",
+      "missing": "Arguments obligatoires laissés vides : {{names}}",
+      "unknown": "Enregistré, mais rien avant ce nœud ne fournit {{names}} : le nœud échouera à l'exécution.",
+      "argsTitle": "Arguments",
+      "argsHint": "Ce que remplit un nœud qui utilise ce composant. La valeur par défaut s'applique si le nœud le laisse vide.",
+      "providesTitle": "Fournit",
+      "providesHint": "Les noms que la sortie de ce composant donne aux nœuds suivants, utilisés là comme marqueurs {name}.",
+      "addArg": "Ajouter un argument",
+      "addProvides": "Ajouter un nom",
+      "name": "nom",
+      "description": "description",
+      "default": "par défaut",
+      "required": "obligatoire",
+      "remove": "Retirer"
+    },
     "connect": {
       "connect": "Se connecter",
       "reconnect": "Se reconnecter",

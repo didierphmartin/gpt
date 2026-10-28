@@ -568,6 +568,7 @@ def _agent_instruction(prompt: str, parent_keys: list):
     mcp_servers: list = []
     timeout_s: int = 30
     args: dict = {}         # the code's ARGS: the node's settings (or the Start option's Start args)
+    arg_decls: list = []    # the arguments' declarations: defaults and required
     parents: list = []      # [[state_key, name, is_start], ...]; a key not in state = a branch not taken
 
     async def _run_async_impl(self, ctx):
@@ -581,7 +582,8 @@ def _agent_instruction(prompt: str, parent_keys: list):
             with open(os.path.join(PACKAGE_DIR, self.source_file), encoding="utf-8") as fh:
                 source = fh.read()
         res = await asyncio.to_thread(CODE_HARNESS.execute, source, value, self.exits, self.mcp_servers,
-                                      _code_transport, self.timeout_s, node_name=self.display, args=self.args)
+                                      _code_transport, self.timeout_s, node_name=self.display, args=self.args,
+                                      arg_decls=self.arg_decls, meta=CODE_HARNESS.received_meta(parents))
         for call in res["tool_calls"]:
             print(f"[tool] {call['server']}.{call['tool']} ok={call['ok']} ({call['ms']} ms)", flush=True)
         if res["stdout"]:
@@ -617,6 +619,7 @@ def _agent_instruction(prompt: str, parent_keys: list):
         + '    mcp_servers=' + PythonEmitHelpers.jsonToPython(cd['mcp_servers']) + ',\n'
         + `    timeout_s=${strval(cd['timeout_s'])},\n`
         + '    args=' + PythonEmitHelpers.jsonToPython(toObject(cd['args'] ?? [])) + ',\n'
+        + '    arg_decls=' + PythonEmitHelpers.jsonToPython(values(cd['arg_decls'] ?? [])) + ',\n'
         + '    parents=[' + parents.join(', ') + '],\n'
         + ')';
     }

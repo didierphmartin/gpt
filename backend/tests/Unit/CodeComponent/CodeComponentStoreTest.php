@@ -20,7 +20,7 @@ final class CodeComponentStoreTest extends TestCase
     {
         $db->exec('CREATE TABLE code_components (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, name TEXT NOT NULL,
             description TEXT, code TEXT NOT NULL, exits TEXT NOT NULL, mcp_servers TEXT NOT NULL, timeout_s INTEGER NOT NULL DEFAULT 30,
-            start_trigger TEXT, created_at TEXT, updated_at TEXT, UNIQUE (user_id, name))');
+            start_trigger TEXT, args TEXT, provides TEXT, created_at TEXT, updated_at TEXT, UNIQUE (user_id, name))');
         $db->exec('CREATE TABLE agent_workflows (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, name TEXT)');
         $db->exec('CREATE TABLE workflow_nodes (id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_id INTEGER, node_type TEXT, agent_id INTEGER, config TEXT, pos_x INTEGER, pos_y INTEGER, drawflow_node_id TEXT)');
         $db->exec("CREATE TABLE workflow_edges (id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_id INTEGER, from_node_id INTEGER,
@@ -44,6 +44,72 @@ final class CodeComponentStoreTest extends TestCase
     {
         try { $fn(); } catch (CodeComponentError $e) { return $e; }
         $this->fail('expected CodeComponentError');
+    }
+
+    private const ARGS = [['name' => 'folder', 'description' => 'd', 'required' => true], ['name' => 'subfolder', 'default' => '{received}']];
+
+    public function testSaveAndReadArgsProvides(): void
+    {
+        $row = $this->store->save(3, null, self::POLL + ['args' => self::ARGS, 'provides' => [['name' => 'from']]]);
+        $this->assertSame(self::ARGS, $row['args']);
+        $this->assertSame([['name' => 'from']], $row['provides']);
+        $this->assertSame(self::ARGS, $this->store->get(3, $row['id'])['args']);
+        $this->assertSame(self::ARGS, $this->store->list(3)[0]['args']);
+    }
+
+    public function testUpdateWithoutArgsKeepsThem(): void
+    {
+        $id = $this->store->save(3, null, self::POLL + ['args' => self::ARGS, 'provides' => [['name' => 'from']]])['id'];
+        $row = $this->store->save(3, $id, ['description' => 'changed'] + self::POLL);
+        $this->assertSame(self::ARGS, $row['args']);
+        $this->assertSame([['name' => 'from']], $row['provides']);
+        $row = $this->store->save(3, $id, self::POLL + ['args' => [], 'provides' => []]);
+        $this->assertSame([], $row['args']);
+        $this->assertSame([], $row['provides']);
+    }
+
+    public function testNullColumnsReadAsEmptyLists(): void
+    {
+        $id = $this->store->save(3, null, self::POLL)['id'];
+        $this->db->exec('UPDATE code_components SET args = NULL, provides = NULL');
+        $row = $this->store->get(3, $id);
+        $this->assertSame([], $row['args']);
+        $this->assertSame([], $row['provides']);
+    }
+
+    public static function badArgs(): array
+    {
+        return [
+            'digit first' => [['args' => [['name' => '1x']]]],
+            'trailing newline' => [['args' => [['name' => "a\n"]]]],
+            'non-ASCII letter' => [['provides' => [['name' => 'é']]]],
+            'duplicate arg' => [['args' => [['name' => 'a'], ['name' => 'a']]]],
+            'duplicate provided' => [['provides' => [['name' => 'a'], ['name' => 'a']]]],
+            'required not bool' => [['args' => [['name' => 'a', 'required' => 'yes']]]],
+            'default not string' => [['args' => [['name' => 'a', 'default' => 3]]]],
+            'description not string' => [['provides' => [['name' => 'a', 'description' => 3]]]],
+            'too many' => [['args' => array_map(fn($i) => ['name' => "a$i"], range(1, 21))]],
+            'not a list' => [['args' => 'x']],
+            'entry not an object' => [['provides' => ['x']]],
+        ];
+    }
+
+    /** @dataProvider badArgs */
+    public function testRejectsBadArgs(array $extra): void
+    {
+        $e = $this->error(fn() => $this->store->save(3, null, self::POLL + $extra));
+        $this->assertSame('invalid', $e->kind);
+        $this->assertSame(422, $e->status);
+    }
+
+    public function testBadArgsMessages(): void
+    {
+        $m = fn(array $x) => $this->error(fn() => $this->store->save(3, null, self::POLL + $x))->getMessage();
+        $this->assertSame('Argument and provided names are letters, digits and _, not starting with a digit (got "1x").', $m(['args' => [['name' => '1x']]]));
+        $this->assertSame('Argument and provided names are letters, digits and _, not starting with a digit (got "a\\n").', $m(['args' => [['name' => "a\n"]]]));
+        $this->assertSame('Argument "a" is listed twice.', $m(['args' => [['name' => 'a'], ['name' => 'a']]]));
+        $this->assertSame('Provided name "a" is listed twice.', $m(['provides' => [['name' => 'a'], ['name' => 'a']]]));
+        $this->assertSame('args must be a list of {name, description, default, required}.', $m(['args' => 'x']));
     }
 
     public function testSaveRoundTripsTypedFields(): void

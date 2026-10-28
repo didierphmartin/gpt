@@ -32,8 +32,24 @@ export interface CodeComponent {
   mcp_servers: string[];
   timeout_s: number;
   start_trigger: StartTrigger | null;
+  /** The arguments it declares: [{name, description?, default?, required?}]. */
+  args: ArgDecl[];
+  /** The meta names its output carries on: [{name, description?}]. */
+  provides: ProvidedDecl[];
   updated_at: any;
   used_by?: number;
+}
+
+export interface ArgDecl {
+  name: string;
+  description?: string;
+  default?: string;
+  required?: boolean;
+}
+
+export interface ProvidedDecl {
+  name: string;
+  description?: string;
 }
 
 export interface LinkedNode {
@@ -47,7 +63,10 @@ export interface LinkedNode {
 const NAME_MAX = 191;
 const LABEL_MAX = 60;
 const PASS_ARGS_MAX = 20;
-const COLS = sql.raw('id, name, description, code, exits, mcp_servers, timeout_s, start_trigger, updated_at');
+const DECLS_MAX = 20;
+/** An argument or provided name: an identifier (no trailing-newline loophole: JS `$` without the m flag). */
+const DECL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const COLS = sql.raw('id, name, description, code, exits, mcp_servers, timeout_s, start_trigger, args, provides, updated_at');
 
 function isObj(v: unknown): v is Record<string, any> {
   return v !== null && typeof v === 'object';
@@ -169,16 +188,19 @@ export class CodeComponentStore {
     }
     const exits = JSON.stringify(c.exits);
     const servers = JSON.stringify(c.mcp_servers);
+    // absent args/provides keep the stored lists (a save from an older client must not wipe them)
+    const args = JSON.stringify(c.args ?? before?.args ?? []);
+    const provides = JSON.stringify(c.provides ?? before?.provides ?? []);
     if (id === null) {
-      const res = await sql`INSERT INTO code_components (user_id, name, description, code, exits, mcp_servers, timeout_s, created_at, updated_at)
-        VALUES (${userId}, ${c.name}, ${c.description}, ${c.code}, ${exits}, ${servers}, ${c.timeout_s}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`.execute(this.ex);
+      const res = await sql`INSERT INTO code_components (user_id, name, description, code, exits, mcp_servers, timeout_s, args, provides, created_at, updated_at)
+        VALUES (${userId}, ${c.name}, ${c.description}, ${c.code}, ${exits}, ${servers}, ${c.timeout_s}, ${args}, ${provides}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`.execute(this.ex);
       id = Number(res.insertId);
     } else {
       const oldExits = before!.exits;
       const cid = id;
       await this.inTx(async (s) => {
         await sql`UPDATE code_components SET name = ${c.name}, description = ${c.description}, code = ${c.code}, exits = ${exits},
-          mcp_servers = ${servers}, timeout_s = ${c.timeout_s}, updated_at = CURRENT_TIMESTAMP WHERE id = ${cid} AND user_id = ${userId}`.execute(s.ex);
+          mcp_servers = ${servers}, timeout_s = ${c.timeout_s}, args = ${args}, provides = ${provides}, updated_at = CURRENT_TIMESTAMP WHERE id = ${cid} AND user_id = ${userId}`.execute(s.ex);
         if (!same(oldExits, c.exits)) {
           await s.remapExits(userId, cid, oldExits, c.exits);
         }
@@ -447,7 +469,7 @@ export class CodeComponentStore {
 
   /** The editor's rules (CodeNode.validateConfig): a name, 1-8 unique exits, server names, 1-300 s. */
   private static validate(d: Record<string, any>): { name: string; description: string; code: string; exits: string[];
-    mcp_servers: string[]; timeout_s: number } {
+    mcp_servers: string[]; timeout_s: number; args?: ArgDecl[]; provides?: ProvidedDecl[] } {
     const bad = (why: string): never => {
       throw new CodeComponentError('invalid', why, 422);
     };
@@ -479,8 +501,65 @@ export class CodeComponentStore {
     if (typeof timeout !== 'number' || !Number.isInteger(timeout) || timeout < 1 || timeout > 300) {
       bad('timeout_s must be 1 to 300 seconds.');
     }
-    return { name, description: str(d.description ?? ''), code: code as string, exits: exits as string[],
-      mcp_servers: servers as string[], timeout_s: timeout as number };
+    const out: { name: string; description: string; code: string; exits: string[]; mcp_servers: string[]; timeout_s: number;
+      args?: ArgDecl[]; provides?: ProvidedDecl[] } = { name, description: str(d.description ?? ''), code: code as string,
+      exits: exits as string[], mcp_servers: servers as string[], timeout_s: timeout as number };
+    if (Object.prototype.hasOwnProperty.call(d, 'args') && d.args !== undefined) {
+      out.args = CodeComponentStore.validateDecls(d.args, true) as ArgDecl[];
+    }
+    if (Object.prototype.hasOwnProperty.call(d, 'provides') && d.provides !== undefined) {
+      out.provides = CodeComponentStore.validateDecls(d.provides, false);
+    }
+    return out;
+  }
+
+  /**
+   * The arguments ({name, description?, default?, required?}) or provided names ({name, description?}) a component
+   * declares: a list of identifiers, unique, at most 20; optional keys stay as given, unknown keys are dropped.
+   */
+  private static validateDecls(list: unknown, isArgs: boolean): Array<ArgDecl | ProvidedDecl> {
+    const bad = (why: string): never => {
+      throw new CodeComponentError('invalid', why, 422);
+    };
+    const what = isArgs ? 'args must be a list of {name, description, default, required}.'
+      : 'provides must be a list of {name, description}.';
+    // PHP decodes an empty JSON object to [] too, so {} reads as an empty list
+    const items: unknown[] = Array.isArray(list) ? list
+      : isObj(list) && Object.keys(list).length === 0 ? [] : bad(what);
+    if (items.length > DECLS_MAX) {
+      bad(`At most ${DECLS_MAX} arguments and ${DECLS_MAX} provided names.`);
+    }
+    const out: Array<ArgDecl | ProvidedDecl> = [];
+    const seen = new Set<string>();
+    for (const e of items) {
+      // an entry is an object (an empty JSON list decodes to PHP's empty array, so [] passes on to the name check)
+      if (!isObj(e) || (Array.isArray(e) && e.length > 0)) {
+        bad(what);
+      }
+      const entry = e as Record<string, any>;
+      const n = Array.isArray(entry) ? undefined : entry.name;
+      if (typeof n !== 'string' || !DECL_NAME_RE.test(n)) {
+        bad('Argument and provided names are letters, digits and _, not starting with a digit (got '
+          + (n === undefined ? 'null' : JSON.stringify(n)) + ').');
+      }
+      if (seen.has(n)) {
+        bad((isArgs ? 'Argument' : 'Provided name') + ` "${n}" is listed twice.`);
+      }
+      seen.add(n);
+      const decl: Record<string, any> = { name: n };
+      for (const k of isArgs ? ['description', 'default'] : ['description']) {
+        if (Object.prototype.hasOwnProperty.call(entry, k)) {
+          if (typeof entry[k] !== 'string') bad(what);
+          decl[k] = entry[k];
+        }
+      }
+      if (isArgs && Object.prototype.hasOwnProperty.call(entry, 'required')) {
+        if (typeof entry.required !== 'boolean') bad(what);
+        decl.required = entry.required;
+      }
+      out.push(decl as ArgDecl | ProvidedDecl);
+    }
+    return out;
   }
 
   /**
@@ -522,6 +601,12 @@ export class CodeComponentStore {
     return { label, watch, work_exit: exit, pass_args: pass as string[] };
   }
 
+  /** A declarations column: json_decode(...) ?: [] (NULL, '' and invalid JSON read as an empty list). */
+  private static declList(v: unknown): any[] {
+    const d = decodeJson(v ?? '');
+    return phpEmpty(d) || !Array.isArray(d) ? [] : d;
+  }
+
   private row(r: Record<string, any>): CodeComponent {
     const exits = decodeJson(r.exits);
     const servers = decodeJson(r.mcp_servers);
@@ -530,6 +615,8 @@ export class CodeComponentStore {
       code: str(r.code), exits: phpEmpty(exits) ? [] : exits,
       mcp_servers: phpEmpty(servers) ? [] : servers, timeout_s: intval(r.timeout_s),
       start_trigger: (r.start_trigger ?? null) && r.start_trigger !== '0' ? decodeJson(r.start_trigger) : null,
+      args: CodeComponentStore.declList(r.args),
+      provides: CodeComponentStore.declList(r.provides),
       updated_at: r.updated_at,
     };
   }

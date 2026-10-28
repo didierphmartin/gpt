@@ -47,6 +47,24 @@ class PythonEmitHelpers
     }
 
     /**
+     * A value as a one-line Python literal: compact JSON with the bare true / false / null
+     * (never those words inside a string) spelled True / False / None.
+     *
+     * @param mixed $value
+     */
+    public static function pyLiteral($value): string
+    {
+        $raw = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        // unrolled and possessive: a long string value must not exhaust the PCRE JIT stack
+        $out = preg_replace_callback('/"[^"\\\\]*+(?:\\\\.[^"\\\\]*+)*+"|\b(?:true|false|null)\b/',
+            fn($m) => ['true' => 'True', 'false' => 'False', 'null' => 'None'][$m[0]] ?? $m[0], $raw);
+        if ($out === null) {
+            throw new \RuntimeException('pyLiteral: ' . preg_last_error_msg());
+        }
+        return $out;
+    }
+
+    /**
      * Render a PHP string as a Python double-quoted string literal.
      *
      * Escapes backslashes, double-quotes, newlines, carriage returns,

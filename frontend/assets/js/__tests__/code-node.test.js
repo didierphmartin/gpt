@@ -244,11 +244,14 @@ for (const bad of [undefined, null, [], 'x', 3]) assert.deepStrictEqual(CN.nodeA
     const req = CN.runRequest({ name: 'Hand back', code: 'c', exits: ['handed_back', 'error'], mcp_servers: ['ServiceNow'],
         timeout_s: 20, args: { group: 'IT L2' } }, [{ name: 'P', text: 't' }], 'go');
     assert.deepStrictEqual(req, { code: 'c', exits: ['handed_back', 'error'], servers: ['servicenow'], timeout_s: 20,
-        parents: [{ name: 'P', text: 't' }], user_prompt: 'go', name: 'Hand back', args: { group: 'IT L2' } });
+        parents: [{ name: 'P', text: 't' }], user_prompt: 'go', name: 'Hand back', args: { group: 'IT L2' }, arg_decls: [] });
     const bare = CN.runRequest({}, [], '');
     assert.deepStrictEqual(bare.args, {});
     assert.deepStrictEqual(bare.exits, ['next']);
     assert.strictEqual(bare.timeout_s, 30);
+    assert.deepStrictEqual(bare.arg_decls, []);
+    assert.deepStrictEqual(CN.runRequest({ arg_decls: [{ name: 'a' }] }, [], '').arg_decls, [{ name: 'a' }]);
+    assert.deepStrictEqual(CN.runRequest({ arg_decls: 'x' }, [], '').arg_decls, []);
 }
 {
     const comp = { id: 12, name: 'ServiceNow: get new job', code: 'c', exits: ['job', 'no_job', 'error'], mcp_servers: ['ServiceNow'],
@@ -265,5 +268,43 @@ for (const bad of [undefined, null, [], 'x', 3]) assert.deepStrictEqual(CN.nodeA
     // the component is gone: a missing node (its run fails), still with the Start's args
     const gone = CN.startAsCode({ type: 'start', start_option: 12, start_option_label: 'Get job', exits: ['job'], start_args: { tag: 'k' } }, null, linked);
     assert.deepStrictEqual(gone, { name: 'Get job', code_component_id: 12, code_component_missing: true, exits: ['job'], args: { tag: 'k' } });
+}
+// declaration-aware arg fields, upstream placeholders, Save checks
+{
+    assert.deepStrictEqual(CN.argFieldsFor({ arg_decls: [{ name: 'folder', required: true }], code: 'ARGS.get("zzz")' }),
+        [{ name: 'folder', description: '', default: '', required: true }]);
+    assert.deepStrictEqual(CN.argFieldsFor({ code: 'x = ARGS.get("a", "1")' }),
+        [{ name: 'a', description: '', default: '1', required: false }]);
+    assert.deepStrictEqual(CN.placeholderNames('VIP/{mailbox_name} {{lit}} {a} {a} {1x}'), ['mailbox_name', 'a']);
+    const parents = { start: [], pdf: ['start', 'move'], move: ['pdf'] };
+    const data = { start: { provides: [{ name: 'from', description: 's from' }, { name: 'subject' }] },
+        pdf: { name: 'PDF', provides: [{ name: 'from', description: 'pdf from' }] }, move: {} };
+    assert.deepStrictEqual(CN.upstreamProvides('move', (i) => parents[i], (i) => data[i]),
+        [{ name: 'from', description: 'pdf from', from: 'PDF' }, { name: 'subject', description: '', from: 'Start' }]);
+    assert.deepStrictEqual(CN.upstreamProvides('start', (i) => parents[i], (i) => data[i]).map((e) => e.name), []);
+    // start -> agent -> code: the agent outputs text, so nothing before it reaches the code node
+    const viaAgent = { start: [], agent: ['start'], code: ['agent'] };
+    const agentData = { start: data.start, agent: { stop: true, name: 'Agent', provides: [{ name: 'x' }] }, code: {} };
+    assert.deepStrictEqual(CN.upstreamProvides('code', (i) => viaAgent[i], (i) => agentData[i]), []);
+    // a stop on one branch does not hide another branch that passes meta
+    const twoWays = { start: [], agent: ['start'], pdf: ['start'], code: ['agent', 'pdf'] };
+    const twoData = { start: data.start, agent: { stop: true }, pdf: { name: 'PDF' }, code: {} };
+    assert.deepStrictEqual(CN.upstreamProvides('code', (i) => twoWays[i], (i) => twoData[i]).map((e) => e.name), ['from', 'subject']);
+    assert.deepStrictEqual(CN.argProblems([{ name: 'folder', required: true, default: '' },
+        { name: 'sub', default: '{received}', required: false }], { folder: '' }, ['from']),
+        { missing: ['folder'], unknown: ['received'] });
+}
+// browser branch: no module, StartOptions on the global
+{
+    const vm = require('vm'), fs = require('fs'), path = require('path');
+    const sandbox = { self: null };
+    sandbox.self = sandbox;
+    sandbox.StartOptions = require('../start-options.js');
+    vm.createContext(sandbox);
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../code-node.js'), 'utf8'), sandbox);
+    sandbox.globalThis = sandbox;
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(sandbox.CodeNode.argFieldsFor({ code: 'x = ARGS.get("a", "1")' }))),
+        [{ name: 'a', description: '', default: '1', required: false }]);
+    assert.deepStrictEqual(CN.argProblems([{ name: 'a', default: '{z}' }], {}), { missing: [], unknown: ['z'] });
 }
 console.log('code-node.test.js: OK');

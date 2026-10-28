@@ -9,6 +9,10 @@
 #                10-minute lease (up to 3 attempts).
 # On an organization connection the email also carries `mailbox` / `mailbox_name` (the VIP whose mailbox it came
 # from); they are copied into document.meta and source under the same names, and absent otherwise.
+# It also provides `meta` (handed on to the next nodes, whose arguments may use these as {placeholders}):
+#   mailbox, mailbox_name (only when the mail has them), from ("unknown sender" when empty), subject (first 60
+#   characters, "(no subject)" when empty), received_at (as given), received ("YYYY-MM-DD HHMM"; omitted when
+#   the mail has no received_at).
 # File content is never in the package: each part says how to fetch it, so run records stay small.
 
 def _attachment(mail_id, att):
@@ -47,5 +51,12 @@ def run(input, call_tool):
     source = {"server": "outlook", "id": mail_id, "folder": folder, "attempt": mail.get("attempt"),
               "release": {"server": "outlook", "tool": "move_mail", "args": {"mail_id": mail_id, "folder": done}}}
     source.update({k: mail[k] for k in ("mailbox", "mailbox_name") if mail.get(k)})
+    meta = {k: mail[k] for k in ("mailbox", "mailbox_name") if mail.get(k)}
+    meta["from"] = mail.get("from") or "unknown sender"
+    meta["subject"] = (mail.get("subject") or "").strip()[:60] or "(no subject)"
+    received_at = mail.get("received_at") or ""
+    if received_at:
+        meta["received_at"] = received_at
+        meta["received"] = received_at[:16].replace("T", " ").replace(":", "")
     return {"route": "dropped_mail", "output": {"document": document, "attachments": attachments,
-                                       "not_fetched": cloud, "source": source}}
+                                       "not_fetched": cloud, "source": source, "meta": meta}}

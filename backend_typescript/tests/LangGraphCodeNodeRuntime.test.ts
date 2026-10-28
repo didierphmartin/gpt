@@ -81,3 +81,19 @@ test('testToolErrorResultTakesErrorExitInCompiledScript', { skip: noPy }, () => 
   assert.equal(r.rc, 0, r.out.join('\n'));
   assert.deepEqual(r.out, ['error', 'True']);
 });
+
+test('testPlaceholderFilledFromParentMeta', { skip: noPy }, () => {
+  // The emitted CodeNode.run: ARGS {"v": "{m}"} is filled from the parent output's meta before the code runs.
+  const py = 'from __future__ import annotations\nimport asyncio, json, os, sys, types\nfrom abc import ABC, abstractmethod\n'
+    + "from enum import Enum\nfrom functools import cached_property\nPACKAGE_DIR = '.'\nMCP_SLUGS = {}\nMCP = None\n"
+    + LangGraphRuntime.codeHarnessBlock() + '\n' + LangGraphRuntime.nodeClassesBlock(false, true) + '\n'
+    + "node = CodeNode({'id': '2', 'kind': 'code', 'display': 'Fill', 'exits': ['next'], 'mcp_servers': [], 'timeout_s': 5,\n"
+    + "    'exit_targets': {'next': []}, 'args': {'v': '{m}'}, 'arg_decls': [{'name': 'v'}],\n"
+    + "    'source': 'def run(input, call_tool):\\n    return ARGS[\"v\"]\\n'})\n"
+    + 'async def _noop(msg):\n    pass\n'
+    + "req = json.dumps({'user_prompt': '', 'parents': [{'name': 'P', 'text': json.dumps({'meta': {'m': 'V'}}), 'start': False}]})\n"
+    + "print(asyncio.run(node.run(req, _noop))['text'])\n";
+  const r = runPySource('python3', py);
+  assert.equal(r.rc, 0, r.out.join('\n'));
+  assert.equal(r.out[r.out.length - 1], 'V');
+});

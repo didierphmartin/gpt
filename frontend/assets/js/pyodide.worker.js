@@ -504,7 +504,8 @@ def _transport(server, tool, args):
 
 _res = _h.execute(_req["code"], _h.decode_input(_req["parents"], _req["user_prompt"]),
                   _req["exits"], _req["servers"], _transport, _req["timeout_s"], threaded=False,
-                  node_name=_req.get("name") or "", args=_req.get("args"))
+                  node_name=_req.get("name") or "", args=_req.get("args"),
+                  arg_decls=_req.get("arg_decls"), meta=_h.received_meta(_req["parents"]))
 _code_res_json = json.dumps(_res, ensure_ascii=False)
 `;
 

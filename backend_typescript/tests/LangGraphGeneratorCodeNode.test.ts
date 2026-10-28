@@ -244,3 +244,50 @@ test('testABranchNotTakenIsNotAParentOfTheOutput', { skip: noVenv, timeout: 1800
   assert.equal(rc, 0, text);
   assert.match(text, /FINAL OUTPUT\n=+\nNO MAIL\n/);
 });
+
+/**
+ * The argument declarations are compiled in as Python (a "required": true declaration imports: no NameError
+ * on true), in both packagings, and the node's run fills ARGS from its parents' meta and the declared default.
+ */
+test('testNodeLiteralHasArgDeclsAndExecutePassesMeta', { skip: noPy }, async () => {
+  const g = codeGraph();
+  g.nodes[1].config.arg_decls = [{ name: 'folder', required: true }, { name: 'note', default: null }];
+  g.nodes[1].config.args = { flag: false };
+  const code = await generate(g);
+  assert.ok(code.includes('"arg_decls": [{"name":"folder","required":True},{"name":"note","default":None}]'));
+  assert.ok(code.includes('"args": {"flag":False}'));
+  assert.ok(code.includes('meta=CODE_HARNESS.received_meta('));
+  assert.ok((await generate(codeGraph())).includes('"arg_decls": []'));
+  const files: Record<string, string> = { 'single/wf.py': code };
+  for (const [p, c] of Object.entries(lgFiles(await generateWith(g, { modular: true })))) {
+    if (p.endsWith('.py')) files['modular/' + p] = c;
+  }
+  for (const [p, c] of Object.entries(files)) {
+    const r = pyCompile(c);
+    assert.equal(r.rc, 0, p + '\n' + r.out.join('\n'));
+  }
+  // the NODE literal evaluates: the declarations come back as Python values
+  const m = code.match(/"arg_decls": (\[.*\]),   #/);
+  assert.ok(m);
+  const ev = execPy(python3() as string, ['-c', 'import sys; print(eval(sys.argv[1]))', m![1]]);
+  assert.equal(ev.rc, 0, ev.text);
+  assert.equal(ev.text.trim(), "[{'name': 'folder', 'required': True}, {'name': 'note', 'default': None}]");
+});
+
+/** A compiled node whose argument is required and declared with a default runs with that default in ARGS. */
+test('testTheCompiledRunAppliesADeclaredDefault', { skip: noVenv, timeout: 180000 }, async () => {
+  const g = codeGraph();
+  g.nodes[1].config = {
+    type: 'code', name: 'Echo args', exits: ['next'], mcp_servers: [], timeout_s: 30, args: {},
+    arg_decls: [{ name: 'folder', default: 'Inbox', required: true }],
+    code: "def run(input, call_tool):\n    return 'folder=' + str(ARGS.get('folder'))\n",
+  };
+  g.edges = [
+    { from: '1', to: '2', from_port: 'output_1' },
+    { from: '2', to: '3', from_port: 'output_1' },
+  ];
+  g.nodes.pop();
+  const [rc, text] = runOnce(await generate(g));
+  assert.equal(rc, 0, text);
+  assert.ok(text.includes('folder=Inbox'), text);
+});

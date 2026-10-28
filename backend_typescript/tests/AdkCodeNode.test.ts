@@ -117,3 +117,18 @@ test('wf64Analyzed() is the analysis PHP builds (AdkCodeNodeTest::wf64Analyzed)'
   assert.equal(asText(wf64Analyzed()), asText(cmpWf64()));
   assert.equal(maskStamps(ADKGenerator.emitAdk(cmpWf64())), maskStamps(ADKGenerator.emitAdk(wf64Analyzed())));
 });
+
+/** The node's argument declarations are compiled in, and its run fills ARGS from the parents' meta. */
+test('testCodeAgentCarriesArgDeclsAndPassesMeta', () => {
+  const a = codeAnalyzed();
+  a.code['2'].arg_decls = [{ name: 'folder', required: true }];
+  const code = ADKGenerator.emitAdk(a);
+  assert.ok(code.includes('meta=CODE_HARNESS.received_meta(parents)'));
+  assert.ok(code.includes('arg_decls=self.arg_decls'));
+  assert.match(code, /arg_decls=\[\s*\{\s*"name": "folder",\s*"required": True\s*\}\s*\]/);
+  if (!PY_SKIP) {
+    const r = pyCompile(code);
+    assert.equal(r.rc, 0, r.out.join('\n'));
+  }
+  assertSameAsPhp(a);
+});

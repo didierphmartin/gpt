@@ -38,6 +38,13 @@ def obj(value) -> PhpObj:
     return PhpObj() if value is None else PhpObj({'scalar': value})
 
 
+def array_values(value) -> list:
+    """PHP ``array_values($value ?? [])``: a list as is, a keyed array's values in order."""
+    if value is None:
+        return []
+    return list(value.values()) if isinstance(value, dict) else list(value)
+
+
 def is_list_like(d: dict) -> bool:
     """A PHP array json_encode() writes as a list: keys 0..n-1 in order."""
     for i, k in enumerate(d):
@@ -279,6 +286,15 @@ def json_to_python(value, force_object: bool = False) -> str:
         value = obj(value)
     raw = json_encode(value, slashes=True, unicode=True, pretty=True)
     return raw.replace(': true', ': True').replace(': false', ': False').replace(': null', ': None')
+
+
+_PY_WORDS = {'true': 'True', 'false': 'False', 'null': 'None'}
+
+
+def py_literal(value) -> str:
+    """PythonEmitHelpers::pyLiteral(): a one-line Python literal, compact JSON with the bare true / false / null
+    (never those words inside a string) spelled True / False / None."""
+    return re.sub(r'"(?:[^"\\]|\\.)*"|\b(?:true|false|null)\b', lambda m: _PY_WORDS.get(m.group(0), m.group(0)), j(value))
 
 
 def py_str(s: str) -> str:

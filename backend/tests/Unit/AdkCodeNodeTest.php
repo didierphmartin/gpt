@@ -192,4 +192,17 @@ class AdkCodeNodeTest extends TestCase
     {
         self::assertStringNotContainsString('_Gate(', ADKGenerator::emitAdk(self::mcpAnalyzed()));
     }
+
+    /** The node's argument declarations are compiled in, and its run fills ARGS from the parents' meta. */
+    public function testCodeAgentCarriesArgDeclsAndPassesMeta(): void
+    {
+        $a = self::codeAnalyzed();
+        $a['code']['2']['arg_decls'] = [['name' => 'folder', 'required' => true]];
+        $code = ADKGenerator::emitAdk($a);
+        self::assertStringContainsString('meta=CODE_HARNESS.received_meta(parents)', $code);
+        self::assertStringContainsString('arg_decls=self.arg_decls', $code);
+        self::assertMatchesRegularExpression('/arg_decls=\[\s*\{\s*"name": "folder",\s*"required": True\s*\}\s*\]/', $code);
+        [$rc, $out] = self::pyCompile($code);
+        self::assertSame(0, $rc, $out);
+    }
 }

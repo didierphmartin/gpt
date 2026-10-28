@@ -119,3 +119,15 @@ def test_node_summary_compact_float_path_still_correct():
     assert PythonEmitHelpers._nodeSummary(node) == 'claude/m, temp 0.7, 0 tool(s)'
     node['temperature'] = 0
     assert PythonEmitHelpers._nodeSummary(node) == 'claude/m, temp 0, 0 tool(s)'
+
+
+def test_py_literal_long_and_escaped_strings():
+    """pyLiteral on 200000-char and escape-heavy strings evaluates back to the value."""
+    import subprocess
+    import json
+    from app.agent_team.services.compiler_php import py_literal
+    for v in ({'k': 'x' * 200000, 'b': True, 'n': None}, {'k': 'a"b\\c true null ' * 20000, 'f': False}):
+        out = subprocess.run(['python3', '-c', 'import sys,json; print(json.dumps(eval(sys.stdin.read())))'],
+                             input=py_literal(v), capture_output=True, text=True, check=True).stdout
+        assert json.loads(out) == v
+    assert py_literal({'a': True, 'b': 'true', 'c': None}) == '{"a":True,"b":"true","c":None}'

@@ -42,6 +42,15 @@ test('nodeData maps ports to exits', () => {
   assert.equal(d.display, 'Poll');
 });
 
+test('testNodeDataCarriesArgDecls', () => {
+  const decls = [{ name: 'folder', required: true }];
+  assert.deepEqual(CodeNodeEmit.nodeData(emitNode({ arg_decls: decls }), [], { servicenow: 'u' }).arg_decls, decls);
+  assert.deepEqual(CodeNodeEmit.nodeData(emitNode({}), [], { servicenow: 'u' }).arg_decls, []);
+  for (const bad of ['x', { a: { name: 'folder' } }, null]) {
+    assert.deepEqual(CodeNodeEmit.nodeData(emitNode({ arg_decls: bad }), [], { servicenow: 'u' }).arg_decls, [], JSON.stringify(bad));
+  }
+});
+
 test('nodeData defaults and validation', () => {
   const d = CodeNodeEmit.nodeData({ id: '5', node_type: 'code', config: { type: 'code', code: "def run(i, c):\n    return i" } }, [], {});
   assert.deepEqual(d.exits, ['next']);
@@ -196,6 +205,18 @@ test('config args reach the code as the ARGS global', async (t) => {
   out = await exec().run(execNode("def run(i, c):\n    return {'route': 'a', 'output': ARGS}\n"), [], [2], '3', [], '');
   assertRan(out, t);
   assert.equal(out.result.output_text, '{}');
+});
+
+test('testRequestCarriesArgDecls', async (t) => {
+  // The declared default reaches ARGS only when the request carries arg_decls; the parent's meta fills {m}.
+  installFakeDb((sql) => (sql.includes('FROM mcp_servers') ? mcpRows : []));
+  const node = execNode("def run(input, call_tool):\n    return {'route': 'a', 'output': [ARGS['folder'], ARGS['v']]}\n");
+  node.config.args = { folder: '', v: 'x/{m}' };
+  node.config.arg_decls = [{ name: 'folder', default: 'Inbox', required: true }, { name: 'v' }];
+  const out = await exec().run(node, [], [2], '3', [{ name: 'P', text: '{"meta":{"m":"V"}}', start: false }], '');
+  if (!assertRan(out, t)) return;
+  assert.equal(out.result.output_text, '["Inbox", "x/V"]');
+  assert.deepEqual(out.data.arg_decls, node.config.arg_decls);
 });
 
 test('an unknown server is refused before running', async () => {

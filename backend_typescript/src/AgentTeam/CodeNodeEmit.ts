@@ -19,6 +19,8 @@ export interface CodeNodeData {
   exit_targets: Record<string, string[]>;
   servers: string[];
   args: Record<string, any> | any[];
+  /** The linked component's argument declarations (defaults, required), applied by the harness; [] when none. */
+  arg_decls: any[];
 }
 
 /** PHP array_keys(): a key that is a canonical decimal integer comes back as an int. */
@@ -106,9 +108,12 @@ export const CodeNodeEmit = {
     const targets = CodeNodeEmit.exitTargets(nid, exitList, rawEdges, nodeIds);
     // args: a component's settings, or a Start option's Start args (StartOptionGraph); the code reads them as ARGS.
     const args = is_array(cfg['args'] ?? null) ? cfg['args'] : [];
+    // arg_decls: the linked component's argument declarations (defaults, required), applied by the harness.
+    const argDecls = Array.isArray(cfg['arg_decls']) ? cfg['arg_decls'] : [];
     return {
       display, kind: 'code', source: strval(cfg['code'] ?? ''), exits: exitList, mcp_servers: phpArrayKeys(slugs),
       timeout_s: timeout, exit_targets: targets, servers: phpArrayKeys(servers), args,
+      arg_decls: argDecls,
     };
   },
 

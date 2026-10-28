@@ -63,7 +63,9 @@ class Fake:
 
 
 def run(source, meta, fake, input, args=None, servers=("outlook", "sharepoint")):
-    r = h.execute(source, input, meta["exits"], list(servers), fake, 30, args=args or {})
+    hand_on = input.get("meta") if isinstance(input, dict) else None      # what the previous node provides
+    r = h.execute(source, input, meta["exits"], list(servers), fake, 30, args=args or {},
+                  arg_decls=meta.get("args"), meta=hand_on)
     return r, (json.loads(r["output_text"]) if r.get("ok") and r.get("output_text") else None)
 
 
@@ -176,6 +178,7 @@ class SharePointMove(unittest.TestCase):
         sub = "Didier/2026-10-09 0815 - ann@x.com - Invoice 42"
         self.assertEqual({u["folder"] for u in ups}, {sub})
         self.assertEqual(f.calls[-1], ("outlook.move_mail", {"mail_id": "m1", "folder": "Filed"}))
+        self.assertEqual(out.pop("meta")["subject"], "Invoice 42")     # the mail's meta is carried on
         self.assertEqual(out, {"status": "moved", "folder": sub, "files": ["Email.pdf", "inv.pdf"],
                                "web_urls": ["u/Email.pdf", "u/inv.pdf"], "released": True})
 
@@ -196,10 +199,12 @@ class SharePointMove(unittest.TestCase):
 
     def test_without_document_or_source_it_just_stores(self):
         f = Fake()
-        r, out = run(MOVE, MOVE_META, f, {"files": [{"name": "a.txt", "base64": "QQ=="}]}, {"folder": "D"})
+        r, out = run(MOVE, MOVE_META, f, {"files": [{"name": "a.txt", "base64": "QQ=="}]},
+                      {"folder": "D", "subfolder": "S"})
         self.assertEqual(r["route"], "moved")
-        self.assertEqual(f.names(), ["sharepoint.ensure_folder", "sharepoint.upload_file"])
-        self.assertEqual((out["folder"], out["released"]), ("Didier", False))
+        self.assertEqual(f.names(), ["sharepoint.ensure_folder", "sharepoint.create_subfolder",
+                                     "sharepoint.upload_file"])
+        self.assertEqual((out["folder"], out["released"]), ("Didier/S", False))
 
     def test_stored_names_follow_sharepoint_renames(self):
         data = {"files": [{"name": "inv.pdf", "base64": "QQ=="}, {"name": "inv.pdf", "base64": "QQ=="}]}

@@ -286,7 +286,7 @@ function stripDerivedLinkFields(nodeType: string, config: any): void {
     delete config.playbook_missing;
   }
   if (nodeType === 'code' && config.code_component_id !== undefined && config.code_component_id !== null) {
-    for (const k of ['code', 'exits', 'mcp_servers', 'timeout_s', 'code_component_missing']) delete config[k];
+    for (const k of ['code', 'exits', 'mcp_servers', 'timeout_s', 'arg_decls', 'provides', 'code_component_missing']) delete config[k];
   }
   if (nodeType === 'start') {
     for (const k of ['exits', 'start_option_label', 'start_option_missing']) delete config[k];
@@ -345,11 +345,12 @@ export class WorkflowGraphRepository {
         continue;
       }
       const c = await codeStore.get(await ownerId(), phpIntval(cfg.code_component_id));
-      for (const k of ['code', 'exits', 'mcp_servers', 'timeout_s', 'code_component_missing']) delete cfg[k];
+      for (const k of ['code', 'exits', 'mcp_servers', 'timeout_s', 'arg_decls', 'provides', 'code_component_missing']) delete cfg[k];
       if (c === null) {
         cfg.code_component_missing = true;
       } else {
-        Object.assign(cfg, { code: c.code, exits: c.exits, mcp_servers: c.mcp_servers, timeout_s: c.timeout_s });
+        Object.assign(cfg, { code: c.code, exits: c.exits, mcp_servers: c.mcp_servers, timeout_s: c.timeout_s,
+          arg_decls: c.args, provides: c.provides });
       }
     }
 

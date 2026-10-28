@@ -8,7 +8,7 @@
     else root.CodeComponents = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
     // The fields a component owns; a linked node carries them only as a cache (the server strips them on save).
-    const CONTENT_KEYS = ['code', 'exits', 'mcp_servers', 'timeout_s'];
+    const CONTENT_KEYS = ['code', 'exits', 'mcp_servers', 'timeout_s', 'arg_decls', 'provides'];
 
     const rows = new Map();
     let loadFailed = false;
@@ -51,12 +51,14 @@
 
     function linkedNodeConfig(row, nodeName) {
         return { name: nodeName || row.name, code_component_id: Number(row.id), code: row.code,
-            exits: [...row.exits], mcp_servers: [...row.mcp_servers], timeout_s: row.timeout_s };
+            exits: [...row.exits], mcp_servers: [...row.mcp_servers], timeout_s: row.timeout_s,
+            arg_decls: [...(row.args || [])], provides: [...(row.provides || [])] };
     }
 
     function componentBody(cfg, { name, description }) {
         return { name: String(name || '').trim(), description: description || '', code: cfg.code,
-            exits: [...cfg.exits], mcp_servers: [...cfg.mcp_servers], timeout_s: cfg.timeout_s };
+            exits: [...cfg.exits], mcp_servers: [...cfg.mcp_servers], timeout_s: cfg.timeout_s,
+            args: [...(cfg.arg_decls || [])], provides: [...(cfg.provides || [])] };
     }
 
     // Another cached component with this name (the DB's collation ignores case), or null.

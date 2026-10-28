@@ -47,6 +47,16 @@ export class PythonEmitHelpers
     }
 
     /**
+     * A value as a one-line Python literal: compact JSON with the bare true / false / null
+     * (never those words inside a string) spelled True / False / None.
+     */
+    static pyLiteral(value: any): string {
+        const raw = json_encode(value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        const words: Record<string, string> = { true: 'True', false: 'False', null: 'None' };
+        return raw.replace(/"(?:[^"\\]|\\.)*"|\b(?:true|false|null)\b/g, (m: string) => words[m] ?? m);
+    }
+
+    /**
      * Render a PHP string as a Python double-quoted string literal.
      *
      * Escapes backslashes, double-quotes, newlines, carriage returns,
