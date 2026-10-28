@@ -51,6 +51,8 @@ assert.ok(msg.includes('next -> Triage'));
 assert.ok(msg.includes('get the next new email'));
 assert.ok(msg.includes('return input'));
 assert.ok(/no server is checked/i.test(CA.buildUserMessage({ usable: [], exits: ['next'], wiring: {}, sample: '', code: '', request: 'x' })));
+// ... and a request that needs anything beyond the input is refused, not guessed
+assert.ok(/anything outside its input[^\n]*cannot/i.test(CA.buildUserMessage({ usable: [], exits: ['next'], wiring: {}, sample: '', code: '', request: 'x' })));
 assert.ok(CA.SYSTEM_PROMPT.includes('"cannot"') && CA.SYSTEM_PROMPT.includes('def run(input, call_tool)'));
 
 // parsing -- review focus 2

@@ -116,7 +116,11 @@
     function buildUserMessage({ usable, exits, wiring, sample, code, request }) {
         const parts = [];
         const servers = (usable || []).filter((s) => s.tools.length);
-        if (!servers.length) parts.push('## MCP servers\nNo server is checked: write plain Python, no call_tool.');
+        if (!servers.length) {
+            parts.push('## MCP servers\nNo server is checked: write plain Python, no call_tool. The code can only work on its'
+                + ' input. If the request needs anything outside its input (reading, sending, moving or storing data elsewhere),'
+                + ' answer cannot and say which server would have to be checked.');
+        }
         else {
             parts.push('## MCP servers and their documented tools');
             for (const s of servers) {
