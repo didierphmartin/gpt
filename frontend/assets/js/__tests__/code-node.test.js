@@ -269,4 +269,21 @@ for (const bad of [undefined, null, [], 'x', 3]) assert.deepStrictEqual(CN.nodeA
     const gone = CN.startAsCode({ type: 'start', start_option: 12, start_option_label: 'Get job', exits: ['job'], start_args: { tag: 'k' } }, null, linked);
     assert.deepStrictEqual(gone, { name: 'Get job', code_component_id: 12, code_component_missing: true, exits: ['job'], args: { tag: 'k' } });
 }
+// declaration-aware arg fields, upstream placeholders, Save checks
+{
+    assert.deepStrictEqual(CN.argFieldsFor({ arg_decls: [{ name: 'folder', required: true }], code: 'ARGS.get("zzz")' }),
+        [{ name: 'folder', description: '', default: '', required: true }]);
+    assert.deepStrictEqual(CN.argFieldsFor({ code: 'x = ARGS.get("a", "1")' }),
+        [{ name: 'a', description: '', default: '1', required: false }]);
+    assert.deepStrictEqual(CN.placeholderNames('VIP/{mailbox_name} {{lit}} {a} {a} {1x}'), ['mailbox_name', 'a']);
+    const parents = { start: [], pdf: ['start', 'move'], move: ['pdf'] };
+    const data = { start: { provides: [{ name: 'from', description: 's from' }, { name: 'subject' }] },
+        pdf: { name: 'PDF', provides: [{ name: 'from', description: 'pdf from' }] }, move: {} };
+    assert.deepStrictEqual(CN.upstreamProvides('move', (i) => parents[i], (i) => data[i]),
+        [{ name: 'from', description: 'pdf from', from: 'PDF' }, { name: 'subject', description: '', from: 'Start' }]);
+    assert.deepStrictEqual(CN.upstreamProvides('start', (i) => parents[i], (i) => data[i]).map((e) => e.name), []);
+    assert.deepStrictEqual(CN.argProblems([{ name: 'folder', required: true, default: '' },
+        { name: 'sub', default: '{received}', required: false }], { folder: '' }, ['from']),
+        { missing: ['folder'], unknown: ['received'] });
+}
 console.log('code-node.test.js: OK');
