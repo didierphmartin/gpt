@@ -15068,7 +15068,7 @@ class WorkflowEditor {
 
     async _codeHarness() {
         if (!this._codeHarnessSrc) {
-            const resp = await fetch('assets/py/code_node_harness.py?v=20261005-no-exit-2');
+            const resp = await fetch('assets/py/code_node_harness.py?v=20261028-placeholders');
             if (!resp.ok) throw new Error(`cannot load the code node harness (HTTP ${resp.status})`);
             this._codeHarnessSrc = await resp.text();
         }
