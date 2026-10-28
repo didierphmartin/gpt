@@ -912,6 +912,27 @@
       "confirmUnlisted": "Esta prueba llamará a herramientas de {{servers}}, cuyas herramientas no se pudieron listar. ¿Continuar?",
       "codeChanged": "El código cambió desde esta propuesta; revisa la comparación actualizada y vuelve a pulsar Aceptar."
     },
+    "codeArgs": {
+      "intro": "Los valores que lee el código de este nodo. Vacío: se aplica el valor por defecto (en gris). * = obligatorio.",
+      "none": "Este código no lee argumentos.",
+      "available": "Marcadores disponibles",
+      "availableHint": "Haga clic en uno para insertarlo en el último campo usado. Se sustituye por su valor cuando el nodo se ejecuta.",
+      "from": "de {{node}}",
+      "noneAvailable": "Nada antes de este nodo proporciona marcadores.",
+      "missing": "Argumentos obligatorios vacíos: {{names}}",
+      "unknown": "Guardado, pero nada antes de este nodo proporciona {{names}}: el nodo fallará al ejecutarse.",
+      "argsTitle": "Argumentos",
+      "argsHint": "Lo que rellena un nodo que usa este componente. Si el nodo lo deja vacío, se aplica el valor por defecto.",
+      "providesTitle": "Proporciona",
+      "providesHint": "Los nombres que la salida de este componente da a los nodos siguientes, usados allí como marcadores {name}.",
+      "addArg": "Añadir argumento",
+      "addProvides": "Añadir nombre",
+      "name": "nombre",
+      "description": "descripción",
+      "default": "por defecto",
+      "required": "obligatorio",
+      "remove": "Quitar"
+    },
     "connect": {
       "connect": "Conectar",
       "reconnect": "Volver a conectar",

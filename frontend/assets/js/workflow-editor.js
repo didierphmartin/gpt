@@ -9707,6 +9707,7 @@ class WorkflowEditor {
                         <div class="storage-config-folder"><label>Timeout (seconds)</label><input data-f="timeout" type="number" min="1" max="300"></div>
                         <div data-f="connect" class="storage-config-folder full" style="display:contents;"></div>
                         <div data-f="callargs" class="storage-config-folder full" style="display:none;"></div>
+                        ${node ? '' : '<div data-f="decl-args" class="storage-config-folder full"></div><div data-f="decl-provides" class="storage-config-folder full"></div>'}
                     </div>`)}
                     ${pane('code', `<div class="storage-config-grid">
                         <div class="storage-config-folder full"><label>Code — def run(input, call_tool)</label>
@@ -9881,34 +9882,109 @@ class WorkflowEditor {
                 if (!keep.has(name)) { box.el.remove(); connectBoxes.delete(name); }
             }
         };
-        // Arguments: one field per ARGS key the code reads (the Start form's StartOptions.argFields), this node's
-        // own values (its args); an empty field is dropped, so the code's default applies. Nodes only: a
-        // component's arguments belong to each node that uses it.
+        // Arguments: the component's declared arguments, else one field per ARGS key the code reads
+        // (CodeNode.argFieldsFor), this node's own values (its args); an empty field is dropped, so the default
+        // applies. Below them, the {name} placeholders the nodes before this one provide. Nodes only: a
+        // component's arguments are filled in by each node that uses it.
         const SO = window.StartOptions;
+        const ta = (k, p) => this.t(`workflow.codeArgs.${k}`, p);
+        const escA = (v) => this.escapeHtml(String(v ?? ''));
+        const argDecls = comp ? (comp.args || []) : (d.arg_decls || []);
         let argValues = { ...(d.args && typeof d.args === 'object' && !Array.isArray(d.args) ? d.args : {}) };
         let argFields = [];
+        let lastArgInput = null;   // where a clicked placeholder goes (the first field when none was focused)
+        const graph = this.editor.drawflow.drawflow.Home.data;
+        const available = node ? CN.upstreamProvides(String(nodeId),
+            (id) => Object.values(graph[id]?.inputs || {}).flatMap((i) => (i.connections || []).map((c) => String(c.node))),
+            (id) => {
+                const nd = graph[id]?.data || {};
+                // a Start on an option provides what that option's component declares
+                if (nd.start_option) return { name: nd.name || 'Start', provides: CC.cache.get(nd.start_option)?.provides || [] };
+                if (nd.code_component_id) return { ...nd, provides: CC.cache.get(nd.code_component_id)?.provides ?? nd.provides };
+                return nd;
+            }) : [];
+        const argInput = (name) => f('args').querySelector(`[data-arg="${CSS.escape(name)}"]`);
+        const argInputValues = () => Object.fromEntries(argFields.map(({ name }) => [name, argInput(name)?.value ?? '']));
         const renderArgs = () => {
             if (!node) return;
-            argFields.forEach(({ name }) => {
-                const i = f('args').querySelector(`[data-arg="${CSS.escape(name)}"]`);
-                if (i) argValues[name] = i.value;
-            });
-            argFields = SO.argFields(f('code').value);
-            const esc = (v) => this.escapeHtml(String(v ?? ''));
-            f('args').innerHTML = argFields.length ? `<p class="text-xs text-gray-500" style="margin:0 0 8px;">The values this node's code reads with
-                <code>ARGS.get(...)</code>. Empty: the code's default applies.</p>
-                <div class="storage-config-grid">${argFields.map(({ name }) => `<div class="storage-config-folder full">
-                    <label>${esc(name)}</label><input type="text" data-arg="${esc(name)}"></div>`).join('')}</div>`
-                : '<p class="text-sm text-gray-400 italic">This code reads no arguments.</p>';
+            argFields.forEach(({ name }) => { const i = argInput(name); if (i) argValues[name] = i.value; });
+            argFields = CN.argFieldsFor({ arg_decls: argDecls, code: f('code').value });
+            lastArgInput = null;
+            const list = available.length
+                ? `<p class="text-xs text-gray-500" style="margin:0 0 6px;">${escA(ta('availableHint'))}</p>` + available.map((p) => `
+                    <div class="text-xs" style="margin:2px 0;"><button type="button" data-ph="${escA(p.name)}" class="text-blue-600 hover:underline"><code>{${escA(p.name)}}</code></button>
+                        ${p.description ? `<span class="text-gray-700">— ${escA(p.description)}</span>` : ''}
+                        <span class="text-gray-500">(${escA(ta('from', { node: p.from }))})</span></div>`).join('')
+                : `<p class="text-xs text-gray-500" style="margin:0;">${escA(ta('noneAvailable'))}</p>`;
+            f('args').innerHTML = (argFields.length ? `<p class="text-xs text-gray-500" style="margin:0 0 8px;">${escA(ta('intro'))}</p>
+                <div class="storage-config-grid">${argFields.map(({ name, description, required }) => `<div class="storage-config-folder full">
+                    <label>${escA(name)}${required ? ' <span class="text-red-600">*</span>' : ''}</label><input type="text" data-arg="${escA(name)}">
+                    ${description ? `<small>${escA(description)}</small>` : ''}</div>`).join('')}</div>`
+                : `<p class="text-sm text-gray-400 italic">${escA(ta('none'))}</p>`)
+                + `<div class="storage-config-folder" style="margin-top:12px;"><label>${escA(ta('available'))}</label>${list}</div>`;
             for (const { name, default: dflt } of argFields) {
-                const i = f('args').querySelector(`[data-arg="${CSS.escape(name)}"]`);
+                const i = argInput(name);
                 i.value = argValues[name] ?? '';
                 i.placeholder = dflt;
+                i.addEventListener('focus', () => { lastArgInput = i; });
             }
+            f('args').querySelectorAll('[data-ph]').forEach((b) => b.addEventListener('click', () => {
+                const i = lastArgInput || f('args').querySelector('[data-arg]');
+                if (!i) return;
+                const text = `{${b.dataset.ph}}`;
+                const s = i.selectionStart ?? i.value.length;
+                const e = i.selectionEnd ?? s;
+                i.value = i.value.slice(0, s) + text + i.value.slice(e);
+                i.focus();
+                i.selectionStart = i.selectionEnd = s + text.length;
+            }));
         };
         renderArgs();
-        const readArgs = () => SO.startArgs(d.args, argFields, Object.fromEntries(argFields.map(({ name }) =>
-            [name, f('args').querySelector(`[data-arg="${CSS.escape(name)}"]`)?.value ?? ''])));
+        const readArgs = () => SO.startArgs(d.args, argFields, argInputValues());
+        // Component mode (the Library form): the component's Arguments and Provides declarations as row lists.
+        const declRow = (kind, e = {}) => {
+            const row = document.createElement('div');
+            row.dataset.decl = kind;
+            row.style.cssText = `display:grid;grid-template-columns:${kind === 'args' ? '1fr 2fr 1fr auto auto' : '1fr 3fr auto'};gap:6px;align-items:center;margin-bottom:6px;`;
+            row.innerHTML = `<input type="text" data-k="name" placeholder="${escA(ta('name'))}">
+                <input type="text" data-k="description" placeholder="${escA(ta('description'))}">
+                ${kind === 'args' ? `<input type="text" data-k="default" placeholder="${escA(ta('default'))}">
+                <span style="display:flex;align-items:center;gap:4px;font-size:12px;white-space:nowrap;"><input type="checkbox" data-k="required">${escA(ta('required'))}</span>` : ''}
+                <button type="button" data-remove class="text-gray-400 hover:text-red-600" title="${escA(ta('remove'))}">×</button>`;
+            row.querySelector('[data-k="name"]').value = e.name || '';
+            row.querySelector('[data-k="description"]').value = e.description || '';
+            if (kind === 'args') {
+                row.querySelector('[data-k="default"]').value = e.default ?? '';
+                row.querySelector('[data-k="required"]').checked = !!e.required;
+            }
+            row.querySelector('[data-remove]').addEventListener('click', () => row.remove());
+            return row;
+        };
+        const renderDecls = (kind, entries) => {
+            const box = f(`decl-${kind}`);
+            box.innerHTML = `<label>${escA(ta(kind === 'args' ? 'argsTitle' : 'providesTitle'))}</label>
+                <p class="text-xs text-gray-500" style="margin:0 0 8px;">${escA(ta(kind === 'args' ? 'argsHint' : 'providesHint'))}</p>
+                <div data-rows></div>
+                <button type="button" data-add class="text-sm text-blue-600 hover:underline">+ ${escA(ta(kind === 'args' ? 'addArg' : 'addProvides'))}</button>`;
+            const rows = box.querySelector('[data-rows]');
+            for (const e of entries) rows.appendChild(declRow(kind, e));
+            box.querySelector('[data-add]').addEventListener('click', () => rows.appendChild(declRow(kind)));
+        };
+        // A declaration: its name and the optional keys that are filled in; a fully blank row is skipped.
+        const readDecls = (kind) => [...f(`decl-${kind}`).querySelectorAll(`[data-decl="${kind}"]`)].map((row) => {
+            const v = (k) => row.querySelector(`[data-k="${k}"]`)?.value ?? '';
+            const e = { name: v('name').trim() };
+            if (v('description').trim()) e.description = v('description').trim();
+            if (kind === 'args') {
+                if (v('default') !== '') e.default = v('default');
+                if (row.querySelector('[data-k="required"]').checked) e.required = true;
+            }
+            return e;
+        }).filter((e) => Object.keys(e).length > 1 || e.name);
+        if (!node) {
+            renderDecls('args', Array.isArray(d.args) ? d.args : []);
+            renderDecls('provides', Array.isArray(d.provides) ? d.provides : []);
+        }
         // The template call's arguments as fields (CodeNode.callTemplate): shown when the code makes that call.
         const callArgs = this._wireCallArgs(f('callargs'), () => f('code').value, (code) => { f('code').value = code; });
         f('code').addEventListener('change', () => { callArgs.refresh(); renderArgs(); });
@@ -9974,6 +10050,9 @@ class WorkflowEditor {
             mcp_servers: [...checked],
             timeout_s: Math.trunc(Number(f('timeout').value)),
             ...(node ? { args: readArgs() } : {}),
+            // A component Save sends its declarations (componentBody): edited in the Library form, kept from a linked node.
+            ...(editingComponent ? (node ? { arg_decls: [...argDecls], provides: [...(comp?.provides || d.provides || [])] }
+                : { arg_decls: readDecls('args'), provides: readDecls('provides') }) : {}),
         });
         f('code').addEventListener('keydown', (ev) => {
             if (ev.key !== 'Tab') return;
@@ -9994,8 +10073,15 @@ class WorkflowEditor {
             if (libraryUnavailable) { show(this.t('codeLibrary.loadFailed'), true); return; }
             const cfg = read();
             const errs = CN.validateConfig(cfg);
+            if (errs.length) { show(errs.join('\n'), true); return; }
+            // A node's arguments: a required one left empty refuses the Save; a placeholder nothing before
+            // this node provides is only a warning, once the Save went through.
+            const argCheck = node ? CN.argProblems(argFields, argInputValues(), available.map((p) => p.name)) : { missing: [], unknown: [] };
+            if (argCheck.missing.length) { show(ta('missing', { names: argCheck.missing.join(', ') }), true); return; }
+            const warnUnknown = () => {
+                if (argCheck.unknown.length) this.showToast(ta('unknown', { names: argCheck.unknown.map((n) => `{${n}}`).join(', ') }), 'warning');
+            };
             if (act === 'tolib') {
-                if (errs.length) { show(errs.join('\n'), true); return; }
                 const name = cfg.name;
                 // A name already in the library: the first click warns, the second replaces it.
                 await CC.cache.load(CC.api()).catch(() => {});   // the clash check needs the library rows
@@ -10006,11 +10092,14 @@ class WorkflowEditor {
                     return;
                 }
                 try {
-                    const row = (await CC.api().create(CC.componentBody(cfg, { name, description: clash?.description || '' }))).data;
+                    // a node whose component is gone still carries that component's declarations: they go along
+                    const row = (await CC.api().create(CC.componentBody({ ...cfg, arg_decls: d.arg_decls || [], provides: d.provides || [] },
+                        { name, description: clash?.description || '' }))).data;
                     CC.cache.put(row);
                     this._applyCodeNodeConfig(nodeId, { ...CC.linkedNodeConfig(row, cfg.name), disabled: !!node.data.disabled, args: cfg.args });
                     this._refreshLinkedCodeNodes(row);
                     overlay.remove();
+                    warnUnknown();
                     // The component is already saved: store the node's link now too, or a reload before
                     // Save Workflow leaves a library component that no workflow uses.
                     await this._persistIfDirty();
@@ -10018,12 +10107,12 @@ class WorkflowEditor {
                 } catch (e) { show(e.message, true); }
                 return;
             }
-            if (errs.length) { show(errs.join('\n'), true); return; }
             if (!editingComponent) {
                 // Inline node, or a node whose component is gone, which becomes inline (the server would
                 // otherwise strip its code as a linked node's).
                 this._applyCodeNodeConfig(nodeId, { ...cfg, code_component_id: null, code_component_missing: false });
                 overlay.remove();
+                warnUnknown();
                 return;
             }
             // Component mode, or a linked node: the collection is written and every linked node follows.
@@ -10057,6 +10146,7 @@ class WorkflowEditor {
                 this._refreshLinkedCodeNodes(row);
                 window.codeLibrary?.loadTree?.();
                 overlay.remove();
+                warnUnknown();
             } catch (e) { show(e.message, true); }
         });
     }
@@ -10427,16 +10517,17 @@ class WorkflowEditor {
     }
 
     /**
-     * Option `compId` as this workflow uses it: what it watches, and the Start arguments (the names its code reads
-     * from ARGS), saved as the Start node's start_args. The workflow is saved, then the event row again: its watch
-     * takes the Start's tag (CodeComponentStore::scheduleBody). An option that reads a tag warns while the tag is
+     * Option `compId` as this workflow uses it: what it watches, and the Start arguments (its component's declared
+     * arguments, else the names its code reads from ARGS), saved as the Start node's start_args. The workflow is
+     * saved, then the event row again: its watch takes the Start's tag (CodeComponentStore::scheduleBody). An option that reads a tag warns while the tag is
      * empty; one that reads no arguments says so and only closes.
      */
     _openStartArgsDialog(compId) {
         const SO = window.StartOptions;
         const comp = window.CodeComponents?.cache.get(compId);
         const startId = this._startNodeId();
-        const fields = comp ? SO.argFields(comp.code) : [];
+        // the option component's declared arguments (descriptions, defaults), else the names its code reads
+        const fields = comp ? window.CodeNode.argFieldsFor(window.CodeComponents.linkedNodeConfig(comp)) : [];
         if (!startId || !comp?.start_trigger) return;
         const t = (k, p) => this.t(`workflow.startOptions.${k}`, p);
         const esc = (v) => this.escapeHtml(String(v ?? ''));
@@ -10460,9 +10551,9 @@ class WorkflowEditor {
                     </div>
                     <p style="margin:0 0 10px;font-size:13px;color:#6b7280;">${esc(t(fields.length ? 'argsIntro' : 'noArgs'))}</p>
                     <div style="display:${fields.length ? 'grid' : 'none'};grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:14px;">
-                        ${fields.map((f) => `<label for="start-arg-${esc(f.name)}">${esc(f.name)}</label>
-                            <input id="start-arg-${esc(f.name)}" type="text" data-arg="${esc(f.name)}" placeholder="${esc(f.default)}"
-                                value="${esc(current[f.name])}" style="padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;">`).join('')}
+                        ${fields.map((f) => `<label for="start-arg-${esc(f.name)}">${esc(f.name)}${f.required ? ' <span style="color:#dc2626;">*</span>' : ''}</label>
+                            <input id="start-arg-${esc(f.name)}" type="text" data-arg="${esc(f.name)}" style="padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;">
+                            ${f.description ? `<span></span><span style="font-size:12px;color:#6b7280;margin-top:-4px;">${esc(f.description)}</span>` : ''}`).join('')}
                     </div>
                     <p data-role="no-tag" style="display:none;margin:10px 0 0;font-size:13px;color:#b45309;">⚠ ${esc(t('noTag'))}</p>
                     <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
@@ -10473,6 +10564,12 @@ class WorkflowEditor {
             </div>`;
         document.body.appendChild(overlay);
         const inputs = [...overlay.querySelectorAll('[data-arg]')];
+        // set through the DOM: escapeHtml leaves quotes alone, so an attribute could be cut short
+        for (const i of inputs) {
+            const fld = fields.find((x) => x.name === i.dataset.arg);
+            i.value = current[i.dataset.arg] ?? '';
+            i.placeholder = fld?.default ?? '';
+        }
         const tag = inputs.find((i) => i.dataset.arg === 'tag');
         const warn = () => { overlay.querySelector('[data-role="no-tag"]').style.display = tag && !tag.value.trim() ? '' : 'none'; };
         tag?.addEventListener('input', warn);

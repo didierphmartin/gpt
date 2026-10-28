@@ -912,6 +912,27 @@
       "confirmUnlisted": "This test will call tools on {{servers}}, whose tools couldn't be listed. Continue?",
       "codeChanged": "The code changed since this proposal; review the updated comparison, then Accept again."
     },
+    "codeArgs": {
+      "intro": "The values this node's code reads. Empty: the default (shown in grey) applies. * = required.",
+      "none": "This code reads no arguments.",
+      "available": "Available placeholders",
+      "availableHint": "Click one to insert it in the last field you used. It is replaced by that value when the node runs.",
+      "from": "from {{node}}",
+      "noneAvailable": "Nothing before this node provides placeholders.",
+      "missing": "Required arguments left empty: {{names}}",
+      "unknown": "Saved, but nothing before this node provides {{names}}: the node will fail when it runs.",
+      "argsTitle": "Arguments",
+      "argsHint": "What a node using this component fills in. The default applies when the node leaves it empty.",
+      "providesTitle": "Provides",
+      "providesHint": "The names this component's output gives the nodes after it, used there as {name} placeholders.",
+      "addArg": "Add argument",
+      "addProvides": "Add name",
+      "name": "name",
+      "description": "description",
+      "default": "default",
+      "required": "required",
+      "remove": "Remove"
+    },
     "connect": {
       "connect": "Connect",
       "reconnect": "Reconnect",
