@@ -282,6 +282,14 @@ for (const bad of [undefined, null, [], 'x', 3]) assert.deepStrictEqual(CN.nodeA
     assert.deepStrictEqual(CN.upstreamProvides('move', (i) => parents[i], (i) => data[i]),
         [{ name: 'from', description: 'pdf from', from: 'PDF' }, { name: 'subject', description: '', from: 'Start' }]);
     assert.deepStrictEqual(CN.upstreamProvides('start', (i) => parents[i], (i) => data[i]).map((e) => e.name), []);
+    // start -> agent -> code: the agent outputs text, so nothing before it reaches the code node
+    const viaAgent = { start: [], agent: ['start'], code: ['agent'] };
+    const agentData = { start: data.start, agent: { stop: true, name: 'Agent', provides: [{ name: 'x' }] }, code: {} };
+    assert.deepStrictEqual(CN.upstreamProvides('code', (i) => viaAgent[i], (i) => agentData[i]), []);
+    // a stop on one branch does not hide another branch that passes meta
+    const twoWays = { start: [], agent: ['start'], pdf: ['start'], code: ['agent', 'pdf'] };
+    const twoData = { start: data.start, agent: { stop: true }, pdf: { name: 'PDF' }, code: {} };
+    assert.deepStrictEqual(CN.upstreamProvides('code', (i) => twoWays[i], (i) => twoData[i]).map((e) => e.name), ['from', 'subject']);
     assert.deepStrictEqual(CN.argProblems([{ name: 'folder', required: true, default: '' },
         { name: 'sub', default: '{received}', required: false }], { folder: '' }, ['from']),
         { missing: ['folder'], unknown: ['received'] });

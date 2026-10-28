@@ -9898,6 +9898,9 @@ class WorkflowEditor {
             (id) => Object.values(graph[id]?.inputs || {}).flatMap((i) => (i.connections || []).map((c) => String(c.node))),
             (id) => {
                 const nd = graph[id]?.data || {};
+                // only code nodes and the Start pass meta on: placeholders do not cross a node that outputs text
+                const kind = this._wfNodeKind(id, graph);
+                if (kind !== 'code' && kind !== 'start' && !nd.code_component_id) return { stop: true };
                 // a Start on an option provides what that option's component declares
                 if (nd.start_option) return { name: nd.name || 'Start', provides: CC.cache.get(nd.start_option)?.provides || [] };
                 if (nd.code_component_id) return { ...nd, provides: CC.cache.get(nd.code_component_id)?.provides ?? nd.provides };

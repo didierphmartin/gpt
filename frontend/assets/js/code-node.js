@@ -426,7 +426,11 @@
         return out;
     }
 
-    /** What the nodes before this one provide: [{name, description, from}], the nearest node winning a name. */
+    /**
+     * What the nodes before this one provide: [{name, description, from}], the nearest node winning a name.
+     * dataOf(id) returns {stop: true} for a node that does not pass meta on (any node but a code node or the
+     * Start: an agent, dispatcher or playbook outputs text): the walk neither collects from it nor goes past it.
+     */
     function upstreamProvides(nodeId, parentsOf, dataOf) {
         const seen = new Set([String(nodeId)]);
         const out = new Map();
@@ -437,8 +441,9 @@
                 for (const p of parentsOf(id) || []) {
                     if (seen.has(String(p))) continue;
                     seen.add(String(p));
-                    next.push(p);
                     const d = dataOf(p) || {};
+                    if (d.stop) continue;
+                    next.push(p);
                     for (const e of d.provides || []) {
                         if (!out.has(e.name)) out.set(e.name, { name: e.name, description: e.description || '', from: d.name || 'Start' });
                     }
