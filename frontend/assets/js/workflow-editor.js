@@ -9970,7 +9970,7 @@ class WorkflowEditor {
             for (const e of entries) rows.appendChild(declRow(kind, e));
             box.querySelector('[data-add]').addEventListener('click', () => rows.appendChild(declRow(kind)));
         };
-        // A declaration: its name and the optional keys that are filled in; a fully blank row is skipped.
+        // A declaration: its name and the optional keys that are filled in; a row with no text is skipped.
         const readDecls = (kind) => [...f(`decl-${kind}`).querySelectorAll(`[data-decl="${kind}"]`)].map((row) => {
             const v = (k) => row.querySelector(`[data-k="${k}"]`)?.value ?? '';
             const e = { name: v('name').trim() };
@@ -9980,7 +9980,7 @@ class WorkflowEditor {
                 if (row.querySelector('[data-k="required"]').checked) e.required = true;
             }
             return e;
-        }).filter((e) => Object.keys(e).length > 1 || e.name);
+        }).filter((e) => e.name || e.description || e.default !== undefined);   // `required` alone is still a blank row
         if (!node) {
             renderDecls('args', Array.isArray(d.args) ? d.args : []);
             renderDecls('provides', Array.isArray(d.provides) ? d.provides : []);
@@ -10092,8 +10092,10 @@ class WorkflowEditor {
                     return;
                 }
                 try {
-                    // a node whose component is gone still carries that component's declarations: they go along
-                    const row = (await CC.api().create(CC.componentBody({ ...cfg, arg_decls: d.arg_decls || [], provides: d.provides || [] },
+                    // Declarations: a node whose component is gone still carries that component's; otherwise a
+                    // replaced component keeps its own (like its description), or there are none.
+                    const keep = (k, rowKey) => (d[k]?.length ? d[k] : (clash?.[rowKey] || []));
+                    const row = (await CC.api().create(CC.componentBody({ ...cfg, arg_decls: keep('arg_decls', 'args'), provides: keep('provides', 'provides') },
                         { name, description: clash?.description || '' }))).data;
                     CC.cache.put(row);
                     this._applyCodeNodeConfig(nodeId, { ...CC.linkedNodeConfig(row, cfg.name), disabled: !!node.data.disabled, args: cfg.args });
@@ -10663,6 +10665,8 @@ class WorkflowEditor {
             this.showToast?.(`Exit "${d.exit}" removed: ${d.count} connection(s) dropped`, 'warning');
         }
         const { mcp_tools: _dropped, ...kept } = node.data;   // mcp_tools: the old typed tool list, replaced by mcp_servers
+        // A node turned inline drops the linked-node cache of its component's declarations.
+        if (cfg.code_component_id === null) { delete kept.arg_decls; delete kept.provides; }
         this.editor.updateNodeDataFromId(nodeId, { ...kept, ...cfg, type: 'code', node_type: 'code' });
         this._refreshCodeNode(nodeId);
         // Like an agent node's form: the DB write is flushed by _persistIfDirty() (Run, Compile,
