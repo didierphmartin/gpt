@@ -892,7 +892,7 @@
       "placeholder": "Describe what this node should do",
       "model": "Model",
       "providerDefault": "{{provider}} (default model)",
-      "ask": "Ask",
+      "ask": "Submit",
       "thinking": "Thinking…",
       "stop": "Stop",
       "emptyRequest": "Describe what the node should do first.",

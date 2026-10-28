@@ -116,7 +116,11 @@
     function buildUserMessage({ usable, exits, wiring, sample, code, request }) {
         const parts = [];
         const servers = (usable || []).filter((s) => s.tools.length);
-        if (!servers.length) parts.push('## MCP servers\nNo server is checked: write plain Python, no call_tool.');
+        if (!servers.length) {
+            parts.push('## MCP servers\nNo server is checked: write plain Python, no call_tool. The code can only work on its'
+                + ' input. If the request needs anything outside its input (reading, sending, moving or storing data elsewhere),'
+                + ' answer cannot and say which server would have to be checked.');
+        }
         else {
             parts.push('## MCP servers and their documented tools');
             for (const s of servers) {
@@ -244,11 +248,13 @@
         const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
         el.innerHTML = `
             <label>${esc(t('workflow.codeAssist.title'))}</label>
-            <textarea data-a="request" rows="3" style="width:100%;" placeholder="${esc(t('workflow.codeAssist.placeholder'))}"></textarea>
-            <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
-                <label style="margin:0;">${esc(t('workflow.codeAssist.model'))}</label>
-                <select data-a="model" style="flex:1;"></select>
-                <button type="button" class="storage-config-btn" data-a="ask">${esc(t('workflow.codeAssist.ask'))}</button>
+            <div style="display:flex;gap:8px;align-items:stretch;">
+                <textarea data-a="request" rows="3" style="flex:1;min-width:0;" placeholder="${esc(t('workflow.codeAssist.placeholder'))}"></textarea>
+                <div style="display:flex;flex-direction:column;gap:6px;width:240px;flex:none;">
+                    <label style="margin:0;">${esc(t('workflow.codeAssist.model'))}</label>
+                    <select data-a="model" style="width:100%;"></select>
+                    <button type="button" class="storage-config-btn save" data-a="ask" style="align-self:flex-end;">${esc(t('workflow.codeAssist.ask'))}</button>
+                </div>
             </div>
             <div data-a="status" class="text-xs text-gray-500" style="margin-top:6px;"></div>
             <div data-a="proposal" style="margin-top:8px;"></div>`;

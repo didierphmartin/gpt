@@ -2845,6 +2845,23 @@ svg.connection.wf-edge-chosen .main-path {
     user-select: none;
 }
 
+/* The code node dialog: still a modal (dimmed backdrop), but a window like the two above — taller by default,
+   dragged by its header, resized from any edge (_pbInitOverlayWindow), its size remembered. */
+.wf-code-window .storage-config-modal {
+    width: min(1000px, 96vw);
+    height: calc(100vh - 32px);
+    max-width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
+    min-width: 520px;
+    min-height: 360px;
+    resize: both;
+    overflow: hidden;
+}
+.wf-code-window .storage-config-header {
+    cursor: move;
+    user-select: none;
+}
+
 /* ============================================
    Node Delete Button (X)
    ============================================ */

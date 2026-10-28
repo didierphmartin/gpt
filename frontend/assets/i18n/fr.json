@@ -892,7 +892,7 @@
       "placeholder": "Décrivez ce que ce nœud doit faire",
       "model": "Modèle",
       "providerDefault": "{{provider}} (modèle par défaut)",
-      "ask": "Demander",
+      "ask": "Soumettre",
       "thinking": "Réflexion…",
       "stop": "Arrêter",
       "emptyRequest": "Décrivez d'abord ce que le nœud doit faire.",
