@@ -2,10 +2,9 @@
 # node's folder argument its destination.
 # Input: {files, source?, document?, ...}. Each file is {"name", "base64"} or {"name", "from": {"server", "tool",
 # "args"}} -- a tool call whose result has base64, made just before the upload (tick that server on the node).
-# The folder argument may hold {mailbox} / {mailbox_name}, filled from document.meta (the VIP's address / safe
-# folder name); if the email names no mailbox the node exits error and touches nothing in SharePoint.
-# 1. stores the files in folder/<subfolder>, the subfolder named from document.meta when there is one
-#    ("YYYY-MM-DD HHMM - sender - subject"), else straight in folder;
+# Arguments arrive filled (any {placeholder} already replaced from the previous nodes' meta, defaults applied):
+# nothing here handles placeholders.
+# 1. stores the files in folder/<subfolder> (the subfolder argument; empty = straight in folder);
 # 2. then runs source.release when there is one (e.g. the email leaves the Outlook drop folder) -- only after
 #    every file is stored, so a failure leaves the source where it was, to be handed on again.
 # Exits: ok {status, folder, files, web_urls, released}; no {status, reason}.
@@ -14,15 +13,6 @@ import json
 
 def _error(reason, released=False):
     return {"route": "error", "output": {"status": "error", "reason": str(reason), "released": released}}
-
-
-def _subfolder(document):
-    meta = (document or {}).get("meta") if isinstance(document, dict) else None
-    if not isinstance(meta, dict):
-        return ""
-    when = (meta.get("received_at") or "")[:16].replace("T", " ").replace(":", "")
-    subject = (meta.get("subject") or "").strip()[:60] or "(no subject)"
-    return f"{when} - {meta.get('from') or 'unknown sender'} - {subject}"
 
 
 def _content(call_tool, f):
@@ -49,16 +39,9 @@ def run(input, call_tool):
     destination = str(ARGS.get("folder") or "").strip()
     if not destination:
         return _error("set folder in this node's arguments (the SharePoint destination)")
-    meta = (pkg.get("document") or {}).get("meta") if isinstance(pkg.get("document"), dict) else None
-    for key in ("mailbox", "mailbox_name"):
-        if "{" + key + "}" in destination:
-            value = str((meta or {}).get(key) or "").strip() if isinstance(meta, dict) else ""
-            if not value:
-                return _error(f"the email names no mailbox (folder uses {{{key}}})")
-            destination = destination.replace("{" + key + "}", value)
+    name = str(ARGS.get("subfolder") or "").strip()
     try:
         folder = call_tool("sharepoint", "ensure_folder", {"path": destination})["path"]
-        name = _subfolder(pkg.get("document"))
         if name:
             folder = call_tool("sharepoint", "create_subfolder", {"parent": folder, "name": name})["path"]
         stored, urls = [], []
