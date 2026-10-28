@@ -9691,9 +9691,10 @@ class WorkflowEditor {
         const pane = (k, html) => `<div data-pane="${k}" style="display:none;">${html}</div>`;
         const pre = (k) => `<pre data-f="${k}" class="whitespace-pre-wrap text-sm text-gray-800 font-mono bg-white border border-gray-200 rounded p-3" style="min-height:300px;margin:0;"></pre>`;
         const overlay = document.createElement('div');
-        overlay.className = 'storage-config-overlay';
+        overlay.id = 'code-node-overlay';
+        overlay.className = 'storage-config-overlay wf-code-window';
         overlay.innerHTML = `
-            <div class="storage-config-modal" style="width:min(900px,95vw);height:min(720px,92vh);display:flex;flex-direction:column;">
+            <div class="storage-config-modal" style="display:flex;flex-direction:column;">
                 <div class="storage-config-header"><h3>⚙️ ${this.escapeHtml(node ? this.t('codeLibrary.nodeTitle') : this.t('codeLibrary.componentTitle'))}</h3><button class="storage-config-close" data-act="close">×</button></div>
                 <div data-f="link" class="text-xs text-gray-600" style="padding:4px 16px;display:none;"></div>
                 <div class="flex border-b border-gray-200" style="padding:0 16px;">
@@ -9732,6 +9733,13 @@ class WorkflowEditor {
                 </div>
             </div>`;
         document.body.appendChild(overlay);
+        // Same window machinery as the conversation: drag by the header, resize from any edge or corner, its size
+        // and place remembered. Every close path calls overlay.remove(), so the window listeners go with it.
+        const windowCleanup = this._pbInitOverlayWindow({
+            overlayId: 'code-node-overlay', storageKey: 'wf:code-node-overlay:rect:v1', minW: 520, minH: 360,
+        });
+        const removeOverlay = overlay.remove.bind(overlay);
+        overlay.remove = () => { windowCleanup(); removeOverlay(); };
         const f = (k) => overlay.querySelector(`[data-f="${k}"]`);
         const showTab = (k) => {
             overlay.querySelectorAll('[data-tab]').forEach((b) => {
