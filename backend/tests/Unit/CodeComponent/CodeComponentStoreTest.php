@@ -81,6 +81,8 @@ final class CodeComponentStoreTest extends TestCase
     {
         return [
             'digit first' => [['args' => [['name' => '1x']]]],
+            'trailing newline' => [['args' => [['name' => "a\n"]]]],
+            'non-ASCII letter' => [['provides' => [['name' => 'é']]]],
             'duplicate arg' => [['args' => [['name' => 'a'], ['name' => 'a']]]],
             'duplicate provided' => [['provides' => [['name' => 'a'], ['name' => 'a']]]],
             'required not bool' => [['args' => [['name' => 'a', 'required' => 'yes']]]],
@@ -104,6 +106,7 @@ final class CodeComponentStoreTest extends TestCase
     {
         $m = fn(array $x) => $this->error(fn() => $this->store->save(3, null, self::POLL + $x))->getMessage();
         $this->assertSame('Argument and provided names are letters, digits and _, not starting with a digit (got "1x").', $m(['args' => [['name' => '1x']]]));
+        $this->assertSame('Argument and provided names are letters, digits and _, not starting with a digit (got "a\\n").', $m(['args' => [['name' => "a\n"]]]));
         $this->assertSame('Argument "a" is listed twice.', $m(['args' => [['name' => 'a'], ['name' => 'a']]]));
         $this->assertSame('Provided name "a" is listed twice.', $m(['provides' => [['name' => 'a'], ['name' => 'a']]]));
         $this->assertSame('args must be a list of {name, description, default, required}.', $m(['args' => 'x']));

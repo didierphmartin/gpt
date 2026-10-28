@@ -453,9 +453,6 @@ final class CodeComponentStore
         if (array_key_exists('provides', $d)) {
             $out['provides'] = self::validateDecls($d['provides'], false);
         }
-        if (count($out['args'] ?? []) > self::DECLS_MAX || count($out['provides'] ?? []) > self::DECLS_MAX) {
-            $bad('At most ' . self::DECLS_MAX . ' arguments and ' . self::DECLS_MAX . ' provided names.');
-        }
         return $out;
     }
 
@@ -481,7 +478,7 @@ final class CodeComponentStore
                 $bad($what);
             }
             $n = $d['name'] ?? null;
-            if (!is_string($n) || !preg_match('/^[A-Za-z_]\w*$/', $n)) {
+            if (!is_string($n) || !preg_match('/^[A-Za-z_][A-Za-z0-9_]*\z/', $n)) {
                 $bad('Argument and provided names are letters, digits and _, not starting with a digit (got ' . json_encode($n) . ').');
             }
             if (isset($seen[$n])) {
