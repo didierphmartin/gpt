@@ -180,6 +180,7 @@ class LangGraphGeneratorCodeNodeTest extends TestCase
         exec('python3 -c ' . escapeshellarg('import re,sys; s=open(sys.argv[1]).read(); '
             . 'print(eval(re.search(r\'"arg_decls": (\\[.*\\]),   #\', s).group(1)))') . ' ' . escapeshellarg("$dir/single/wf.py") . ' 2>&1', $ev, $rc);
         self::assertSame(0, $rc, implode("\n", $ev));
+        exec('rm -rf ' . escapeshellarg($dir));
         self::assertSame("[{'name': 'folder', 'required': True}, {'name': 'note', 'default': None}]", implode("\n", $ev));
     }
 
@@ -202,6 +203,7 @@ class LangGraphGeneratorCodeNodeTest extends TestCase
         file_put_contents("$dir/wf.py", $this->generate($g));
         exec('cd ' . escapeshellarg($dir) . ' && RUNS_DIR=' . escapeshellarg("$dir/runs") . ' ' . escapeshellarg($venv)
             . ' wf.py --once go 2>&1', $out, $rc);
+        exec('rm -rf ' . escapeshellarg($dir));
         self::assertSame(0, $rc, implode("\n", $out));
         self::assertStringContainsString('folder=Inbox', implode("\n", $out));
     }
@@ -224,6 +226,7 @@ class LangGraphGeneratorCodeNodeTest extends TestCase
         file_put_contents("$dir/wf.py", $this->generate($g));
         exec('cd ' . escapeshellarg($dir) . ' && RUNS_DIR=' . escapeshellarg("$dir/runs") . ' ' . escapeshellarg($venv)
             . ' wf.py --once go 2>&1', $out, $rc);
+        exec('rm -rf ' . escapeshellarg($dir));
         self::assertSame(0, $rc, implode("\n", $out));
         self::assertStringContainsString('folder=Didier', implode("\n", $out));
     }

@@ -55,8 +55,13 @@ class PythonEmitHelpers
     public static function pyLiteral($value): string
     {
         $raw = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        return preg_replace_callback('/"(?:[^"\\\\]|\\\\.)*"|\b(?:true|false|null)\b/',
+        // unrolled and possessive: a long string value must not exhaust the PCRE JIT stack
+        $out = preg_replace_callback('/"[^"\\\\]*+(?:\\\\.[^"\\\\]*+)*+"|\b(?:true|false|null)\b/',
             fn($m) => ['true' => 'True', 'false' => 'False', 'null' => 'None'][$m[0]] ?? $m[0], $raw);
+        if ($out === null) {
+            throw new \RuntimeException('pyLiteral: ' . preg_last_error_msg());
+        }
+        return $out;
     }
 
     /**
