@@ -343,7 +343,8 @@ class CodeNode(Node):
         value = CODE_HARNESS.decode_input(req["parents"], req["user_prompt"])
         res = await asyncio.to_thread(CODE_HARNESS.execute, self.source(), value, c["exits"], c["mcp_servers"],
                                       _code_transport, c["timeout_s"], node_name=self.display,
-                                      args=c.get("args"))
+                                      args=c.get("args"), arg_decls=c.get("arg_decls"),
+                                      meta=CODE_HARNESS.received_meta(req["parents"]))
         for call in res["tool_calls"]:
             await trace(f"tool {call['server']}.{call['tool']} ok={call['ok']} ({call['ms']} ms)")
         if res["stdout"]:

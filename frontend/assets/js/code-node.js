@@ -363,7 +363,8 @@
     /** The worker request for one code-node run (the editor's Run walk), args included as the server sends them. */
     function runRequest(d, parents, userPrompt) {
         return { code: d.code || '', exits: d.exits || ['next'], servers: (d.mcp_servers || []).map(slug),
-            timeout_s: Number(d.timeout_s) || 30, parents, user_prompt: userPrompt, name: d.name || 'Code', args: nodeArgs(d.args) };
+            timeout_s: Number(d.timeout_s) || 30, parents, user_prompt: userPrompt, name: d.name || 'Code', args: nodeArgs(d.args),
+            arg_decls: Array.isArray(d.arg_decls) ? d.arg_decls : [] };
     }
 
     /**

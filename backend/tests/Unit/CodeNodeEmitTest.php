@@ -32,6 +32,17 @@ final class CodeNodeEmitTest extends TestCase
         self::assertSame('Poll', $d['display']);
     }
 
+    public function testNodeDataCarriesArgDecls(): void
+    {
+        $decls = [['name' => 'folder', 'required' => true]];
+        $d = CodeNodeEmit::nodeData($this->node(['arg_decls' => $decls]), [], ['servicenow' => 'u']);
+        self::assertSame($decls, $d['arg_decls']);
+        self::assertSame([], CodeNodeEmit::nodeData($this->node([]), [], ['servicenow' => 'u'])['arg_decls']);
+        foreach (['x', ['a' => ['name' => 'folder']], null] as $bad) {
+            self::assertSame([], CodeNodeEmit::nodeData($this->node(['arg_decls' => $bad]), [], ['servicenow' => 'u'])['arg_decls']);
+        }
+    }
+
     public function testDefaultsAndValidation(): void
     {
         $d = CodeNodeEmit::nodeData(['id' => '5', 'node_type' => 'code', 'config' => ['type' => 'code', 'code' => "def run(i, c):\n    return i"]], [], []);

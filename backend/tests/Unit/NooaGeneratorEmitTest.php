@@ -203,4 +203,15 @@ final class NooaGeneratorEmitTest extends TestCase
         $this->assertStringContainsString('OUTPUT_STORAGE_ENABLED = True', $code);
         $this->assertStringContainsString('WORKFLOW_ID = 9', $code);
     }
+
+    /** A code node's CODE_NODES entry carries its argument declarations; its run fills ARGS from the parents' meta. */
+    public function testCodeNodeCarriesArgDeclsAndPassesMeta(): void
+    {
+        $a = AdkCodeNodeTest::codeAnalyzed();
+        $a['code']['2']['arg_decls'] = [['name' => 'folder', 'required' => true]];
+        $code = NOOAGenerator::emitNooa($a);
+        $this->assertStringContainsString('meta=CODE_HARNESS.received_meta(parents)', $code);
+        $this->assertStringContainsString('arg_decls=cfg.get("arg_decls")', $code);
+        $this->assertMatchesRegularExpression('/"arg_decls": \[\s*\{\s*"name": "folder",\s*"required": True\s*\}\s*\]/', $code);
+    }
 }

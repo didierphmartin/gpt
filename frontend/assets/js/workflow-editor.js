@@ -15125,7 +15125,7 @@ class WorkflowEditor {
     _codeWorkerJob(verb, payload, limitMs, timeoutMsg) {
         const runOne = () => {
             const cold = !this._codeWorker || !this._codeWorkerWarm;
-            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261023-assist');
+            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261028-meta');
             const w = this._codeWorker;
             const id = (this._codeSeq = (this._codeSeq || 0) + 1);
             const limit = limitMs + (cold ? 90000 : 0);

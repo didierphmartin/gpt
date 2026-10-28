@@ -36,6 +36,7 @@ final class CodeNodeExecutor
             'source' => $data['source'], 'exits' => $data['exits'], 'timeout_s' => $data['timeout_s'],
             'parents' => $parents, 'user_prompt' => $userPrompt, 'name' => $data['display'],
             'args' => (object) (is_array($cfgArgs = ($node['config'] ?? [])['args'] ?? null) ? $cfgArgs : []),
+            'arg_decls' => $data['arg_decls'],
             'servers' => (object) array_intersect_key($servers, array_flip($data['mcp_servers'])),
         ];
         return ['data' => $data, 'result' => $this->spawn($request, $data['timeout_s'] + self::KILL_GRACE_S)];

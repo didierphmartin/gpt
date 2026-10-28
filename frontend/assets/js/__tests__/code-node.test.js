@@ -244,11 +244,14 @@ for (const bad of [undefined, null, [], 'x', 3]) assert.deepStrictEqual(CN.nodeA
     const req = CN.runRequest({ name: 'Hand back', code: 'c', exits: ['handed_back', 'error'], mcp_servers: ['ServiceNow'],
         timeout_s: 20, args: { group: 'IT L2' } }, [{ name: 'P', text: 't' }], 'go');
     assert.deepStrictEqual(req, { code: 'c', exits: ['handed_back', 'error'], servers: ['servicenow'], timeout_s: 20,
-        parents: [{ name: 'P', text: 't' }], user_prompt: 'go', name: 'Hand back', args: { group: 'IT L2' } });
+        parents: [{ name: 'P', text: 't' }], user_prompt: 'go', name: 'Hand back', args: { group: 'IT L2' }, arg_decls: [] });
     const bare = CN.runRequest({}, [], '');
     assert.deepStrictEqual(bare.args, {});
     assert.deepStrictEqual(bare.exits, ['next']);
     assert.strictEqual(bare.timeout_s, 30);
+    assert.deepStrictEqual(bare.arg_decls, []);
+    assert.deepStrictEqual(CN.runRequest({ arg_decls: [{ name: 'a' }] }, [], '').arg_decls, [{ name: 'a' }]);
+    assert.deepStrictEqual(CN.runRequest({ arg_decls: 'x' }, [], '').arg_decls, []);
 }
 {
     const comp = { id: 12, name: 'ServiceNow: get new job', code: 'c', exits: ['job', 'no_job', 'error'], mcp_servers: ['ServiceNow'],

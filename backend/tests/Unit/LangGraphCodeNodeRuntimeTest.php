@@ -75,6 +75,25 @@ final class LangGraphCodeNodeRuntimeTest extends TestCase
         self::assertStringContainsString('res = await asyncio.to_thread(CODE_HARNESS.execute, self.source(), value,', $with);
     }
 
+    public function testPlaceholderFilledFromParentMeta(): void
+    {
+        // The emitted CodeNode.run: ARGS {"v": "{m}"} is filled from the parent output's meta before the code runs.
+        $py = "from __future__ import annotations\nimport asyncio, json, os, sys, types\nfrom abc import ABC, abstractmethod\n"
+            . "from enum import Enum\nfrom functools import cached_property\nPACKAGE_DIR = '.'\nMCP_SLUGS = {}\nMCP = None\n"
+            . LangGraphRuntime::codeHarnessBlock() . "\n" . LangGraphRuntime::nodeClassesBlock(false, true) . "\n"
+            . "node = CodeNode({'id': '2', 'kind': 'code', 'display': 'Fill', 'exits': ['next'], 'mcp_servers': [], 'timeout_s': 5,\n"
+            . "    'exit_targets': {'next': []}, 'args': {'v': '{m}'}, 'arg_decls': [{'name': 'v'}],\n"
+            . "    'source': 'def run(input, call_tool):\\n    return ARGS[\"v\"]\\n'})\n"
+            . "async def _noop(msg):\n    pass\n"
+            . "req = json.dumps({'user_prompt': '', 'parents': [{'name': 'P', 'text': json.dumps({'meta': {'m': 'V'}}), 'start': False}]})\n"
+            . "print(asyncio.run(node.run(req, _noop))['text'])\n";
+        $file = tempnam(sys_get_temp_dir(), 'cn') . '.py';
+        file_put_contents($file, $py);
+        exec('python3 ' . escapeshellarg($file) . ' 2>&1', $out, $rc);
+        self::assertSame(0, $rc, implode("\n", $out));
+        self::assertSame('V', end($out));
+    }
+
     public function testToolErrorResultTakesErrorExitInCompiledScript(): void
     {
         $block = LangGraphRuntime::codeHarnessBlock();

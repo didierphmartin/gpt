@@ -151,6 +151,19 @@ class LangGraphGeneratorCodeNodeTest extends TestCase
         self::assertStringContainsString('"args": {"folder":"To SharePoint","done_folder":"Filed"}', $this->generate($opt));
     }
 
+    /** The argument declarations are compiled in, and the node's run fills ARGS from its parents' meta. */
+    public function testNodeLiteralHasArgDeclsAndExecutePassesMeta(): void
+    {
+        $g = $this->codeGraph();
+        $g['nodes'][1]['config']['arg_decls'] = [['name' => 'folder', 'required' => true]];
+        $code = $this->generate($g);
+        self::assertStringContainsString('"arg_decls": [{"name":"folder","required":true}]', $code);
+        self::assertStringContainsString('meta=CODE_HARNESS.received_meta(', $code);
+        self::assertStringContainsString('"arg_decls": []', $this->generate($this->codeGraph()));
+        $byPath = array_column($this->generateWith($g, ['modular' => true])['files'], 'code', 'path');
+        self::assertStringContainsString('"arg_decls": [{"name":"folder","required":true}]', implode("\n", $byPath));
+    }
+
     /** The compiled script hands the arguments to run() (the same ARGS the editor and the server give it). */
     public function testTheCompiledCodeReadsItsArguments(): void
     {

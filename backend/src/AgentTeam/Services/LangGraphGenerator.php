@@ -3763,6 +3763,7 @@ TXT;
         $L[] = $indent . '    "timeout_s": ' . (int) $cd['timeout_s'] . ',';
         $L[] = $indent . '    "exit_targets": ' . $j((object) $cd['exit_targets']) . ',';
         $L[] = $indent . '    "args": ' . $j((object) ($cd['args'] ?? [])) . ',   # the code\'s ARGS';
+        $L[] = $indent . '    "arg_decls": ' . $j(array_values($cd['arg_decls'] ?? [])) . ',   # defaults and required, per argument';
         // The modular package reads the code from its file at each run (an edit takes effect on the
         // next run); the single file embeds it.
         $L[] = isset($cd['source_file'])
