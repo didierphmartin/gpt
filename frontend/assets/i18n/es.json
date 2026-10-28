@@ -892,7 +892,7 @@
       "placeholder": "Describe lo que debe hacer este nodo",
       "model": "Modelo",
       "providerDefault": "{{provider}} (modelo predeterminado)",
-      "ask": "Preguntar",
+      "ask": "Enviar",
       "thinking": "Pensando…",
       "stop": "Detener",
       "emptyRequest": "Primero describe lo que debe hacer el nodo.",
