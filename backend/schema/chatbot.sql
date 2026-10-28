@@ -331,6 +331,8 @@ CREATE TABLE `code_components` (
   `mcp_servers` json NOT NULL,
   `timeout_s` smallint UNSIGNED NOT NULL DEFAULT '30',
   `start_trigger` text,
+  `args` json DEFAULT NULL,
+  `provides` json DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

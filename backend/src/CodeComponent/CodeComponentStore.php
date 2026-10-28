@@ -16,9 +16,10 @@ use PDO;
 final class CodeComponentStore
 {
     private const NAME_MAX = 191;
-    private const COLS = 'id, name, description, code, exits, mcp_servers, timeout_s, start_trigger, updated_at';
+    private const COLS = 'id, name, description, code, exits, mcp_servers, timeout_s, start_trigger, args, provides, updated_at';
     private const LABEL_MAX = 60;
     private const PASS_ARGS_MAX = 20;
+    private const DECLS_MAX = 20;
 
     public function __construct(private readonly PDO $db) {}
 
@@ -84,10 +85,14 @@ final class CodeComponentStore
                     . implode(', ', $what) . '. Save again to confirm.', 409, $lost);
             }
         }
-        $vals = [$c['name'], $c['description'], $c['code'], json_encode($c['exits']), json_encode($c['mcp_servers']), $c['timeout_s']];
+        // absent args/provides keep the stored lists (a save from an older client must not wipe them)
+        $args = $c['args'] ?? $before['args'] ?? [];
+        $provides = $c['provides'] ?? $before['provides'] ?? [];
+        $vals = [$c['name'], $c['description'], $c['code'], json_encode($c['exits']), json_encode($c['mcp_servers']), $c['timeout_s'],
+            json_encode($args), json_encode($provides)];
         if ($id === null) {
-            $this->db->prepare('INSERT INTO code_components (user_id, name, description, code, exits, mcp_servers, timeout_s, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)')->execute([$userId, ...$vals]);
+            $this->db->prepare('INSERT INTO code_components (user_id, name, description, code, exits, mcp_servers, timeout_s, args, provides, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)')->execute([$userId, ...$vals]);
             $id = (int) $this->db->lastInsertId();
         } else {
             $outer = !$this->db->inTransaction();
@@ -95,7 +100,7 @@ final class CodeComponentStore
                 $this->db->beginTransaction();
             }
             try {
-                $this->db->prepare('UPDATE code_components SET name = ?, description = ?, code = ?, exits = ?, mcp_servers = ?, timeout_s = ?,
+                $this->db->prepare('UPDATE code_components SET name = ?, description = ?, code = ?, exits = ?, mcp_servers = ?, timeout_s = ?, args = ?, provides = ?,
                     updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?')->execute([...$vals, $id, $userId]);
                 if ($before['exits'] !== $c['exits']) {
                     $this->remapExits($userId, $id, $before['exits'], $c['exits']);
@@ -440,8 +445,63 @@ final class CodeComponentStore
         if (!is_int($timeout) || $timeout < 1 || $timeout > 300) {
             $bad('timeout_s must be 1 to 300 seconds.');
         }
-        return ['name' => $name, 'description' => (string) ($d['description'] ?? ''), 'code' => $code,
+        $out = ['name' => $name, 'description' => (string) ($d['description'] ?? ''), 'code' => $code,
             'exits' => array_values($exits), 'mcp_servers' => array_values($servers), 'timeout_s' => $timeout];
+        if (array_key_exists('args', $d)) {
+            $out['args'] = self::validateDecls($d['args'], true);
+        }
+        if (array_key_exists('provides', $d)) {
+            $out['provides'] = self::validateDecls($d['provides'], false);
+        }
+        if (count($out['args'] ?? []) > self::DECLS_MAX || count($out['provides'] ?? []) > self::DECLS_MAX) {
+            $bad('At most ' . self::DECLS_MAX . ' arguments and ' . self::DECLS_MAX . ' provided names.');
+        }
+        return $out;
+    }
+
+    /**
+     * The arguments ({name, description?, default?, required?}) or provided names ({name, description?}) a component
+     * declares: a list of identifiers, unique, at most 20; optional keys stay as given, unknown keys are dropped.
+     */
+    private static function validateDecls(mixed $list, bool $isArgs): array
+    {
+        $bad = fn(string $why) => throw new CodeComponentError('invalid', $why, 422);
+        $what = $isArgs ? 'args must be a list of {name, description, default, required}.'
+            : 'provides must be a list of {name, description}.';
+        if (!is_array($list) || !array_is_list($list)) {
+            $bad($what);
+        }
+        if (count($list) > self::DECLS_MAX) {
+            $bad('At most ' . self::DECLS_MAX . ' arguments and ' . self::DECLS_MAX . ' provided names.');
+        }
+        $out = [];
+        $seen = [];
+        foreach ($list as $d) {
+            if (!is_array($d) || array_is_list($d) && $d !== []) {
+                $bad($what);
+            }
+            $n = $d['name'] ?? null;
+            if (!is_string($n) || !preg_match('/^[A-Za-z_]\w*$/', $n)) {
+                $bad('Argument and provided names are letters, digits and _, not starting with a digit (got ' . json_encode($n) . ').');
+            }
+            if (isset($seen[$n])) {
+                $bad(($isArgs ? 'Argument' : 'Provided name') . " \"{$n}\" is listed twice.");
+            }
+            $seen[$n] = true;
+            $e = ['name' => $n];
+            foreach ($isArgs ? ['description', 'default'] : ['description'] as $k) {
+                if (array_key_exists($k, $d)) {
+                    is_string($d[$k]) || $bad($what);
+                    $e[$k] = $d[$k];
+                }
+            }
+            if ($isArgs && array_key_exists('required', $d)) {
+                is_bool($d['required']) || $bad($what);
+                $e['required'] = $d['required'];
+            }
+            $out[] = $e;
+        }
+        return $out;
     }
 
     /**
@@ -487,6 +547,8 @@ final class CodeComponentStore
             'code' => (string) $r['code'], 'exits' => json_decode((string) $r['exits'], true) ?: [],
             'mcp_servers' => json_decode((string) $r['mcp_servers'], true) ?: [], 'timeout_s' => (int) $r['timeout_s'],
             'start_trigger' => ($r['start_trigger'] ?? null) ? json_decode((string) $r['start_trigger'], true) : null,
+            'args' => json_decode((string) ($r['args'] ?? ''), true) ?: [],
+            'provides' => json_decode((string) ($r['provides'] ?? ''), true) ?: [],
             'updated_at' => $r['updated_at']];
     }
 }

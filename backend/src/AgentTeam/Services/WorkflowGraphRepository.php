@@ -96,11 +96,12 @@ class WorkflowGraphRepository
                 continue;
             }
             $c = $codeStore->get($ownerId(), (int) $cfg['code_component_id']);
-            unset($cfg['code'], $cfg['exits'], $cfg['mcp_servers'], $cfg['timeout_s'], $cfg['code_component_missing']);
+            unset($cfg['code'], $cfg['exits'], $cfg['mcp_servers'], $cfg['timeout_s'], $cfg['arg_decls'], $cfg['provides'], $cfg['code_component_missing']);
             if ($c === null) {
                 $cfg['code_component_missing'] = true;
             } else {
-                $cfg += ['code' => $c['code'], 'exits' => $c['exits'], 'mcp_servers' => $c['mcp_servers'], 'timeout_s' => $c['timeout_s']];
+                $cfg += ['code' => $c['code'], 'exits' => $c['exits'], 'mcp_servers' => $c['mcp_servers'], 'timeout_s' => $c['timeout_s'],
+                    'arg_decls' => $c['args'], 'provides' => $c['provides']];
             }
             $row['config'] = $cfg;
         }
@@ -188,7 +189,7 @@ class WorkflowGraphRepository
         }
         // A linked code node stores only the link; its body and the missing flag are derived on read.
         if ($nodeType === 'code' && isset($config['code_component_id'])) {
-            unset($config['code'], $config['exits'], $config['mcp_servers'], $config['timeout_s'], $config['code_component_missing']);
+            unset($config['code'], $config['exits'], $config['mcp_servers'], $config['timeout_s'], $config['arg_decls'], $config['provides'], $config['code_component_missing']);
         }
         // A Start on a Start option stores only the option; its exits, label and missing flag are derived on read.
         if ($nodeType === 'start') {
@@ -244,7 +245,7 @@ class WorkflowGraphRepository
         }
         // A linked code node stores only the link; its body and the missing flag are derived on read.
         if ($nodeType === 'code' && isset($config['code_component_id'])) {
-            unset($config['code'], $config['exits'], $config['mcp_servers'], $config['timeout_s'], $config['code_component_missing']);
+            unset($config['code'], $config['exits'], $config['mcp_servers'], $config['timeout_s'], $config['arg_decls'], $config['provides'], $config['code_component_missing']);
         }
         // A Start on a Start option stores only the option; its exits, label and missing flag are derived on read.
         if ($nodeType === 'start') {

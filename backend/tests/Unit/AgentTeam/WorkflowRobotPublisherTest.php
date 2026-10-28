@@ -142,6 +142,17 @@ final class WorkflowRobotPublisherTest extends TestCase
         $this->assertSame($this->src['To PDF'], $this->config(self::WF, 'code', 'PDF')['code_component_id']);
     }
 
+    public function testRobotCopyKeepsDeclarations(): void
+    {
+        $args = [['name' => 'folder', 'description' => 'd', 'required' => true], ['name' => 'sub', 'default' => '{received}']];
+        $src = $this->store->get(self::OWNER, $this->src['To PDF']);
+        $this->store->save(self::OWNER, $src['id'], ['args' => $args, 'provides' => [['name' => 'from']]] + $src);
+        $this->publish();
+        $mine = $this->store->getByName($this->robot, 'To PDF');
+        $this->assertSame($args, $mine['args']);
+        $this->assertSame([['name' => 'from']], $mine['provides']);
+    }
+
     public function test_republish_updates_in_place_and_remaps_components(): void
     {
         $old = $this->store->save($this->robot, null, ['name' => 'To PDF', 'code' => 'robot old', 'exits' => ['done', 'failed']]);
