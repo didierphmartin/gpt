@@ -66,6 +66,18 @@ def test_config_args_reach_the_code_as_the_args_global():
     assert out['result']['output_text'] == '{}'
 
 
+def test_request_carries_arg_decls():
+    # The declared default reaches ARGS only when the request carries arg_decls; the parent's meta fills {m}.
+    code = "def run(input, call_tool):\n    return {'route': 'a', 'output': [ARGS['folder'], ARGS['v']]}\n"
+    node = _node(code)
+    node['config']['args'] = {'folder': '', 'v': 'x/{m}'}
+    node['config']['arg_decls'] = [{'name': 'folder', 'default': 'Inbox', 'required': True}, {'name': 'v'}]
+    out = _exec().run(node, [], [2], '3', [{'name': 'P', 'text': '{"meta":{"m":"V"}}'}], '')
+    _assert_ran(out)
+    assert out['result']['output_text'] == '["Inbox", "x/V"]'
+    assert out['data']['arg_decls'] == node['config']['arg_decls']
+
+
 def test_unknown_server_is_refused_before_running():
     with pytest.raises(RuntimeError, match='is not one of your MCP servers'):
         _exec().run(_node("def run(i, c):\n    return {'route': 'a', 'output': 1}\n", ['Nope']), [], [2], '3', [], '')

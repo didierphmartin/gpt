@@ -14,6 +14,7 @@ import pytest
 from app.agent_team.services.compiled_runtime_emit import CompiledRuntimeEmit
 from app.agent_team.services.compiler_text import nooa_generator as T
 from app.agent_team.services.nooa_generator import NOOAGenerator
+from tests.unit.test_adk_code_node import code_analyzed
 from tests.unit import lg_support as S
 from tests.unit.test_lang_graph_generator_playbook import _db, _fixed_exits_graph, _from_input_graph, _robot_db
 
@@ -253,3 +254,13 @@ def test_nooa_probe_picks_the_answering_endpoint_live():
         'http://localhost/servicenow/?profile=mock&toolset=jobs',      # answers as given
         'http://localhost/servicenow/mcp?profile=mock&toolset=jobs',   # 301 as given -> the /mcp form
     ]
+
+
+def test_code_node_carries_arg_decls_and_passes_meta():
+    """A code node's CODE_NODES entry carries its argument declarations; its run fills ARGS from the parents' meta."""
+    a = code_analyzed()
+    a['code']['2']['arg_decls'] = [{'name': 'folder', 'required': True}]
+    code = NOOAGenerator.emitNooa(a)
+    assert 'meta=CODE_HARNESS.received_meta(parents)' in code
+    assert 'arg_decls=cfg.get("arg_decls")' in code
+    assert re.search(r'"arg_decls": \[\s*\{\s*"name": "folder",\s*"required": True\s*\}\s*\]', code)

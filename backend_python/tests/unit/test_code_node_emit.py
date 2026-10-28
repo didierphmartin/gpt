@@ -32,6 +32,15 @@ def test_node_data_maps_ports_to_exits():
     assert d['display'] == 'Poll'
 
 
+def test_node_data_carries_arg_decls():
+    decls = [{'name': 'folder', 'required': True}]
+    d = CodeNodeEmit.nodeData(_node({'arg_decls': decls}), [], {'servicenow': 'u'})
+    assert d['arg_decls'] == decls
+    assert CodeNodeEmit.nodeData(_node({}), [], {'servicenow': 'u'})['arg_decls'] == []
+    for bad in ('x', {'a': {'name': 'folder'}}, None):
+        assert CodeNodeEmit.nodeData(_node({'arg_decls': bad}), [], {'servicenow': 'u'})['arg_decls'] == []
+
+
 @pytest.mark.parametrize('bad', [{'exits': ['Bad']}, {'exits': ['a', 'a']}, {'exits': []}, {'mcp_servers': ['Okta']},
                                  {'mcp_servers': [5]}, {'mcp_servers': 'ServiceNow'}, {'timeout_s': 0}])
 def test_defaults_and_validation(bad):

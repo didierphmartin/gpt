@@ -93,9 +93,12 @@ class CodeNodeEmit:
         targets = CodeNodeEmit.exitTargets(nid, list(exits), rawEdges, nodeIds)
         # args: a component's settings, or a Start option's Start args (StartOptionGraph); the code reads them as ARGS.
         args = cfg.get('args') if isinstance(cfg.get('args'), (list, dict)) else []
+        # arg_decls: the linked component's argument declarations (defaults, required), applied by the harness.
+        argDecls = cfg.get('arg_decls') if isinstance(cfg.get('arg_decls'), list) else []
         return {'display': display, 'kind': 'code', 'source': php_strval(cfg.get('code') if cfg.get('code') is not None else ''),
                 'exits': list(exits), 'mcp_servers': list(slugs.keys()), 'timeout_s': timeout,
-                'exit_targets': targets, 'servers': list(servers.keys()), 'args': args}
+                'exit_targets': targets, 'servers': list(servers.keys()), 'args': args,
+                'arg_decls': argDecls}
 
     @staticmethod
     def exitTargets(nid: str, exits: list, rawEdges: list, nodeIds: list | None = None) -> dict:

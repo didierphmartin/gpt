@@ -51,6 +51,7 @@ class StartOptionGraph:
                 'config': {'type': 'code', 'name': php_strval(label if label is not None else c['name']),
                            'code_component_id': cid, 'code': c['code'], 'exits': c['exits'],
                            'mcp_servers': c['mcp_servers'], 'timeout_s': c['timeout_s'],
+                           'arg_decls': c.get('args') if c.get('args') is not None else [],
                            'start_trigger': c.get('start_trigger'),
                            'args': sa if isinstance(sa, (dict, list)) else []},
                 'pos_x': php_intval(start.get('pos_x') if start.get('pos_x') is not None else 0) + 1,

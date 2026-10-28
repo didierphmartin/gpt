@@ -16,7 +16,7 @@ from app.agent_team.services.compiled_a2a_emit import CompiledA2AEmit
 from app.agent_team.services.compiled_architecture_doc import CompiledArchitectureDoc
 from app.agent_team.services.compiled_package import CompiledPackage
 from app.agent_team.services.compiled_runtime_emit import CompiledRuntimeEmit
-from app.agent_team.services.compiler_php import PhpObj, j, json_encode, json_to_python, obj, py_str, var_export_float
+from app.agent_team.services.compiler_php import PhpObj, array_values, j, json_encode, json_to_python, obj, py_str, var_export_float
 from app.agent_team.services.compiler_text import adk_generator as T
 from app.agent_team.services.compiler_text import python_emit_helpers as T_PEH
 from app.agent_team.services.lang_graph_package import LangGraphPackage
@@ -491,6 +491,7 @@ def _agent_instruction(prompt: str, parent_keys: list):
                         + '    mcp_servers=' + json_to_python(cd['mcp_servers']) + ',\n'
                         + '    timeout_s=' + php_strval(cd['timeout_s']) + ',\n'
                         + '    args=' + json_to_python(obj(args if args is not None else [])) + ',\n'
+                        + '    arg_decls=' + json_to_python(array_values(cd.get('arg_decls'))) + ',\n'
                         + '    parents=[' + ', '.join(parents) + '],\n'
                         + ')')
         return out

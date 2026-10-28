@@ -73,6 +73,22 @@ def test_code_nodes_are_checked_at_startup():
     assert 'res = await asyncio.to_thread(CODE_HARNESS.execute, self.source(), value,' in with_
 
 
+def test_placeholder_filled_from_parent_meta():
+    # The emitted CodeNode.run: ARGS {"v": "{m}"} is filled from the parent output's meta before the code runs.
+    py = ("from __future__ import annotations\nimport asyncio, json, os, sys, types\nfrom abc import ABC, abstractmethod\n"
+          "from enum import Enum\nfrom functools import cached_property\nPACKAGE_DIR = '.'\nMCP_SLUGS = {}\nMCP = None\n"
+          + LangGraphRuntime.codeHarnessBlock() + "\n" + LangGraphRuntime.nodeClassesBlock(False, True) + "\n"
+          + "node = CodeNode({'id': '2', 'kind': 'code', 'display': 'Fill', 'exits': ['next'], 'mcp_servers': [], 'timeout_s': 5,\n"
+          + "    'exit_targets': {'next': []}, 'args': {'v': '{m}'}, 'arg_decls': [{'name': 'v'}],\n"
+          + "    'source': 'def run(input, call_tool):\\n    return ARGS[\"v\"]\\n'})\n"
+          + "async def _noop(msg):\n    pass\n"
+          + "req = json.dumps({'user_prompt': '', 'parents': [{'name': 'P', 'text': json.dumps({'meta': {'m': 'V'}}), 'start': False}]})\n"
+          + "print(asyncio.run(node.run(req, _noop))['text'])\n")
+    rc, out = _run(py)
+    assert rc == 0, '\n'.join(out)
+    assert out[-1] == 'V'
+
+
 def test_tool_error_result_takes_error_exit_in_compiled_script():
     block = LangGraphRuntime.codeHarnessBlock()
     py = ("import json, sys, types\nMCP_SLUGS = {'s': 'http://x/mcp'}\nclass _M:\n"

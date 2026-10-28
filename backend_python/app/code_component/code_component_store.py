@@ -20,6 +20,8 @@ from app.support.phpjson import php_json_decode, php_json_encode
 
 _PORT = re.compile(r'^output_(\d+)$')
 _PASS_ARG = re.compile(r'^[A-Za-z_]\w*$', re.ASCII)
+# An argument or provided name: an identifier, matched whole (no trailing-newline loophole).
+_DECL_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
 
 
 def _in_tx(db) -> bool:
@@ -46,9 +48,10 @@ def _unique_key(v):
 
 class CodeComponentStore:
     NAME_MAX = 191
-    COLS = 'id, name, description, code, exits, mcp_servers, timeout_s, start_trigger, updated_at'
+    COLS = 'id, name, description, code, exits, mcp_servers, timeout_s, start_trigger, args, provides, updated_at'
     LABEL_MAX = 60
     PASS_ARGS_MAX = 20
+    DECLS_MAX = 20
 
     def __init__(self, db):
         self.db = db
@@ -94,16 +97,20 @@ class CodeComponentStore:
                 what = [f'"{l["exit"]}" on {l["node_name"]} in "{l["workflow_name"]}"' for l in lost]
                 raise CodeComponentError('links_dropped', 'Removing these exits removes the links on '
                                          + ', '.join(what) + '. Save again to confirm.', 409, lost)
-        vals = [c['name'], c['description'], c['code'], php_json_encode(c['exits']), php_json_encode(c['mcp_servers']), c['timeout_s']]
+        # absent args/provides keep the stored lists (a save from an older client must not wipe them)
+        args = c['args'] if 'args' in c else (before['args'] if before is not None else [])
+        provides = c['provides'] if 'provides' in c else (before['provides'] if before is not None else [])
+        vals = [c['name'], c['description'], c['code'], php_json_encode(c['exits']), php_json_encode(c['mcp_servers']), c['timeout_s'],
+                php_json_encode(args), php_json_encode(provides)]
         if id is None:
-            id = int(self.db.insert('INSERT INTO code_components (user_id, name, description, code, exits, mcp_servers, timeout_s, created_at, updated_at)\n'
-                                    '                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)', [userId, *vals]))
+            id = int(self.db.insert('INSERT INTO code_components (user_id, name, description, code, exits, mcp_servers, timeout_s, args, provides, created_at, updated_at)\n'
+                                    '                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)', [userId, *vals]))
         else:
             outer = not _in_tx(self.db)
             if outer:
                 self.db.begin()
             try:
-                self.db.execute('UPDATE code_components SET name = ?, description = ?, code = ?, exits = ?, mcp_servers = ?, timeout_s = ?,\n'
+                self.db.execute('UPDATE code_components SET name = ?, description = ?, code = ?, exits = ?, mcp_servers = ?, timeout_s = ?, args = ?, provides = ?,\n'
                                 '                    updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?', [*vals, id, userId])
                 if before['exits'] != c['exits']:
                     self._remapExits(userId, id, before['exits'], c['exits'])
@@ -369,8 +376,54 @@ class CodeComponentStore:
         if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout < 1 or timeout > 300:
             bad('timeout_s must be 1 to 300 seconds.')
         desc = d.get('description')
-        return {'name': name, 'description': php_strval(desc if desc is not None else ''), 'code': code,
-                'exits': list(exits), 'mcp_servers': list(servers), 'timeout_s': timeout}
+        out = {'name': name, 'description': php_strval(desc if desc is not None else ''), 'code': code,
+               'exits': list(exits), 'mcp_servers': list(servers), 'timeout_s': timeout}
+        if 'args' in d:
+            out['args'] = cls._validateDecls(d['args'], True)
+        if 'provides' in d:
+            out['provides'] = cls._validateDecls(d['provides'], False)
+        return out
+
+    @classmethod
+    def _validateDecls(cls, items, isArgs: bool) -> list[dict]:
+        """The arguments ({name, description?, default?, required?}) or provided names ({name, description?}) a component
+        declares: a list of identifiers, unique, at most 20; optional keys stay as given, unknown keys are dropped."""
+        def bad(why: str):
+            raise CodeComponentError('invalid', why, 422)
+        what = ('args must be a list of {name, description, default, required}.' if isArgs
+                else 'provides must be a list of {name, description}.')
+        if items == {}:   # PHP decodes an empty JSON object to [] too
+            items = []
+        if not isinstance(items, list):
+            bad(what)
+        if len(items) > cls.DECLS_MAX:
+            bad(f'At most {cls.DECLS_MAX} arguments and {cls.DECLS_MAX} provided names.')
+        out = []
+        seen = set()
+        for e in items:
+            if e == []:   # an empty JSON list is PHP's empty array: on to the name check
+                e = {}
+            if not isinstance(e, dict):
+                bad(what)
+            n = e.get('name')
+            if not isinstance(n, str) or not _DECL_NAME.fullmatch(n):
+                bad('Argument and provided names are letters, digits and _, not starting with a digit (got '
+                    + php_json_encode(n) + ').')
+            if n in seen:
+                bad(('Argument' if isArgs else 'Provided name') + f' "{n}" is listed twice.')
+            seen.add(n)
+            decl = {'name': n}
+            for k in (('description', 'default') if isArgs else ('description',)):
+                if k in e:
+                    if not isinstance(e[k], str):
+                        bad(what)
+                    decl[k] = e[k]
+            if isArgs and 'required' in e:
+                if not isinstance(e['required'], bool):
+                    bad(what)
+                decl['required'] = e['required']
+            out.append(decl)
+        return out
 
     @classmethod
     def _validateStartTrigger(cls, c: dict, t: dict) -> dict:
@@ -414,4 +467,6 @@ class CodeComponentStore:
                 'code': php_strval(r['code']), 'exits': php_json_decode(php_strval(r['exits'])) or [],
                 'mcp_servers': php_json_decode(php_strval(r['mcp_servers'])) or [], 'timeout_s': php_intval(r['timeout_s']),
                 'start_trigger': php_json_decode(php_strval(st)) if php_strval(st if st is not None else '') not in ('', '0') else None,
+                'args': _decode(r.get('args')) or [],
+                'provides': _decode(r.get('provides')) or [],
                 'updated_at': r['updated_at']}

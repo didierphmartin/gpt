@@ -17,7 +17,7 @@ import re
 
 from app.agent_team.services.code_node_emit import CodeNodeEmit
 from app.agent_team.services.compiler_php import (
-    PhpObj, j, json_decode_obj, json_to_python, obj, py_str, var_export_float,
+    PhpObj, array_values, j, json_decode_obj, json_to_python, obj, py_str, var_export_float,
 )
 from app.agent_team.services.compiler_text import lang_graph_generator as T
 from app.agent_team.services.compiler_text.llm_factory_lines import LLM_FACTORY_LINES
@@ -1164,7 +1164,8 @@ class LangGraphGenerator(LangGraphLayouts):
              indent + '    "mcp_servers": ' + j(cd['mcp_servers']) + ',',
              indent + '    "timeout_s": ' + str(php_intval(cd['timeout_s'])) + ',',
              indent + '    "exit_targets": ' + j(obj(cd['exit_targets'])) + ',',
-             indent + '    "args": ' + j(obj(_first(cd.get('args'), []))) + ",   # the code's ARGS"]
+             indent + '    "args": ' + j(obj(_first(cd.get('args'), []))) + ",   # the code's ARGS",
+             indent + '    "arg_decls": ' + j(array_values(cd.get('arg_decls'))) + ',   # defaults and required, per argument']
         # The modular package reads the code from its file at each run; the single file embeds it.
         L.append(indent + '    "source_file": ' + j(cd['source_file']) + ',   # relative to the package folder'
                  if 'source_file' in cd else indent + '    "source": ' + j(cd['source']) + ',')

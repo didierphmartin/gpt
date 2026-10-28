@@ -38,6 +38,13 @@ def obj(value) -> PhpObj:
     return PhpObj() if value is None else PhpObj({'scalar': value})
 
 
+def array_values(value) -> list:
+    """PHP ``array_values($value ?? [])``: a list as is, a keyed array's values in order."""
+    if value is None:
+        return []
+    return list(value.values()) if isinstance(value, dict) else list(value)
+
+
 def is_list_like(d: dict) -> bool:
     """A PHP array json_encode() writes as a list: keys 0..n-1 in order."""
     for i, k in enumerate(d):

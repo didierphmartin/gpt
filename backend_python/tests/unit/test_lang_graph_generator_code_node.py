@@ -116,6 +116,18 @@ def test_arguments_are_compiled_in():
     assert '"args": {"folder":"To SharePoint","done_folder":"Filed"}' in _generate(opt)
 
 
+def test_node_literal_has_arg_decls_and_execute_passes_meta():
+    """The argument declarations are compiled in, and the node's run fills ARGS from its parents' meta."""
+    g = _code_graph()
+    g['nodes'][1]['config']['arg_decls'] = [{'name': 'folder', 'required': True}]
+    code = _generate(g)
+    assert '"arg_decls": [{"name":"folder","required":true}]' in code
+    assert 'meta=CODE_HARNESS.received_meta(' in code
+    assert '"arg_decls": []' in _generate(_code_graph())
+    byPath = S.files_of(_generate_with(g, {'modular': True}))
+    assert '"arg_decls": [{"name":"folder","required":true}]' in '\n'.join(byPath.values())
+
+
 def _run_once(code: str) -> tuple:
     venv = S.venv()
     d = tempfile.mkdtemp(prefix='lgout')
