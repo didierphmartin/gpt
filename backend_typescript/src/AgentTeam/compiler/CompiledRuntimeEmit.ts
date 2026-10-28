@@ -719,7 +719,7 @@ if __name__ == "__main__":
         return isset(analyzed, 'agents', cid) || isset(analyzed, 'code', cid);
     }
 
-    /** CODE_NODES = {id: {display, exits, mcp_servers, timeout_s, exit_targets, args, source | source_file}}. */
+    /** CODE_NODES = {id: {display, exits, mcp_servers, timeout_s, exit_targets, args, arg_decls, source | source_file}}. */
     /** Each code node's CODE_NODES entry as a Python dict literal, by node id (agents in separate files). */
     static codeNodeLiterals(analyzed: any): any {
         const out: any = oarr();
@@ -729,14 +729,14 @@ if __name__ == "__main__":
         return out;
     }
 
-    /** One CODE_NODES entry: display, exits, MCP servers, timeout, exit targets, arguments, the code or its file. */
+    /** One CODE_NODES entry: display, exits, MCP servers, timeout, exit targets, arguments and their declarations, the code or its file. */
     private static codeNodeEntry(analyzed: any, id: string, cd: any): any {
         const exitTargets: any = oarr();
         for (const [x, ids] of entries(cd['exit_targets'])) exitTargets[x] = values(ids).map((v) => strval(v));
         const entry: any = { display: cd['display'], exits: cd['exits'], mcp_servers: cd['mcp_servers'],
             timeout_s: cd['timeout_s'],
             exit_targets: toObject(exitTargets),
-            args: toObject(dig(cd, 'args') ?? []) };
+            args: toObject(dig(cd, 'args') ?? []), arg_decls: values(dig(cd, 'arg_decls') ?? []) };
         if (truthy(dig(analyzed, 'package'))) {
             entry['source_file'] = CompiledPackage.codePath(analyzed, id);   // code/<file>, read at each run
         } else {

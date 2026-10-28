@@ -57,6 +57,7 @@ export class CodeNodeExecutor {
       parents, user_prompt: userPrompt, name: data.display,
       // (object) in PHP: a list becomes {"0": ...}, an empty one {}.
       args: cfgArgs !== null && typeof cfgArgs === 'object' ? { ...cfgArgs } : {},
+      arg_decls: data.arg_decls,
       servers: picked,
     };
     return { data, result: await this.spawn(request, data.timeout_s + KILL_GRACE_S) };

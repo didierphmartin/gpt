@@ -3567,6 +3567,7 @@ once instead of copied per node.`;
         L.push(indent + '    "timeout_s": ' + intval(cd['timeout_s']) + ',');
         L.push(indent + '    "exit_targets": ' + j(toObject(cd['exit_targets'])) + ',');
         L.push(indent + '    "args": ' + j(toObject((cd['args'] ?? []))) + ',   # the code\'s ARGS');
+        L.push(indent + '    "arg_decls": ' + j(values(cd['arg_decls'] ?? [])) + ',   # defaults and required, per argument');
         // The modular package reads the code from its file at each run (an edit takes effect on the
         // next run); the single file embeds it.
         L.push(((cd?.['source_file']) != null)

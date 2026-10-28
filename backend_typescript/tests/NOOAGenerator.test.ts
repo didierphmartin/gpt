@@ -23,6 +23,7 @@ import { preg_quote, values } from '../src/AgentTeam/compiler/php';
 import { CompiledRuntimeEmit } from '../src/AgentTeam/compiler/CompiledRuntimeEmit';
 import { WorkflowView } from '../src/AgentTeam/compiler/WorkflowView';
 import { NOOAGenerator } from '../src/AgentTeam/NOOAGenerator';
+import { codeAnalyzed } from './support/adkAnalyses';
 
 const PHP_SKIP = phpSkipReason() || undefined;
 const PY_SKIP = spawnSync('python3', ['--version']).status === 0 ? undefined : 'python3 not on PATH';
@@ -465,3 +466,12 @@ test('testNooaProbePicksTheAnsweringEndpointLive', { skip: liveSkipReason() }, (
   ]);
 });
 
+/** A code node's CODE_NODES entry carries its argument declarations; its run fills ARGS from the parents' meta. */
+test('testCodeNodeCarriesArgDeclsAndPassesMeta', () => {
+  const a = codeAnalyzed();
+  a.code['2'].arg_decls = [{ name: 'folder', required: true }];
+  const code = NOOAGenerator.emitNooa(a);
+  assert.ok(code.includes('meta=CODE_HARNESS.received_meta(parents)'));
+  assert.ok(code.includes('arg_decls=cfg.get("arg_decls")'));
+  assert.match(code, /"arg_decls": \[\s*\{\s*"name": "folder",\s*"required": True\s*\}\s*\]/);
+});

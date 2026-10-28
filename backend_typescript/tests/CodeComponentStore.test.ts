@@ -105,6 +105,63 @@ test('store: used-by and the delete guard', async () => {
   assert.equal(await store.get(3, id), null);
 });
 
+const ARGS = [{ name: 'folder', description: 'd', required: true }, { name: 'subfolder', default: '{received}' }];
+
+test('store: testSaveAndReadArgsProvides', async () => {
+  const row = await store.save(3, null, { ...POLL, args: ARGS, provides: [{ name: 'from' }] });
+  assert.deepEqual(row.args, ARGS);
+  assert.deepEqual(row.provides, [{ name: 'from' }]);
+  assert.deepEqual((await store.get(3, row.id))!.args, ARGS);
+  assert.deepEqual((await store.list(3))[0].args, ARGS);
+});
+
+test('store: testUpdateWithoutArgsKeepsThem', async () => {
+  const id = (await store.save(3, null, { ...POLL, args: ARGS, provides: [{ name: 'from' }] })).id;
+  let row = await store.save(3, id, { ...POLL, description: 'changed' });
+  assert.deepEqual(row.args, ARGS);
+  assert.deepEqual(row.provides, [{ name: 'from' }]);
+  row = await store.save(3, id, { ...POLL, args: [], provides: [] });
+  assert.deepEqual(row.args, []);
+  assert.deepEqual(row.provides, []);
+});
+
+test('store: testNullColumnsReadAsEmptyLists', async () => {
+  const id = (await store.save(3, null, POLL)).id;
+  d.exec('UPDATE code_components SET args = NULL, provides = NULL');
+  const row = (await store.get(3, id))!;
+  assert.deepEqual(row.args, []);
+  assert.deepEqual(row.provides, []);
+});
+
+test('store: testRejectsBadArgs', async () => {
+  const badArgs: Record<string, Record<string, any>> = {
+    'digit first': { args: [{ name: '1x' }] },
+    'duplicate arg': { args: [{ name: 'a' }, { name: 'a' }] },
+    'duplicate provided': { provides: [{ name: 'a' }, { name: 'a' }] },
+    'required not bool': { args: [{ name: 'a', required: 'yes' }] },
+    'default not string': { args: [{ name: 'a', default: 3 }] },
+    'description not string': { provides: [{ name: 'a', description: 3 }] },
+    'too many': { args: Array.from({ length: 21 }, (_, i) => ({ name: `a${i + 1}` })) },
+    'not a list': { args: 'x' },
+    'entry not an object': { provides: ['x'] },
+    // the corrected name rule: no trailing-newline loophole
+    'trailing newline': { args: [{ name: 'a\n' }] },
+  };
+  for (const [label, extra] of Object.entries(badArgs)) {
+    const e = await error(() => store.save(3, null, { ...POLL, ...extra }));
+    assert.equal(e.kind, 'invalid', label);
+    assert.equal(e.status, 422, label);
+  }
+});
+
+test('store: testBadArgsMessages', async () => {
+  const m = async (x: Record<string, any>) => (await error(() => store.save(3, null, { ...POLL, ...x }))).message;
+  assert.equal(await m({ args: [{ name: '1x' }] }), 'Argument and provided names are letters, digits and _, not starting with a digit (got "1x").');
+  assert.equal(await m({ args: [{ name: 'a' }, { name: 'a' }] }), 'Argument "a" is listed twice.');
+  assert.equal(await m({ provides: [{ name: 'a' }, { name: 'a' }] }), 'Provided name "a" is listed twice.');
+  assert.equal(await m({ args: 'x' }), 'args must be a list of {name, description, default, required}.');
+});
+
 // ---------------- CodeComponentExitRemapTest ----------------
 
 async function remapSetup(): Promise<number> {

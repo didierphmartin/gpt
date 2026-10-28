@@ -244,3 +244,15 @@ test('testABranchNotTakenIsNotAParentOfTheOutput', { skip: noVenv, timeout: 1800
   assert.equal(rc, 0, text);
   assert.match(text, /FINAL OUTPUT\n=+\nNO MAIL\n/);
 });
+
+/** The argument declarations are compiled in, and the node's run fills ARGS from its parents' meta. */
+test('testNodeLiteralHasArgDeclsAndExecutePassesMeta', async () => {
+  const g = codeGraph();
+  g.nodes[1].config.arg_decls = [{ name: 'folder', required: true }];
+  const code = await generate(g);
+  assert.ok(code.includes('"arg_decls": [{"name":"folder","required":true}]'));
+  assert.ok(code.includes('meta=CODE_HARNESS.received_meta('));
+  assert.ok((await generate(codeGraph())).includes('"arg_decls": []'));
+  const byPath = lgFiles(await generateWith(g, { modular: true }));
+  assert.ok(Object.values(byPath).join('\n').includes('"arg_decls": [{"name":"folder","required":true}]'));
+});

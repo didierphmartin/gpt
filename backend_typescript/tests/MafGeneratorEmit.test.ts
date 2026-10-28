@@ -9,6 +9,7 @@ import { MAFGenerator } from '../src/AgentTeam/MAFGenerator';
 import { phpSkipReason } from './support/phpCompiler';
 import { asPhpArg, cmpBatch } from './support/phpCmp';
 import { emitAnalyzed, withMcp } from './support/mafAnalyses';
+import { codeAnalyzed } from './support/adkAnalyses';
 
 const NO_PHP = phpSkipReason() || false;
 
@@ -145,4 +146,14 @@ test('emitMaf and skillRunnerBlockForTest are byte-identical to PHP on every var
     assert.equal(unstamp(emit(vs[n])), unstamp(php[i].result), `${n}: emitMaf differs from PHP`);
   });
   assert.equal(MAFGenerator.skillRunnerBlockForTest(), php[names.length].result);
+});
+
+/** A code node's CODE_NODES entry carries its argument declarations; its run fills ARGS from the parents' meta. */
+test('testCodeNodeCarriesArgDeclsAndPassesMeta', () => {
+  const a = codeAnalyzed();
+  a.code['2'].arg_decls = [{ name: 'folder', required: true }];
+  const code = MAFGenerator.emitMaf(a);
+  assert.ok(code.includes('meta=CODE_HARNESS.received_meta(parents)'));
+  assert.ok(code.includes('arg_decls=cfg.get("arg_decls")'));
+  assert.match(code, /"arg_decls": \[\s*\{\s*"name": "folder",\s*"required": True\s*\}\s*\]/);
 });
