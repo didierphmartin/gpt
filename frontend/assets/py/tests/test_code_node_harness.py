@@ -329,6 +329,12 @@ class ArgsAndMetaTest(unittest.TestCase):
     def test_missing_placeholder_fails_without_error_exit(self):
         r = run(ECHO, {}, ["next"], args={"v": "{x}"}, meta={})
         self.assertFalse(r["ok"])
+        self.assertTrue(r["error"].startswith("ArgumentError: placeholder {x} has no value"))
+
+    def test_non_dict_own_meta_left_untouched(self):
+        for m in (None, {"a": "1"}):
+            r = run("def run(i, c):\n    return {'meta': 'x'}\n", {}, ["next"], meta=m)
+            self.assertEqual(r["output_text"], json.dumps({"meta": "x"}))
 
     def test_meta_carried_through_plain_output(self):
         r = run("def run(i, c):\n    return {'files': []}\n", {}, ["next"], meta={"from": "a"})

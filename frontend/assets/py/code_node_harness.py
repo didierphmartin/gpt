@@ -237,7 +237,10 @@ def execute(source: str, input, exits: list, servers: list, transport, timeout_s
 
     def carry(output):
         if isinstance(output, dict):
-            merged = {**(meta or {}), **(output.get("meta") or {})}
+            own = output.get("meta")
+            if own is not None and not isinstance(own, dict):
+                return output
+            merged = {**(meta or {}), **(own or {})}
             if merged:
                 return {**output, "meta": merged}
         return output
