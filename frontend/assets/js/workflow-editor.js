@@ -9697,7 +9697,7 @@ class WorkflowEditor {
                 <div class="storage-config-header"><h3>⚙️ ${this.escapeHtml(node ? this.t('codeLibrary.nodeTitle') : this.t('codeLibrary.componentTitle'))}</h3><button class="storage-config-close" data-act="close">×</button></div>
                 <div data-f="link" class="text-xs text-gray-600" style="padding:4px 16px;display:none;"></div>
                 <div class="flex border-b border-gray-200" style="padding:0 16px;">
-                    ${tab('settings', 'Settings')}${tab('code', 'Code')}${tab('servers', 'MCP Servers')}${tab('tools', 'Tools')}${tab('input', 'Input')}${tab('output', 'Output')}${tab('logs', 'Logs')}
+                    ${tab('settings', 'Settings')}${node ? tab('args', 'Arguments') : ''}${tab('code', 'Code')}${tab('servers', 'MCP Servers')}${tab('tools', 'Tools')}${tab('input', 'Input')}${tab('output', 'Output')}${tab('logs', 'Logs')}
                 </div>
                 <div class="storage-config-body" style="overflow:auto;flex:1;">
                     ${pane('settings', `<div class="storage-config-grid">
@@ -9716,6 +9716,7 @@ class WorkflowEditor {
                     ${pane('servers', `<p class="text-xs text-gray-500" style="margin:0 0 8px;">The code calls a checked server's tools with
                         <code>call_tool("&lt;server&gt;", "&lt;tool&gt;", {...})</code>; the server is written as shown in grey.</p>
                         <div data-f="servers"><p class="text-sm text-gray-400 italic">…</p></div>`)}
+                    ${pane('args', '<div data-f="args"></div>')}
                     ${pane('tools', '<div data-f="tools"></div>')}
                     ${pane('input', pre('input'))}
                     ${pane('output', pre('output'))}
@@ -9880,9 +9881,37 @@ class WorkflowEditor {
                 if (!keep.has(name)) { box.el.remove(); connectBoxes.delete(name); }
             }
         };
+        // Arguments: one field per ARGS key the code reads (the Start form's StartOptions.argFields), this node's
+        // own values (its args); an empty field is dropped, so the code's default applies. Nodes only: a
+        // component's arguments belong to each node that uses it.
+        const SO = window.StartOptions;
+        let argValues = { ...(d.args && typeof d.args === 'object' && !Array.isArray(d.args) ? d.args : {}) };
+        let argFields = [];
+        const renderArgs = () => {
+            if (!node) return;
+            argFields.forEach(({ name }) => {
+                const i = f('args').querySelector(`[data-arg="${CSS.escape(name)}"]`);
+                if (i) argValues[name] = i.value;
+            });
+            argFields = SO.argFields(f('code').value);
+            const esc = (v) => this.escapeHtml(String(v ?? ''));
+            f('args').innerHTML = argFields.length ? `<p class="text-xs text-gray-500" style="margin:0 0 8px;">The values this node's code reads with
+                <code>ARGS.get(...)</code>. Empty: the code's default applies.</p>
+                <div class="storage-config-grid">${argFields.map(({ name }) => `<div class="storage-config-folder full">
+                    <label>${esc(name)}</label><input type="text" data-arg="${esc(name)}"></div>`).join('')}</div>`
+                : '<p class="text-sm text-gray-400 italic">This code reads no arguments.</p>';
+            for (const { name, default: dflt } of argFields) {
+                const i = f('args').querySelector(`[data-arg="${CSS.escape(name)}"]`);
+                i.value = argValues[name] ?? '';
+                i.placeholder = dflt;
+            }
+        };
+        renderArgs();
+        const readArgs = () => SO.startArgs(d.args, argFields, Object.fromEntries(argFields.map(({ name }) =>
+            [name, f('args').querySelector(`[data-arg="${CSS.escape(name)}"]`)?.value ?? ''])));
         // The template call's arguments as fields (CodeNode.callTemplate): shown when the code makes that call.
         const callArgs = this._wireCallArgs(f('callargs'), () => f('code').value, (code) => { f('code').value = code; });
-        f('code').addEventListener('change', () => callArgs.refresh());
+        f('code').addEventListener('change', () => { callArgs.refresh(); renderArgs(); });
         callArgs.refresh();
         (async () => {
             // Fresh on every open: a server added in Settings since the page loaded must show here.
@@ -9944,6 +9973,7 @@ class WorkflowEditor {
             exits: CN.parseExits(f('exits').value),   // empty: the default, the output goes to the next node
             mcp_servers: [...checked],
             timeout_s: Math.trunc(Number(f('timeout').value)),
+            ...(node ? { args: readArgs() } : {}),
         });
         f('code').addEventListener('keydown', (ev) => {
             if (ev.key !== 'Tab') return;
@@ -9978,7 +10008,7 @@ class WorkflowEditor {
                 try {
                     const row = (await CC.api().create(CC.componentBody(cfg, { name, description: clash?.description || '' }))).data;
                     CC.cache.put(row);
-                    this._applyCodeNodeConfig(nodeId, { ...CC.linkedNodeConfig(row, cfg.name), disabled: !!node.data.disabled });
+                    this._applyCodeNodeConfig(nodeId, { ...CC.linkedNodeConfig(row, cfg.name), disabled: !!node.data.disabled, args: cfg.args });
                     this._refreshLinkedCodeNodes(row);
                     overlay.remove();
                     // The component is already saved: store the node's link now too, or a reload before
@@ -10020,7 +10050,10 @@ class WorkflowEditor {
                     row = (await CC.api().update(comp.id, { ...body, confirm_drop_links: true })).data;
                 }
                 CC.cache.put(row);
-                if (node) this.editor.updateNodeDataFromId(nodeId, { ...node.data, name: cfg.name });
+                if (node) {
+                    this.editor.updateNodeDataFromId(nodeId, { ...node.data, name: cfg.name, args: cfg.args });
+                    this._workflowDirty = true;
+                }
                 this._refreshLinkedCodeNodes(row);
                 window.codeLibrary?.loadTree?.();
                 overlay.remove();
