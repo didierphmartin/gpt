@@ -15607,6 +15607,9 @@ class WorkflowEditor {
             if (!modal.isConnected) return;
             const r = modal.getBoundingClientRect();
             if (r.width < 1 || r.height < 1) return;
+            // Mid-animation (the modalSlideIn open starts at scale(0.95)) the measured rect is the scaled one: the
+            // ResizeObserver's first call on a restored window wrote it back, so each open shrank and moved the window.
+            if (getComputedStyle(modal).transform !== 'none') return;
             // Refuse anything under the floor. Restoring a rect sets userSized,
             // which arms the ResizeObserver for EVERY later measurement — so a
             // single transient reading taken mid-layout used to be written as
