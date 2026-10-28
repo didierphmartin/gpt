@@ -286,4 +286,17 @@ for (const bad of [undefined, null, [], 'x', 3]) assert.deepStrictEqual(CN.nodeA
         { name: 'sub', default: '{received}', required: false }], { folder: '' }, ['from']),
         { missing: ['folder'], unknown: ['received'] });
 }
+// browser branch: no module, StartOptions on the global
+{
+    const vm = require('vm'), fs = require('fs'), path = require('path');
+    const sandbox = { self: null };
+    sandbox.self = sandbox;
+    sandbox.StartOptions = require('../start-options.js');
+    vm.createContext(sandbox);
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../code-node.js'), 'utf8'), sandbox);
+    sandbox.globalThis = sandbox;
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(sandbox.CodeNode.argFieldsFor({ code: 'x = ARGS.get("a", "1")' }))),
+        [{ name: 'a', description: '', default: '1', required: false }]);
+    assert.deepStrictEqual(CN.argProblems([{ name: 'a', default: '{z}' }], {}), { missing: [], unknown: ['z'] });
+}
 console.log('code-node.test.js: OK');

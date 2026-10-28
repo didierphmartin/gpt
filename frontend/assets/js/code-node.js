@@ -407,7 +407,7 @@
 
     function startOptions() {
         if (typeof module === 'object' && module.exports) return require('./start-options.js');
-        return root.StartOptions;
+        return globalThis.StartOptions;
     }
 
     /** The argument fields a node shows: its component's declarations, else what the code reads. */
@@ -450,7 +450,7 @@
     }
 
     /** Save checks: required fields left empty (no default), and placeholders nothing before the node provides. */
-    function argProblems(fields, values, available) {
+    function argProblems(fields, values, available = []) {
         const missing = [];
         const unknown = [];
         for (const f of fields || []) {
