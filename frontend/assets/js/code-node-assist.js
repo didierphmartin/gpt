@@ -249,7 +249,7 @@
                 <div style="display:flex;flex-direction:column;gap:6px;width:240px;flex:none;">
                     <label style="margin:0;">${esc(t('workflow.codeAssist.model'))}</label>
                     <select data-a="model" style="width:100%;"></select>
-                    <button type="button" class="storage-config-btn" data-a="ask" style="align-self:flex-end;">${esc(t('workflow.codeAssist.ask'))}</button>
+                    <button type="button" class="storage-config-btn save" data-a="ask" style="align-self:flex-end;">${esc(t('workflow.codeAssist.ask'))}</button>
                 </div>
             </div>
             <div data-a="status" class="text-xs text-gray-500" style="margin-top:6px;"></div>
