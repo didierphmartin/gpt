@@ -2,7 +2,9 @@
 declare(strict_types=1);
 namespace Quantis\AIPortfolioAssistant\Controllers;
 
+use AgentTeam\Controllers\WorkflowController;
 use PDO;
+use Quantis\AIPortfolioAssistant\Services\RobotOwnership;
 use Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentError;
 use Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentStore;
 
@@ -11,10 +13,12 @@ final class CodeComponentsController
 {
     private CodeComponentStore $store;
     private PDO $db;
+    private array $config;
 
     public function __construct(PDO $db, array $config)
     {
         $this->db = $db;
+        $this->config = $config;
         $this->store = new CodeComponentStore($db);
     }
 
@@ -55,8 +59,24 @@ final class CodeComponentsController
 
     public function setStartOption(array $request): array
     {
-        return $this->guard($request, fn(int $u) => ['success' => true,
+        return $this->guard($request, fn(int $u) => $this->lockedGuard((int) ($request['params']['id'] ?? 0)) ?? ['success' => true,
             'data' => $this->store->setStartTrigger($u, (int) ($request['params']['id'] ?? 0), $this->body($request))]);
+    }
+
+    /** The 423 body when a schedule on this Start option belongs to a running robot workflow, else null. */
+    private function lockedGuard(int $componentId): ?array
+    {
+        $own = new RobotOwnership($this->db, $this->config);
+        $rows = $this->db->prepare('SELECT DISTINCT workflow_id FROM scheduled_workflows WHERE trigger_component_id = ?');
+        $rows->execute([$componentId]);
+        foreach ($rows->fetchAll(PDO::FETCH_COLUMN) as $wf) {
+            if ($own->isLocked((int) $wf)) {
+                $name = $this->db->prepare('SELECT name FROM agent_workflows WHERE id = ?');
+                $name->execute([$wf]);
+                return WorkflowController::lockedResponse((string) $name->fetchColumn());
+            }
+        }
+        return null;
     }
 
     public function startOptionImpact(array $request): array
@@ -68,6 +88,9 @@ final class CodeComponentsController
     public function clearStartOption(array $request): array
     {
         return $this->guard($request, function (int $u) use ($request) {
+            if ($locked = $this->lockedGuard((int) ($request['params']['id'] ?? 0))) {
+                return $locked;
+            }
             $data = $this->store->clearStartTrigger($u, (int) ($request['params']['id'] ?? 0));
             $this->sweepActive();   // reverted Starts: their mode is gone
             return ['success' => true, 'data' => $data];

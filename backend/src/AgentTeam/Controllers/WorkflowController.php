@@ -88,6 +88,28 @@ class WorkflowController
         return $this->ownership ??= new RobotOwnership($this->db, $this->config);
     }
 
+    /** The 423 a locked (running robot) workflow answers to every edit. */
+    public static function lockedResponse(string $name): array
+    {
+        return [
+            'success' => false,
+            'error_code' => 'locked',
+            'error' => "$name is running as the robot. Unlock it first.",
+            'status_code' => 423,
+        ];
+    }
+
+    /** The 423 body when this workflow is robot-owned and active, else null. */
+    private function lockedGuard(int $workflowId): ?array
+    {
+        if (!$this->ownership()->isLocked($workflowId)) {
+            return null;
+        }
+        $stmt = $this->db->prepare('SELECT name FROM agent_workflows WHERE id = ?');
+        $stmt->execute([$workflowId]);
+        return self::lockedResponse((string) $stmt->fetchColumn());
+    }
+
     /**
      * GET /api/v1/workflows
      * List all workflows for the authenticated user
@@ -586,6 +608,9 @@ class WorkflowController
                     'status_code' => 404
                 ];
             }
+            if ($locked = $this->lockedGuard($workflowId)) {
+                return $locked;
+            }
 
             $workflow = $this->workflowRepository->findById($workflowId);
 
@@ -728,6 +753,9 @@ class WorkflowController
                     'status_code' => 404
                 ];
             }
+            if ($locked = $this->lockedGuard($workflowId)) {
+                return $locked;
+            }
 
             $this->workflowRepository->delete($workflowId);
 
@@ -801,6 +829,9 @@ class WorkflowController
                     'error' => 'Workflow not found or access denied',
                     'status_code' => 404
                 ];
+            }
+            if ($locked = $this->lockedGuard($workflowId)) {
+                return $locked;
             }
 
             $workflow = $this->workflowRepository->findById($workflowId);
@@ -959,6 +990,12 @@ class WorkflowController
         try {
             if (!$this->workflowRepository->canUserAccess($userId, $workflowId, $this->ownership()->robotFor((int) $userId))) {
                 $sseCallback(['type' => 'error', 'error' => 'Workflow not found or access denied']);
+                echo "data: [DONE]\n\n";
+                flush();
+                return;
+            }
+            if ($locked = $this->lockedGuard($workflowId)) {
+                $sseCallback(['type' => 'error', 'error' => $locked['error']]);
                 echo "data: [DONE]\n\n";
                 flush();
                 return;
@@ -1365,6 +1402,9 @@ class WorkflowController
                     'status_code' => 404
                 ];
             }
+            if ($locked = $this->lockedGuard($workflowId)) {
+                return $locked;
+            }
 
             $this->workflowRepository->toggleEnabled($workflowId);
             $workflow = $this->workflowRepository->findById($workflowId);
@@ -1602,6 +1642,9 @@ class WorkflowController
         if (!$this->workflowRepository->isOwner($userId, $workflowId, $this->ownership()->robotFor((int) $userId))) {
             return ['success' => false, 'error' => 'Workflow not found or access denied', 'status_code' => 404];
         }
+        if ($locked = $this->lockedGuard($workflowId)) {
+            return $locked;
+        }
 
         // Verify node exists
         $node = $this->graphRepository->getNode($nodeId);
@@ -1734,6 +1777,9 @@ class WorkflowController
         if (!$this->workflowRepository->isOwner($userId, $workflowId, $this->ownership()->robotFor((int) $userId))) {
             return ['success' => false, 'error' => 'Workflow not found or access denied', 'status_code' => 404];
         }
+        if ($locked = $this->lockedGuard($workflowId)) {
+            return $locked;
+        }
 
         // Verify node exists
         $node = $this->graphRepository->getNode($nodeId);
@@ -1854,6 +1900,9 @@ class WorkflowController
         // Check ownership
         if (!$this->workflowRepository->isOwner($userId, $workflowId, $this->ownership()->robotFor((int) $userId))) {
             return ['success' => false, 'error' => 'Workflow not found or access denied', 'status_code' => 404];
+        }
+        if ($locked = $this->lockedGuard($workflowId)) {
+            return $locked;
         }
 
         // Get node

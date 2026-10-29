@@ -8,6 +8,7 @@ use AgentTeam\Services\CronExpression;
 use AgentTeam\Services\ScheduledWorkflowService;
 use AgentTeam\Services\WorkflowRepository;
 use PDO;
+use Quantis\AIPortfolioAssistant\Services\RobotOwnership;
 use Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentError;
 use Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentStore;
 
@@ -29,6 +30,23 @@ class ScheduledWorkflowController
         $this->config = $config;
         $this->scheduleService = new ScheduledWorkflowService($db);
         $this->workflowRepository = new WorkflowRepository($db);
+    }
+
+    /** The 423 body when the workflow is a running robot workflow, else null. */
+    private function lockedGuard(int $workflowId): ?array
+    {
+        if ($workflowId <= 0 || !(new RobotOwnership($this->db, $this->config))->isLocked($workflowId)) {
+            return null;
+        }
+        $stmt = $this->db->prepare('SELECT name FROM agent_workflows WHERE id = ?');
+        $stmt->execute([$workflowId]);
+        return WorkflowController::lockedResponse((string) $stmt->fetchColumn());
+    }
+
+    /** The 423 body when the schedule belongs to a running robot workflow, else null. */
+    private function lockedGuardForSchedule(int $scheduleId): ?array
+    {
+        return $this->lockedGuard((int) ($this->scheduleService->findById($scheduleId)['workflow_id'] ?? 0));
     }
 
     /**
@@ -103,6 +121,10 @@ class ScheduledWorkflowController
                 'error' => 'Scheduled time is required',
                 'status_code' => 400
             ];
+        }
+
+        if ($locked = $this->lockedGuard((int) $body['workflow_id'])) {
+            return $locked;
         }
 
         // Verify the workflow exists and belongs to the user
@@ -223,6 +245,10 @@ class ScheduledWorkflowController
             ];
         }
 
+        if ($locked = $this->lockedGuardForSchedule($id)) {
+            return $locked;
+        }
+
         try {   // a Start option names its component; the component supplies the event (spec §3)
             $body = (new CodeComponentStore($this->db))->scheduleBody((int) $userId, $body,
                 (int) ($this->scheduleService->findById($id)['workflow_id'] ?? 0));
@@ -297,6 +323,10 @@ class ScheduledWorkflowController
             ];
         }
 
+        if ($locked = $this->lockedGuardForSchedule($id)) {
+            return $locked;
+        }
+
         try {
             $deleted = $this->scheduleService->delete($id, $userId);
 
@@ -340,6 +370,10 @@ class ScheduledWorkflowController
             ];
         }
 
+        if ($locked = $this->lockedGuardForSchedule($id)) {
+            return $locked;
+        }
+
         try {
             $paused = $this->scheduleService->pause($id, $userId);
 
@@ -381,6 +415,10 @@ class ScheduledWorkflowController
                 'error' => 'Authentication required',
                 'status_code' => 401
             ];
+        }
+
+        if ($locked = $this->lockedGuardForSchedule($id)) {
+            return $locked;
         }
 
         try {

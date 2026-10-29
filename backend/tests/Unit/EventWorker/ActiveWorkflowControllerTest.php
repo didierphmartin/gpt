@@ -17,6 +17,7 @@ final class ActiveWorkflowControllerTest extends TestCase
     {
         $this->db = new PDO('sqlite::memory:');
         EventWorkerSchema::create($this->db, fn() => '2026-10-14 09:00:00');
+        $this->db->exec("CREATE TABLE users (id INTEGER PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'person')");   // the schedule writes look for the robot
         EventWorkerSchema::option($this->db, 1, 3);
         EventWorkerSchema::workflow($this->db, 64, 3, 1);
     }
