@@ -15,12 +15,8 @@ use Quantis\AIPortfolioAssistant\Tests\Unit\EventWorker\EventWorkerSchema;
 /** Task B2: a frozen copy of a workflow (graph, code components, Start option, schedule) under the robot. */
 final class WorkflowRobotPublisherTest extends TestCase
 {
-    public const POLL = ['name' => 'Poll Drop', 'code' => 'def run(input, call_tool): pass', 'exits' => ['new_mail', 'no_mail'],
-        'mcp_servers' => ['Outlook'], 'timeout_s' => 20];
-    public const PDF = ['name' => 'To PDF', 'code' => 'v1', 'exits' => ['done'], 'mcp_servers' => ['Converter']];
-    public const SP = ['name' => 'Store SharePoint', 'code' => 'sp', 'exits' => ['done'], 'mcp_servers' => ['SharePoint', 'Outlook']];
-    public const WF = 75;
-    public const OWNER = 2;
+    private const WF = RobotSchema::WF;
+    private const OWNER = RobotSchema::OWNER;
 
     private PDO $db;
     private CodeComponentStore $store;
@@ -28,50 +24,10 @@ final class WorkflowRobotPublisherTest extends TestCase
     /** name => the owner's component id */
     private array $src = [];
 
-    /**
-     * EventWorkerSchema plus the users/packages the robot needs (RobotControllerTest's), an empty LLM settings
-     * table (WorkflowController reads it), and wf 75 of user 2: Start on "Poll Drop" -> To PDF -> Store SharePoint -> Output,
-     * with its event schedule row. Returns the owner's component ids by name.
-     */
-    public static function schema(PDO $db): array
-    {
-        EventWorkerSchema::create($db, fn() => '2026-10-26 09:00:00');
-        $db->exec("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE, password TEXT,
-            first_name TEXT, last_name TEXT, role TEXT, provider TEXT, kind TEXT NOT NULL DEFAULT 'person', email_verified INTEGER DEFAULT 0)");
-        $db->exec('CREATE TABLE packages (role TEXT PRIMARY KEY, name TEXT, builtin INTEGER, capabilities TEXT, updated_at TEXT)');
-        $db->exec("INSERT INTO packages (role, name, builtin, capabilities) VALUES ('user', 'User', 1, '{}'), ('admin', 'Admin', 1, '{}'), ('ops', 'Ops', 0, '{\"use_robot\": true}')");
-        $db->exec("INSERT INTO users (id, email, role) VALUES (1, 'u@x.test', 'user'), (2, 'o@x.test', 'ops'), (3, 'a@x.test', 'admin')");
-        $db->exec('CREATE TABLE system_llm_settings (provider_key TEXT, enabled INTEGER)');
-
-        $store = new CodeComponentStore($db);
-        $ids = [];
-        foreach ([self::POLL, self::PDF, self::SP] as $c) {
-            $ids[$c['name']] = $store->save(self::OWNER, null, $c)['id'];
-        }
-        $store->setStartTrigger(self::OWNER, $ids['Poll Drop'],
-            ['label' => 'New drop', 'watch' => EventWorkerSchema::WATCH, 'work_exit' => 'new_mail']);
-        $db->prepare('INSERT INTO agent_workflows (id, user_id, name) VALUES (?, ?, ?)')->execute([self::WF, self::OWNER, 'Mail to PDF']);
-        $node = function (string $type, array $cfg) use ($db): int {
-            $db->prepare('INSERT INTO workflow_nodes (workflow_id, node_type, config) VALUES (?, ?, ?)')
-                ->execute([self::WF, $type, json_encode(['type' => $type] + $cfg)]);
-            return (int) $db->lastInsertId();
-        };
-        $start = $node('start', ['start_option' => $ids['Poll Drop'], 'start_args' => ['tag' => 'vip']]);
-        $pdf = $node('code', ['name' => 'PDF', 'code_component_id' => $ids['To PDF']]);
-        $sp = $node('code', ['name' => 'SP', 'code_component_id' => $ids['Store SharePoint']]);
-        $out = $node('output', []);
-        $edge = $db->prepare('INSERT INTO workflow_edges (workflow_id, from_node_id, to_node_id, from_port) VALUES (?, ?, ?, ?)');
-        $edge->execute([self::WF, $start, $pdf, 'output_1']);
-        $edge->execute([self::WF, $pdf, $sp, 'output_1']);
-        $edge->execute([self::WF, $sp, $out, 'output_1']);
-        EventWorkerSchema::row($db, self::WF, self::OWNER, 'event', $ids['Poll Drop']);
-        return $ids;
-    }
-
     protected function setUp(): void
     {
         $this->db = new PDO('sqlite::memory:');
-        $this->src = self::schema($this->db);
+        $this->src = RobotSchema::create($this->db);
         $this->store = new CodeComponentStore($this->db);
         $this->robot = RobotAccount::ensure($this->db);
     }
@@ -159,7 +115,7 @@ final class WorkflowRobotPublisherTest extends TestCase
         $first = $this->publish();
         $this->assertSame($old['id'], $this->store->getByName($this->robot, 'To PDF')['id']);   // overwritten, not added
 
-        $this->store->save(self::OWNER, $this->src['To PDF'], ['code' => 'v2'] + self::PDF);
+        $this->store->save(self::OWNER, $this->src['To PDF'], ['code' => 'v2'] + RobotSchema::PDF);
         $this->db->exec("DELETE FROM workflow_edges WHERE workflow_id = 75 AND to_node_id = (SELECT id FROM workflow_nodes WHERE node_type = 'output' AND workflow_id = 75)");
         $count = fn() => (int) $this->db->query('SELECT COUNT(*) FROM code_components WHERE user_id = ' . $this->robot)->fetchColumn();
         $before = $count();

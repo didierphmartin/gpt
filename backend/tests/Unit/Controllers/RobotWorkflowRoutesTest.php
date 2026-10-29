@@ -8,7 +8,7 @@ use PDO;
 use PHPUnit\Framework\TestCase;
 use Quantis\AIPortfolioAssistant\Controllers\RobotController;
 use Quantis\AIPortfolioAssistant\Services\RobotAccount;
-use Quantis\AIPortfolioAssistant\Tests\Unit\AgentTeam\WorkflowRobotPublisherTest;
+use Quantis\AIPortfolioAssistant\Tests\Unit\AgentTeam\RobotSchema;
 
 /** Task B2: POST /workflows/{id}/publish, GET /robot/workflows, DELETE /robot/workflows/{id}. */
 final class RobotWorkflowRoutesTest extends TestCase
@@ -19,7 +19,7 @@ final class RobotWorkflowRoutesTest extends TestCase
     protected function setUp(): void
     {
         $this->db = new PDO('sqlite::memory:');
-        WorkflowRobotPublisherTest::schema($this->db);
+        RobotSchema::create($this->db);
     }
 
     private function req(int $u, array $body = [], array $params = []): array
@@ -29,7 +29,7 @@ final class RobotWorkflowRoutesTest extends TestCase
 
     private function publish(int $u, array $body = []): array
     {
-        return (new WorkflowController($this->db, self::CONFIG))->publish($this->req($u, $body, ['id' => WorkflowRobotPublisherTest::WF]));
+        return (new WorkflowController($this->db, self::CONFIG))->publish($this->req($u, $body, ['id' => RobotSchema::WF]));
     }
 
     private function robot(): RobotController

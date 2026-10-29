@@ -17,6 +17,8 @@ use AgentTeam\Services\LiveStream;
 use AgentTeam\Services\WorkflowRunLog;
 use AgentTeam\Services\WorkflowPublishError;
 use AgentTeam\Services\WorkflowRobotPublisher;
+use AgentTeam\Services\WorkflowOwnerTransfer;
+use AgentTeam\Services\WorkflowTransferError;
 use Quantis\AIPortfolioAssistant\AIPortfolioAssistant;
 use Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentStore;
 use Quantis\AIPortfolioAssistant\Services\RobotAccount;
@@ -1445,6 +1447,38 @@ class WorkflowController
             return ['success' => true, 'data' => $data, 'status_code' => 200];
         } catch (WorkflowPublishError $e) {
             return ['success' => false, 'error' => $e->getMessage(), 'kind' => $e->kind, 'status_code' => $e->status];
+        }
+    }
+
+    /**
+     * PUT /api/v1/workflows/{id}/owner  body {owner: 'robot', confirm: bool}
+     * confirm false: what the transfer would do (WorkflowOwnerTransfer::preview); true: move it to the robot.
+     */
+    public function owner(array $request): array
+    {
+        $userId = (int) ($request['user_id'] ?? 0);
+        $workflowId = (int) ($request['params']['id'] ?? 0);
+        $body = $request['body'] ?? [];
+        if ($userId <= 0) {
+            return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
+        }
+        if (($body['owner'] ?? null) !== 'robot') {
+            return ['success' => false, 'error' => "owner must be 'robot'", 'error_code' => 'invalid', 'status_code' => 422];
+        }
+        if ((new RobotPolicy($this->db, $this->config))->canUse($userId)) {
+            RobotAccount::ensure($this->db);   // before ownership() reads the robot's id
+        }
+        try {
+            $transfer = new WorkflowOwnerTransfer($this->db, $this->ownership());
+            $preview = $transfer->preview($userId, $workflowId);
+            if ($locked = $this->lockedGuard($workflowId)) {
+                return $locked;
+            }
+            $data = ($body['confirm'] ?? false) === true ? $transfer->toRobot($userId, $workflowId) : $preview;
+            return ['success' => true, 'data' => $data, 'status_code' => 200];
+        } catch (WorkflowTransferError $e) {
+            return ['success' => false, 'error' => $e->getMessage(), 'error_code' => $e->kind, 'status_code' => $e->status]
+                + ($e->clashes !== [] ? ['clashes' => $e->clashes] : []);
         }
     }
 

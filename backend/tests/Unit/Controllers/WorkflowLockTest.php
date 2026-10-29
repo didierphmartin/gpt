@@ -8,7 +8,7 @@ use PDO;
 use PHPUnit\Framework\TestCase;
 use Quantis\AIPortfolioAssistant\Controllers\CodeComponentsController;
 use Quantis\AIPortfolioAssistant\Services\RobotAccount;
-use Quantis\AIPortfolioAssistant\Tests\Unit\AgentTeam\WorkflowRobotPublisherTest;
+use Quantis\AIPortfolioAssistant\Tests\Unit\AgentTeam\RobotSchema;
 
 /** A robot workflow with an active row is locked: edits, runs and schedule writes answer 423. */
 final class WorkflowLockTest extends TestCase
@@ -21,7 +21,7 @@ final class WorkflowLockTest extends TestCase
     protected function setUp(): void
     {
         $this->db = new PDO('sqlite::memory:');
-        $this->ids = WorkflowRobotPublisherTest::schema($this->db);
+        $this->ids = RobotSchema::create($this->db);
         $have = array_column($this->db->query('PRAGMA table_info(agent_workflows)')->fetchAll(), 'name');
         foreach (['description' => 'TEXT', 'steps' => 'TEXT', 'triggers' => 'TEXT', 'variables' => 'TEXT', 'enabled' => 'INTEGER DEFAULT 1',
                   'workspace_id' => 'INTEGER', 'output_storage_enabled' => 'INTEGER DEFAULT 0', 'output_folder' => 'TEXT', 'orchestration' => 'TEXT'] as $c => $t) {

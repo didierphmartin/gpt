@@ -7,7 +7,7 @@ use PHPUnit\Framework\TestCase;
 use Quantis\AIPortfolioAssistant\Controllers\MCPProxyController;
 use Quantis\AIPortfolioAssistant\Controllers\RobotServersController;
 use Quantis\AIPortfolioAssistant\Services\RobotAccount;
-use Quantis\AIPortfolioAssistant\Tests\Unit\AgentTeam\WorkflowRobotPublisherTest;
+use Quantis\AIPortfolioAssistant\Tests\Unit\AgentTeam\RobotSchema;
 
 /** MCPProxyController with the wire stubbed: records what would have been sent. */
 final class RecordingProxy extends MCPProxyController
@@ -31,7 +31,7 @@ final class RobotServersControllerTest extends TestCase
     protected function setUp(): void
     {
         $this->db = new PDO('sqlite::memory:');
-        WorkflowRobotPublisherTest::schema($this->db);
+        RobotSchema::create($this->db);
         $this->db->exec('DROP TABLE mcp_servers');   // the shared fixture's table lacks description/transport
         $this->db->exec('CREATE TABLE mcp_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NULL, name TEXT NOT NULL,
             url TEXT NOT NULL, description TEXT, headers TEXT NULL, transport TEXT DEFAULT \'http\', enabled INTEGER DEFAULT 1,

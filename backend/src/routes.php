@@ -402,6 +402,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->post('/api/v1/workflows/{id:\d+}/toggle', ['AgentTeam:WorkflowController', 'toggle']);
         $r->post('/api/v1/workflows/{id:\d+}/duplicate', ['AgentTeam:WorkflowController', 'duplicate']);
         $r->post('/api/v1/workflows/{id:\d+}/publish', ['AgentTeam:WorkflowController', 'publish']);
+        $r->put('/api/v1/workflows/{id:\d+}/owner', ['AgentTeam:WorkflowController', 'owner']);
 
         // Playbook registration-time validation (spec T4): parse + resolve
         // bindings against the caller's MCP tools/agents, no run created.
