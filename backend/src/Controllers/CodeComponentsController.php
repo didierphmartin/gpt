@@ -59,13 +59,21 @@ final class CodeComponentsController
 
     public function setStartOption(array $request): array
     {
-        return $this->guard($request, fn(int $u) => $this->lockedGuard((int) ($request['params']['id'] ?? 0)) ?? ['success' => true,
-            'data' => $this->store->setStartTrigger($u, (int) ($request['params']['id'] ?? 0), $this->body($request))]);
+        return $this->guard($request, function (int $u) use ($request) {
+            if ($locked = $this->lockedGuard($u, (int) ($request['params']['id'] ?? 0))) {
+                return $locked;
+            }
+            return ['success' => true,
+                'data' => $this->store->setStartTrigger($u, (int) ($request['params']['id'] ?? 0), $this->body($request))];
+        });
     }
 
     /** The 423 body when a schedule on this Start option belongs to a running robot workflow, else null. */
-    private function lockedGuard(int $componentId): ?array
+    private function lockedGuard(int $userId, int $componentId): ?array
     {
+        if ($this->store->get($userId, $componentId) === null) {
+            return null;   // not the caller's component: the store answers 404, never a lock
+        }
         $own = new RobotOwnership($this->db, $this->config);
         $rows = $this->db->prepare('SELECT DISTINCT workflow_id FROM scheduled_workflows WHERE trigger_component_id = ?');
         $rows->execute([$componentId]);
@@ -88,7 +96,7 @@ final class CodeComponentsController
     public function clearStartOption(array $request): array
     {
         return $this->guard($request, function (int $u) use ($request) {
-            if ($locked = $this->lockedGuard((int) ($request['params']['id'] ?? 0))) {
+            if ($locked = $this->lockedGuard($u, (int) ($request['params']['id'] ?? 0))) {
                 return $locked;
             }
             $data = $this->store->clearStartTrigger($u, (int) ($request['params']['id'] ?? 0));

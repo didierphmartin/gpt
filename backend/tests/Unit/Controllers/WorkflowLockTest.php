@@ -93,4 +93,22 @@ final class WorkflowLockTest extends TestCase
         $r = (new WorkflowController($this->db, self::CONFIG))->update($this->req(3, ['name' => 'Mine2'], ['id' => 9]));
         $this->assertTrue($r['success'], json_encode($r));
     }
+
+    public function test_caller_without_access_gets_404_not_the_lock(): void
+    {
+        // user 1 has no robot permission and owns nothing here
+        $sc = new ScheduledWorkflowController($this->db, self::CONFIG);
+        $sid = (int) $this->db->query('SELECT id FROM scheduled_workflows WHERE workflow_id = 75')->fetchColumn();
+        $rs = [$sc->create($this->req(1, ['workflow_id' => 75, 'scheduled_time' => '2026-11-01 10:00:00']))];
+        foreach (['update', 'destroy', 'pause', 'resume'] as $m) {
+            $rs[] = $sc->$m($this->req(1, ['scheduled_time' => '2026-11-01 10:00:00'], ['id' => $sid]));
+        }
+        $rs[] = (new CodeComponentsController($this->db, self::CONFIG))->setStartOption($this->req(1, [], ['id' => $this->ids['Poll Drop']]));
+        $rs[] = (new CodeComponentsController($this->db, self::CONFIG))->clearStartOption($this->req(1, [], ['id' => $this->ids['Poll Drop']]));
+        foreach ($rs as $r) {
+            $this->assertSame(404, $r['status_code'], json_encode($r));
+            $this->assertStringNotContainsString('Mail to PDF', json_encode($r));
+            $this->assertArrayNotHasKey('error_code', $r);
+        }
+    }
 }

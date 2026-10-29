@@ -17,7 +17,10 @@ final class ActiveWorkflowControllerTest extends TestCase
     {
         $this->db = new PDO('sqlite::memory:');
         EventWorkerSchema::create($this->db, fn() => '2026-10-14 09:00:00');
-        $this->db->exec("CREATE TABLE users (id INTEGER PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'person')");   // the schedule writes look for the robot
+        $this->db->exec("CREATE TABLE users (id INTEGER PRIMARY KEY, role TEXT, kind TEXT NOT NULL DEFAULT 'person')");   // the schedule writes look for the robot and the caller's package
+        $this->db->exec('CREATE TABLE packages (role TEXT PRIMARY KEY, name TEXT, builtin INTEGER, capabilities TEXT, updated_at TEXT)');
+        $this->db->exec("INSERT INTO packages (role, name, builtin, capabilities) VALUES ('user', 'User', 1, '{}')");
+        $this->db->exec("INSERT INTO users (id, role) VALUES (3, 'user')");
         EventWorkerSchema::option($this->db, 1, 3);
         EventWorkerSchema::workflow($this->db, 64, 3, 1);
     }

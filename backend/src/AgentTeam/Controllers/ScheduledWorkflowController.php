@@ -33,9 +33,11 @@ class ScheduledWorkflowController
     }
 
     /** The 423 body when the workflow is a running robot workflow, else null. */
-    private function lockedGuard(int $workflowId): ?array
+    private function lockedGuard(int $userId, int $workflowId): ?array
     {
-        if ($workflowId <= 0 || !(new RobotOwnership($this->db, $this->config))->isLocked($workflowId)) {
+        $own = new RobotOwnership($this->db, $this->config);
+        // only a caller who may see the workflow learns it is locked; everyone else gets the usual 404 below
+        if ($workflowId <= 0 || !$this->workflowRepository->canUserAccess($userId, $workflowId, $own->robotFor($userId)) || !$own->isLocked($workflowId)) {
             return null;
         }
         $stmt = $this->db->prepare('SELECT name FROM agent_workflows WHERE id = ?');
@@ -44,9 +46,9 @@ class ScheduledWorkflowController
     }
 
     /** The 423 body when the schedule belongs to a running robot workflow, else null. */
-    private function lockedGuardForSchedule(int $scheduleId): ?array
+    private function lockedGuardForSchedule(int $userId, int $scheduleId): ?array
     {
-        return $this->lockedGuard((int) ($this->scheduleService->findById($scheduleId)['workflow_id'] ?? 0));
+        return $this->lockedGuard($userId, (int) ($this->scheduleService->findById($scheduleId)['workflow_id'] ?? 0));
     }
 
     /**
@@ -123,7 +125,7 @@ class ScheduledWorkflowController
             ];
         }
 
-        if ($locked = $this->lockedGuard((int) $body['workflow_id'])) {
+        if ($locked = $this->lockedGuard((int) $userId, (int) $body['workflow_id'])) {
             return $locked;
         }
 
@@ -245,7 +247,7 @@ class ScheduledWorkflowController
             ];
         }
 
-        if ($locked = $this->lockedGuardForSchedule($id)) {
+        if ($locked = $this->lockedGuardForSchedule((int) $userId, $id)) {
             return $locked;
         }
 
@@ -323,7 +325,7 @@ class ScheduledWorkflowController
             ];
         }
 
-        if ($locked = $this->lockedGuardForSchedule($id)) {
+        if ($locked = $this->lockedGuardForSchedule((int) $userId, $id)) {
             return $locked;
         }
 
@@ -370,7 +372,7 @@ class ScheduledWorkflowController
             ];
         }
 
-        if ($locked = $this->lockedGuardForSchedule($id)) {
+        if ($locked = $this->lockedGuardForSchedule((int) $userId, $id)) {
             return $locked;
         }
 
@@ -417,7 +419,7 @@ class ScheduledWorkflowController
             ];
         }
 
-        if ($locked = $this->lockedGuardForSchedule($id)) {
+        if ($locked = $this->lockedGuardForSchedule((int) $userId, $id)) {
             return $locked;
         }
 
