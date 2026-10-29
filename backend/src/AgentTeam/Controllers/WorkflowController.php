@@ -1551,7 +1551,7 @@ class WorkflowController
 
             return [
                 'success' => true,
-                'data' => $duplicated->toArray(),
+                'data' => ['id' => $duplicated->getId(), 'name' => $duplicated->getName()],
                 'message' => 'Workflow duplicated successfully',
                 'status_code' => 201
             ];

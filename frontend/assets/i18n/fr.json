@@ -443,6 +443,7 @@
   },
   "contextMenu": {
     "rename": "Renommer",
+    "copy": "Copier",
     "delete": "Supprimer"
   },
   "voicePanel": {
@@ -795,6 +796,7 @@
       "defaultWorkflowName": "Mon Workflow"
     },
     "errors": {
+      "copyWorkflowFailed": "Échec de la copie du workflow : ",
       "deleteWorkflowFailed": "Erreur lors de la suppression du workflow : {{error}}",
       "saveWorkflowFailed": "Erreur lors de l'enregistrement du workflow : {{error}}",
       "loadWorkflowFailed": "Erreur lors du chargement du workflow : {{error}}",

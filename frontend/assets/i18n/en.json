@@ -443,6 +443,7 @@
   },
   "contextMenu": {
     "rename": "Rename",
+    "copy": "Copy",
     "delete": "Delete"
   },
   "voicePanel": {
@@ -795,6 +796,7 @@
       "defaultWorkflowName": "My Workflow"
     },
     "errors": {
+      "copyWorkflowFailed": "Failed to copy workflow: ",
       "deleteWorkflowFailed": "Error deleting workflow: {{error}}",
       "saveWorkflowFailed": "Error saving workflow: {{error}}",
       "loadWorkflowFailed": "Error loading workflow: {{error}}",

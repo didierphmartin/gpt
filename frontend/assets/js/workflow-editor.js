@@ -802,6 +802,10 @@ class WorkflowEditor {
                         class="w-full text-left px-3 py-1.5 hover:bg-gray-100 text-gray-700 flex items-center gap-2">
                     <span>✏️</span><span data-i18n="contextMenu.rename">${this.t('contextMenu.rename')}</span>
                 </button>
+                <button type="button" data-action="copy"
+                        class="w-full text-left px-3 py-1.5 hover:bg-gray-100 text-gray-700 flex items-center gap-2">
+                    <span>📄</span><span data-i18n="contextMenu.copy">${this.t('contextMenu.copy')}</span>
+                </button>
                 <button type="button" data-action="skillify"
                         class="w-full text-left px-3 py-1.5 hover:bg-gray-100 text-gray-700 flex items-center gap-2">
                     <span>🧬</span><span data-i18n="genesis.promoteWorkflow">${this.tWithFallback('genesis.promoteWorkflow', 'Promote to skill…')}</span>
@@ -839,6 +843,8 @@ class WorkflowEditor {
                     if (!target) return;
                     if (action === 'rename') {
                         await this.renameWorkflow(target.id, target.name);
+                    } else if (action === 'copy') {
+                        await this.copyWorkflow(target.id);
                     } else if (action === 'skillify') {
                         await this.promoteWorkflowToSkill(target.id);
                     } else if (action === 'delete') {
@@ -939,6 +945,26 @@ class WorkflowEditor {
      * in-memory name in sync so the header reflects the change without
      * a reload.
      */
+    /** Copy a workflow (also a locked robot one) into a personal instance and open it. */
+    async copyWorkflow(workflowId) {
+        try {
+            const response = await fetch(`${this.apiBase}/workflows/${workflowId}/duplicate`, {
+                method: 'POST',
+                headers: this.getAuthHeaders(),
+                body: JSON.stringify({})
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || data.success === false) {
+                throw new Error(data.error || data.message || `HTTP ${response.status}`);
+            }
+            await this.loadWorkflowsList();
+            await this.loadWorkflow(data.data.id);
+        } catch (error) {
+            console.error('[WorkflowEditor] Error copying workflow:', error);
+            alert((this.t('workflow.errors.copyWorkflowFailed') || 'Failed to copy workflow: ') + (error.message || error));
+        }
+    }
+
     async renameWorkflow(workflowId, currentName) {
         const newName = await this._showRenameDialog(
             'workflow.dialogs.renameWorkflowTitle',

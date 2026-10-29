@@ -443,6 +443,7 @@
   },
   "contextMenu": {
     "rename": "Renombrar",
+    "copy": "Copiar",
     "delete": "Eliminar"
   },
   "voicePanel": {
@@ -795,6 +796,7 @@
       "defaultWorkflowName": "Mi Workflow"
     },
     "errors": {
+      "copyWorkflowFailed": "No se pudo copiar el flujo de trabajo: ",
       "deleteWorkflowFailed": "Error al eliminar el workflow: {{error}}",
       "saveWorkflowFailed": "Error al guardar el workflow: {{error}}",
       "loadWorkflowFailed": "Error al cargar el workflow: {{error}}",
