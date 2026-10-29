@@ -14,8 +14,8 @@ final class FakeTransport implements WatchTransport
     public array $open = [];      // key => body
     public array $answers = [];   // key => [body, http, err], handed out by done()
     public int $started = 0;
-    public function start(int $key, string $url, array $headers, string $body): void { $this->open[$key] = $body; $this->started++; }
-    public function cancel(int $key): void { unset($this->open[$key]); }
+    public function start(string $key, string $url, array $headers, string $body): void { $this->open[$key] = $body; $this->started++; }
+    public function cancel(string $key): void { unset($this->open[$key]); }
     public function done(): array
     {
         $out = [];
@@ -23,7 +23,7 @@ final class FakeTransport implements WatchTransport
         $this->answers = [];
         return $out;
     }
-    public function answer(int $key, array $payload): void
+    public function answer(string $key, array $payload): void
     {
         $this->answers[$key] = [json_encode(['jsonrpc' => '2.0', 'id' => 1, 'result' => ['structuredContent' => $payload]]), 200, ''];
     }
@@ -46,7 +46,7 @@ final class FakeRuns implements RunSpawner
     public array $started = [];   // [key, scheduleId]
     public array $ended = [];     // key => exit code, handed out by done()
     public int $ticks = 0;
-    public function start(int $key, int $scheduleId): void { $this->started[] = [$key, $scheduleId]; }
+    public function start(string $key, int $scheduleId): void { $this->started[] = [$key, $scheduleId]; }
     public function done(): array { $d = $this->ended; $this->ended = []; return $d; }
     public function scheduleTick(): void { $this->ticks++; }
 }
@@ -65,6 +65,8 @@ final class EventWorkerTest extends TestCase
     {
         $this->db = new PDO('sqlite::memory:');
         EventWorkerSchema::create($this->db, fn() => date('Y-m-d H:i:s', (int) $this->t));
+        $this->db->exec("CREATE TABLE users (id INTEGER PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'person')");
+        $this->db->exec("INSERT INTO users (id, kind) VALUES (3, 'person'), (4, 'person'), (9, 'service')");
         EventWorkerSchema::option($this->db, 1, 3);
         EventWorkerSchema::workflow($this->db, 64, 3, 1);
         $this->row = EventWorkerSchema::row($this->db, 64, 3, 'event', 1);
@@ -77,9 +79,10 @@ final class EventWorkerTest extends TestCase
     }
 
     private function active(int $user = 3, int $wf = 64): void { (new ActiveWorkflowService($this->db))->activate($user, $wf); }
-    private function state(int $user = 3): array
+    private function state(int $user = 3, ?int $wf = null): array
     {
-        return $this->db->query("SELECT watch_state, watch_message FROM active_workflows WHERE user_id = $user")->fetch() ?: [];
+        return $this->db->query("SELECT watch_state, watch_message FROM active_workflows WHERE user_id = $user"
+            . ($wf ? " AND workflow_id = $wf" : ''))->fetch() ?: [];
     }
     private function step(float $after = 0.0): void { $this->t += $after; $this->w->step(); }
 
@@ -93,16 +96,16 @@ final class EventWorkerTest extends TestCase
     {
         $this->active();
         $this->step();
-        $this->assertArrayHasKey(3, $this->tr->open);
+        $this->assertArrayHasKey('3:64', $this->tr->open);
         $this->assertSame('waiting', $this->state()['watch_state']);
-        $this->tr->answer(3, ['status' => 'ready', 'via' => 'event', 'events' => 'on']);
+        $this->tr->answer('3:64', ['status' => 'ready', 'via' => 'event', 'events' => 'on']);
         $this->step(1);
-        $this->assertSame([[3, $this->row]], $this->runs->started);
+        $this->assertSame([['3:64', $this->row]], $this->runs->started);
         $this->assertSame('running', $this->state()['watch_state']);
-        $this->assertArrayNotHasKey(3, $this->tr->open);          // no wait during a run
-        $this->runs->ended[3] = 0;
+        $this->assertArrayNotHasKey('3:64', $this->tr->open);          // no wait during a run
+        $this->runs->ended['3:64'] = 0;
         $this->step(1);
-        $this->assertArrayHasKey(3, $this->tr->open);             // waiting again
+        $this->assertArrayHasKey('3:64', $this->tr->open);             // waiting again
         $this->assertSame(['waiting', null], array_values($this->state()));
     }
 
@@ -110,7 +113,7 @@ final class EventWorkerTest extends TestCase
     {
         $this->active();
         $this->step();
-        $this->tr->answer(3, ['status' => 'timeout', 'events' => 'off']);
+        $this->tr->answer('3:64', ['status' => 'timeout', 'events' => 'off']);
         $this->step(1);
         $this->assertSame(2, $this->tr->started);
         $this->assertSame(['waiting', 'fallback'], array_values($this->state()));   // events off: the 15-min fallback
@@ -122,38 +125,38 @@ final class EventWorkerTest extends TestCase
         $this->step();
         $delays = [];
         for ($i = 0; $i < 5; $i++) {
-            $this->tr->answer(3, ['error' => 'reconnect_needed']);
+            $this->tr->answer('3:64', ['error' => 'reconnect_needed']);
             $this->step(1);
-            $delays[] = $this->w->slots()[3]['backoff'];
+            $delays[] = $this->w->slots()['3:64']['backoff'];
             $this->assertSame(['error', 'reconnect_needed'], array_values($this->state()));
-            $this->step($this->w->slots()[3]['until'] - $this->t - 0.5);   // not yet
-            $this->assertArrayNotHasKey(3, $this->tr->open);
+            $this->step($this->w->slots()['3:64']['until'] - $this->t - 0.5);   // not yet
+            $this->assertArrayNotHasKey('3:64', $this->tr->open);
             $this->step(1);                                                  // due: wait again
-            $this->assertArrayHasKey(3, $this->tr->open);
+            $this->assertArrayHasKey('3:64', $this->tr->open);
         }
         $this->assertSame([30, 60, 120, 240, 300], $delays);
-        $this->tr->answer(3, ['status' => 'timeout']);
+        $this->tr->answer('3:64', ['status' => 'timeout']);
         $this->step(1);
-        $this->assertSame(0, $this->w->slots()[3]['backoff']);              // a good answer resets it
+        $this->assertSame(0, $this->w->slots()['3:64']['backoff']);              // a good answer resets it
     }
 
     public function testAFailedRunKeepsTheWatchAfterABackoff(): void
     {
         $this->active();
         $this->step();
-        $this->tr->answer(3, ['status' => 'ready']);
+        $this->tr->answer('3:64', ['status' => 'ready']);
         $this->step(1);
-        $this->runs->ended[3] = 1;
+        $this->runs->ended['3:64'] = 1;
         $this->step(1);
         $this->assertSame(['error', 'run_failed'], array_values($this->state()));
-        $this->assertArrayNotHasKey(3, $this->tr->open);                   // no wait at once: no ready -> fail loop
+        $this->assertArrayNotHasKey('3:64', $this->tr->open);                   // no wait at once: no ready -> fail loop
         $this->step(EventWorker::BACKOFF_MIN_S);
-        $this->assertArrayHasKey(3, $this->tr->open);
+        $this->assertArrayHasKey('3:64', $this->tr->open);
         $this->assertSame(['waiting', 'run_failed'], array_values($this->state()));
-        $this->tr->answer(3, ['status' => 'timeout', 'events' => 'off']);
+        $this->tr->answer('3:64', ['status' => 'timeout', 'events' => 'off']);
         $this->step(1);
         $this->assertSame(['waiting', 'run_failed'], array_values($this->state()));   // a timeout does not clear it
-        $this->assertSame(30, $this->w->slots()[3]['backoff']);
+        $this->assertSame(30, $this->w->slots()['3:64']['backoff']);
     }
 
     public function testFailedRunsBackOffDoublingAndASuccessResets(): void
@@ -162,33 +165,33 @@ final class EventWorkerTest extends TestCase
         $this->step();
         $delays = [];
         for ($i = 0; $i < 2; $i++) {
-            $this->tr->answer(3, ['status' => 'ready', 'via' => 'event', 'events' => 'on']);
+            $this->tr->answer('3:64', ['status' => 'ready', 'via' => 'event', 'events' => 'on']);
             $this->step(1);
-            $this->assertSame('running', $this->w->slots()[3]['state']);
-            $this->runs->ended[3] = 1;
+            $this->assertSame('running', $this->w->slots()['3:64']['state']);
+            $this->runs->ended['3:64'] = 1;
             $this->step(1);
-            $delays[] = $this->w->slots()[3]['backoff'];
+            $delays[] = $this->w->slots()['3:64']['backoff'];
             $this->assertSame(['error', 'run_failed'], array_values($this->state()));
-            $this->step($this->w->slots()[3]['until'] - $this->t - 0.5);   // not yet
-            $this->assertArrayNotHasKey(3, $this->tr->open);
+            $this->step($this->w->slots()['3:64']['until'] - $this->t - 0.5);   // not yet
+            $this->assertArrayNotHasKey('3:64', $this->tr->open);
             $this->step(1);                                                  // due: wait again
-            $this->assertArrayHasKey(3, $this->tr->open);
+            $this->assertArrayHasKey('3:64', $this->tr->open);
         }
         $this->assertSame([30, 60], $delays);
         $this->assertCount(2, $this->runs->started);
-        $this->tr->answer(3, ['status' => 'ready']);
+        $this->tr->answer('3:64', ['status' => 'ready']);
         $this->step(1);
-        $this->runs->ended[3] = 0;
+        $this->runs->ended['3:64'] = 0;
         $this->step(1);
-        $this->assertSame(0, $this->w->slots()[3]['backoff']);              // a run that succeeds resets it
-        $this->assertArrayHasKey(3, $this->tr->open);
+        $this->assertSame(0, $this->w->slots()['3:64']['backoff']);              // a run that succeeds resets it
+        $this->assertArrayHasKey('3:64', $this->tr->open);
         $this->assertSame(['waiting', null], array_values($this->state()));
     }
 
     public function testARunThatCannotStartBacksOff(): void
     {
         $runs = new class implements RunSpawner {
-            public function start(int $key, int $scheduleId): void { throw new \RuntimeException('proc_open failed'); }
+            public function start(string $key, int $scheduleId): void { throw new \RuntimeException('proc_open failed'); }
             public function done(): array { return []; }
             public function scheduleTick(): void {}
         };
@@ -197,12 +200,12 @@ final class EventWorkerTest extends TestCase
             $this->tr, $runs, fn() => $this->t, function (string $l) use (&$lines) { $lines[] = $l; });
         $this->active();
         $w->step();
-        $this->tr->answer(3, ['status' => 'ready']);
+        $this->tr->answer('3:64', ['status' => 'ready']);
         $this->t += 1;
         $w->step();
         $this->assertSame(['error', 'run_failed'], array_values($this->state()));
-        $this->assertSame(30, $w->slots()[3]['backoff']);
-        $this->assertSame(['event worker: run start (user 3): RuntimeException: proc_open failed'], $lines);
+        $this->assertSame(30, $w->slots()['3:64']['backoff']);
+        $this->assertSame(['event worker: run start (3:64): RuntimeException: proc_open failed'], $lines);
     }
 
     public function testAReadyAfterDeactivationStartsNoRun(): void
@@ -210,7 +213,7 @@ final class EventWorkerTest extends TestCase
         $this->active();
         $this->step();
         (new ActiveWorkflowService($this->db))->deactivate(3, 64);
-        $this->tr->answers[3] = [json_encode(['result' => ['structuredContent' => ['status' => 'ready']]]), 200, ''];
+        $this->tr->answers['3:64'] = [json_encode(['result' => ['structuredContent' => ['status' => 'ready']]]), 200, ''];
         $this->step(EventWorker::RECONCILE_S);
         $this->assertSame([], $this->runs->started);
         $this->assertSame([], $this->tr->open);
@@ -221,11 +224,11 @@ final class EventWorkerTest extends TestCase
     {
         $this->active();
         $this->step();
-        $this->tr->answer(3, ['status' => 'ready']);
+        $this->tr->answer('3:64', ['status' => 'ready']);
         $this->step(1);
         (new ActiveWorkflowService($this->db))->deactivate(3, 64);
         $this->step(EventWorker::RECONCILE_S);
-        $this->runs->ended[3] = 0;
+        $this->runs->ended['3:64'] = 0;
         $this->step(1);
         $this->assertSame([], $this->tr->open);
         $this->assertSame([], $this->w->slots());
@@ -243,7 +246,7 @@ final class EventWorkerTest extends TestCase
         $this->db->prepare('INSERT INTO workflow_edges (workflow_id, from_node_id, to_node_id) VALUES (?, ?, ?)')
             ->execute([$e['workflow_id'], $e['from_node_id'], $e['to_node_id']]);
         $this->step(EventWorker::RECONCILE_S);
-        $this->assertArrayHasKey(3, $this->tr->open);
+        $this->assertArrayHasKey('3:64', $this->tr->open);
     }
 
     public function testAMissingServerIsAnErrorWithBackoff(): void
@@ -252,7 +255,7 @@ final class EventWorkerTest extends TestCase
         $this->active();
         $this->step();
         $this->assertSame(['error', 'server_missing'], array_values($this->state()));
-        $this->assertSame(30, $this->w->slots()[3]['backoff']);
+        $this->assertSame(30, $this->w->slots()['3:64']['backoff']);
     }
 
     public function testScheduleModeIsScheduledAndTicksEveryMinute(): void
@@ -304,11 +307,11 @@ final class EventWorkerTest extends TestCase
     {
         $this->active();
         $this->step();
-        $this->assertStringContainsString('"Inbox"', $this->tr->open[3]);
+        $this->assertStringContainsString('"Inbox"', $this->tr->open['3:64']);
         $this->editWatch('Archive');
         $this->step(EventWorker::RECONCILE_S);
         $this->assertSame(2, $this->tr->started);
-        $this->assertStringContainsString('"Archive"', $this->tr->open[3]);
+        $this->assertStringContainsString('"Archive"', $this->tr->open['3:64']);
         $this->step(EventWorker::RECONCILE_S);
         $this->assertSame(2, $this->tr->started);         // unchanged since: the wait stays
     }
@@ -319,11 +322,11 @@ final class EventWorkerTest extends TestCase
         $this->editWatch('Archive');
         $this->step(EventWorker::RECONCILE_S);
         $this->assertSame([], $this->tr->open);
-        $this->runs->ended[3] = 0;
+        $this->runs->ended['3:64'] = 0;
         $this->step(1);
         $this->step(1);
-        $this->assertArrayHasKey(3, $this->tr->open);
-        $this->assertStringContainsString('"Archive"', $this->tr->open[3]);
+        $this->assertArrayHasKey('3:64', $this->tr->open);
+        $this->assertStringContainsString('"Archive"', $this->tr->open['3:64']);
         $this->assertCount(1, $this->runs->started);
     }
 
@@ -339,7 +342,7 @@ final class EventWorkerTest extends TestCase
             $this->t += 10;
         }
         $this->assertCount(1, $lines);
-        $this->assertStringContainsString('state write (user 3)', $lines[0]);
+        $this->assertStringContainsString('state write (3:64)', $lines[0]);
         $this->assertStringContainsString('locked', $lines[0]);
         $this->t += 10;                                    // 60 s after the first: logged again
         $w->step();
@@ -364,13 +367,13 @@ final class EventWorkerTest extends TestCase
         $this->active();
         $this->active(4, 80);
         $this->step();
-        $this->tr->answer(3, ['error' => 'reconnect_needed']);
-        $this->tr->answer(4, ['status' => 'ready']);
+        $this->tr->answer('3:64', ['error' => 'reconnect_needed']);
+        $this->tr->answer('4:80', ['status' => 'ready']);
         $this->step(1);
         $this->assertSame('error', $this->state(3)['watch_state']);
         $this->assertSame('running', $this->state(4)['watch_state']);
-        $this->assertSame(30, $this->w->slots()[3]['backoff']);
-        $this->assertSame(0, $this->w->slots()[4]['backoff']);
+        $this->assertSame(30, $this->w->slots()['3:64']['backoff']);
+        $this->assertSame(0, $this->w->slots()['4:80']['backoff']);
     }
 
     public function testSwitchingTheActiveWorkflowCancelsTheOldWait(): void
@@ -381,18 +384,19 @@ final class EventWorkerTest extends TestCase
         $this->step();
         $this->active(3, 66);
         $this->step(EventWorker::RECONCILE_S);
-        $this->assertSame(66, $this->w->slots()[3]['workflow_id']);
-        $this->assertSame($other, $this->w->slots()[3]['schedule_id']);
+        $this->assertSame(66, $this->w->slots()['3:66']['workflow_id']);
+        $this->assertSame($other, $this->w->slots()['3:66']['schedule_id']);
         $this->assertSame(2, $this->tr->started);
+        $this->assertSame(['3:66'], array_keys($this->tr->open));          // the old wait was cancelled
     }
 
     private function running(): void
     {
         $this->active();
         $this->step();
-        $this->tr->answer(3, ['status' => 'ready']);
+        $this->tr->answer('3:64', ['status' => 'ready']);
         $this->step(1);
-        $this->assertSame('running', $this->w->slots()[3]['state']);
+        $this->assertSame('running', $this->w->slots()['3:64']['state']);
     }
 
     public function testSwitchingDuringARunStartsNothingUntilItEnds(): void
@@ -403,14 +407,14 @@ final class EventWorkerTest extends TestCase
         $this->active(3, 66);
         $this->step(EventWorker::RECONCILE_S);
         $this->assertSame([], $this->tr->open);
-        $this->assertSame(64, $this->w->slots()[3]['workflow_id']);
-        $this->assertSame('running', $this->w->slots()[3]['state']);
-        $this->runs->ended[3] = 0;
+        $this->assertSame(64, $this->w->slots()['3:64']['workflow_id']);
+        $this->assertSame('running', $this->w->slots()['3:64']['state']);
+        $this->runs->ended['3:64'] = 0;
         $this->step(1);
         $this->assertSame([], $this->tr->open);                  // re-evaluated first
         $this->step(1);
-        $this->assertArrayHasKey(3, $this->tr->open);
-        $this->assertSame(66, $this->w->slots()[3]['workflow_id']);
+        $this->assertArrayHasKey('3:66', $this->tr->open);
+        $this->assertSame(66, $this->w->slots()['3:66']['workflow_id']);
         $this->assertSame(2, $this->tr->started);
         $this->assertCount(1, $this->runs->started);
     }
@@ -420,7 +424,7 @@ final class EventWorkerTest extends TestCase
         $this->running();
         $this->db->exec('UPDATE agent_workflows SET enabled = 0');
         $this->step(EventWorker::RECONCILE_S);
-        $this->runs->ended[3] = 0;
+        $this->runs->ended['3:64'] = 0;
         $this->step(1);
         $this->step(1);
         $this->assertSame([], $this->tr->open);
@@ -436,11 +440,11 @@ final class EventWorkerTest extends TestCase
         $this->db->exec('UPDATE agent_workflows SET enabled = 1');
         $this->step(EventWorker::RECONCILE_S);
         $this->assertSame([], $this->tr->open);
-        $this->assertSame('running', $this->w->slots()[3]['state']);
-        $this->runs->ended[3] = 0;
+        $this->assertSame('running', $this->w->slots()['3:64']['state']);
+        $this->runs->ended['3:64'] = 0;
         $this->step(1);
         $this->step(1);
-        $this->assertArrayHasKey(3, $this->tr->open);
+        $this->assertArrayHasKey('3:64', $this->tr->open);
         $this->assertCount(1, $this->runs->started);
     }
 
@@ -458,9 +462,9 @@ final class EventWorkerTest extends TestCase
         $this->active(4, 80);
         $w->step();
         $this->assertSame(['error', 'unreachable'], array_values($this->state(3)));
-        $this->assertSame(30, $w->slots()[3]['backoff']);
-        $this->assertArrayHasKey(4, $this->tr->open);
-        $this->assertArrayNotHasKey(3, $this->tr->open);
+        $this->assertSame(30, $w->slots()['3:64']['backoff']);
+        $this->assertArrayHasKey('4:80', $this->tr->open);
+        $this->assertArrayNotHasKey('3:64', $this->tr->open);
     }
 
     public function testAReadyBetweenDeactivationAndReconcileStartsNoRun(): void
@@ -468,7 +472,7 @@ final class EventWorkerTest extends TestCase
         $this->active();
         $this->step();
         (new ActiveWorkflowService($this->db))->deactivate(3, 64);
-        $this->tr->answer(3, ['status' => 'ready']);
+        $this->tr->answer('3:64', ['status' => 'ready']);
         $this->step(1);
         $this->assertSame([], $this->runs->started);
         $this->assertSame([], $this->w->slots());
@@ -481,10 +485,10 @@ final class EventWorkerTest extends TestCase
         $this->db->exec('INSERT INTO flag VALUES (1)');
         $this->db->exec("CREATE TRIGGER no_update BEFORE UPDATE ON active_workflows WHEN (SELECT v FROM flag) = 1
             BEGIN SELECT RAISE(ABORT, 'locked'); END");
-        $this->runs->ended[3] = 0;
+        $this->runs->ended['3:64'] = 0;
         $this->step(1);
-        $this->assertSame('waiting', $this->w->slots()[3]['state']);     // the run end was taken
-        $this->assertArrayHasKey(3, $this->tr->open);
+        $this->assertSame('waiting', $this->w->slots()['3:64']['state']);     // the run end was taken
+        $this->assertArrayHasKey('3:64', $this->tr->open);
         $this->assertSame('running', $this->state()['watch_state']);      // the write failed
         $this->db->exec('UPDATE flag SET v = 0');
         $this->step(EventWorker::HEARTBEAT_S + 1);
@@ -496,13 +500,13 @@ final class EventWorkerTest extends TestCase
         $this->running();
         $this->step(EventWorker::RECONCILE_S);
         $this->step(EventWorker::RECONCILE_S);
-        $this->runs->ended[3] = 1;
+        $this->runs->ended['3:64'] = 1;
         $this->step(1);
         $this->step(1);
         $this->assertSame(['error', 'run_failed'], array_values($this->state()));
         $this->step(EventWorker::BACKOFF_MIN_S);
         $this->assertSame(['waiting', 'run_failed'], array_values($this->state()));
-        $this->assertArrayHasKey(3, $this->tr->open);
+        $this->assertArrayHasKey('3:64', $this->tr->open);
     }
 
     public function testAReadyAfterADisableBeforeTheNextReconcileStartsNoRun(): void
@@ -510,10 +514,10 @@ final class EventWorkerTest extends TestCase
         $this->active();
         $this->step();
         $this->db->exec('UPDATE agent_workflows SET enabled = 0');
-        $this->tr->answer(3, ['status' => 'ready']);
+        $this->tr->answer('3:64', ['status' => 'ready']);
         $this->step(1);
         $this->assertSame([], $this->runs->started);
-        $this->assertArrayNotHasKey(3, $this->tr->open);
+        $this->assertArrayNotHasKey('3:64', $this->tr->open);
     }
 
     public function testARowWhoseCheckThrowsDoesNotStopTheOthers(): void
@@ -528,6 +532,33 @@ final class EventWorkerTest extends TestCase
         ThrowingStatement::$boomOn = (int) $this->db->query("SELECT id FROM workflow_nodes WHERE workflow_id = 64 AND node_type = 'start'")->fetchColumn();
         $this->db->setAttribute(PDO::ATTR_STATEMENT_CLASS, [ThrowingStatement::class]);
         $this->step();
-        $this->assertArrayHasKey(4, $this->tr->open);
+        $this->assertArrayHasKey('4:80', $this->tr->open);
+    }
+
+    public function testTheRobotWatchesSeveralWorkflowsAndCancelsOnlyTheRemovedOne(): void
+    {
+        EventWorkerSchema::option($this->db, 2, 9);
+        EventWorkerSchema::workflow($this->db, 75, 9, 2);
+        $r75 = EventWorkerSchema::row($this->db, 75, 9, 'event', 2);
+        EventWorkerSchema::workflow($this->db, 76, 9, 2);
+        EventWorkerSchema::row($this->db, 76, 9, 'event', 2);
+        $this->db->exec("INSERT INTO mcp_servers (user_id, name, url, headers) VALUES (9, 'Outlook', 'http://robot/mcp', '{}')");
+        $this->active(9, 75);
+        $this->active(9, 76);
+        $this->step();
+        $this->assertSame(['9:75', '9:76'], array_keys($this->w->slots()));
+        $this->assertSame(['9:75', '9:76'], array_keys($this->tr->open));
+        $this->assertSame(['waiting', 'waiting'], [$this->state(9, 75)['watch_state'], $this->state(9, 76)['watch_state']]);
+        $this->tr->answer('9:75', ['status' => 'ready']);
+        $this->step(1);
+        $this->assertSame([['9:75', $r75]], $this->runs->started);
+        $this->assertSame(['running', 'waiting'], [$this->state(9, 75)['watch_state'], $this->state(9, 76)['watch_state']]);
+        (new ActiveWorkflowService($this->db))->deactivate(9, 76);
+        $this->step(EventWorker::RECONCILE_S);
+        $this->assertSame(['9:75'], array_keys($this->w->slots()));
+        $this->assertSame([], $this->tr->open);                   // 76's wait cancelled; 75 runs
+        $this->runs->ended['9:75'] = 0;
+        $this->step(1);
+        $this->assertSame(['9:75'], array_keys($this->tr->open)); // 75 waits again
     }
 }

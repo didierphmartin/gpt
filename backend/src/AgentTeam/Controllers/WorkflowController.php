@@ -1342,11 +1342,12 @@ class WorkflowController
         }
         $log = new WorkflowRunLog(WorkflowRunLog::defaultDir($this->config));
         $active = new ActiveWorkflowService($this->db);
-        $activeOwner = $this->ownership()->runAs($userId, $workflowId);   // a robot workflow's active row is the robot's
+        $activeOwner = $this->ownership()->runAs($userId, $workflowId);
         $cursor = isset($request['query']['cursor']) ? (string) $request['query']['cursor'] : null;
         LiveStream::run(
             fn(?string $c) => LiveFeed::next($log, $workflowId, $c),
-            fn() => $active->get($activeOwner),
+            // a person's own row (whichever workflow it is, as GET /workflows/active); a robot workflow's own row of the robot's several
+            $activeOwner === $userId ? fn() => $active->get($userId) : fn() => $active->forWorkflow($workflowId),
             $emit,
             fn(float $s) => usleep((int) ($s * 1e6)),
             fn() => microtime(true),

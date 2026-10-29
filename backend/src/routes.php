@@ -523,6 +523,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->get('/api/v1/workflows/active', ['AgentTeam:ActiveWorkflowController', 'show']);
         $r->post('/api/v1/workflows/{id:\d+}/activate', ['AgentTeam:ActiveWorkflowController', 'activate']);
         $r->delete('/api/v1/workflows/{id:\d+}/activate', ['AgentTeam:ActiveWorkflowController', 'deactivate']);
+        $r->get('/api/v1/workflows/{id:\d+}/active', ['AgentTeam:ActiveWorkflowController', 'forWorkflow']);
 
         // ============================================
         // SCHEDULER ROUTES (Cron/Admin)

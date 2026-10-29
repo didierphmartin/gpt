@@ -1093,7 +1093,7 @@ CREATE TABLE `workflow_schemas` (
 -- Indexes for table `active_workflows`
 --
 ALTER TABLE `active_workflows`
-  ADD PRIMARY KEY (`user_id`),
+  ADD PRIMARY KEY (`user_id`,`workflow_id`),
   ADD KEY `idx_active_workflows_workflow` (`workflow_id`);
 
 --
