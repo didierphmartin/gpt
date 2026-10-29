@@ -391,6 +391,7 @@ function makeSessionEditor(mode) {
         _swarmBusy: false,
         opened: [],
         _persistIfDirty: async () => {},
+        _refuseIfLocked: () => false,   // not a locked robot workflow
         _hideCompiledScrim() {},
         _pbOverlayOpen(dfId, name, servers, prompt, opts) { this.opened.push({ dfId, opts }); },
         _pbClearFeed() {},

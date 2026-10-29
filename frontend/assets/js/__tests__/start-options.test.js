@@ -42,6 +42,11 @@ assert.deepStrictEqual(SO.warning('New email', [{ workflow_name: 'AA test' }, { 
     'workflow.startOptions.warnPorts', 'workflow.startOptions.warnEverywhere', 'workflow.startOptions.warnLibrary']);
 assert.strictEqual(SO.warning('New email', [{ workflow_name: 'AA test' }, { workflow_name: 'B' }], 'new_mail')[0].params.names, 'AA test, B');
 assert.strictEqual(SO.warning('New email', [{ workflow_name: 'AA test' }], 'new_mail')[2].params.exit, 'new_mail');
+// a robot option's impact ends with {others}: counted in warnActive, named as a line of its own
+{
+    const w = SO.warning('New email', [{ workflow_name: 'AA test' }, { others: 2 }], 'new_mail');
+    assert.deepStrictEqual([w[0].params, w[1]], [{ count: 3, names: 'AA test' }, { key: 'workflow.owner.otherWorkflows', params: { count: 2 } }]);
+}
 assert.deepStrictEqual(SO.warning('New email', [], 'new_mail').map((l) => l.key),
     ['workflow.startOptions.warnEverywhere', 'workflow.startOptions.warnLibrary']);
 
@@ -78,7 +83,7 @@ assert.deepStrictEqual(SO.startLinks({}, MAIL, PLAIN), { ports: 1, connections: 
 // i18n: every warning line's params fill the en strings with the {{x}} rule i18n.js uses -- no brace left
 const en = require('../../i18n/en.json');
 const lookup = (key) => key.split('.').reduce((o, k) => (o ? o[k] : undefined), en);
-for (const { key, params } of SO.warning('New email', [{ workflow_name: 'AA test' }], 'new_mail')) {
+for (const { key, params } of SO.warning('New email', [{ workflow_name: 'AA test' }, { others: 1 }], 'new_mail')) {
     const raw = lookup(key);
     assert.strictEqual(typeof raw, 'string', key);
     const out = raw.replace(/\{\{(\w+)\}\}/g, (m, k) => (params[k] !== undefined ? String(params[k]) : m));

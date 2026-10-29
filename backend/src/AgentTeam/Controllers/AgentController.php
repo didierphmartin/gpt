@@ -88,8 +88,9 @@ class AgentController
         // Remove null filters
         $filters = array_filter($filters, fn($v) => $v !== null);
 
-        $agents = $this->repository->findAccessibleByUser($userId, $filters);
-        $total = $this->repository->countAccessible($userId);
+        $robotId = $this->robotFor($userId);
+        $agents = $this->repository->findAccessibleByUser($userId, $filters, $robotId);
+        $total = $this->repository->countAccessible($userId, $robotId);
 
         return [
             'success' => true,
@@ -189,7 +190,7 @@ class AgentController
         $userId = $this->getUserId($request);
         $agentId = $this->getAgentId($request);
 
-        if (!$this->repository->canUserAccess($userId, $agentId)) {
+        if (!$this->repository->canUserAccess($userId, $agentId, $this->robotFor($userId))) {
             return $this->error('Agent not found', 404);
         }
 
@@ -219,12 +220,20 @@ class AgentController
         $agentId = $this->getAgentId($request);
         $data = $request['body'] ?? [];
 
-        // Check ownership (only owner can update)
-        if (!$this->repository->isOwner($userId, $agentId)) {
+        // Check ownership (only owner can update; a robot agent is also editable by robot-permitted users, by id)
+        if (!$this->repository->isOwner($userId, $agentId, $this->robotFor($userId))) {
             return $this->error('Agent not found or access denied', 404);
         }
 
         $agent = $this->repository->findById($agentId);
+
+        // Names are unique per owner: a robot agent renamed onto another robot agent's name.
+        if (isset($data['name'])) {
+            $holder = $this->repository->findOwnedByName((string) $data['name'], $agent->getUserId());
+            if ($holder !== null && $holder->getId() !== $agentId) {
+                return $this->nameTaken((string) $data['name']);
+            }
+        }
 
         // Update fields
         if (isset($data['name'])) {
@@ -275,7 +284,12 @@ class AgentController
 
         // Only a playbook agent has a playbook; a linked agent keeps its text in the collection only.
         if (array_key_exists('playbook_id', $data) && $data['playbook_id'] !== null && $agent->getAgentType() === 'playbook') {
-            if ($this->findPlaybook($userId, (int) $data['playbook_id']) === null) {
+            // a robot agent links only the robot's playbooks (it runs as the robot); a person's, theirs or the robot's
+            $robotId = $this->robotFor($userId);
+            $pb = $robotId !== null && $agent->getUserId() === $robotId
+                ? $this->findPlaybook($robotId, (int) $data['playbook_id'], $robotId)
+                : $this->findPlaybook($userId, (int) $data['playbook_id'], $robotId);
+            if ($pb === null) {
                 return $this->error('Playbook #' . (int) $data['playbook_id'] . ' not found', 404);
             }
             $agent->setPlaybookId((int) $data['playbook_id']);
@@ -308,6 +322,11 @@ class AgentController
                 'data' => $updated->toArray(),
                 'message' => "Agent '{$updated->getName()}' updated successfully",
             ];
+        } catch (\PDOException $e) {
+            if (isset($data['name']) && $e->getCode() === '23000') {
+                return $this->nameTaken((string) $data['name']);   // lost a race for the name
+            }
+            return $this->error('Failed to update agent: ' . $e->getMessage(), 500);
         } catch (\Exception $e) {
             return $this->error('Failed to update agent: ' . $e->getMessage(), 500);
         }
@@ -323,7 +342,7 @@ class AgentController
         $agentId = $this->getAgentId($request);
 
         // Check ownership
-        if (!$this->repository->isOwner($userId, $agentId)) {
+        if (!$this->repository->isOwner($userId, $agentId, $this->robotFor($userId))) {
             return $this->error('Agent not found or access denied', 404);
         }
 
@@ -650,8 +669,8 @@ class AgentController
         $agentId = $this->getAgentId($request);
         $data = $request['body'] ?? [];
 
-        // Check access
-        if (!$this->repository->canUserAccess($userId, $agentId)) {
+        // Check access (a robot agent too, for a robot-permitted caller; the copy is the caller's)
+        if (!$this->repository->canUserAccess($userId, $agentId, $this->robotFor($userId))) {
             return $this->error('Agent not found', 404);
         }
 
@@ -684,7 +703,7 @@ class AgentController
         $agentId = $this->getAgentId($request);
 
         // Check ownership
-        if (!$this->repository->isOwner($userId, $agentId)) {
+        if (!$this->repository->isOwner($userId, $agentId, $this->robotFor($userId))) {
             return $this->error('Agent not found or access denied', 404);
         }
 
@@ -718,7 +737,7 @@ class AgentController
         $agentId = $this->getAgentId($request);
 
         // Check ownership
-        if (!$this->repository->isOwner($userId, $agentId)) {
+        if (!$this->repository->isOwner($userId, $agentId, $this->robotFor($userId))) {
             return $this->error('Agent not found or access denied', 404);
         }
 
@@ -820,9 +839,20 @@ class AgentController
         return (int) ($request['user_id'] ?? 0);
     }
 
-    private function findPlaybook(int $userId, int $id): ?array
+    private function findPlaybook(int $userId, int $id, ?int $robotId = null): ?array
     {
-        return (new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db))->get($userId, $id);
+        return (new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db))->get($userId, $id, $robotId);
+    }
+
+    /** The robot's id when the caller may use the robot (its agents are shared), else null. */
+    private function robotFor(int $userId): ?int
+    {
+        return (new \Quantis\AIPortfolioAssistant\Services\RobotOwnership($this->db, $this->config))->robotFor($userId);
+    }
+
+    private function nameTaken(string $name): array
+    {
+        return ['error_code' => 'name_taken'] + $this->error("An agent named \"$name\" already exists.", 409);
     }
 
     private function getAgentId(array $request): int

@@ -10,7 +10,7 @@ final class CurlMultiTransport implements WatchTransport
     public const TIMEOUT_S = 180;
 
     private \CurlMultiHandle $multi;
-    /** @var array<int, \CurlHandle> */
+    /** @var array<string, \CurlHandle> */
     private array $handles = [];
 
     public function __construct()
@@ -18,7 +18,7 @@ final class CurlMultiTransport implements WatchTransport
         $this->multi = curl_multi_init();
     }
 
-    public function start(int $key, string $url, array $headers, string $body): void
+    public function start(string $key, string $url, array $headers, string $body): void
     {
         $this->cancel($key);
         $ch = curl_init($url);
@@ -34,7 +34,7 @@ final class CurlMultiTransport implements WatchTransport
         $this->handles[$key] = $ch;
     }
 
-    public function cancel(int $key): void
+    public function cancel(string $key): void
     {
         if (isset($this->handles[$key])) {
             curl_multi_remove_handle($this->multi, $this->handles[$key]);

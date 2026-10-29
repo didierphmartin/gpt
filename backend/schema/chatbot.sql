@@ -218,10 +218,7 @@ CREATE TABLE `agent_workflows` (
   `output_storage_enabled` tinyint(1) DEFAULT '0',
   `output_folder` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `orchestration` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'workflow',
-  `automation_id` int DEFAULT NULL,
-  `published_by` int DEFAULT NULL,
-  `published_at` datetime DEFAULT NULL,
-  `source_id` int DEFAULT NULL
+  `automation_id` int DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
@@ -1093,7 +1090,7 @@ CREATE TABLE `workflow_schemas` (
 -- Indexes for table `active_workflows`
 --
 ALTER TABLE `active_workflows`
-  ADD PRIMARY KEY (`user_id`),
+  ADD PRIMARY KEY (`user_id`,`workflow_id`),
   ADD KEY `idx_active_workflows_workflow` (`workflow_id`);
 
 --
@@ -1179,8 +1176,7 @@ ALTER TABLE `agent_workflows`
   ADD UNIQUE KEY `uq_workflows_user_name` (`user_id`,`name`),
   ADD KEY `idx_workflows_user` (`user_id`),
   ADD KEY `idx_workflows_workspace` (`workspace_id`),
-  ADD KEY `idx_workflows_enabled` (`enabled`),
-  ADD KEY `idx_agent_workflows_user_source` (`user_id`,`source_id`);
+  ADD KEY `idx_workflows_enabled` (`enabled`);
 
 --
 -- Indexes for table `agent_workflow_executions`

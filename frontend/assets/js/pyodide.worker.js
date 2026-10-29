@@ -493,7 +493,10 @@ def _transport(server, tool, args):
     xhr.setRequestHeader("Content-Type", "application/json")
     if _req.get("token"):
         xhr.setRequestHeader("Authorization", "Bearer " + _req["token"])
-    xhr.send(json.dumps({"server": server, "tool": tool, "args": args}))
+    _call = {"server": server, "tool": tool, "args": args}
+    if _req.get("workflow_id"):
+        _call["workflow_id"] = _req["workflow_id"]   # a robot workflow's call runs as the robot
+    xhr.send(json.dumps(_call))
     try:
         body = json.loads(xhr.responseText or "{}")
     except ValueError:

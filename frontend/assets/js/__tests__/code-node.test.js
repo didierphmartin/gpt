@@ -252,6 +252,9 @@ for (const bad of [undefined, null, [], 'x', 3]) assert.deepStrictEqual(CN.nodeA
     assert.deepStrictEqual(bare.arg_decls, []);
     assert.deepStrictEqual(CN.runRequest({ arg_decls: [{ name: 'a' }] }, [], '').arg_decls, [{ name: 'a' }]);
     assert.deepStrictEqual(CN.runRequest({ arg_decls: 'x' }, [], '').arg_decls, []);
+    // A workflow run's request names its workflow: a robot workflow's call_tool then runs as the robot.
+    assert.strictEqual(CN.runRequest({}, [], 'go', 75).workflow_id, 75);
+    assert.ok(!('workflow_id' in CN.runRequest({}, [], 'go')));
 }
 {
     const comp = { id: 12, name: 'ServiceNow: get new job', code: 'c', exits: ['job', 'no_job', 'error'], mcp_servers: ['ServiceNow'],

@@ -360,11 +360,16 @@
         return v && typeof v === 'object' && !Array.isArray(v) ? { ...v } : {};
     }
 
-    /** The worker request for one code-node run (the editor's Run walk), args included as the server sends them. */
-    function runRequest(d, parents, userPrompt) {
-        return { code: d.code || '', exits: d.exits || ['next'], servers: (d.mcp_servers || []).map(slug),
+    /**
+     * The worker request for one code-node run (the editor's Run walk), args included as the server sends them.
+     * workflowId: the running workflow's id, sent with each call_tool so a robot workflow's calls run as the robot.
+     */
+    function runRequest(d, parents, userPrompt, workflowId) {
+        const req = { code: d.code || '', exits: d.exits || ['next'], servers: (d.mcp_servers || []).map(slug),
             timeout_s: Number(d.timeout_s) || 30, parents, user_prompt: userPrompt, name: d.name || 'Code', args: nodeArgs(d.args),
             arg_decls: Array.isArray(d.arg_decls) ? d.arg_decls : [] };
+        if (workflowId) req.workflow_id = Number(workflowId);
+        return req;
     }
 
     /**

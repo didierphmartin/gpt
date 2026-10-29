@@ -62,12 +62,14 @@ class WorkflowRepository
     /**
      * Find all workflows for a user
      */
-    public function findByUser(int $userId, bool $includeGraph = false): array
+    public function findByUser(int $userId, bool $includeGraph = false, ?int $robotId = null): array
     {
         $stmt = $this->db->prepare(
-            "SELECT * FROM agent_workflows WHERE user_id = ? ORDER BY name ASC"
+            $robotId === null
+                ? "SELECT * FROM agent_workflows WHERE user_id = ? ORDER BY name ASC"
+                : "SELECT * FROM agent_workflows WHERE user_id = ? OR user_id = ? ORDER BY name ASC"
         );
-        $stmt->execute([$userId]);
+        $stmt->execute($robotId === null ? [$userId] : [$userId, $robotId]);
 
         return array_map(
             function ($row) use ($includeGraph) {
@@ -201,23 +203,23 @@ class WorkflowRepository
     /**
      * Check if a user can access a workflow
      */
-    public function canUserAccess(int $userId, int $workflowId): bool
+    public function canUserAccess(int $userId, int $workflowId, ?int $robotId = null): bool
     {
         $workflow = $this->findById($workflowId);
         if (!$workflow) {
             return false;
         }
 
-        return $workflow->getUserId() === $userId;
+        return $workflow->getUserId() === $userId || ($robotId !== null && $workflow->getUserId() === $robotId);
     }
 
     /**
      * Check if a user owns a workflow
      */
-    public function isOwner(int $userId, int $workflowId): bool
+    public function isOwner(int $userId, int $workflowId, ?int $robotId = null): bool
     {
         $workflow = $this->findById($workflowId);
-        return $workflow && $workflow->getUserId() === $userId;
+        return $workflow && ($workflow->getUserId() === $userId || ($robotId !== null && $workflow->getUserId() === $robotId));
     }
 
     /**
@@ -244,7 +246,9 @@ class WorkflowRepository
     }
 
     /**
-     * Duplicate a workflow
+     * Copy a workflow for $newUserId: the row, every node and edge (raw rows, ids remapped, so component and
+     * playbook links stay as they are) and its schedules, paused. No active_workflows row: a copy starts inactive.
+     * Name: "<name> (Copy)", then "(Copy 2)", "(Copy 3)"... until free for that owner.
      */
     public function duplicate(int $workflowId, int $newUserId, ?string $newName = null): ?Workflow
     {
@@ -255,8 +259,74 @@ class WorkflowRepository
 
         $copy = new Workflow($original->toArray());
         $copy->setUserId($newUserId);
-        $copy->setName($newName ?? $original->getName() . ' (Copy)');
+        $copy->setName($newName ?? $this->freeCopyName($original->getName(), $newUserId));
 
-        return $this->create($copy);
+        $this->db->beginTransaction();
+        try {
+            $created = $this->create($copy);
+            $newId = $created->getId();
+
+            $nodeMap = [];
+            $nodes = $this->db->prepare('SELECT * FROM workflow_nodes WHERE workflow_id = ? ORDER BY id');
+            $nodes->execute([$workflowId]);
+            $insertNode = $this->db->prepare(
+                'INSERT INTO workflow_nodes (workflow_id, node_type, agent_id, config, pos_x, pos_y, drawflow_node_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)'
+            );
+            foreach ($nodes->fetchAll(PDO::FETCH_ASSOC) as $n) {
+                $insertNode->execute([$newId, $n['node_type'], $n['agent_id'], $n['config'], $n['pos_x'], $n['pos_y'], $n['drawflow_node_id']]);
+                $nodeMap[(int) $n['id']] = (int) $this->db->lastInsertId();
+            }
+
+            $edges = $this->db->prepare('SELECT * FROM workflow_edges WHERE workflow_id = ? ORDER BY id');
+            $edges->execute([$workflowId]);
+            $insertEdge = $this->db->prepare(
+                'INSERT INTO workflow_edges (workflow_id, from_node_id, to_node_id, from_port, to_port, condition_expr)
+                 VALUES (?, ?, ?, ?, ?, ?)'
+            );
+            foreach ($edges->fetchAll(PDO::FETCH_ASSOC) as $e) {
+                $from = $nodeMap[(int) $e['from_node_id']] ?? null;
+                $to = $nodeMap[(int) $e['to_node_id']] ?? null;
+                if ($from === null || $to === null) {
+                    continue;
+                }
+                $insertEdge->execute([$newId, $from, $to, $e['from_port'], $e['to_port'], $e['condition_expr']]);
+            }
+            $this->db->commit();
+        } catch (\Throwable $e) {
+            $this->db->rollBack();
+            throw $e;
+        }
+
+        $this->copySchedules($workflowId, $newId, $newUserId);
+        return $created;
+    }
+
+    private function freeCopyName(string $name, int $userId): string
+    {
+        $taken = $this->db->prepare('SELECT 1 FROM agent_workflows WHERE user_id = ? AND name = ?');
+        for ($n = 1;; $n++) {
+            $candidate = $name . ($n === 1 ? ' (Copy)' : " (Copy $n)");
+            $taken->execute([$userId, $candidate]);
+            if (!$taken->fetchColumn()) {
+                return $candidate;
+            }
+        }
+    }
+
+    /** The source's schedules, as the copier's and paused (a copy never fires on its own). */
+    private function copySchedules(int $fromWorkflowId, int $toWorkflowId, int $userId): void
+    {
+        $rows = $this->db->prepare('SELECT * FROM scheduled_workflows WHERE workflow_id = ? ORDER BY id');
+        $rows->execute([$fromWorkflowId]);
+        $insert = $this->db->prepare(
+            "INSERT INTO scheduled_workflows (user_id, workflow_id, input_prompt, scheduled_time, status, repeat_type,
+                repeat_interval, cron, event_trigger, trigger_component_id, next_run)
+             VALUES (?, ?, ?, ?, 'paused', ?, ?, ?, ?, ?, ?)"
+        );
+        foreach ($rows->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $insert->execute([$userId, $toWorkflowId, $r['input_prompt'], $r['scheduled_time'], $r['repeat_type'],
+                $r['repeat_interval'], $r['cron'], $r['event_trigger'], $r['trigger_component_id'], $r['next_run']]);
+        }
     }
 }

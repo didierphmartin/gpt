@@ -10,7 +10,7 @@ namespace AgentTeam\Services;
  */
 final class ProcRunSpawner implements RunSpawner
 {
-    /** @var array<int, array{proc: resource|null, started: float}> */
+    /** @var array<string, array{proc: resource|null, started: float}> */
     private array $runs = [];
     /** @var resource|null */
     private $tick = null;
@@ -22,16 +22,16 @@ final class ProcRunSpawner implements RunSpawner
         $this->log = $log ?? static fn(string $line) => null;
     }
 
-    public function start(int $key, int $scheduleId): void
+    public function start(string $key, int $scheduleId): void
     {
         if (isset($this->runs[$key])) {
-            ($this->log)("run for user {$key} is still in flight: schedule {$scheduleId} not started");
-            throw new \RuntimeException("a run for user {$key} is still in flight");
+            ($this->log)("run {$key} is still in flight: schedule {$scheduleId} not started");
+            throw new \RuntimeException("a run {$key} is still in flight");
         }
         $proc = proc_open([$this->php, $this->backendDir . '/bin/run-schedule.php', (string) $scheduleId],
             [0 => ['file', '/dev/null', 'r'], 1 => STDOUT, 2 => STDERR], $pipes, $this->backendDir);
         if (!is_resource($proc)) {
-            ($this->log)("run for user {$key} (schedule {$scheduleId}) could not start");
+            ($this->log)("run {$key} (schedule {$scheduleId}) could not start");
             $this->runs[$key] = ['proc' => null, 'started' => microtime(true)];
             return;
         }
@@ -50,7 +50,7 @@ final class ProcRunSpawner implements RunSpawner
             }
             $st = proc_get_status($r['proc']);
             if ($st['running'] && microtime(true) - $r['started'] > $this->runLimitS) {
-                ($this->log)("run for user {$key} passed {$this->runLimitS} s: killed");
+                ($this->log)("run {$key} passed {$this->runLimitS} s: killed");
                 proc_terminate($r['proc'], 9);
                 $st = ['running' => false, 'exitcode' => 137];
             }

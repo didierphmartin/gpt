@@ -574,17 +574,6 @@ class WorkflowEditor {
             });
         }
 
-        // Top-left "Publish to robot": only for a caller whose role may use the robot (GET /robot can_use).
-        const publishRobotBtn = document.getElementById('wf-publish-robot');
-        if (publishRobotBtn && !publishRobotBtn.dataset.robotBound) {
-            publishRobotBtn.dataset.robotBound = '1';
-            publishRobotBtn.addEventListener('click', () => this._publishWorkflowToRobot(publishRobotBtn));
-            const robot = window.playbooksLibrary?.robotInfo
-                ? window.playbooksLibrary.robotInfo()
-                : this._playbookApi().robot().then((b) => b.data || {}).catch(() => ({}));
-            robot.then((r) => { publishRobotBtn.style.display = r?.can_use ? 'flex' : 'none'; });
-        }
-
         // Shared genesis on-ramp used by both the toolbar button above and the
         // sidebar workflow ⋮ menu: one reflection call → approval overlay.
         // Callers own any button busy-state; this method owns the in-flight
@@ -733,6 +722,7 @@ class WorkflowEditor {
                     <span class="opacity-60">${icon}</span>
                     <span class="flex-shrink-0 text-[11px] text-gray-600 font-medium tabular-nums">#${wf.id}</span>
                     <span class="flex-1 truncate" title="${this.escapeHtml(wf.name)} (${badgeLabel}, ID: ${wf.id})">${this.escapeHtml(wf.name || 'Untitled')}</span>
+                    ${window.RobotOwner.rowMarks(wf, (k, p) => this.t(k, p))}
                     <span class="text-[9px] font-semibold px-1.5 py-0.5 rounded" style="${badgeStyle}">${badgeLabel}</span>
                     <button type="button"
                             class="sidebar-workflow-menu px-1 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded transition flex-shrink-0"
@@ -802,6 +792,10 @@ class WorkflowEditor {
                         class="w-full text-left px-3 py-1.5 hover:bg-gray-100 text-gray-700 flex items-center gap-2">
                     <span>✏️</span><span data-i18n="contextMenu.rename">${this.t('contextMenu.rename')}</span>
                 </button>
+                <button type="button" data-action="copy"
+                        class="w-full text-left px-3 py-1.5 hover:bg-gray-100 text-gray-700 flex items-center gap-2">
+                    <span>📄</span><span data-i18n="contextMenu.copy">${this.t('contextMenu.copy')}</span>
+                </button>
                 <button type="button" data-action="skillify"
                         class="w-full text-left px-3 py-1.5 hover:bg-gray-100 text-gray-700 flex items-center gap-2">
                     <span>🧬</span><span data-i18n="genesis.promoteWorkflow">${this.tWithFallback('genesis.promoteWorkflow', 'Promote to skill…')}</span>
@@ -839,6 +833,8 @@ class WorkflowEditor {
                     if (!target) return;
                     if (action === 'rename') {
                         await this.renameWorkflow(target.id, target.name);
+                    } else if (action === 'copy') {
+                        await this.copyWorkflow(target.id);
                     } else if (action === 'skillify') {
                         await this.promoteWorkflowToSkill(target.id);
                     } else if (action === 'delete') {
@@ -939,6 +935,26 @@ class WorkflowEditor {
      * in-memory name in sync so the header reflects the change without
      * a reload.
      */
+    /** Copy a workflow (also a locked robot one) into a personal instance and open it. */
+    async copyWorkflow(workflowId) {
+        try {
+            const response = await fetch(`${this.apiBase}/workflows/${workflowId}/duplicate`, {
+                method: 'POST',
+                headers: this.getAuthHeaders(),
+                body: JSON.stringify({})
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || data.success === false) {
+                throw new Error(data.error || data.message || `HTTP ${response.status}`);
+            }
+            await this.loadWorkflowsList();
+            await this.loadWorkflow(data.data.id);
+        } catch (error) {
+            console.error('[WorkflowEditor] Error copying workflow:', error);
+            alert((this.t('workflow.errors.copyWorkflowFailed') || 'Failed to copy workflow: ') + (error.message || error));
+        }
+    }
+
     async renameWorkflow(workflowId, currentName) {
         const newName = await this._showRenameDialog(
             'workflow.dialogs.renameWorkflowTitle',
@@ -1208,6 +1224,13 @@ class WorkflowEditor {
                 <label class="workflow-form-label">Description</label>
                 <textarea id="workflow-description-input" class="workflow-description-input"
                           rows="2"></textarea>
+            </div>
+            <div class="workflow-form-group" id="workflow-owner-group" style="display:none;">
+                <label class="workflow-form-label">${this.escapeHtml(this.t('workflow.owner.label'))}</label>
+                <select id="workflow-owner-select" class="workflow-name-input">
+                    <option value="me">${this.escapeHtml(this.t('workflow.owner.me'))}</option>
+                    <option value="robot">🤖 ${this.escapeHtml(this.t('workflow.owner.robot'))}</option>
+                </select>
             </div>
             <div class="workflow-form-group workflow-schedule-toggle">
                 <label class="workflow-toggle-label">
@@ -1522,6 +1545,10 @@ class WorkflowEditor {
             this.currentWorkflowDescription = e.target.value;
         });
 
+        document.getElementById('workflow-owner-select')?.addEventListener('change', (e) => {
+            if (e.target.value === 'robot') this._setOwnerRobot();
+        });
+
         scheduleCheckbox.addEventListener('change', (e) => {
             this.scheduleEnabled = e.target.checked;
             this.updateDocumentStorageMode();
@@ -1822,6 +1849,143 @@ class WorkflowEditor {
 
         // Update delete button state
         this.updateDeleteButtonState();
+        this._refreshOwnerField();
+    }
+
+    /** GET /robot once ({can_use, ...}); {} when it fails. Shared with the Playbooks library when it is loaded. */
+    _robotInfo() {
+        if (window.playbooksLibrary?.robotInfo) return window.playbooksLibrary.robotInfo();
+        this._robotInfoPromise ??= this._playbookApi().robot().then((b) => b.data || {}).catch(() => ({}));
+        return this._robotInfoPromise;
+    }
+
+    /** The Owner select: for a caller who may use the robot; "Robot", read-only, on a robot workflow. */
+    _refreshOwnerField() {
+        const group = document.getElementById('workflow-owner-group');
+        const select = document.getElementById('workflow-owner-select');
+        if (!group || !select) return;
+        this._robotInfo().then((robot) => {
+            const v = window.RobotOwner.ownerView(robot, { is_robot: this.currentWorkflowIsRobot });
+            group.style.display = v.show ? '' : 'none';
+            if (!v.show) return;
+            select.value = v.value;
+            select.disabled = v.disabled;
+        });
+    }
+
+    /**
+     * Owner → Robot: PUT /owner {confirm:false} previews it (clashes refuse it: listed, nothing to confirm), the
+     * confirmation says it cannot be undone, then {confirm:true} and the workflow and the list are reloaded.
+     */
+    async _setOwnerRobot() {
+        const id = this.currentWorkflowId;
+        const t = (k, p) => this.t(k, p);
+        try {
+            if (!id) { this.showToast(this.t('workflow.messages.saveFirst'), 'warning'); return; }
+            await this._persistIfDirty();   // the server reads the workflow's links from the database
+            const put = async (confirm) => {
+                const r = await fetch(`${this.apiBase}/workflows/${id}/owner`, { method: 'PUT', headers: this.getAuthHeaders(),
+                    body: JSON.stringify({ owner: 'robot', confirm }) });
+                const body = await r.json().catch(() => ({}));
+                if (!r.ok || body.success === false) throw Object.assign(new Error(body.error || `HTTP ${r.status}`), { body });
+                return body.data || {};
+            };
+            const preview = await put(false);
+            const clashes = window.RobotOwner.clashLines(preview, t);
+            if (clashes.length) {
+                await this._confirmLinksDialog(this.t('workflow.owner.confirmTitle'), '', clashes, null);
+                return;
+            }
+            const ok = await this._confirmLinksDialog(this.t('workflow.owner.confirmTitle'),
+                this.t('workflow.owner.confirmIntro', { name: this.currentWorkflowName || `#${id}` }),
+                window.RobotOwner.previewLines(preview, t), this.t('workflow.owner.confirm'));
+            if (!ok) return;
+            await put(true);
+            await this.loadWorkflowsList();
+            await this.loadWorkflow(id, { quiet: true });
+        } catch (err) {
+            const clashes = window.RobotOwner.clashLines(err?.body, t);
+            this.showNotification(clashes.length ? clashes.join('\n') : (err?.message || String(err)), 'error');
+        } finally {
+            this._refreshOwnerField();   // a cancel or a refusal puts the select back
+        }
+    }
+
+    /**
+     * A robot workflow is locked while it runs (it has an active row): the canvas is read-only (Drawflow 'view'),
+     * Save and the browser's run doors refuse, and a banner offers Unlock. `locked` comes from the workflow's payload
+     * on load, then from GET /workflows/{id}/active.
+     */
+    _applyRobotLock(locked) {
+        const on = !!(this.currentWorkflowIsRobot && locked);
+        this.currentWorkflowLocked = on;
+        if (this.editor) this.editor.editor_mode = on ? 'view' : 'edit';
+        this._renderLockBanner(on);
+        this._markRunDoors();
+        const row = (this.workflows || []).find((w) => String(w.id) === String(this.currentWorkflowId));
+        if (row && !!row.locked !== on) { row.locked = on; this.renderSavedWorkflowsList(); }
+    }
+
+    /** The run doors look disabled while locked (the clicks are refused by _refuseIfLocked); restored on unlock. */
+    _markRunDoors() {
+        const locked = !!this.currentWorkflowLocked;
+        const mark = (btn, off) => {
+            if (!btn) return;
+            btn.disabled = off;
+            btn.classList.toggle('opacity-50', off);
+            btn.classList.toggle('cursor-not-allowed', off);
+            btn.style.opacity = off ? '0.4' : '';
+            btn.style.cursor = off ? 'not-allowed' : '';
+        };
+        const view = locked && this.currentWorkflowId ? this._startView() : {};
+        const flags = { button: view.button, swarm: this._isSwarm?.(), ingestion: this._isIngestionWorkflow?.() };
+        this.container?.querySelectorAll('.workflow-node.start-node .node-play-btn')
+            .forEach((b) => mark(b, window.RobotOwner.runDoorDisabled(locked, flags)));
+        this.container?.querySelectorAll('.realtime-play-btn')
+            .forEach((b) => mark(b, window.RobotOwner.runDoorDisabled(locked, { realtime: true })));
+        mark(document.getElementById('workflow-run-btn'), locked);
+    }
+
+    /** True (with a notice) when the open workflow is a locked robot workflow: edits and browser runs stop here. */
+    _refuseIfLocked() {
+        if (!this.currentWorkflowLocked) return false;
+        this.showNotification(this.t('workflow.lock.banner'), 'warning');
+        return true;
+    }
+
+    /** The lock banner under the toolbar (as the automation banner), its Unlock button after a short warning. */
+    _renderLockBanner(on) {
+        let el = document.getElementById('workflow-lock-banner');
+        if (!on) { if (el) el.style.display = 'none'; return; }
+        if (!el && this.container) {
+            el = document.createElement('div');
+            el.id = 'workflow-lock-banner';
+            el.style.cssText = 'position:absolute;top:52px;left:12px;z-index:12;max-width:calc(100% - 24px);'
+                + 'align-items:center;gap:10px;'
+                + 'background:#fee2e2;border:1px solid #ef4444;color:#7f1d1d;border-radius:8px;padding:6px 8px 6px 12px;font-size:12px;'
+                + 'box-shadow:0 2px 8px rgba(0,0,0,0.08);';
+            const text = document.createElement('span');
+            text.dataset.role = 'text';
+            const unlock = document.createElement('button');
+            unlock.type = 'button';
+            unlock.dataset.role = 'unlock';
+            unlock.className = 'storage-config-btn';
+            unlock.addEventListener('click', () => this._unlockRobotWorkflow());
+            el.append(text, unlock);
+            this.container.appendChild(el);
+        }
+        if (!el) return;
+        el.querySelector('[data-role="text"]').textContent = `🔒 ${this.t('workflow.lock.banner')}`;
+        el.querySelector('[data-role="unlock"]').textContent = this.t('workflow.lock.unlock');
+        el.style.display = 'flex';
+    }
+
+    /** Unlock = DELETE /workflows/{id}/activate (anyone may): stops the robot's run, the workflow is editable again. */
+    async _unlockRobotWorkflow() {
+        const ok = await this._confirmLinksDialog(this.t('workflow.lock.unlock'),
+            this.t('workflow.lock.unlockWarn', { name: this.currentWorkflowName || `#${this.currentWorkflowId}` }), [],
+            this.t('workflow.lock.unlock'));
+        if (ok) await this._deactivate();
     }
 
     /**
@@ -3084,9 +3248,17 @@ class WorkflowEditor {
 
     /** The user's active workflow (spec 2026-10-14 event-worker §5), refreshed every 15 s while a workflow is open. */
     async _loadActive() {
+        // A robot workflow's state is its own row of the robot's (GET /workflows/{id}/active); a person's is theirs.
+        const forId = this.currentWorkflowId;
+        const robot = !!(forId && this.currentWorkflowIsRobot);
         try {
-            const r = await fetch(`${this.apiBase}/workflows/active`, { headers: this.getAuthHeaders() });
-            this.activeWorkflow = r.ok ? ((await r.json()).data || null) : this.activeWorkflow;
+            const r = await fetch(robot ? `${this.apiBase}/workflows/${forId}/active` : `${this.apiBase}/workflows/active`,
+                { headers: this.getAuthHeaders() });
+            const row = r.ok ? ((await r.json()).data || null) : this.activeWorkflow;
+            if (String(forId) === String(this.currentWorkflowId)) {
+                this.activeWorkflow = row;
+                if (robot && r.ok) this._applyRobotLock(!!row);
+            }
         } catch (_) { /* keep the last known state */ }
         if (!this._activeTimer) {
             this._activeTimer = setInterval(() => { if (this.currentWorkflowId) this._loadActive(); }, 15000);
@@ -3274,6 +3446,7 @@ class WorkflowEditor {
                             this._refreshStartHint();
                         } else if (eventType === 'state') {
                             this.activeWorkflow = data.active || null;
+                            if (this.currentWorkflowIsRobot) this._applyRobotLock(!!this.activeWorkflow);
                             this._refreshStartHint();
                             this._liveHeader();
                         } else if (eventType === 'bye') {
@@ -3498,6 +3671,7 @@ class WorkflowEditor {
     /** Start's hint, ▶ and state line: "Runs on <option>"; ▶ runs in prompt mode, else activates / deactivates. */
     _refreshStartHint() {
         this._refreshMonitoring();
+        this._markRunDoors();
         if (this._isSwarm()) return;
         const id = this._startNodeId();
         const d = id ? this.editor.getNodeFromId(id)?.data : null;
@@ -8276,6 +8450,7 @@ class WorkflowEditor {
      * Opens an overlay with mic/speaker, runs the workflow engine.
      */
     async startRealtimeTest() {
+        if (this._refuseIfLocked()) return;
         // Guard against double-invocation — the canvas-level click handler
         // and the inner Play button both fire for the same click.
         if (document.getElementById('realtime-overlay')) return;
@@ -9770,7 +9945,7 @@ class WorkflowEditor {
             f('link').style.display = '';
             f('link').textContent = this.t('codeLibrary.linkedHeader', { name: comp.name, count: '…' });
             CC.api().usedBy(comp.id).then((r) => {
-                f('link').textContent = this.t('codeLibrary.linkedHeader', { name: comp.name, count: (r.data || []).length });
+                f('link').textContent = this.t('codeLibrary.linkedHeader', { name: comp.name, count: window.RobotOwner.linkCount(r.data) });
             }).catch(() => {});
         } else if (libraryUnavailable) {
             f('link').style.display = '';
@@ -10146,7 +10321,9 @@ class WorkflowEditor {
                     if (e.kind !== 'links_dropped') throw e;
                     const t = (k, p) => this.t(`codeLibrary.${k}`, p);
                     const ok = await this._confirmLinksDialog(t('linksDroppedTitle'), t('linksDroppedIntro', { name: compName }),
-                        (e.data || []).map((l) => t('linksDroppedLine', { workflow: l.workflow_name, node: l.node_name, exit: l.exit, count: l.count })),
+                        (e.data || []).map((l) => (l.others   // other users' workflows: counted, not named
+                            ? t('linksDroppedOthers', { count: l.others, links: l.count })
+                            : t('linksDroppedLine', { workflow: l.workflow_name, node: l.node_name, exit: l.exit, count: l.count }))),
                         t('linksDroppedConfirm'));
                     if (!ok) return;
                     row = (await CC.api().update(comp.id, { ...body, confirm_drop_links: true })).data;
@@ -10630,7 +10807,7 @@ class WorkflowEditor {
         this._applyStartPorts(startId, window.CodeNode.remapExits(exits, row.exits, node.outputs), row);
     }
 
-    /** A warning listing the links about to be removed; resolves true on confirm. */
+    /** A warning listing the links about to be removed; resolves true on confirm. A null confirmLabel: only Cancel. */
     _confirmLinksDialog(title, intro, lines, confirmLabel) {
         const esc = (v) => this.escapeHtml(String(v ?? ''));
         const overlay = document.createElement('div');
@@ -10639,11 +10816,11 @@ class WorkflowEditor {
             <div class="storage-config-modal" style="width:min(520px,95vw);">
                 <div class="storage-config-header"><h3>⚠ ${esc(title)}</h3>
                     <button class="storage-config-close" data-act="close">×</button></div>
-                <div class="storage-config-body"><p style="margin:0 0 8px;font-size:14px;">${esc(intro)}</p>
+                <div class="storage-config-body">${intro ? `<p style="margin:0 0 8px;font-size:14px;">${esc(intro)}</p>` : ''}
                     <ul style="margin:0;padding-left:18px;font-size:14px;">${lines.map((l) => `<li style="margin:4px 0;">${esc(l)}</li>`).join('')}</ul></div>
                 <div class="storage-config-footer">
                     <button class="storage-config-btn cancel" data-act="close">${esc(this.t('common.cancel'))}</button>
-                    <button class="storage-config-btn save" data-act="ok" style="background:#dc2626;">${esc(confirmLabel)}</button>
+                    ${confirmLabel == null ? '' : `<button class="storage-config-btn save" data-act="ok" style="background:#dc2626;">${esc(confirmLabel)}</button>`}
                 </div>
             </div>`;
         document.body.appendChild(overlay);
@@ -12367,6 +12544,7 @@ class WorkflowEditor {
      * `opts.render(data)` formats the panel text. Drives glow + the round bar.
      */
     async _runNodeRound(nodeId, opts) {
+        if (this._refuseIfLocked()) return;
         const outputPre = document.getElementById('ingestion-output-code');
         if (!outputPre) return;
         const nodeEl = document.getElementById('node-' + nodeId);
@@ -12541,6 +12719,7 @@ class WorkflowEditor {
      * stream and reflect its events live — node glow + per-file logs.
      */
     async _runIngestionFromStart() {
+        if (this._refuseIfLocked()) return;
         if (!this.currentWorkflowId) { alert(this.t('workflow.messages.saveFirst')); return; }
         const nodes = this.editor.drawflow.drawflow.Home.data || {};
         const idByType = {};
@@ -13198,7 +13377,7 @@ class WorkflowEditor {
         // second save, whose reload would land after whatever the caller opens next.
         if (this._saveInFlight) { try { await this._saveInFlight; } catch (_) {} }
         if (!this._workflowDirty) return;
-        if (!this.currentWorkflowId) { this._workflowDirty = false; return; }
+        if (!this.currentWorkflowId || this.currentWorkflowLocked) { this._workflowDirty = false; return; }
         if (this._unchangedSinceLoad()) { this._workflowDirty = false; return; }
         try {
             await this.saveWorkflow();
@@ -13238,6 +13417,7 @@ class WorkflowEditor {
             this._savePending = true;
             return this._saveInFlight;
         }
+        if (this._refuseIfLocked()) return;
         this._saveInFlight = (async () => {
             try {
                 const result = await this._withSaveButtonBusy(() => this._saveWorkflowImpl());
@@ -13347,6 +13527,11 @@ class WorkflowEditor {
 
             if (!response.ok) {
                 const errorData = await response.json();
+                // A running robot workflow (423 locked): a notice, not a failure dialog.
+                if (errorData.error_code === 'locked') {
+                    this.showNotification(errorData.error, 'warning');
+                    return;
+                }
                 // Include validation errors in the message if available
                 let errorMsg = errorData.error || 'Failed to save workflow';
                 if (errorData.validation_errors && errorData.validation_errors.length > 0) {
@@ -13508,6 +13693,8 @@ class WorkflowEditor {
             this.currentWorkflowId = workflowData.id;
             this.currentWorkflowName = workflowData.name;
             this.currentWorkflowDescription = workflowData.description || '';
+            this.currentWorkflowIsRobot = !!workflowData.is_robot;
+            this._applyRobotLock(!!workflowData.locked);
             // A workflow an automation manages says so: edits here are lost when it is regenerated.
             this._renderAutomationBanner(workflowData.automation_id);
 
@@ -14225,6 +14412,7 @@ class WorkflowEditor {
      * Run the workflow with SSE streaming
      */
     async runWorkflow() {
+        if (this._refuseIfLocked()) return;
         const workflow = this.exportWorkflow();
 
         // Validate first
@@ -14305,6 +14493,7 @@ class WorkflowEditor {
      * execution (needs no vector DB / API key).
      */
     async _runIngestion() {
+        if (this._refuseIfLocked()) return;
         // No re-save when parameters change — the workflow exists only to host
         // the pipeline; the per-node code is generated from the LIVE form attrs.
         // Only create it once (to get an id for the endpoints) if it's brand new.
@@ -14722,6 +14911,8 @@ class WorkflowEditor {
                 body.memory = false;
                 // Ask the backend to echo what it actually sent (Context tab).
                 body.return_context = true;
+                // A robot workflow's node takes its MCP tools from the robot's servers (keys and memory stay the user's).
+                if (this.currentWorkflowId) body.workflow_id = Number(this.currentWorkflowId);
                 if (dispatchTargets?.length) body.client_tools = [this._wfDispatchTool(dispatchTargets, handoffStyle)];
                 if (nodeMaxTokens != null) body.max_tokens = nodeMaxTokens;
                 if (nodeTemperature != null) body.temperature = nodeTemperature;
@@ -15042,7 +15233,9 @@ class WorkflowEditor {
                 method: 'POST',
                 headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
                 credentials: 'include',
-                body: JSON.stringify({ node_config: nodeConfig, prompt: inputText, ...(parentText != null ? { parent_text: parentText } : {}) }),
+                // workflow_id: a robot workflow's node takes its tools from the robot's MCP servers.
+                body: JSON.stringify({ node_config: nodeConfig, prompt: inputText, ...(parentText != null ? { parent_text: parentText } : {}),
+                    ...(this.currentWorkflowId ? { workflow_id: Number(this.currentWorkflowId) } : {}) }),
             });
             if (!resp.ok || !resp.body) throw new Error(`playbook run HTTP ${resp.status}`);
 
@@ -15158,7 +15351,7 @@ class WorkflowEditor {
             (u) => nodes[u]?.data?.agent_type === 'dispatcher');
         // _codeNodeExecute never throws: a timeout or worker failure comes back harness-shaped.
         // The node's args reach the harness as ARGS, as on the server (CodeNodeExecutor).
-        const r = await this._codeNodeExecute(window.CodeNode.runRequest(d, parents, userPrompt));
+        const r = await this._codeNodeExecute(window.CodeNode.runRequest(d, parents, userPrompt, this.currentWorkflowId));
         // The agent nodes' record shape: the modal's Input, Output and Logs tabs read it.
         this.nodeExecutionData[id] = window.CodeNode.runData(r, { parents, user_prompt: userPrompt, name: d.name || 'Code', ts: Date.now() });
         this.highlightNode(id, r.ok ? 'completed' : 'error', id, 'agent');
@@ -15237,7 +15430,7 @@ class WorkflowEditor {
     _codeWorkerJob(verb, payload, limitMs, timeoutMsg) {
         const runOne = () => {
             const cold = !this._codeWorker || !this._codeWorkerWarm;
-            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261028-meta');
+            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261029-robot-run');
             const w = this._codeWorker;
             const id = (this._codeSeq = (this._codeSeq || 0) + 1);
             const limit = limitMs + (cold ? 90000 : 0);
@@ -17014,6 +17207,7 @@ class WorkflowEditor {
      * continue) has no counterpart here and _openSwarmSession keeps it.
      */
     async _openBatchSession() {
+        if (this._refuseIfLocked()) return;   // the browser run never reaches the server's 423
         // The pending-edit save can take seconds; a second click meanwhile must not
         // open (and later lose) a second conversation.
         if (this._openingBatchSession) return this._openingBatchSession;
@@ -17061,6 +17255,7 @@ class WorkflowEditor {
      * it must not silently discard the transcript.
      */
     async _openSwarmSession() {
+        if (this._refuseIfLocked()) return;
         // Flush the mode before anything else. Ticking "Run as a swarm" only
         // sets _workflowDirty; the DAG Run path flushes on its way through
         // Generate/Run, but every swarm door bypasses that. Without this the
@@ -18053,6 +18248,8 @@ class WorkflowEditor {
         if (!keepSession) this._swarmSessionEnd();
         this.currentWorkflowId = null;
         this._renderAutomationBanner(null);
+        this.currentWorkflowIsRobot = false;
+        this._applyRobotLock(false);
         this.currentWorkflowName = '';
         this.currentWorkflowDescription = '';
 
@@ -21728,44 +21925,6 @@ Based on the analysis...
             .forEach(b => b.classList.toggle('hidden', b.id !== 'tab-system-prompt'));
         this.switchAgentModalTab('system-prompt');
         await this._addPlaybookPublishButton();
-    }
-
-    /**
-     * Publish the saved workflow to the robot (a frozen copy). A `replaces` answer (the robot's copy is active)
-     * arms the button (PlaybookCollection.publishStep); a second click on the same workflow confirms. The notice
-     * names the MCP connections the robot still lacks (needs_servers).
-     */
-    async _publishWorkflowToRobot(btn) {
-        const PC = window.PlaybookCollection;
-        const label = btn.querySelector('[data-robot-label]') || btn;
-        const id = this.currentWorkflowId;
-        if (!id) { this.showToast(this.t('workflow.messages.saveFirst'), 'warning'); return; }
-        // The robot copies the saved workflow: unsaved edits would silently not be published.
-        if (!this._unchangedSinceLoad()) { this.showToast(this.t('robot.saveFirst'), 'warning'); return; }
-        if (btn.dataset.busy === '1') return;
-        const step = PC.publishStep(this._wfPublishState, { type: 'click', key: id });
-        clearTimeout(this._wfPublishTimer);
-        btn.dataset.busy = '1';
-        try {
-            const res = await this._playbookApi().publishWorkflow(id, step.confirmReplace);
-            this._wfPublishState = null;
-            label.textContent = this.t('robot.publish');
-            const notice = PC.needsServersNotice(res.data?.needs_servers, this.t.bind(this));
-            this.showNotification(notice ? `${this.t('robot.published')} ${notice}` : this.t('robot.published'), 'success');
-            if (window.playbooksLibrary?.tab === 'robot') window.playbooksLibrary.loadTree();
-        } catch (e) {
-            this._wfPublishState = PC.publishStep(step, { type: 'error', error: e, key: id }, this.t.bind(this), 'robot.replaceConfirm');
-            if (this._wfPublishState.armed) {
-                label.textContent = this._wfPublishState.message;
-                this._wfPublishTimer = setTimeout(() => { this._wfPublishState = null; label.textContent = this.t('robot.publish'); }, 6000);
-            } else {
-                label.textContent = this.t('robot.publish');
-                this.showNotification(this._wfPublishState.message, 'error');
-                this._wfPublishState = null;
-            }
-        } finally {
-            btn.dataset.busy = '0';
-        }
     }
 
     /** The form's Publish button, next to Save, only when the caller can use the robot. */

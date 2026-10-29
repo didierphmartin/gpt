@@ -278,6 +278,7 @@
     "linksDroppedTitle": "Remove links in workflows?",
     "linksDroppedIntro": "Saving removes exits from \"{{name}}\". These workflows lose the links on them:",
     "linksDroppedLine": "{{workflow}} — {{node}}: \"{{exit}}\" ({{count}} link(s))",
+    "linksDroppedOthers": "{{count}} other workflow(s) you cannot open ({{links}} link(s))",
     "linksDroppedConfirm": "Save and remove links"
   },
   "playbookLibrary": {
@@ -443,6 +444,7 @@
   },
   "contextMenu": {
     "rename": "Rename",
+    "copy": "Copy",
     "delete": "Delete"
   },
   "voicePanel": {
@@ -683,6 +685,24 @@
     "noteNotExported": "Note: memory is applied at runtime only. It is not included in generated LangGraph Python exports, which remain portable and user-agnostic."
   },
   "workflow": {
+    "owner": {
+      "label": "Owner",
+      "me": "Me",
+      "robot": "Robot",
+      "confirmTitle": "Make the robot the owner?",
+      "confirmIntro": "This cannot be undone. \"{{name}}\" and everything it uses (code components, playbooks, agents) will belong to the robot and be shared with every user. Its runs will use the robot's connections.",
+      "confirmShared": "Your workflow \"{{name}}\" uses some of them too: it will use the robot's from now on.",
+      "confirmServers": "The robot has no connection to {{name}}: connect it before running.",
+      "confirm": "Make the robot the owner",
+      "clash": "The robot already has a {{kind}} named \"{{name}}\": rename yours first.",
+      "clashPublished": "The playbook \"{{name}}\" is published to the robot: unpublish it first.",
+      "otherWorkflows": "{{count}} other workflow(s) you cannot open"
+    },
+    "lock": {
+      "banner": "Running as the robot — locked. Unlock to edit or run it.",
+      "unlock": "Unlock",
+      "unlockWarn": "Unlocking stops the robot's run of \"{{name}}\"."
+    },
     "active": {
       "activate": "Activate: run on its schedule or event",
       "deactivate": "Deactivate",
@@ -795,6 +815,7 @@
       "defaultWorkflowName": "My Workflow"
     },
     "errors": {
+      "copyWorkflowFailed": "Failed to copy workflow: ",
       "deleteWorkflowFailed": "Error deleting workflow: {{error}}",
       "saveWorkflowFailed": "Error saving workflow: {{error}}",
       "loadWorkflowFailed": "Error loading workflow: {{error}}",
@@ -1453,27 +1474,11 @@
     }
   },
   "robot": {
-    "publish": "Publish to robot",
-    "publishTitle": "Publish a frozen copy of the saved workflow to the robot",
-    "saveFirst": "Save the workflow first: the robot gets the saved version.",
-    "published": "Published to the robot.",
-    "replaceConfirm": "The robot is running this workflow: click again to replace it",
-    "needsServers": "The robot needs these MCP connections: {{names}}. Add them under Robot connections.",
     "connectOrganization": "Connect the organization's VIP mailboxes",
     "playbooks": "Playbooks",
-    "workflows": "Workflows",
-    "noWorkflows": "No workflows published to the robot.",
     "connections": "Robot connections",
     "noConnections": "No robot connections yet.",
     "add": "Add",
-    "active": "Active",
-    "publishedBy": "Published by user #{{id}} on {{date}}",
-    "activate": "Activate",
-    "stop": "Stop",
-    "runs": "Runs",
-    "noRuns": "No runs yet.",
-    "unpublish": "Unpublish",
-    "confirmUnpublish": "Click again to unpublish {{key}}",
     "keys": "Key headers: {{names}}",
     "noKey": "No key yet: Connect",
     "disabled": "disabled",

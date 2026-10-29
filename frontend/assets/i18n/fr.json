@@ -278,6 +278,7 @@
     "linksDroppedTitle": "Supprimer des liens dans les workflows ?",
     "linksDroppedIntro": "L'enregistrement retire des sorties de « {{name}} ». Ces workflows perdent leurs liens :",
     "linksDroppedLine": "{{workflow}} — {{node}} : « {{exit}} » ({{count}} lien(s))",
+    "linksDroppedOthers": "{{count}} autre(s) flux que vous ne pouvez pas ouvrir ({{links}} lien(s))",
     "linksDroppedConfirm": "Enregistrer et supprimer les liens"
   },
   "playbookLibrary": {
@@ -443,6 +444,7 @@
   },
   "contextMenu": {
     "rename": "Renommer",
+    "copy": "Copier",
     "delete": "Supprimer"
   },
   "voicePanel": {
@@ -683,6 +685,24 @@
     "noteNotExported": "Remarque : la mémoire est appliquée uniquement à l'exécution. Elle n'est pas incluse dans les exports Python LangGraph générés, qui restent portables et indépendants de l'utilisateur."
   },
   "workflow": {
+    "owner": {
+      "label": "Propriétaire",
+      "me": "Moi",
+      "robot": "Robot",
+      "confirmTitle": "Faire du robot le propriétaire ?",
+      "confirmIntro": "C'est irréversible. « {{name}} » et tout ce qu'il utilise (composants de code, playbooks, agents) appartiendront au robot et seront partagés avec tous les utilisateurs. Ses exécutions utiliseront les connexions du robot.",
+      "confirmShared": "Votre workflow « {{name}} » en utilise aussi : il utilisera désormais ceux du robot.",
+      "confirmServers": "Le robot n'a pas de connexion à {{name}} : connectez-le avant d'exécuter.",
+      "confirm": "Faire du robot le propriétaire",
+      "clash": "Le robot a déjà un {{kind}} nommé « {{name}} » : renommez le vôtre d'abord.",
+      "clashPublished": "Le playbook « {{name}} » est publié sur le robot : dépubliez-le d'abord.",
+      "otherWorkflows": "{{count}} autre(s) flux que vous ne pouvez pas ouvrir"
+    },
+    "lock": {
+      "banner": "Exécuté par le robot — verrouillé. Déverrouillez-le pour le modifier ou l'exécuter.",
+      "unlock": "Déverrouiller",
+      "unlockWarn": "Déverrouiller arrête l'exécution de « {{name}} » par le robot."
+    },
     "active": {
       "activate": "Activer : exécuter selon sa planification ou son événement",
       "deactivate": "Désactiver",
@@ -795,6 +815,7 @@
       "defaultWorkflowName": "Mon Workflow"
     },
     "errors": {
+      "copyWorkflowFailed": "Échec de la copie du workflow : ",
       "deleteWorkflowFailed": "Erreur lors de la suppression du workflow : {{error}}",
       "saveWorkflowFailed": "Erreur lors de l'enregistrement du workflow : {{error}}",
       "loadWorkflowFailed": "Erreur lors du chargement du workflow : {{error}}",
@@ -1453,27 +1474,11 @@
     }
   },
   "robot": {
-    "publish": "Publier sur le robot",
-    "publishTitle": "Publier une copie figée du workflow enregistré sur le robot",
-    "saveFirst": "Enregistrez d'abord le workflow : le robot reçoit la version enregistrée.",
-    "published": "Publié sur le robot.",
-    "replaceConfirm": "Le robot exécute ce workflow : cliquez à nouveau pour le remplacer",
-    "needsServers": "Le robot a besoin de ces connexions MCP : {{names}}. Ajoutez-les sous Connexions du robot.",
     "connectOrganization": "Connecter les boîtes VIP de l'organisation",
     "playbooks": "Playbooks",
-    "workflows": "Workflows",
-    "noWorkflows": "Aucun workflow publié sur le robot.",
     "connections": "Connexions du robot",
     "noConnections": "Aucune connexion du robot pour le moment.",
     "add": "Ajouter",
-    "active": "Actif",
-    "publishedBy": "Publié par l'utilisateur #{{id}} le {{date}}",
-    "activate": "Activer",
-    "stop": "Arrêter",
-    "runs": "Exécutions",
-    "noRuns": "Aucune exécution pour le moment.",
-    "unpublish": "Dépublier",
-    "confirmUnpublish": "Cliquez à nouveau pour dépublier {{key}}",
     "keys": "En-têtes de clé : {{names}}",
     "noKey": "Pas encore de clé : Connecter",
     "disabled": "désactivé",

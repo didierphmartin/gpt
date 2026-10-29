@@ -18,6 +18,9 @@ final class PlaybookLinkResolutionTest extends TestCase
         $this->db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         $this->db->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
         PlaybookStoreTest::schema($this->db);
+        // RobotOwnership asks these (who may use the robot; the robot's id): empty here, so nothing is shared
+        $this->db->exec("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, email TEXT, role TEXT, kind TEXT NOT NULL DEFAULT 'person')");
+        $this->db->exec('CREATE TABLE IF NOT EXISTS packages (role TEXT PRIMARY KEY, name TEXT, builtin INTEGER, capabilities TEXT, updated_at TEXT)');
     }
 
     public function testGetNodesFillsTheLinkedTextForTheWorkflowOwner(): void

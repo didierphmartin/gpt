@@ -278,6 +278,7 @@
     "linksDroppedTitle": "¿Quitar enlaces en los flujos?",
     "linksDroppedIntro": "Al guardar se quitan salidas de \"{{name}}\". Estos flujos pierden sus enlaces:",
     "linksDroppedLine": "{{workflow}} — {{node}}: \"{{exit}}\" ({{count}} enlace(s))",
+    "linksDroppedOthers": "{{count}} flujo(s) más que no puedes abrir ({{links}} enlace(s))",
     "linksDroppedConfirm": "Guardar y quitar enlaces"
   },
   "playbookLibrary": {
@@ -443,6 +444,7 @@
   },
   "contextMenu": {
     "rename": "Renombrar",
+    "copy": "Copiar",
     "delete": "Eliminar"
   },
   "voicePanel": {
@@ -683,6 +685,24 @@
     "noteNotExported": "Nota: la memoria se aplica solo en tiempo de ejecución. No se incluye en los exports Python LangGraph generados, que permanecen portables e independientes del usuario."
   },
   "workflow": {
+    "owner": {
+      "label": "Propietario",
+      "me": "Yo",
+      "robot": "Robot",
+      "confirmTitle": "¿Hacer del robot el propietario?",
+      "confirmIntro": "No se puede deshacer. «{{name}}» y todo lo que usa (componentes de código, playbooks, agentes) pertenecerán al robot y se compartirán con todos los usuarios. Sus ejecuciones usarán las conexiones del robot.",
+      "confirmShared": "Tu workflow «{{name}}» también usa algunos de ellos: a partir de ahora usará los del robot.",
+      "confirmServers": "El robot no tiene conexión a {{name}}: conéctalo antes de ejecutar.",
+      "confirm": "Hacer del robot el propietario",
+      "clash": "El robot ya tiene un {{kind}} llamado «{{name}}»: cambia el nombre del tuyo primero.",
+      "clashPublished": "El playbook «{{name}}» está publicado en el robot: anula su publicación primero.",
+      "otherWorkflows": "{{count}} flujo(s) más que no puedes abrir"
+    },
+    "lock": {
+      "banner": "Ejecutándose como el robot — bloqueado. Desbloquéalo para editarlo o ejecutarlo.",
+      "unlock": "Desbloquear",
+      "unlockWarn": "Desbloquear detiene la ejecución del robot de «{{name}}»."
+    },
     "active": {
       "activate": "Activar: ejecutar según su programación o evento",
       "deactivate": "Desactivar",
@@ -795,6 +815,7 @@
       "defaultWorkflowName": "Mi Workflow"
     },
     "errors": {
+      "copyWorkflowFailed": "No se pudo copiar el flujo de trabajo: ",
       "deleteWorkflowFailed": "Error al eliminar el workflow: {{error}}",
       "saveWorkflowFailed": "Error al guardar el workflow: {{error}}",
       "loadWorkflowFailed": "Error al cargar el workflow: {{error}}",
@@ -1453,27 +1474,11 @@
     }
   },
   "robot": {
-    "publish": "Publicar en el robot",
-    "publishTitle": "Publicar una copia congelada del flujo guardado en el robot",
-    "saveFirst": "Guarda primero el flujo: el robot recibe la versión guardada.",
-    "published": "Publicado en el robot.",
-    "replaceConfirm": "El robot está ejecutando este flujo: haz clic de nuevo para reemplazarlo",
-    "needsServers": "El robot necesita estas conexiones MCP: {{names}}. Añádelas en Conexiones del robot.",
     "connectOrganization": "Conectar los buzones VIP de la organización",
     "playbooks": "Playbooks",
-    "workflows": "Flujos de trabajo",
-    "noWorkflows": "No hay flujos publicados en el robot.",
     "connections": "Conexiones del robot",
     "noConnections": "Todavía no hay conexiones del robot.",
     "add": "Añadir",
-    "active": "Activo",
-    "publishedBy": "Publicado por el usuario #{{id}} el {{date}}",
-    "activate": "Activar",
-    "stop": "Detener",
-    "runs": "Ejecuciones",
-    "noRuns": "Todavía no hay ejecuciones.",
-    "unpublish": "Retirar",
-    "confirmUnpublish": "Haz clic de nuevo para retirar {{key}}",
     "keys": "Cabeceras de clave: {{names}}",
     "noKey": "Sin clave todavía: Conectar",
     "disabled": "desactivado",

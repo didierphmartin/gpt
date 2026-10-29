@@ -18,6 +18,8 @@ final class ActiveWorkflowServiceTest extends TestCase
         $this->db = new PDO('sqlite::memory:');
         EventWorkerSchema::create($this->db, fn() => $this->now);
         EventWorkerSchema::option($this->db, 1, 3);
+        $this->db->exec("CREATE TABLE users (id INTEGER PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'person')");   // the robot keeps several rows
+        $this->db->exec("INSERT INTO users (id, kind) VALUES (3, 'person'), (4, 'person'), (9, 'service')");
     }
 
     private function svc(): ActiveWorkflowService { return new ActiveWorkflowService($this->db); }
@@ -144,7 +146,7 @@ final class ActiveWorkflowServiceTest extends TestCase
         $this->svc()->activate(3, 64);
         $this->assertNull($this->svc()->get(3)['checked_age_s']);
         $this->now = '2026-10-14 09:00:40';
-        $this->svc()->setState(3, 'waiting', 'fallback');
+        $this->svc()->setState(3, 64, 'waiting', 'fallback');
         $this->now = '2026-10-14 09:01:00';
         $a = $this->svc()->get(3);
         $this->assertSame(['waiting', 'fallback', 20, 60], [$a['watch_state'], $a['watch_message'], $a['checked_age_s'], $a['activated_age_s']]);
@@ -174,5 +176,87 @@ final class ActiveWorkflowServiceTest extends TestCase
         $this->assertSame([], $this->svc()->scheduleWorkflowIds());
         $this->db->exec('UPDATE agent_workflows SET enabled = 1 WHERE id = 70');
         $this->assertSame([70], $this->svc()->scheduleWorkflowIds());
+    }
+
+    public function testAPersonKeepsOneRow(): void
+    {
+        EventWorkerSchema::workflow($this->db, 9, 3, null);
+        EventWorkerSchema::row($this->db, 9, 3, 'daily');
+        EventWorkerSchema::workflow($this->db, 10, 3, null);
+        EventWorkerSchema::row($this->db, 10, 3, 'daily');
+        $this->svc()->activate(3, 9);
+        $r = $this->svc()->activate(3, 10);
+        $this->assertSame(['workflow_id' => 9, 'workflow_name' => 'wf 9'], $r['replaced']);
+        $this->assertSame([[3, 10]], $this->rows());
+    }
+
+    public function testTheRobotKeepsOneRowPerWorkflow(): void
+    {
+        EventWorkerSchema::option($this->db, 2, 9);
+        EventWorkerSchema::workflow($this->db, 75, 9, 2);
+        EventWorkerSchema::row($this->db, 75, 9, 'event', 2);
+        EventWorkerSchema::workflow($this->db, 76, 9, null);
+        EventWorkerSchema::row($this->db, 76, 9, 'daily');
+        $this->assertNull($this->svc()->activate(9, 75)['replaced']);
+        $r = $this->svc()->activate(9, 76);
+        $this->assertNull($r['replaced']);
+        $this->assertSame(76, (int) $r['active']['workflow_id']);
+        $this->assertSame([[9, 75], [9, 76]], $this->rows());
+        $this->svc()->activate(9, 75);                                  // again: still one row for it
+        $this->assertSame([[9, 75], [9, 76]], $this->rows());
+        $this->now = '2026-10-14 09:00:30';
+        $this->svc()->setState(9, 76, 'scheduled', 'soon');            // only that row
+        $this->assertSame(['starting', 'scheduled'], $this->db->query('SELECT watch_state FROM active_workflows ORDER BY workflow_id')
+            ->fetchAll(PDO::FETCH_COLUMN));
+        $this->svc()->deactivate(9, 75);
+        $this->assertSame([[9, 76]], $this->rows());
+    }
+
+    public function testForWorkflow(): void
+    {
+        EventWorkerSchema::workflow($this->db, 75, 9, null);
+        EventWorkerSchema::row($this->db, 75, 9, 'daily');
+        EventWorkerSchema::workflow($this->db, 76, 9, null);
+        EventWorkerSchema::row($this->db, 76, 9, 'daily');
+        $this->assertNull($this->svc()->forWorkflow(75));
+        $this->svc()->activate(9, 75);
+        $this->svc()->activate(9, 76);
+        $this->now = '2026-10-14 09:00:20';
+        $a = $this->svc()->forWorkflow(75);
+        $this->assertSame([9, 75, 'wf 75', null, 20], [(int) $a['user_id'], (int) $a['workflow_id'], $a['workflow_name'],
+            $a['checked_age_s'], $a['activated_age_s']]);
+        $this->assertSame(76, (int) $this->svc()->forWorkflow(76)['workflow_id']);
+    }
+
+    /** The production table before 2026-10-29_active_workflows_per_workflow.sql: keyed by user_id alone. */
+    private function oldPrimaryKey(): void
+    {
+        $this->db->exec('DROP TABLE active_workflows');
+        $this->db->exec("CREATE TABLE active_workflows (user_id INTEGER NOT NULL PRIMARY KEY, workflow_id INTEGER NOT NULL,
+            mode TEXT NOT NULL, trigger_component_id INTEGER, activated_at TEXT NOT NULL, watch_state TEXT NOT NULL DEFAULT 'starting',
+            watch_message TEXT, watch_checked_at TEXT)");
+    }
+
+    public function testOnTheOldKeyASecondRobotWorkflowIsBusyNotAnSqlError(): void
+    {
+        $this->oldPrimaryKey();
+        EventWorkerSchema::workflow($this->db, 75, 9, null);
+        EventWorkerSchema::row($this->db, 75, 9, 'daily');
+        EventWorkerSchema::workflow($this->db, 76, 9, null);
+        EventWorkerSchema::row($this->db, 76, 9, 'daily');
+        $this->svc()->activate(9, 75);
+        $e = $this->refused(fn() => $this->svc()->activate(9, 76));
+        $this->assertSame(['robot_busy', 409, 'The robot can run one workflow at a time until the database is updated.'],
+            [$e->kind, $e->status, $e->getMessage()]);
+        $this->assertSame([[9, 75]], $this->rows());
+        $this->assertFalse($this->db->inTransaction());
+        $this->svc()->activate(9, 75);                                  // the same one again still works
+        $this->assertSame([[9, 75]], $this->rows());
+    }
+
+    private function rows(): array
+    {
+        return array_map(fn($r) => [(int) $r['user_id'], (int) $r['workflow_id']],
+            $this->db->query('SELECT user_id, workflow_id FROM active_workflows ORDER BY user_id, workflow_id')->fetchAll());
     }
 }

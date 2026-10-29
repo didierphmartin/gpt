@@ -401,7 +401,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->get('/api/v1/workflows/runs/{runId:[a-f0-9]{32}}/events', ['AgentTeam:WorkflowController', 'runEvents']);
         $r->post('/api/v1/workflows/{id:\d+}/toggle', ['AgentTeam:WorkflowController', 'toggle']);
         $r->post('/api/v1/workflows/{id:\d+}/duplicate', ['AgentTeam:WorkflowController', 'duplicate']);
-        $r->post('/api/v1/workflows/{id:\d+}/publish', ['AgentTeam:WorkflowController', 'publish']);
+        $r->put('/api/v1/workflows/{id:\d+}/owner', ['AgentTeam:WorkflowController', 'owner']);
 
         // Playbook registration-time validation (spec T4): parse + resolve
         // bindings against the caller's MCP tools/agents, no run created.
@@ -436,12 +436,6 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->get('/api/v1/robot', ['RobotController', 'show']);
         $r->get('/api/v1/robot/playbooks', ['RobotController', 'playbooks']);
         $r->delete('/api/v1/robot/playbooks/{id:\d+}', ['RobotController', 'unpublish']);
-        $r->get('/api/v1/robot/workflows', ['RobotController', 'workflows']);
-        $r->delete('/api/v1/robot/workflows/{id:\d+}', ['RobotController', 'unpublishWorkflow']);
-        $r->post('/api/v1/robot/workflows/{id:\d+}/activate', ['RobotController', 'activateWorkflow']);
-        $r->delete('/api/v1/robot/workflows/{id:\d+}/activate', ['RobotController', 'deactivateWorkflow']);
-        $r->get('/api/v1/robot/workflows/{id:\d+}/executions', ['RobotController', 'workflowExecutions']);
-        $r->get('/api/v1/robot/workflows/{id:\d+}/live', ['RobotController', 'workflowLive']);
         $r->get('/api/v1/robot/mcp-servers', ['RobotServersController', 'index']);
         $r->post('/api/v1/robot/mcp-servers', ['RobotServersController', 'create']);
         $r->post('/api/v1/robot/mcp-servers/{id:\d+}', ['RobotServersController', 'update']);
@@ -522,6 +516,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->get('/api/v1/workflows/active', ['AgentTeam:ActiveWorkflowController', 'show']);
         $r->post('/api/v1/workflows/{id:\d+}/activate', ['AgentTeam:ActiveWorkflowController', 'activate']);
         $r->delete('/api/v1/workflows/{id:\d+}/activate', ['AgentTeam:ActiveWorkflowController', 'deactivate']);
+        $r->get('/api/v1/workflows/{id:\d+}/active', ['AgentTeam:ActiveWorkflowController', 'forWorkflow']);
 
         // ============================================
         // SCHEDULER ROUTES (Cron/Admin)

@@ -51,9 +51,10 @@ final class PlaybookNodeRunner
 
     /**
      * @param bool $unattended no human present: any gate ends the run as handed_off
+     * @param ?int $mcpUserId whose MCP servers the tools come from (a robot workflow's: the robot); default $userId
      * @return array{output:string, run_id:int, status:string, gate:?string}
      */
-    public function run(int $userId, array $nodeConfig, string $requestText, \Closure $emit, bool $unattended = false): array
+    public function run(int $userId, array $nodeConfig, string $requestText, \Closure $emit, bool $unattended = false, ?int $mcpUserId = null): array
     {
         // Playbook legs are long-lived (human gates can block for minutes)
         // and talk to a REMOTE contexts DB. If that connection dies while a
@@ -77,7 +78,8 @@ final class PlaybookNodeRunner
         }
 
         $pdo = $this->pdoFactory !== null ? ($this->pdoFactory)() : $this->defaultPdo();
-        $mcp = $this->mcpFactory !== null ? ($this->mcpFactory)($pdo, $userId) : $this->defaultMcp($pdo, $userId);
+        $mcpUser = $mcpUserId ?? $userId;
+        $mcp = $this->mcpFactory !== null ? ($this->mcpFactory)($pdo, $mcpUser) : $this->defaultMcp($pdo, $mcpUser);
 
         // Bound agent.* targets have no real invocation path yet (see
         // PlaybookActionSpace's constructor comment), so there is no need to

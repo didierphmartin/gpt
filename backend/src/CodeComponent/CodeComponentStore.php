@@ -16,49 +16,89 @@ use PDO;
 final class CodeComponentStore
 {
     private const NAME_MAX = 191;
-    private const COLS = 'id, name, description, code, exits, mcp_servers, timeout_s, start_trigger, args, provides, updated_at';
+    private const COLS = 'id, user_id, name, description, code, exits, mcp_servers, timeout_s, start_trigger, args, provides, updated_at';
     private const LABEL_MAX = 60;
     private const PASS_ARGS_MAX = 20;
     private const DECLS_MAX = 20;
 
     public function __construct(private readonly PDO $db) {}
 
-    public function list(int $userId): array
+    /** The owners whose rows a caller sees: the user, and the robot when the caller may use it. */
+    private static function owners(int $userId, ?int $robotId): array
     {
-        $st = $this->db->prepare('SELECT ' . self::COLS . ' FROM code_components WHERE user_id = ? ORDER BY name');
-        $st->execute([$userId]);
-        $rows = array_map(fn($r) => $this->row($r), $st->fetchAll(PDO::FETCH_ASSOC));
+        return $robotId === null || $robotId === $userId ? [$userId] : [$userId, $robotId];
+    }
+
+    private static function in(array $ids): string
+    {
+        return implode(',', array_fill(0, count($ids), '?'));
+    }
+
+    /** $robotId: also the robot's rows (is_robot = true), for a caller who may use the robot. */
+    public function list(int $userId, ?int $robotId = null): array
+    {
+        $o = self::owners($userId, $robotId);
+        $st = $this->db->prepare('SELECT ' . self::COLS . ' FROM code_components WHERE user_id IN (' . self::in($o) . ') ORDER BY name');
+        $st->execute($o);
+        $rows = array_map(fn($r) => $this->row($r, $robotId), $st->fetchAll(PDO::FETCH_ASSOC));
+        $links = $this->linkedNodesOf($userId, array_column($rows, 'id'), $robotId);   // one scan for the whole list
         foreach ($rows as &$r) {
-            $r['used_by'] = count($this->usedBy($userId, $r['id']));
+            $r['used_by'] = count($links[$r['id']]);
         }
         unset($r);
         return $rows;
     }
 
-    public function get(int $userId, int $id): ?array
+    public function get(int $userId, int $id, ?int $robotId = null): ?array
     {
-        $st = $this->db->prepare('SELECT ' . self::COLS . ' FROM code_components WHERE id = ? AND user_id = ?');
-        $st->execute([$id, $userId]);
+        $o = self::owners($userId, $robotId);
+        $st = $this->db->prepare('SELECT ' . self::COLS . ' FROM code_components WHERE id = ? AND user_id IN (' . self::in($o) . ')');
+        $st->execute([$id, ...$o]);
         $r = $st->fetch(PDO::FETCH_ASSOC);
-        return $r === false ? null : $this->row($r);
+        return $r === false ? null : $this->row($r, $robotId);
     }
 
-    public function getByName(int $userId, string $name): ?array
+    public function getByName(int $userId, string $name, ?int $robotId = null): ?array
     {
-        $st = $this->db->prepare('SELECT ' . self::COLS . ' FROM code_components WHERE name = ? AND user_id = ?');
-        $st->execute([$name, $userId]);
-        $r = $st->fetch(PDO::FETCH_ASSOC);
-        return $r === false ? null : $this->row($r);
+        $o = self::owners($userId, $robotId);
+        $st = $this->db->prepare('SELECT ' . self::COLS . ' FROM code_components WHERE name = ? AND user_id IN (' . self::in($o) . ')');
+        $st->execute([$name, ...$o]);
+        $found = null;
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {   // the user's own row wins over the robot's
+            if ($found === null || (int) $r['user_id'] === $userId) {
+                $found = $r;
+            }
+        }
+        return $found === null ? null : $this->row($found, $robotId);
+    }
+
+    private function isRobotComponent(int $id, ?int $robotId): bool
+    {
+        if ($robotId === null) {
+            return false;
+        }
+        $st = $this->db->prepare('SELECT 1 FROM code_components WHERE id = ? AND user_id = ?');
+        $st->execute([$id, $robotId]);
+        return $st->fetchColumn() !== false;
+    }
+
+    /** Whose row $id is: the robot's when the caller sees it as the robot's, else the caller. */
+    private function ownerOf(int $userId, int $id, ?int $robotId): int
+    {
+        return ($this->get($userId, $id, $robotId)['is_robot'] ?? false) ? $robotId : $userId;
     }
 
     /** Create ($id null; an existing name updates that row, as agents do) or update by id. */
-    public function save(int $userId, ?int $id, array $data): array
+    public function save(int $userId, ?int $id, array $data, ?int $robotId = null): array
     {
         $c = self::validate($data);
-        $before = $id === null ? null : $this->get($userId, $id);
+        $caller = $userId;
+        $before = $id === null ? null : $this->get($userId, $id, $robotId);
         if ($id !== null && $before === null) {
             throw new CodeComponentError('not_found', "Code component #{$id} not found", 404);
         }
+        // a robot component stays the robot's (updated by id); a new one is always the caller's
+        $userId = $before !== null && $before['is_robot'] ? $robotId : $userId;
         $clash = $this->getByName($userId, $c['name']);
         if ($id === null && $clash !== null) {
             $id = $clash['id'];
@@ -78,9 +118,10 @@ final class CodeComponentStore
             }
         }
         if ($before !== null && $before['exits'] !== $c['exits'] && empty($data['confirm_drop_links'])) {
-            $lost = $this->droppedLinks($userId, $id, $before['exits'], $c['exits']);
+            $lost = $this->droppedLinks($caller, $id, $before['exits'], $c['exits'], $robotId);
             if ($lost !== []) {
-                $what = array_map(fn($l) => "\"{$l['exit']}\" on {$l['node_name']} in \"{$l['workflow_name']}\"", $lost);
+                $what = array_map(fn($l) => isset($l['others']) ? self::others($l['others'])
+                    : "\"{$l['exit']}\" on {$l['node_name']} in \"{$l['workflow_name']}\"", $lost);
                 throw new CodeComponentError('links_dropped', 'Removing these exits removes the links on '
                     . implode(', ', $what) . '. Save again to confirm.', 409, $lost);
             }
@@ -103,7 +144,7 @@ final class CodeComponentStore
                 $this->db->prepare('UPDATE code_components SET name = ?, description = ?, code = ?, exits = ?, mcp_servers = ?, timeout_s = ?, args = ?, provides = ?,
                     updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?')->execute([...$vals, $id, $userId]);
                 if ($before['exits'] !== $c['exits']) {
-                    $this->remapExits($userId, $id, $before['exits'], $c['exits']);
+                    $this->remapExits($userId, $id, $before['exits'], $c['exits'], $robotId);
                 }
                 if ($outer) {
                     $this->db->commit();
@@ -115,31 +156,36 @@ final class CodeComponentStore
                 throw $e;
             }
         }
-        return $this->get($userId, $id);
+        return $this->get($userId, $id, $robotId);
     }
 
-    public function delete(int $userId, int $id): void
+    public function delete(int $userId, int $id, ?int $robotId = null): void
     {
-        $c = $this->get($userId, $id);
+        $c = $this->get($userId, $id, $robotId);
         if ($c === null) {
             throw new CodeComponentError('not_found', "Code component #{$id} not found", 404);
         }
+        $caller = $userId;
+        $userId = $c['is_robot'] ? $robotId : $userId;
         if ($c['start_trigger'] !== null) {
             throw new CodeComponentError('is_option', 'This code component is a Start option: remove the option first.', 409);
         }
-        $used = $this->usedBy($userId, $id);
+        $used = $this->usedBy($caller, $id, $robotId);   // every link refuses; only the caller's visible ones are named
         if ($used !== []) {
-            $names = array_map(fn($n) => "node \"{$n['node_name']}\" in workflow \"{$n['workflow_name']}\"", $used);
+            $names = array_map(fn($n) => isset($n['others']) ? self::others($n['others'])
+                : "node \"{$n['node_name']}\" in workflow \"{$n['workflow_name']}\"", $used);
             throw new CodeComponentError('in_use', 'This code component is used by ' . implode(', ', $names) . '.', 409);
         }
         $this->db->prepare('DELETE FROM code_components WHERE id = ? AND user_id = ?')->execute([$id, $userId]);
     }
 
     /** Make the component a Start option (spec §1); the trigger is validated against the component. */
-    public function setStartTrigger(int $userId, int $id, array $trigger): array
+    public function setStartTrigger(int $userId, int $id, array $trigger, ?int $robotId = null): array
     {
-        $c = $this->get($userId, $id) ?? throw new CodeComponentError('not_found', "Code component #{$id} not found", 404);
+        $c = $this->get($userId, $id, $robotId) ?? throw new CodeComponentError('not_found', "Code component #{$id} not found", 404);
+        $userId = $c['is_robot'] ? $robotId : $userId;
         $t = self::validateStartTrigger($c, $trigger);
+        $robot = $c['is_robot'];
         $outer = !$this->db->inTransaction();
         if ($outer) {
             $this->db->beginTransaction();
@@ -149,8 +195,9 @@ final class CodeComponentStore
                 ->execute([json_encode($t, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), $id, $userId]);
             // the schedules already on this option carry a copy of its watch: an edit reaches them too
             $watch = json_decode(json_encode($t['watch']), true);   // validateStartTrigger hands back objects
-            $rows = $this->db->prepare('SELECT id, workflow_id FROM scheduled_workflows WHERE user_id = ? AND trigger_component_id = ?');
-            $rows->execute([$userId, $id]);
+            $rows = $this->db->prepare('SELECT id, workflow_id FROM scheduled_workflows WHERE trigger_component_id = ?'
+                . ($robot ? '' : ' AND user_id = ?'));
+            $rows->execute($robot ? [$id] : [$id, $userId]);
             $upd = $this->db->prepare('UPDATE scheduled_workflows SET event_trigger = ? WHERE id = ?');
             foreach ($rows->fetchAll(PDO::FETCH_ASSOC) as $r) {   // each keeps its own Start's args
                 $upd->execute([ScheduledWorkflowService::eventTrigger(json_encode(
@@ -165,46 +212,53 @@ final class CodeComponentStore
             }
             throw $e;
         }
-        return $this->get($userId, $id);
+        return $this->get($userId, $id, $robotId);
     }
 
     /** The user's workflows on this option: their schedule runs on it, or their Start shows its exits. */
-    public function startTriggerImpact(int $userId, int $id): array
+    public function startTriggerImpact(int $userId, int $id, ?int $robotId = null): array
     {
-        $st = $this->db->prepare('SELECT DISTINCT s.workflow_id, w.name FROM scheduled_workflows s
+        $caller = $userId;
+        $userId = $this->ownerOf($userId, $id, $robotId);
+        $robot = $this->isRobotComponent($id, $robotId);   // a robot option is scheduled by any permitted user
+        $st = $this->db->prepare('SELECT DISTINCT s.workflow_id, w.name, w.user_id FROM scheduled_workflows s
             JOIN agent_workflows w ON w.id = s.workflow_id
-            WHERE s.user_id = ? AND s.trigger_component_id = ?');
-        $st->execute([$userId, $id]);
-        $names = [];
+            WHERE s.trigger_component_id = ?' . ($robot ? '' : ' AND s.user_id = ?'));
+        $st->execute($robot ? [$id] : [$id, $userId]);
+        $rows = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $names[(int) $r['workflow_id']] = (string) $r['name'];
+            $rows[(int) $r['workflow_id']] = ['workflow_id' => (int) $r['workflow_id'], 'workflow_name' => (string) $r['name'],
+                'owner' => (int) $r['user_id']];
         }
-        foreach ($this->linkedNodes($userId, $id) as $n) {
+        foreach ($this->linkedNodes($caller, $id, $robotId) as $n) {
             if ($n['is_start']) {
-                $names[$n['workflow_id']] = $n['workflow_name'];
+                $rows[$n['workflow_id']] = ['workflow_id' => $n['workflow_id'], 'workflow_name' => $n['workflow_name'], 'owner' => $n['owner']];
             }
         }
-        asort($names);
-        return array_map(fn($wid, $name) => ['workflow_id' => $wid, 'workflow_name' => $name],
-            array_keys($names), array_values($names));
+        [$shown, $others] = self::split(array_values($rows), $caller, $robotId);
+        usort($shown, fn($a, $b) => [$a['workflow_name'], $a['workflow_id']] <=> [$b['workflow_name'], $b['workflow_id']]);
+        $out = array_map(fn($r) => ['workflow_id' => $r['workflow_id'], 'workflow_name' => $r['workflow_name']], $shown);
+        return $others > 0 ? [...$out, ['others' => $others]] : $out;
     }
 
     /**
      * Remove the option: its schedule rows are deleted (a 'none' row would still run once at its time) and the
      * component stops being an option. Start nodes on it go back to one port (revertStarts); linked code nodes stay.
      */
-    public function clearStartTrigger(int $userId, int $id): array
+    public function clearStartTrigger(int $userId, int $id, ?int $robotId = null): array
     {
-        $c = $this->get($userId, $id) ?? throw new CodeComponentError('not_found', "Code component #{$id} not found", 404);
-        $impact = $this->startTriggerImpact($userId, $id);
+        $c = $this->get($userId, $id, $robotId) ?? throw new CodeComponentError('not_found', "Code component #{$id} not found", 404);
+        $impact = $this->startTriggerImpact($userId, $id, $robotId);   // as the caller sees it
+        $userId = $c['is_robot'] ? $robotId : $userId;
         $outer = !$this->db->inTransaction();
         if ($outer) {
             $this->db->beginTransaction();
         }
         try {
-            $this->db->prepare('DELETE FROM scheduled_workflows WHERE user_id = ? AND trigger_component_id = ?')->execute([$userId, $id]);
+            $this->db->prepare('DELETE FROM scheduled_workflows WHERE trigger_component_id = ?' . ($c['is_robot'] ? '' : ' AND user_id = ?'))
+                ->execute($c['is_robot'] ? [$id] : [$id, $userId]);
             if ($c['start_trigger'] !== null) {
-                $this->revertStarts($userId, $id, $c['exits'], $c['start_trigger']['work_exit']);
+                $this->revertStarts($userId, $id, $c['exits'], $c['start_trigger']['work_exit'], $robotId);
             }
             $this->db->prepare('UPDATE code_components SET start_trigger = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?')
                 ->execute([$id, $userId]);
@@ -283,46 +337,97 @@ final class CodeComponentStore
         return ($nodeType ?? '') !== '' ? $nodeType === 'code' : is_array($cfg) && ($cfg['type'] ?? null) === 'code';
     }
 
-    /** The user's workflow code nodes that link to the component, and the Start nodes on its option. */
-    public function usedBy(int $userId, int $id): array
+    /**
+     * The user's workflow code nodes that link to the component, and the Start nodes on its option. A robot component
+     * is linked from every user's workflows: only the caller's own and the robot's are named, the rest end the list as
+     * one {others: number of workflows}.
+     */
+    public function usedBy(int $userId, int $id, ?int $robotId = null): array
     {
-        return array_map(fn($n) => array_diff_key($n, ['node_id' => 1, 'is_start' => 1]), $this->linkedNodes($userId, $id));
+        [$shown, $others] = self::split($this->linkedNodes($userId, $id, $robotId), $userId, $robotId);
+        $out = array_map(fn($n) => array_diff_key($n, ['node_id' => 1, 'is_start' => 1, 'owner' => 1]), $shown);
+        return $others > 0 ? [...$out, ['others' => $others]] : $out;
     }
 
-    /** usedBy plus each node's workflow_nodes.id. */
-    private function linkedNodes(int $userId, int $id): array
+    /** [the rows on workflows the caller may open (their own, the robot's), the number of other workflows]. */
+    private static function split(array $rows, int $caller, ?int $robotId): array
     {
-        // The link lives in the node's config JSON: decoded here, so the query stays portable (MySQL and SQLite).
-        $st = $this->db->prepare("SELECT n.id AS node_id, n.node_type, n.config, w.id AS workflow_id, w.name AS workflow_name
-            FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id
-            WHERE w.user_id = ? ORDER BY w.name, n.id");
-        $st->execute([(string) $userId]);
-        $nodes = [];
-        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
-            $cfg = json_decode((string) $r['config'], true);
-            $code = self::isCodeNode($r['node_type'], $cfg) && (int) ($cfg['code_component_id'] ?? 0) === $id;
-            $start = !$code && is_array($cfg) && StartOptionGraph::optionId(['node_type' => $r['node_type'], 'config' => $cfg]) === $id;
-            if ($code || $start) {
-                $nodes[] = ['workflow_id' => (int) $r['workflow_id'], 'workflow_name' => (string) $r['workflow_name'],
-                    'node_name' => $start ? 'Start' : (string) ($cfg['name'] ?? 'Code'), 'node_id' => (int) $r['node_id'],
-                    'is_start' => $start];
+        $shown = [];
+        $hidden = [];
+        foreach ($rows as $r) {
+            if ($r['owner'] === $caller || ($robotId !== null && $r['owner'] === $robotId)) {
+                $shown[] = $r;
+            } else {
+                $hidden[$r['workflow_id']] = true;
             }
         }
-        return $nodes;
+        return [$shown, count($hidden)];
+    }
+
+    /** "2 other workflows", for a message. */
+    private static function others(int $n): string
+    {
+        return $n === 1 ? '1 other workflow' : "$n other workflows";
+    }
+
+    /** usedBy, unfiltered, plus each node's workflow_nodes.id and its workflow's owner. */
+    private function linkedNodes(int $userId, int $id, ?int $robotId = null): array
+    {
+        return $this->linkedNodesOf($userId, [$id], $robotId)[$id];
+    }
+
+    /** linkedNodes of several components, in one scan of the workflow nodes: id => nodes. */
+    private function linkedNodesOf(int $userId, array $ids, ?int $robotId): array
+    {
+        $out = array_fill_keys($ids, []);
+        if ($ids === []) {
+            return $out;
+        }
+        $o = self::owners($userId, $robotId);
+        // A robot component is linked from any permitted user's workflows: scan them all.
+        $robots = [];
+        if ($robotId !== null) {
+            $st = $this->db->prepare('SELECT id FROM code_components WHERE user_id = ? AND id IN (' . self::in($ids) . ')');
+            $st->execute([$robotId, ...$ids]);
+            $robots = array_flip(array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN)));
+        }
+        $all = $robots !== [];
+        // The link lives in the node's config JSON: decoded here, so the query stays portable (MySQL and SQLite).
+        $st = $this->db->prepare("SELECT n.id AS node_id, n.node_type, n.config, w.id AS workflow_id, w.name AS workflow_name, w.user_id AS owner
+            FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id"
+            . ($all ? '' : " WHERE w.user_id IN (" . self::in($o) . ")") . " ORDER BY w.name, n.id");
+        $st->execute($all ? [] : array_map('strval', $o));
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $cfg = json_decode((string) $r['config'], true);
+            $code = self::isCodeNode($r['node_type'], $cfg) ? (int) ($cfg['code_component_id'] ?? 0) : 0;
+            $start = isset($out[$code]) || !is_array($cfg) ? null
+                : StartOptionGraph::optionId(['node_type' => $r['node_type'], 'config' => $cfg]);
+            $id = isset($out[$code]) ? $code : $start;
+            $owner = (int) $r['owner'];
+            // a personal component's links are on the owners' workflows only (the full scan reads everyone's)
+            if ($id === null || !isset($out[$id]) || (!isset($robots[$id]) && !in_array($owner, $o, true))) {
+                continue;
+            }
+            $isStart = $id !== $code;
+            $out[$id][] = ['workflow_id' => (int) $r['workflow_id'], 'workflow_name' => (string) $r['workflow_name'],
+                'node_name' => $isStart ? 'Start' : (string) ($cfg['name'] ?? 'Code'), 'node_id' => (int) $r['node_id'],
+                'is_start' => $isStart, 'owner' => $owner];
+        }
+        return $out;
     }
 
     /**
      * The links an exit change would remove (remapExits' rules): [{workflow_id, workflow_name, node_name, exit,
      * count}], one per linked node and removed exit that has links. Collapsing to one exit removes none.
      */
-    public function droppedLinks(int $userId, int $id, array $oldExits, array $newExits): array
+    public function droppedLinks(int $userId, int $id, array $oldExits, array $newExits, ?int $robotId = null): array
     {
         if (count($newExits) === 1 || count($oldExits) === 1) {
             return [];
         }
         $count = $this->db->prepare('SELECT COUNT(*) FROM workflow_edges WHERE from_node_id = ? AND from_port = ?');
         $lost = [];
-        foreach ($this->linkedNodes($userId, $id) as $node) {
+        foreach ($this->linkedNodes($userId, $id, $robotId) as $node) {
             foreach ($oldExits as $k => $exit) {
                 if (in_array($exit, $newExits, true)) {
                     continue;
@@ -331,18 +436,24 @@ final class CodeComponentStore
                 $n = (int) $count->fetchColumn();
                 if ($n > 0) {
                     $lost[] = ['workflow_id' => $node['workflow_id'], 'workflow_name' => $node['workflow_name'],
-                        'node_name' => $node['node_name'], 'exit' => $exit, 'count' => $n];
+                        'node_name' => $node['node_name'], 'exit' => $exit, 'count' => $n, 'owner' => $node['owner']];
                 }
             }
         }
-        return $lost;
+        // other users' workflows are counted, not named: one {others: workflows, count: links} ends the list
+        [$shown, $others] = self::split($lost, $userId, $robotId);
+        $out = array_map(fn($l) => array_diff_key($l, ['owner' => 1]), $shown);
+        if ($others > 0) {
+            $out[] = ['others' => $others, 'count' => array_sum(array_column($lost, 'count')) - array_sum(array_column($shown, 'count'))];
+        }
+        return $out;
     }
 
     /**
      * Start nodes on the option go back to a plain Start: one port, holding the work exit's links; the other
      * exits' links are removed, and so is config.start_option.
      */
-    private function revertStarts(int $userId, int $id, array $exits, string $workExit): void
+    private function revertStarts(int $userId, int $id, array $exits, string $workExit, ?int $robotId = null): void
     {
         $work = 'output_' . ((int) array_search($workExit, $exits, true) + 1);
         $select = $this->db->prepare('SELECT id, from_port FROM workflow_edges WHERE from_node_id = ?');
@@ -350,7 +461,7 @@ final class CodeComponentStore
         $drop = $this->db->prepare('DELETE FROM workflow_edges WHERE id = ?');
         $config = $this->db->prepare('SELECT config FROM workflow_nodes WHERE id = ?');
         $save = $this->db->prepare('UPDATE workflow_nodes SET config = ? WHERE id = ?');
-        foreach ($this->linkedNodes($userId, $id) as $node) {
+        foreach ($this->linkedNodes($userId, $id, $robotId) as $node) {
             if (!$node['is_start']) {
                 continue;
             }
@@ -376,12 +487,12 @@ final class CodeComponentStore
      * dropped); one exit before lands on output_1 unless its name survives. Ports beyond the old exits
      * are left alone.
      */
-    private function remapExits(int $userId, int $id, array $oldExits, array $newExits): void
+    private function remapExits(int $userId, int $id, array $oldExits, array $newExits, ?int $robotId = null): void
     {
         $select = $this->db->prepare('SELECT id, to_node_id, to_port, from_port FROM workflow_edges WHERE from_node_id = ? ORDER BY id');
         $move = $this->db->prepare('UPDATE workflow_edges SET from_port = ? WHERE id = ?');
         $drop = $this->db->prepare('DELETE FROM workflow_edges WHERE id = ?');
-        foreach ($this->linkedNodes($userId, $id) as $node) {
+        foreach ($this->linkedNodes($userId, $id, $robotId) as $node) {
             $select->execute([$node['node_id']]);
             $edges = [];
             foreach ($select->fetchAll(PDO::FETCH_ASSOC) as $e) {
@@ -538,9 +649,9 @@ final class CodeComponentStore
         return ['label' => $label, 'watch' => $watch, 'work_exit' => $exit, 'pass_args' => $pass];
     }
 
-    private function row(array $r): array
+    private function row(array $r, ?int $robotId = null): array
     {
-        return ['id' => (int) $r['id'], 'name' => (string) $r['name'], 'description' => (string) ($r['description'] ?? ''),
+        return ['id' => (int) $r['id'], 'is_robot' => $robotId !== null && (int) $r['user_id'] === $robotId, 'name' => (string) $r['name'], 'description' => (string) ($r['description'] ?? ''),
             'code' => (string) $r['code'], 'exits' => json_decode((string) $r['exits'], true) ?: [],
             'mcp_servers' => json_decode((string) $r['mcp_servers'], true) ?: [], 'timeout_s' => (int) $r['timeout_s'],
             'start_trigger' => ($r['start_trigger'] ?? null) ? json_decode((string) $r['start_trigger'], true) : null,

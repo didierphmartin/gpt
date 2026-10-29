@@ -4,10 +4,12 @@ declare(strict_types=1);
 namespace AgentTeam\Services;
 
 use PDO;
+use Quantis\AIPortfolioAssistant\Services\RobotAccount;
 
 /**
  * The workflow each user activated with ▶ on Start (spec 2026-10-14 event-worker): the event worker runs it on its
- * schedule, or on its Start option's event. One per user. Ticking a mode never activates; a mode change deactivates.
+ * schedule, or on its Start option's event. One per person; the robot keeps one per workflow (several robot workflows
+ * watch at once). Ticking a mode never activates; a mode change deactivates.
  */
 final class ActiveWorkflowService
 {
@@ -67,20 +69,28 @@ final class ActiveWorkflowService
         if (!$this->startHasLinks($workflowId)) {
             throw new ActiveWorkflowError('no_links', 'Start has no links', 422);
         }
-        $before = $this->get($userId);
+        $several = RobotAccount::id($this->db) === $userId;
+        $before = $several ? null : $this->get($userId);
         $replaced = $before && (int) $before['workflow_id'] !== $workflowId
             ? ['workflow_id' => (int) $before['workflow_id'], 'workflow_name' => $before['workflow_name']] : null;
         $this->db->beginTransaction();
         try {
-            $this->db->prepare('DELETE FROM active_workflows WHERE user_id = ?')->execute([$userId]);
+            // a person's other active workflow is replaced; the robot's other rows stay
+            $this->db->prepare('DELETE FROM active_workflows WHERE user_id = ?' . ($several ? ' AND workflow_id = ?' : ''))
+                ->execute($several ? [$userId, $workflowId] : [$userId]);
             $this->db->prepare("INSERT INTO active_workflows (user_id, workflow_id, mode, trigger_component_id, activated_at, watch_state)
                 VALUES (?, ?, ?, ?, NOW(), 'starting')")->execute([$userId, $workflowId, $mode['mode'], $mode['component_id']]);
             $this->db->commit();
         } catch (\Throwable $e) {
             $this->db->rollBack();
+            // Until 2026-10-29_active_workflows_per_workflow.sql runs, the table is keyed by user alone: the robot's
+            // second workflow is a duplicate key there, a refusal and not a server error.
+            if ($several && $e instanceof \PDOException && $e->getCode() === '23000') {
+                throw new ActiveWorkflowError('robot_busy', 'The robot can run one workflow at a time until the database is updated.', 409);
+            }
             throw $e;
         }
-        return ['active' => $this->get($userId), 'replaced' => $replaced];
+        return ['active' => $this->row($userId, $workflowId), 'replaced' => $replaced];
     }
 
     public function deactivate(int $userId, int $workflowId): void
@@ -88,12 +98,28 @@ final class ActiveWorkflowService
         $this->db->prepare('DELETE FROM active_workflows WHERE user_id = ? AND workflow_id = ?')->execute([$userId, $workflowId]);
     }
 
-    /** The user's active row, or null; ages in seconds from the database's NOW() (the worker's clock). */
+    /** The user's active row (a person has one), or null; ages in seconds from the database's NOW() (the worker's clock). */
     public function get(int $userId): ?array
     {
+        return $this->fetchAged('a.user_id = ? ORDER BY a.workflow_id', [$userId]);
+    }
+
+    /** The workflow's active row, whoever's it is (the robot's for a robot workflow), or null; ages as get(). */
+    public function forWorkflow(int $workflowId): ?array
+    {
+        return $this->fetchAged('a.workflow_id = ? ORDER BY a.user_id', [$workflowId]);
+    }
+
+    private function row(int $userId, int $workflowId): ?array
+    {
+        return $this->fetchAged('a.user_id = ? AND a.workflow_id = ?', [$userId, $workflowId]);
+    }
+
+    private function fetchAged(string $where, array $params): ?array
+    {
         $st = $this->db->prepare('SELECT a.*, w.name AS workflow_name, NOW() AS db_now FROM active_workflows a
-            LEFT JOIN agent_workflows w ON w.id = a.workflow_id WHERE a.user_id = ?');
-        $st->execute([$userId]);
+            LEFT JOIN agent_workflows w ON w.id = a.workflow_id WHERE ' . $where . ' LIMIT 1');
+        $st->execute($params);
         $row = $st->fetch(PDO::FETCH_ASSOC);
         if (!$row) {
             return null;
@@ -105,11 +131,12 @@ final class ActiveWorkflowService
         return $row;
     }
 
-    /** Every active row with its workflow's owner and enabled flag (the worker's reconcile). */
+    /** Every active row with its workflow's owner, enabled flag and the row user's kind ('service' = the robot): the worker's reconcile. */
     public function all(): array
     {
-        return $this->db->query('SELECT a.*, w.user_id AS owner_id, w.enabled FROM active_workflows a
-            JOIN agent_workflows w ON w.id = a.workflow_id ORDER BY a.user_id')->fetchAll(PDO::FETCH_ASSOC);
+        return $this->db->query('SELECT a.*, w.user_id AS owner_id, w.enabled, u.kind AS user_kind FROM active_workflows a
+            JOIN agent_workflows w ON w.id = a.workflow_id LEFT JOIN users u ON u.id = a.user_id
+            ORDER BY a.user_id, a.workflow_id')->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /** Whether the worker may serve the row now; a row that may not is idle, not deactivated (fixing it resumes it). */
@@ -141,10 +168,10 @@ final class ActiveWorkflowService
         return $gone;
     }
 
-    public function setState(int $userId, string $state, ?string $message): void
+    public function setState(int $userId, int $workflowId, string $state, ?string $message): void
     {
-        $this->db->prepare('UPDATE active_workflows SET watch_state = ?, watch_message = ?, watch_checked_at = NOW() WHERE user_id = ?')
-            ->execute([$state, $message, $userId]);
+        $this->db->prepare('UPDATE active_workflows SET watch_state = ?, watch_message = ?, watch_checked_at = NOW()
+            WHERE user_id = ? AND workflow_id = ?')->execute([$state, $message, $userId, $workflowId]);
     }
 
     /**

@@ -6,6 +6,7 @@ use PDO;
 use Quantis\AIPortfolioAssistant\Playbook\PlaybookStore;
 use Quantis\AIPortfolioAssistant\Playbook\PlaybookStoreError;
 use Quantis\AIPortfolioAssistant\Services\RobotAccount;
+use Quantis\AIPortfolioAssistant\Services\RobotOwnership;
 use Quantis\AIPortfolioAssistant\Services\RobotPolicy;
 
 /** /api/v1/playbooks — the playbook collection (CRUD + used-by), over PlaybookStore. */
@@ -13,17 +14,19 @@ final class PlaybooksController
 {
     private PlaybookStore $store;
     private RobotPolicy $policy;
+    private RobotOwnership $ownership;
 
     public function __construct(private readonly PDO $db, array $config)
     {
         $this->store = new PlaybookStore($db);
         $this->policy = new RobotPolicy($db, $config);
+        $this->ownership = new RobotOwnership($db, $config);
     }
 
     public function index(array $request): array
     {
         return $this->guard($request, function (int $u) {
-            $rows = $this->store->list($u);
+            $rows = $this->store->list($u, $this->ownership->robotFor($u));
             if ($this->policy->canUse($u)) {
                 $robotId = RobotAccount::id($this->db);
                 $status = $robotId === null ? [] : $this->store->publishStatus($u, $robotId);
@@ -52,7 +55,7 @@ final class PlaybooksController
     {
         return $this->guard($request, function (int $u) use ($request) {
             $id = (int) ($request['params']['id'] ?? 0);
-            $row = $this->store->get($u, $id);
+            $row = $this->store->get($u, $id, $this->ownership->robotFor($u));
             if ($row === null) throw new PlaybookStoreError('not_found', "Playbook #{$id} not found", 404);
             return ['success' => true, 'data' => $row];
         });
@@ -61,19 +64,19 @@ final class PlaybooksController
     public function create(array $request): array
     {
         return $this->guard($request, fn(int $u) => ['success' => true,
-            'data' => $this->store->save($u, null, $this->text($request), $this->key($request))]);
+            'data' => $this->store->save($u, null, $this->text($request), $this->key($request), $this->ownership->robotFor($u))]);
     }
 
     public function update(array $request): array
     {
         return $this->guard($request, fn(int $u) => ['success' => true,
-            'data' => $this->store->save($u, (int) ($request['params']['id'] ?? 0), $this->text($request), $this->key($request))]);
+            'data' => $this->store->save($u, (int) ($request['params']['id'] ?? 0), $this->text($request), $this->key($request), $this->ownership->robotFor($u))]);
     }
 
     public function destroy(array $request): array
     {
         return $this->guard($request, function (int $u) use ($request) {
-            $this->store->delete($u, (int) ($request['params']['id'] ?? 0));
+            $this->store->delete($u, (int) ($request['params']['id'] ?? 0), $this->ownership->robotFor($u));
             return ['success' => true];
         });
     }
@@ -82,8 +85,9 @@ final class PlaybooksController
     {
         return $this->guard($request, function (int $u) use ($request) {
             $id = (int) ($request['params']['id'] ?? 0);
-            if ($this->store->get($u, $id) === null) throw new PlaybookStoreError('not_found', "Playbook #{$id} not found", 404);
-            return ['success' => true, 'data' => $this->store->usedBy($u, $id)];
+            $robot = $this->ownership->robotFor($u);
+            if ($this->store->get($u, $id, $robot) === null) throw new PlaybookStoreError('not_found', "Playbook #{$id} not found", 404);
+            return ['success' => true, 'data' => $this->store->usedBy($u, $id, $robot)];
         });
     }
 
