@@ -8,7 +8,9 @@ use AgentTeam\Controllers\WorkflowController;
 use AgentTeam\Services\GraphWorkflowRunner;
 use PDO;
 use PHPUnit\Framework\TestCase;
-use Quantis\AIPortfolioAssistant\Controllers\MCPProxyController;
+use AgentTeam\Services\PlaybookNodeRunner;
+use Quantis\AIPortfolioAssistant\Controllers\ChatController;
+use Quantis\AIPortfolioAssistant\Services\MCPToolsLoader;
 use Quantis\AIPortfolioAssistant\Services\RobotAccount;
 use Quantis\AIPortfolioAssistant\Tests\Unit\AgentTeam\RobotSchema;
 
@@ -19,6 +21,7 @@ final class RobotRunIdentityTest extends TestCase
     private PDO $db;
     private int $robot;
     private array $ids;
+    private int $baseLevel;
 
     protected function setUp(): void
     {
@@ -43,6 +46,9 @@ final class RobotRunIdentityTest extends TestCase
         $this->db->exec("INSERT INTO mcp_servers VALUES (5, '3', 'Outlook', 'http://mcp.test/u3-outlook', '{\"Authorization\":\"Bearer u3\"}', 'http', 1)");
         $this->db->exec("INSERT INTO mcp_servers VALUES (6, '3', 'Converter', 'http://mcp.test/u3-conv', NULL, 'http', 1)");
         $this->db->exec("INSERT INTO mcp_servers VALUES (7, '{$this->robot}', 'Outlook', 'http://mcp.test/robot-outlook', '{\"Authorization\":\"Bearer robot\"}', 'http', 1)");
+        $this->db->exec("INSERT INTO mcp_server_tools (server_id, tool_name) VALUES (5, 'list_mail'), (6, 'convert'), (7, 'list_mail')");
+        $this->db->exec("INSERT INTO agent_workflows (id, user_id, name) VALUES (9, 3, 'Mine')");
+        $this->baseLevel = ob_get_level();
     }
 
     public function test_robot_is_user_120(): void
@@ -69,7 +75,6 @@ final class RobotRunIdentityTest extends TestCase
 
     public function test_code_node_tool_call_never_escalates(): void
     {
-        $this->db->exec("INSERT INTO agent_workflows (id, user_id, name) VALUES (9, 3, 'Mine')");
         $seen = [];
         $body = ['server' => 'outlook', 'tool' => 'list_mail', 'args' => []];
         // user 1 may not use the robot; wf 9 is a personal workflow
@@ -78,43 +83,52 @@ final class RobotRunIdentityTest extends TestCase
         $this->assertSame(['1', '3'], $seen);
     }
 
-    /** The proxy with the network replaced: records [url, headers, method] of every send. */
-    private function proxy(array &$sent): MCPProxyController
+    /** /chat with the MCP loader recorded: the user whose servers it loads, and the answer. */
+    private function chat(int $userId, array $body, array &$loaded): array
     {
-        $c = (new \ReflectionClass(RunIdentityProxy::class))->newInstanceWithoutConstructor();
-        (new \ReflectionProperty(MCPProxyController::class, 'db'))->setValue($c, $this->db);
-        (new \ReflectionProperty(MCPProxyController::class, 'config'))->setValue($c, self::CONFIG);
-        $c->sent = &$sent;
-        return $c;
+        $c = new RunIdentityChat($this->db, self::CONFIG + ['database' => []]);
+        $c->loaded = &$loaded;
+        $log = ini_set('error_log', '/dev/null');   // the chat path logs freely
+        try {
+            return $c->chat(['user_id' => $userId, 'body' => $body + ['message' => 'hi', 'streaming' => false, 'memory' => false]]);
+        } catch (\Throwable $e) {
+            return ['thrown' => $e->getMessage()];   // past the MCP load, the provider (none here) may fail
+        } finally {
+            ini_set('error_log', (string) $log);
+        }
     }
 
-    private function proxyBody(int $serverId, ?int $workflowId): array
+    public function test_chat_of_a_robot_workflows_node_loads_the_robots_servers(): void
     {
-        return ['action' => 'proxy', 'server_id' => $serverId, 'server_url' => 'http://ignored.test',
-            'jsonrpc' => ['method' => 'tools/list']] + ($workflowId !== null ? ['workflow_id' => $workflowId] : []);
+        $tools = ['tools' => ['mcp_list_mail']];
+        foreach ([[3, ['workflow_id' => 75], '120'], [3, [], '3'], [1, ['workflow_id' => 75], '1'], [3, ['workflow_id' => 9], '3']] as [$u, $extra, $want]) {
+            $loaded = [];
+            $this->chat($u, $tools + $extra, $loaded);
+            $this->assertSame([$want], $loaded, "user $u " . json_encode($extra));
+        }
     }
 
-    public function test_proxy_maps_the_callers_server_to_the_robots_by_slug(): void
+    public function test_chat_refuses_a_tool_whose_server_the_robot_lacks(): void
     {
-        $sent = [];
-        $r = $this->proxy($sent)->forward(['user_id' => 3, 'body' => $this->proxyBody(5, 75)]);
-        $this->assertTrue($r['success'], json_encode($r));
-        $this->assertSame('http://mcp.test/robot-outlook', $sent[0][0]);
-        $this->assertContains('Authorization: Bearer robot', $sent[0][1]);
-
-        $sent = [];
-        $this->proxy($sent)->forward(['user_id' => 3, 'body' => $this->proxyBody(5, null)]);
-        $this->assertSame('http://mcp.test/u3-outlook', $sent[0][0]);
-        $this->assertContains('Authorization: Bearer u3', $sent[0][1]);
-    }
-
-    public function test_proxy_refuses_when_the_robot_lacks_the_server(): void
-    {
-        $sent = [];
-        $r = $this->proxy($sent)->forward(['user_id' => 3, 'body' => $this->proxyBody(6, 75)]);
+        $loaded = [];
+        $r = $this->chat(3, ['tools' => ['mcp_convert'], 'workflow_id' => 75], $loaded);
         $this->assertSame([false, 422, 'robot_server_missing', 'Converter'],
-            [$r['success'], $r['status_code'], $r['error_code'] ?? null, $r['server'] ?? null]);
-        $this->assertSame([], $sent);
+            [$r['success'] ?? null, $r['status_code'] ?? null, $r['error_code'] ?? null, $r['server'] ?? null]);
+        $this->assertSame([], $loaded);
+    }
+
+    public function test_playbook_node_of_a_robot_workflow_takes_the_robots_tools(): void
+    {
+        foreach ([[3, ['workflow_id' => 75], 120], [3, [], 3], [1, ['workflow_id' => 75], 1], [3, ['workflow_id' => 9], 3]] as [$u, $extra, $want]) {
+            $wf = new RunIdentityWorkflows($this->db, self::CONFIG);
+            ob_start();
+            ob_start();   // runPlaybookNode closes one buffer level
+            $wf->runPlaybookNode(['user_id' => $u, 'body' => ['node_config' => ['playbook' => "Title: T\nInstructions: Do #Leave Internal Note."], 'prompt' => 'go'] + $extra]);
+            while (ob_get_level() > $this->baseLevel) {
+                ob_end_clean();
+            }
+            $this->assertSame([$want], $wf->mcpUsers, "user $u " . json_encode($extra));
+        }
     }
 
     public function test_schedule_of_a_robot_workflow_is_the_robots(): void
@@ -152,19 +166,43 @@ final class RobotRunIdentityTest extends TestCase
         $byName = fn(int $u) => $wf->runByName(['user_id' => $u, 'body' => ['workflow' => 'Mail to PDF']]);
         $this->assertStringContainsString('swarm', $byName(3)['error']);   // the robot's, found by name
         $this->assertSame(404, $byName(1)['status_code']);                  // not robot-permitted
-        $this->db->exec("INSERT INTO agent_workflows (id, user_id, name, enabled) VALUES (9, 3, 'Mail to PDF', 0)");
+        $this->db->exec("UPDATE agent_workflows SET name = 'Mail to PDF', enabled = 0 WHERE id = 9");
         $this->assertSame('Workflow is disabled', $byName(3)['error']);     // the caller's own wins
     }
 }
 
-/** MCPProxyController without the network: every send is recorded and answered with an empty result. */
-class RunIdentityProxy extends MCPProxyController
+/** ChatController with the MCP loader recorded (no MCP server is reached). */
+class RunIdentityChat extends ChatController
 {
-    public array $sent = [];
+    public array $loaded = [];
 
-    protected function sendToMCPServer(string $serverUrl, array $request, bool $expectResponse = true, array $extraHeaders = [], string $transport = 'http'): ?array
+    protected function newMcpToolsLoader(): MCPToolsLoader
     {
-        $this->sent[] = [$serverUrl, $extraHeaders, $request['method'] ?? null];
-        return ['jsonrpc' => '2.0', 'id' => 1, 'result' => []];
+        $loaded = &$this->loaded;
+        return new class($loaded) extends MCPToolsLoader {
+            public function __construct(private array &$loaded) {}
+            public function loadToolsForUser(?string $userId = null, ?array $allowedServerNames = null): array
+            {
+                $this->loaded[] = $userId;
+                return [];
+            }
+        };
+    }
+}
+
+/** WorkflowController whose playbook node runner records the MCP user and stops there (no LLM, no contexts DB). */
+class RunIdentityWorkflows extends WorkflowController
+{
+    public array $mcpUsers = [];
+
+    protected function playbookNodeRunner(): PlaybookNodeRunner
+    {
+        return new PlaybookNodeRunner([],
+            llmFactory: fn(array $cfg) => fn() => ['text' => '', 'tool_calls' => []],
+            mcpFactory: function (PDO $pdo, int $userId): never {
+                $this->mcpUsers[] = $userId;
+                throw new \RuntimeException('stop');
+            },
+            pdoFactory: fn() => new PDO('sqlite::memory:'));
     }
 }

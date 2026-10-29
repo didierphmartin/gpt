@@ -222,7 +222,7 @@ class ScheduledWorkflowController
         try {
             $schedule = $this->scheduleService->findById($id);
 
-            if (!$schedule || $schedule['user_id'] !== $this->owner((int) $userId, (int) $schedule['workflow_id'])) {
+            if (!$schedule || (int) $schedule['user_id'] !== $this->owner((int) $userId, (int) $schedule['workflow_id'])) {
                 return [
                     'success' => false,
                     'error' => 'Schedule not found',

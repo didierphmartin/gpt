@@ -1167,7 +1167,8 @@ class WorkflowController
                 }
             } elseif (isset($nodeConfig['playbook_id'])) {
                 // A node linked to the collection sends playbook_id; the text is read here, for its owner.
-                $pb = (new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db))->get($userId, (int) $nodeConfig['playbook_id']);
+                $pb = (new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db))->get($userId, (int) $nodeConfig['playbook_id'],
+                    $this->ownership()->robotFor($userId));
                 if ($pb === null) {
                     throw new \RuntimeException("Playbook #{$nodeConfig['playbook_id']} not found");
                 }
@@ -1177,9 +1178,12 @@ class WorkflowController
             $transcript = '';
             if ($reason === null) {
                 try {
-                    $runner = new \AgentTeam\Services\PlaybookNodeRunner($this->config);
-                    // Attended: gates go to the person at the editor.
-                    $result = $runner->run($userId, $nodeConfig, $prompt, $sseCallback);
+                    $runner = $this->playbookNodeRunner();
+                    // Attended: gates go to the person at the editor. A robot workflow's node (workflow_id)
+                    // takes its tools from the robot's MCP servers; the run and its gates stay the caller's.
+                    $workflowId = (int) ($body['workflow_id'] ?? 0);
+                    $mcpUser = $workflowId > 0 ? $this->ownership()->runAs($userId, $workflowId) : $userId;
+                    $result = $runner->run($userId, $nodeConfig, $prompt, $sseCallback, false, $mcpUser);
                     $transcript = (string) ($result['output'] ?? '');
                     $reason = \AgentTeam\Services\PlaybookOutcome::reason((string) ($result['status'] ?? ''), $result['gate'] ?? null);
                 } catch (\Throwable $e) {
@@ -1205,6 +1209,12 @@ class WorkflowController
             echo "data: " . json_encode(['error' => $e->getMessage()]) . "\n\n";
             flush();
         }
+    }
+
+    /** The playbook node runner of runPlaybookNode (a seam for tests). */
+    protected function playbookNodeRunner(): \AgentTeam\Services\PlaybookNodeRunner
+    {
+        return new \AgentTeam\Services\PlaybookNodeRunner($this->config);
     }
 
     /**

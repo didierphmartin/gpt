@@ -14722,6 +14722,8 @@ class WorkflowEditor {
                 body.memory = false;
                 // Ask the backend to echo what it actually sent (Context tab).
                 body.return_context = true;
+                // A robot workflow's node takes its MCP tools from the robot's servers (keys and memory stay the user's).
+                if (this.currentWorkflowId) body.workflow_id = Number(this.currentWorkflowId);
                 if (dispatchTargets?.length) body.client_tools = [this._wfDispatchTool(dispatchTargets, handoffStyle)];
                 if (nodeMaxTokens != null) body.max_tokens = nodeMaxTokens;
                 if (nodeTemperature != null) body.temperature = nodeTemperature;
@@ -15042,7 +15044,9 @@ class WorkflowEditor {
                 method: 'POST',
                 headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
                 credentials: 'include',
-                body: JSON.stringify({ node_config: nodeConfig, prompt: inputText, ...(parentText != null ? { parent_text: parentText } : {}) }),
+                // workflow_id: a robot workflow's node takes its tools from the robot's MCP servers.
+                body: JSON.stringify({ node_config: nodeConfig, prompt: inputText, ...(parentText != null ? { parent_text: parentText } : {}),
+                    ...(this.currentWorkflowId ? { workflow_id: Number(this.currentWorkflowId) } : {}) }),
             });
             if (!resp.ok || !resp.body) throw new Error(`playbook run HTTP ${resp.status}`);
 

@@ -7,6 +7,8 @@ namespace Quantis\AIPortfolioAssistant\Controllers;
 use Quantis\AIPortfolioAssistant\AIPortfolioAssistant;
 use Quantis\AIPortfolioAssistant\Services\UsageLogger;
 use Quantis\AIPortfolioAssistant\Services\MCPToolsLoader;
+use Quantis\AIPortfolioAssistant\Services\RobotMcpServers;
+use Quantis\AIPortfolioAssistant\Services\RobotOwnership;
 use Quantis\AIPortfolioAssistant\Services\CombinedToolsExecutor;
 use Quantis\AIPortfolioAssistant\Services\FilteredToolsExecutor;
 use Quantis\AIPortfolioAssistant\Services\PackageResolver;
@@ -34,11 +36,19 @@ class ChatController
     private array $config;
     /** Memoized enabled provider_keys from system_llm_settings (per request). */
     private ?array $enabledProviderKeysCache = null;
+    /** Whose MCP servers this request's tools load from: the robot for a robot workflow's node, else the caller (null). */
+    private ?string $mcpUserId = null;
 
     public function __construct(PDO $db, array $config)
     {
         $this->db = $db;
         $this->config = $config;
+    }
+
+    /** The MCP tools loader of a chat turn (a seam for tests). */
+    protected function newMcpToolsLoader(): MCPToolsLoader
+    {
+        return new MCPToolsLoader($this->db);
     }
 
     /**
@@ -819,6 +829,20 @@ class ChatController
             ];
         }
 
+        // A workflow run's agent node names its workflow: a robot workflow's MCP tools load from the robot's
+        // servers (each requested one must have a robot server of its slug). Keys, memory and usage stay the caller's.
+        $workflowId = (int) ($input['workflow_id'] ?? 0);
+        if ($workflowId > 0 && ctype_digit($userId)) {
+            $actor = (string) (new RobotOwnership($this->db, $this->config))->runAs((int) $userId, $workflowId);
+            if ($actor !== $userId) {
+                $missing = RobotMcpServers::missing($this->db, $userId, $actor, $toolsFilter);
+                if ($missing !== []) {
+                    return RobotMcpServers::missingResponse($missing[0]);
+                }
+                $this->mcpUserId = $actor;
+            }
+        }
+
         // Per-node overrides from the workflow agent form. When present they WIN over
         // the provider-config defaults (system_llm_settings). Null = use provider default.
         $maxTokensOverride = isset($input['max_tokens']) && is_numeric($input['max_tokens'])
@@ -1568,8 +1592,8 @@ class ChatController
         try {
             if ($wantsMcp) {
                 error_log("[ChatController] Loading MCP tools for user: {$userId}");
-                $mcpToolsLoader = new MCPToolsLoader($this->db);
-                $mcpToolsLoader->loadToolsForUser($userId);
+                $mcpToolsLoader = $this->newMcpToolsLoader();
+                $mcpToolsLoader->loadToolsForUser($this->mcpUserId ?? $userId);
                 error_log("[ChatController] MCP hasTools: " . ($mcpToolsLoader->hasTools() ? 'yes' : 'no'));
             } else {
                 error_log("[MCP] Skipped MCP load: node selected no MCP tools");
@@ -2431,8 +2455,8 @@ class ChatController
         $wantsMcp = $toolsFilter === null || array_filter($toolsFilter, fn($t) => str_starts_with((string)$t, 'mcp_')) !== [];
         try {
             if ($wantsMcp) {
-                $mcpToolsLoader = new MCPToolsLoader($this->db);
-                $mcpToolsLoader->loadToolsForUser($userId);
+                $mcpToolsLoader = $this->newMcpToolsLoader();
+                $mcpToolsLoader->loadToolsForUser($this->mcpUserId ?? $userId);
             } else {
                 error_log("[MCP] Skipped MCP load: node selected no MCP tools");
             }
