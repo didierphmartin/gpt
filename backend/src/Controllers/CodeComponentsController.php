@@ -22,9 +22,15 @@ final class CodeComponentsController
         $this->store = new CodeComponentStore($db);
     }
 
+    /** The robot's id when the caller may use the robot (its components are shared), else null. */
+    private function robot(int $u): ?int
+    {
+        return (new RobotOwnership($this->db, $this->config))->robotFor($u);
+    }
+
     public function index(array $request): array
     {
-        return $this->guard($request, fn(int $u) => ['success' => true, 'data' => $this->store->list($u)]);
+        return $this->guard($request, fn(int $u) => ['success' => true, 'data' => $this->store->list($u, $this->robot($u))]);
     }
 
     public function show(array $request): array
@@ -34,19 +40,19 @@ final class CodeComponentsController
 
     public function create(array $request): array
     {
-        return $this->guard($request, fn(int $u) => ['success' => true, 'data' => $this->store->save($u, null, $this->body($request))]);
+        return $this->guard($request, fn(int $u) => ['success' => true, 'data' => $this->store->save($u, null, $this->body($request), $this->robot($u))]);
     }
 
     public function update(array $request): array
     {
         return $this->guard($request, fn(int $u) => ['success' => true,
-            'data' => $this->store->save($u, (int) ($request['params']['id'] ?? 0), $this->body($request))]);
+            'data' => $this->store->save($u, (int) ($request['params']['id'] ?? 0), $this->body($request), $this->robot($u))]);
     }
 
     public function destroy(array $request): array
     {
         return $this->guard($request, function (int $u) use ($request) {
-            $this->store->delete($u, (int) ($request['params']['id'] ?? 0));
+            $this->store->delete($u, (int) ($request['params']['id'] ?? 0), $this->robot($u));
             return ['success' => true];
         });
     }
@@ -54,7 +60,7 @@ final class CodeComponentsController
     public function usedBy(array $request): array
     {
         return $this->guard($request, fn(int $u) => ['success' => true,
-            'data' => $this->store->usedBy($u, $this->found($u, $request)['id'])]);
+            'data' => $this->store->usedBy($u, $this->found($u, $request)['id'], $this->robot($u))]);
     }
 
     public function setStartOption(array $request): array
@@ -64,14 +70,14 @@ final class CodeComponentsController
                 return $locked;
             }
             return ['success' => true,
-                'data' => $this->store->setStartTrigger($u, (int) ($request['params']['id'] ?? 0), $this->body($request))];
+                'data' => $this->store->setStartTrigger($u, (int) ($request['params']['id'] ?? 0), $this->body($request), $this->robot($u))];
         });
     }
 
     /** The 423 body when a schedule on this Start option belongs to a running robot workflow, else null. */
     private function lockedGuard(int $userId, int $componentId): ?array
     {
-        if ($this->store->get($userId, $componentId) === null) {
+        if ($this->store->get($userId, $componentId, $this->robot($userId)) === null) {
             return null;   // not the caller's component: the store answers 404, never a lock
         }
         $own = new RobotOwnership($this->db, $this->config);
@@ -90,7 +96,7 @@ final class CodeComponentsController
     public function startOptionImpact(array $request): array
     {
         return $this->guard($request, fn(int $u) => ['success' => true,
-            'data' => $this->store->startTriggerImpact($u, $this->found($u, $request)['id'])]);
+            'data' => $this->store->startTriggerImpact($u, $this->found($u, $request)['id'], $this->robot($u))]);
     }
 
     public function clearStartOption(array $request): array
@@ -99,7 +105,7 @@ final class CodeComponentsController
             if ($locked = $this->lockedGuard($u, (int) ($request['params']['id'] ?? 0))) {
                 return $locked;
             }
-            $data = $this->store->clearStartTrigger($u, (int) ($request['params']['id'] ?? 0));
+            $data = $this->store->clearStartTrigger($u, (int) ($request['params']['id'] ?? 0), $this->robot($u));
             $this->sweepActive();   // reverted Starts: their mode is gone
             return ['success' => true, 'data' => $data];
         });
@@ -117,7 +123,7 @@ final class CodeComponentsController
     private function found(int $u, array $request): array
     {
         $id = (int) ($request['params']['id'] ?? 0);
-        return $this->store->get($u, $id) ?? throw new CodeComponentError('not_found', "Code component #{$id} not found", 404);
+        return $this->store->get($u, $id, $this->robot($u)) ?? throw new CodeComponentError('not_found', "Code component #{$id} not found", 404);
     }
 
     private function body(array $request): array

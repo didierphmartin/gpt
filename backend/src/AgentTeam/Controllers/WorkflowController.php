@@ -199,7 +199,8 @@ class WorkflowController
             $graphData = $body['definition'] ?? $body['graph'] ?? [];
             try {
                 $resolved = (new \AgentTeam\Services\WorkflowRefResolver($this->db))
-                    ->resolve((int) $userId, $graphData['nodes'] ?? $graphData['steps'] ?? [], $graphData['edges'] ?? []);
+                    ->resolve((int) $userId, $graphData['nodes'] ?? $graphData['steps'] ?? [], $graphData['edges'] ?? [],
+                        $this->ownership()->robotFor((int) $userId));
             } catch (\AgentTeam\Services\UnresolvedRefsException $e) {
                 return ['success' => false, 'error' => 'unknown references', 'missing' => $e->missing, 'status_code' => 422];
             }
@@ -688,7 +689,7 @@ class WorkflowController
                 // Validate the graph
                 // First clear and save, then validate
                 try {
-                    $resolved = (new \AgentTeam\Services\WorkflowRefResolver($this->db))->resolve($userId, $nodes, $edges);
+                    $resolved = (new \AgentTeam\Services\WorkflowRefResolver($this->db))->resolve($userId, $nodes, $edges, $this->ownership()->robotFor((int) $userId));
                     $this->graphRepository->saveGraph($workflowId, $resolved['nodes'], $resolved['edges']);
                     error_log("[WorkflowController] Graph updated successfully");
                 } catch (\Exception $e) {

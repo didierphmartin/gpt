@@ -30,7 +30,7 @@ final class WorkflowControllerRefsTest extends TestCase
         $ref = new ReflectionClass(WorkflowController::class);
         $this->ctl = $ref->newInstanceWithoutConstructor();
         $repo = new WorkflowRepository($this->db);
-        foreach (['db' => $this->db, 'workflowRepository' => $repo, 'graphRepository' => $repo->getGraphRepository()] as $k => $v) {
+        foreach (['db' => $this->db, 'config' => [], 'workflowRepository' => $repo, 'graphRepository' => $repo->getGraphRepository()] as $k => $v) {
             $p = $ref->getProperty($k);
             $p->setValue($this->ctl, $v);
         }

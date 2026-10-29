@@ -44,28 +44,46 @@ final class PlaybookStore
         return $key;
     }
 
-    public function list(int $userId): array
+    /** The owners whose rows a caller sees: the user, and the robot when the caller may use it. */
+    private static function owners(int $userId, ?int $robotId): array
     {
+        return $robotId === null || $robotId === $userId ? [$userId] : [$userId, $robotId];
+    }
+
+    /** $robotId: also the robot's rows (is_robot = true), for a caller who may use the robot. */
+    public function list(int $userId, ?int $robotId = null): array
+    {
+        $o = self::owners($userId, $robotId);
+        $in = implode(',', array_fill(0, count($o), '?'));
         // automation_id: the automation that manages the playbook (null = none); save_playbook_agent checks it on a key clash.
-        $st = $this->db->prepare('SELECT id, pkey, title, text, updated_at, automation_id FROM playbooks WHERE user_id = ? ORDER BY title');
-        $st->execute([$userId]);
+        $st = $this->db->prepare("SELECT id, user_id, pkey, title, text, updated_at, automation_id FROM playbooks WHERE user_id IN ({$in}) ORDER BY title");
+        $st->execute($o);
         $rows = $st->fetchAll(PDO::FETCH_ASSOC);
         foreach ($rows as &$r) {
             $r['id'] = (int) $r['id'];
+            $r['is_robot'] = $robotId !== null && (int) $r['user_id'] === $robotId;
+            unset($r['user_id']);
             $r['automation_id'] = $r['automation_id'] === null ? null : (int) $r['automation_id'];
-            $used = $this->usedBy($userId, $r['id']);
+            $used = $this->usedBy($userId, $r['id'], $robotId);
             $r['used_by'] = count($used['agents']) + count($used['nodes']);
         }
         unset($r);
         return $rows;
     }
 
-    public function get(int $userId, int $id): ?array
+    public function get(int $userId, int $id, ?int $robotId = null): ?array
     {
-        $st = $this->db->prepare('SELECT id, pkey, title, text, updated_at FROM playbooks WHERE id = ? AND user_id = ?');
-        $st->execute([$id, $userId]);
+        $o = self::owners($userId, $robotId);
+        $in = implode(',', array_fill(0, count($o), '?'));
+        $st = $this->db->prepare("SELECT id, user_id, pkey, title, text, updated_at FROM playbooks WHERE id = ? AND user_id IN ({$in})");
+        $st->execute([$id, ...$o]);
         $row = $st->fetch(PDO::FETCH_ASSOC);
-        return $row === false ? null : ['id' => (int) $row['id']] + $row;
+        if ($row === false) {
+            return null;
+        }
+        $row['is_robot'] = $robotId !== null && (int) $row['user_id'] === $robotId;
+        unset($row['user_id']);
+        return ['id' => (int) $row['id']] + $row;
     }
 
     public function getByKey(int $userId, string $pkey): ?array
@@ -245,17 +263,19 @@ final class PlaybookStore
     }
 
     /** The agents and workflow nodes (the user's own) that link to the playbook. */
-    public function usedBy(int $userId, int $id): array
+    public function usedBy(int $userId, int $id, ?int $robotId = null): array
     {
-        $st = $this->db->prepare("SELECT id, name FROM agents WHERE user_id = ? AND playbook_id = ? ORDER BY name");
-        $st->execute([$userId, $id]);
+        $o = self::owners($userId, $robotId);
+        $in = implode(',', array_fill(0, count($o), '?'));
+        $st = $this->db->prepare("SELECT id, name FROM agents WHERE user_id IN ({$in}) AND playbook_id = ? ORDER BY name");
+        $st->execute([...$o, $id]);
         $agents = array_map(fn($a) => ['id' => (int) $a['id'], 'name' => (string) $a['name']], $st->fetchAll(PDO::FETCH_ASSOC));
 
         // The node's link lives in its config JSON: decoded here, so the query stays portable (MySQL and SQLite).
         $st = $this->db->prepare("SELECT n.config, w.id AS workflow_id, w.name AS workflow_name
             FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id
-            WHERE w.user_id = ? AND n.node_type = 'playbook' ORDER BY w.name, n.id");
-        $st->execute([(string) $userId]);
+            WHERE w.user_id IN ({$in}) AND n.node_type = 'playbook' ORDER BY w.name, n.id");
+        $st->execute(array_map('strval', $o));
         $nodes = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $cfg = json_decode((string) $r['config'], true);

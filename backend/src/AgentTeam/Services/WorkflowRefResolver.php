@@ -7,7 +7,7 @@ use PDO;
 /**
  * Turns the names a compiled workflow graph uses (playbook_ref = pkey, code_component_ref / start_option_ref =
  * component name, edge from_port_name = exit name) into the ids and ports the graph repository stores.
- * Resolution is against the workflow owner's own rows only.
+ * Resolution is against the workflow owner's own rows, then the robot's (shared with robot-permitted users).
  */
 final class WorkflowRefResolver
 {
@@ -21,7 +21,7 @@ final class WorkflowRefResolver
      * @return array{nodes: array, edges: array}
      * @throws UnresolvedRefsException listing every name that did not resolve
      */
-    public function resolve(int $userId, array $nodes, array $edges): array
+    public function resolve(int $userId, array $nodes, array $edges, ?int $robotId = null): array
     {
         $missing = [];
         $exitsByNode = [];   // node id => list of exit names the node's out-edges are named against
@@ -36,7 +36,7 @@ final class WorkflowRefResolver
 
             if (isset($cfg['playbook_ref'])) {
                 $ref = (string) $cfg['playbook_ref'];
-                $pid = $this->playbookId($userId, $ref);
+                $pid = $this->playbookId($userId, $ref, $robotId);
                 if ($pid === null) {
                     $missing[] = "playbook '$ref'";
                 } else {
@@ -47,7 +47,7 @@ final class WorkflowRefResolver
             }
             if (isset($cfg['code_component_ref'])) {
                 $ref = (string) $cfg['code_component_ref'];
-                $c = $this->component($userId, $ref);
+                $c = $this->component($userId, $ref, $robotId);
                 if ($c === null) {
                     $missing[] = "code component '$ref'";
                 } else {
@@ -58,7 +58,7 @@ final class WorkflowRefResolver
             }
             if (isset($cfg['start_option_ref'])) {
                 $ref = (string) $cfg['start_option_ref'];
-                $c = $this->component($userId, $ref);
+                $c = $this->component($userId, $ref, $robotId);
                 if ($c === null) {
                     $missing[] = "start option component '$ref'";
                 } else {
@@ -93,20 +93,32 @@ final class WorkflowRefResolver
         return ['nodes' => $nodes, 'edges' => $edges];
     }
 
-    private function playbookId(int $userId, string $pkey): ?int
+    private function playbookId(int $userId, string $pkey, ?int $robotId): ?int
     {
         $st = $this->db->prepare('SELECT id FROM playbooks WHERE user_id = ? AND pkey = ? ORDER BY id LIMIT 1');
-        $st->execute([$userId, $pkey]);
-        $id = $st->fetchColumn();
-        return $id === false ? null : (int) $id;
+        foreach ($robotId === null ? [$userId] : [$userId, $robotId] as $owner) {
+            $st->execute([$owner, $pkey]);
+            $id = $st->fetchColumn();
+            if ($id !== false) {
+                return (int) $id;
+            }
+        }
+        return null;
     }
 
     /** @return array{id: int, exits: list<string>}|null */
-    private function component(int $userId, string $name): ?array
+    private function component(int $userId, string $name, ?int $robotId): ?array
     {
         $st = $this->db->prepare('SELECT id, exits FROM code_components WHERE user_id = ? AND name = ? ORDER BY id LIMIT 1');
-        $st->execute([$userId, $name]);
-        $row = $st->fetch(PDO::FETCH_ASSOC);
+        $row = false;
+        foreach ($robotId === null ? [$userId] : [$userId, $robotId] as $owner) {
+            $st->execute([$owner, $name]);
+            $row = $st->fetch(PDO::FETCH_ASSOC);
+            $st->closeCursor();
+            if ($row) {
+                break;
+            }
+        }
         if (!$row) {
             return null;
         }

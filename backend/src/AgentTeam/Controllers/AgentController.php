@@ -88,8 +88,8 @@ class AgentController
         // Remove null filters
         $filters = array_filter($filters, fn($v) => $v !== null);
 
-        $agents = $this->repository->findAccessibleByUser($userId, $filters);
-        $total = $this->repository->countAccessible($userId);
+        $agents = $this->repository->findAccessibleByUser($userId, $filters, $this->robotFor($userId));
+        $total = $this->repository->countAccessible($userId, $this->robotFor($userId));
 
         return [
             'success' => true,
@@ -189,7 +189,7 @@ class AgentController
         $userId = $this->getUserId($request);
         $agentId = $this->getAgentId($request);
 
-        if (!$this->repository->canUserAccess($userId, $agentId)) {
+        if (!$this->repository->canUserAccess($userId, $agentId, $this->robotFor($userId))) {
             return $this->error('Agent not found', 404);
         }
 
@@ -219,8 +219,8 @@ class AgentController
         $agentId = $this->getAgentId($request);
         $data = $request['body'] ?? [];
 
-        // Check ownership (only owner can update)
-        if (!$this->repository->isOwner($userId, $agentId)) {
+        // Check ownership (only owner can update; a robot agent is also editable by robot-permitted users, by id)
+        if (!$this->repository->isOwner($userId, $agentId, $this->robotFor($userId))) {
             return $this->error('Agent not found or access denied', 404);
         }
 
@@ -275,7 +275,7 @@ class AgentController
 
         // Only a playbook agent has a playbook; a linked agent keeps its text in the collection only.
         if (array_key_exists('playbook_id', $data) && $data['playbook_id'] !== null && $agent->getAgentType() === 'playbook') {
-            if ($this->findPlaybook($userId, (int) $data['playbook_id']) === null) {
+            if ($this->findPlaybook($userId, (int) $data['playbook_id'], $this->robotFor($userId)) === null) {
                 return $this->error('Playbook #' . (int) $data['playbook_id'] . ' not found', 404);
             }
             $agent->setPlaybookId((int) $data['playbook_id']);
@@ -820,9 +820,15 @@ class AgentController
         return (int) ($request['user_id'] ?? 0);
     }
 
-    private function findPlaybook(int $userId, int $id): ?array
+    private function findPlaybook(int $userId, int $id, ?int $robotId = null): ?array
     {
-        return (new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db))->get($userId, $id);
+        return (new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db))->get($userId, $id, $robotId);
+    }
+
+    /** The robot's id when the caller may use the robot (its agents are shared), else null. */
+    private function robotFor(int $userId): ?int
+    {
+        return (new \Quantis\AIPortfolioAssistant\Services\RobotOwnership($this->db, $this->config))->robotFor($userId);
     }
 
     private function getAgentId(array $request): int

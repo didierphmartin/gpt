@@ -58,15 +58,17 @@ class AgentRepository
     /**
      * Find all agents accessible by a user
      */
-    public function findAccessibleByUser(int $userId, array $filters = []): array
+    public function findAccessibleByUser(int $userId, array $filters = [], ?int $robotId = null): array
     {
+        // $robotId: the robot's agents are shared with a caller who may use the robot
         $sql = "SELECT * FROM agents WHERE (
-            user_id = :user_id
+            user_id = :user_id"
+            . ($robotId !== null ? " OR user_id = :robot_id" : '') . "
             OR visibility = 'public'
             OR visibility = 'workspace'
         ) AND enabled = 1";
 
-        $params = ['user_id' => $userId];
+        $params = ['user_id' => $userId] + ($robotId !== null ? ['robot_id' => $robotId] : []);
 
         // Filter by agent type
         if (!empty($filters['agent_type'])) {
@@ -477,15 +479,15 @@ class AgentRepository
     /**
      * Check if a user can access an agent
      */
-    public function canUserAccess(int $userId, int $agentId): bool
+    public function canUserAccess(int $userId, int $agentId, ?int $robotId = null): bool
     {
         $agent = $this->findById($agentId);
         if (!$agent) {
             return false;
         }
 
-        // Owner always has access
-        if ($agent->getUserId() === $userId) {
+        // Owner always has access; so does a caller who may use the robot, to the robot's agents
+        if ($agent->getUserId() === $userId || ($robotId !== null && $agent->getUserId() === $robotId)) {
             return true;
         }
 
@@ -505,10 +507,10 @@ class AgentRepository
     /**
      * Check if a user owns an agent
      */
-    public function isOwner(int $userId, int $agentId): bool
+    public function isOwner(int $userId, int $agentId, ?int $robotId = null): bool
     {
         $agent = $this->findById($agentId);
-        return $agent && $agent->getUserId() === $userId;
+        return $agent && ($agent->getUserId() === $userId || ($robotId !== null && $agent->getUserId() === $robotId));
     }
 
     /**
@@ -526,14 +528,14 @@ class AgentRepository
     /**
      * Count all accessible agents for a user
      */
-    public function countAccessible(int $userId): int
+    public function countAccessible(int $userId, ?int $robotId = null): int
     {
         $stmt = $this->db->prepare(
             "SELECT COUNT(*) FROM agents
-             WHERE (user_id = ? OR visibility IN ('public', 'workspace'))
+             WHERE (user_id = ? OR user_id = ? OR visibility IN ('public', 'workspace'))
              AND enabled = 1"
         );
-        $stmt->execute([$userId]);
+        $stmt->execute([$userId, $robotId ?? $userId]);
         return (int) $stmt->fetchColumn();
     }
 
