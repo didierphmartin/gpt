@@ -121,6 +121,11 @@ final class EventWorker
                 }
             }
         }
+        foreach (array_keys($this->carry) as $key) {
+            if (!isset($seen[$key]) && !isset($this->slots[$key])) {
+                unset($this->carry[$key]);   // its row is gone: a later reactivation starts clean
+            }
+        }
         foreach ($rows as $row) {
             try {
                 $this->reconcileRow($row);
@@ -153,8 +158,8 @@ final class EventWorker
             }
             return;
         }
-        if ($slot === null && $this->replacedRunInFlight((int) $row['user_id'])) {
-            return;   // a person's replaced workflow still runs: the new one opens once it ends
+        if ($slot === null && ($row['user_kind'] ?? null) !== 'service' && $this->replacedRunInFlight((int) $row['user_id'])) {
+            return;   // a person's replaced workflow still runs: the new one opens once it ends (the robot's run independently)
         }
         $carried = null;
         if ($slot === null && isset($this->carry[$key])) {
@@ -198,7 +203,7 @@ final class EventWorker
         return $schedule && is_string($schedule['event_trigger'] ?? null) ? json_decode($schedule['event_trigger'], true) : null;
     }
 
-    /** Whether a slot of this user whose row is gone still runs (a person who activated another workflow meanwhile). */
+    /** Whether a slot of this person whose row is gone still runs (they activated another workflow meanwhile). */
     private function replacedRunInFlight(int $userId): bool
     {
         foreach ($this->slots as $s) {

@@ -561,4 +561,44 @@ final class EventWorkerTest extends TestCase
         $this->step(1);
         $this->assertSame(['9:75'], array_keys($this->tr->open)); // 75 waits again
     }
+
+    /** Two robot event workflows (75, 76) on option 2, and the robot's Outlook server. */
+    private function robotWorkflows(): void
+    {
+        EventWorkerSchema::option($this->db, 2, 9);
+        EventWorkerSchema::workflow($this->db, 75, 9, 2);
+        EventWorkerSchema::row($this->db, 75, 9, 'event', 2);
+        EventWorkerSchema::workflow($this->db, 76, 9, 2);
+        EventWorkerSchema::row($this->db, 76, 9, 'event', 2);
+        $this->db->exec("INSERT INTO mcp_servers (user_id, name, url, headers) VALUES (9, 'Outlook', 'http://robot/mcp', '{}')");
+    }
+
+    public function testARobotWorkflowActivatedDuringAnotherOnesRunOpensAtOnce(): void
+    {
+        $this->robotWorkflows();
+        $this->active(9, 75);
+        $this->step();
+        $this->tr->answer('9:75', ['status' => 'ready']);
+        $this->step(1);
+        $this->assertSame('running', $this->w->slots()['9:75']['state']);
+        (new ActiveWorkflowService($this->db))->deactivate(9, 75);   // unlocked mid-run
+        $this->active(9, 76);
+        $this->step(EventWorker::RECONCILE_S);
+        $this->assertSame(['9:76'], array_keys($this->tr->open));   // not held back by 75's run
+        $this->assertSame('running', $this->w->slots()['9:75']['state']);
+    }
+
+    public function testAFailedRunOfARemovedRowLeavesNoCarry(): void
+    {
+        $this->running();
+        (new ActiveWorkflowService($this->db))->deactivate(3, 64);
+        $this->step(EventWorker::RECONCILE_S);
+        $this->runs->ended['3:64'] = 1;                         // fails after its row went: carried
+        $this->step(1);
+        $this->step(1);                                         // the row is not back: the carry is dropped
+        $this->active();
+        $this->step(EventWorker::RECONCILE_S);
+        $this->assertArrayHasKey('3:64', $this->tr->open);
+        $this->assertSame(['waiting', null], array_values($this->state()));   // starts clean, no old run_failed
+    }
 }

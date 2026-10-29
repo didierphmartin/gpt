@@ -126,11 +126,12 @@ final class ActiveWorkflowService
         return $row;
     }
 
-    /** Every active row with its workflow's owner and enabled flag (the worker's reconcile). */
+    /** Every active row with its workflow's owner, enabled flag and the row user's kind ('service' = the robot): the worker's reconcile. */
     public function all(): array
     {
-        return $this->db->query('SELECT a.*, w.user_id AS owner_id, w.enabled FROM active_workflows a
-            JOIN agent_workflows w ON w.id = a.workflow_id ORDER BY a.user_id, a.workflow_id')->fetchAll(PDO::FETCH_ASSOC);
+        return $this->db->query('SELECT a.*, w.user_id AS owner_id, w.enabled, u.kind AS user_kind FROM active_workflows a
+            JOIN agent_workflows w ON w.id = a.workflow_id LEFT JOIN users u ON u.id = a.user_id
+            ORDER BY a.user_id, a.workflow_id')->fetchAll(PDO::FETCH_ASSOC);
     }
 
     /** Whether the worker may serve the row now; a row that may not is idle, not deactivated (fixing it resumes it). */

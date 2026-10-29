@@ -6,6 +6,7 @@ namespace AgentTeam\Controllers;
 
 use AgentTeam\Services\ActiveWorkflowError;
 use AgentTeam\Services\ActiveWorkflowService;
+use AgentTeam\Services\WorkflowRepository;
 use PDO;
 use Quantis\AIPortfolioAssistant\Services\RobotOwnership;
 
@@ -17,11 +18,13 @@ class ActiveWorkflowController
 {
     private ActiveWorkflowService $active;
     private RobotOwnership $ownership;
+    private WorkflowRepository $workflows;
 
-    public function __construct(private PDO $db, array $config)
+    public function __construct(PDO $db, array $config)
     {
         $this->active = new ActiveWorkflowService($db);
         $this->ownership = new RobotOwnership($db, $config);
+        $this->workflows = new WorkflowRepository($db);
     }
 
     /** GET /api/v1/workflows/active: the caller's own row. */
@@ -71,10 +74,7 @@ class ActiveWorkflowController
             return ['success' => false, 'error' => 'Authentication required', 'status_code' => 401];
         }
         $workflowId = (int) ($request['params']['id'] ?? 0);
-        $st = $this->db->prepare('SELECT user_id FROM agent_workflows WHERE id = ?');
-        $st->execute([$workflowId]);
-        $owner = $st->fetchColumn();
-        if ($owner === false || !in_array((int) $owner, [$userId, $this->ownership->robotFor($userId)], true)) {
+        if (!$this->workflows->canUserAccess($userId, $workflowId, $this->ownership->robotFor($userId))) {
             return ['success' => false, 'error' => 'Workflow not found', 'kind' => 'not_found', 'status_code' => 404];
         }
         return $fn($userId, $workflowId);
