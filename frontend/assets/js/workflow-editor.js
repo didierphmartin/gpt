@@ -1880,6 +1880,10 @@ class WorkflowEditor {
     async _setOwnerRobot() {
         const id = this.currentWorkflowId;
         const t = (k, p) => this.t(k, p);
+        if (this._ownerChanging) return;   // the save and the preview take seconds: one dialog at a time
+        this._ownerChanging = true;
+        const select = document.getElementById('workflow-owner-select');
+        if (select) select.disabled = true;
         try {
             if (!id) { this.showToast(this.t('workflow.messages.saveFirst'), 'warning'); return; }
             await this._persistIfDirty();   // the server reads the workflow's links from the database
@@ -1907,7 +1911,8 @@ class WorkflowEditor {
             const clashes = window.RobotOwner.clashLines(err?.body, t);
             this.showNotification(clashes.length ? clashes.join('\n') : (err?.message || String(err)), 'error');
         } finally {
-            this._refreshOwnerField();   // a cancel or a refusal puts the select back
+            this._ownerChanging = false;
+            this._refreshOwnerField();   // a cancel or a refusal puts the select back (and re-enables it)
         }
     }
 
