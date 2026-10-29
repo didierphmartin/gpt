@@ -60,9 +60,9 @@
     // ---- translations ---------------------------------------------
     const STRINGS = {
         en: {
-            'welcome.what':   'Synergy brings two things together in one place: a chatbot that speaks to every major AI provider, and a visual workflow builder for the work that is too involved for a single conversation.',
-            'welcome.chat':   'Chat with Claude, OpenAI, Gemini, Grok, DeepSeek, Kimi and more through one interface. Switch model mid-conversation, compare two answers side by side, attach documents, and talk to it out loud.',
-            'welcome.flows':  'Then go further: build multi-step workflows on a canvas, where agents use tools, search the web, read your files and hand work to one another. Compile any of them to Python and run it on your own machine.',
+            'welcome.what':   'SynergyAI Studio is a development tool for building AI agents and the work they do together. It works with the major AI providers, so each step can use the model that suits it best.',
+            'welcome.engine': 'At its heart is a powerful workflow engine: design multi-step workflows on a canvas, where agents use tools, search the web, read your files and hand work to one another. Then compile any workflow into a standalone Python program for LangGraph, Google ADK, Microsoft Agent Framework or NVIDIA OO Agents, and run it on your own machine.',
+            'welcome.skills': 'Skills turn your procedures into intelligent, reusable steps that agents follow. Advanced features keep them sharp: self-healing diagnoses a skill from its traces and repairs it for you.',
             'welcome.bkeys':  'Add your own AI provider keys — nothing is shipped with this app.',
             'step.lang':      'Language',
             'step.welcome':   'Welcome',
@@ -71,7 +71,7 @@
             'step.install':   'Install',
             'lang.title':     'Choose your language',
             'lang.continue':  'Continue',
-            'welcome.title':  'Welcome to Synergy AI Chat',
+            'welcome.title':  'Welcome to SynergyAI Studio',
             'welcome.intro':  'A few quick steps and you are ready.',
             'welcome.b1':     'Pick a root folder where Synergy will read and write files.',
             'welcome.b2':     'Install Synergy as a local app on your device.',
@@ -113,9 +113,9 @@
             'testBanner':     'Test mode — wizard shown every visit for iteration.'
         },
         fr: {
-            'welcome.what':   "Synergy réunit deux outils au même endroit : un agent conversationnel relié à tous les grands fournisseurs d'IA, et un constructeur visuel de workflows pour les tâches trop complexes pour une simple conversation.",
-            'welcome.chat':   "Discutez avec Claude, OpenAI, Gemini, Grok, DeepSeek, Kimi et d'autres depuis une seule interface. Changez de modèle en cours de conversation, comparez deux réponses côte à côte, joignez des documents et parlez-lui à voix haute.",
-            'welcome.flows':  "Allez plus loin : construisez des workflows en plusieurs étapes sur un canevas, où des agents utilisent des outils, cherchent sur le web, lisent vos fichiers et se transmettent le travail. Compilez-les en Python et exécutez-les sur votre machine.",
+            'welcome.what':   'SynergyAI Studio est un outil de développement pour créer des agents d\'IA et le travail qu\'ils accomplissent ensemble. Il fonctionne avec les grands fournisseurs d\'IA, pour que chaque étape utilise le modèle qui lui convient le mieux.',
+            'welcome.engine': 'Au cœur du studio, un puissant moteur de workflows : concevez sur un canevas des workflows en plusieurs étapes, où des agents utilisent des outils, cherchent sur le web, lisent vos fichiers et se transmettent le travail. Compilez ensuite n\'importe quel workflow en un programme Python autonome pour LangGraph, Google ADK, Microsoft Agent Framework ou NVIDIA OO Agents, et exécutez-le sur votre machine.',
+            'welcome.skills': 'Les skills transforment vos procédures en étapes intelligentes et réutilisables que les agents suivent. Des fonctions avancées les maintiennent au point : l\'auto-réparation diagnostique un skill à partir de ses traces et le corrige pour vous.',
             'welcome.bkeys':  "Ajouter vos propres clés de fournisseur IA — aucune n'est fournie avec l'application.",
             'step.lang':      'Langue',
             'step.welcome':   'Bienvenue',
@@ -124,7 +124,7 @@
             'step.install':   'Installation',
             'lang.title':     'Choisissez votre langue',
             'lang.continue':  'Continuer',
-            'welcome.title':  'Bienvenue sur Synergy AI Chat',
+            'welcome.title':  'Bienvenue sur SynergyAI Studio',
             'welcome.intro':  'Quelques étapes rapides et tout est prêt.',
             'welcome.b1':     'Choisir un dossier racine où Synergy lira et écrira des fichiers.',
             'welcome.b2':     'Installer Synergy comme une application locale sur votre appareil.',
@@ -166,9 +166,9 @@
             'testBanner':     "Mode test — l'assistant s'affiche à chaque visite pour itération."
         },
         es: {
-            'welcome.what':   'Synergy reúne dos herramientas en un mismo lugar: un chatbot conectado a los principales proveedores de IA y un constructor visual de flujos de trabajo para las tareas demasiado complejas para una sola conversación.',
-            'welcome.chat':   'Conversa con Claude, OpenAI, Gemini, Grok, DeepSeek, Kimi y otros desde una sola interfaz. Cambia de modelo a mitad de conversación, compara dos respuestas lado a lado, adjunta documentos y háblale en voz alta.',
-            'welcome.flows':  'Y ve más lejos: crea flujos de trabajo de varios pasos en un lienzo, donde los agentes usan herramientas, buscan en la web, leen tus archivos y se pasan el trabajo entre sí. Compílalos a Python y ejecútalos en tu propia máquina.',
+            'welcome.what':   'SynergyAI Studio es una herramienta de desarrollo para crear agentes de IA y el trabajo que realizan juntos. Funciona con los principales proveedores de IA, para que cada paso use el modelo que mejor le convenga.',
+            'welcome.engine': 'En su núcleo hay un potente motor de flujos de trabajo: diseña en un lienzo flujos de varios pasos, donde los agentes usan herramientas, buscan en la web, leen tus archivos y se pasan el trabajo entre sí. Después compila cualquier flujo en un programa Python independiente para LangGraph, Google ADK, Microsoft Agent Framework o NVIDIA OO Agents, y ejecútalo en tu propia máquina.',
+            'welcome.skills': 'Los skills convierten tus procedimientos en pasos inteligentes y reutilizables que los agentes siguen. Funciones avanzadas los mantienen a punto: la autorreparación diagnostica un skill a partir de sus trazas y lo corrige por ti.',
             'welcome.bkeys':  'Añadir tus propias claves de proveedor de IA: la aplicación no incluye ninguna.',
             'step.lang':      'Idioma',
             'step.welcome':   'Bienvenida',
@@ -177,7 +177,7 @@
             'step.install':   'Instalación',
             'lang.title':     'Elige tu idioma',
             'lang.continue':  'Continuar',
-            'welcome.title':  'Bienvenido a Synergy AI Chat',
+            'welcome.title':  'Bienvenido a SynergyAI Studio',
             'welcome.intro':  'Unos pocos pasos rápidos y estará listo.',
             'welcome.b1':     'Elegir una carpeta raíz donde Synergy leerá y escribirá archivos.',
             'welcome.b2':     'Instalar Synergy como una aplicación local en tu dispositivo.',
@@ -475,8 +475,8 @@
             ${header('welcome.title')}
 
             <p class="text-sm text-gray-300 leading-relaxed mb-3">${esc(t('welcome.what'))}</p>
-            <p class="text-sm text-gray-400 leading-relaxed mb-3">${esc(t('welcome.chat'))}</p>
-            <p class="text-sm text-gray-400 leading-relaxed mb-5">${esc(t('welcome.flows'))}</p>
+            <p class="text-sm text-gray-400 leading-relaxed mb-3">${esc(t('welcome.engine'))}</p>
+            <p class="text-sm text-gray-400 leading-relaxed mb-5">${esc(t('welcome.skills'))}</p>
 
             <p class="text-sm text-gray-300 mb-2">${esc(t('welcome.intro'))}</p>
             <ol class="space-y-2 text-sm text-gray-300 mb-5">
