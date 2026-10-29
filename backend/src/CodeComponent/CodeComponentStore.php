@@ -71,6 +71,16 @@ final class CodeComponentStore
         return $found === null ? null : $this->row($found, $robotId);
     }
 
+    private function isRobotComponent(int $id, ?int $robotId): bool
+    {
+        if ($robotId === null) {
+            return false;
+        }
+        $st = $this->db->prepare('SELECT 1 FROM code_components WHERE id = ? AND user_id = ?');
+        $st->execute([$id, $robotId]);
+        return $st->fetchColumn() !== false;
+    }
+
     /** Whose row $id is: the robot's when the caller sees it as the robot's, else the caller. */
     private function ownerOf(int $userId, int $id, ?int $robotId): int
     {
@@ -170,6 +180,7 @@ final class CodeComponentStore
         $c = $this->get($userId, $id, $robotId) ?? throw new CodeComponentError('not_found', "Code component #{$id} not found", 404);
         $userId = $c['is_robot'] ? $robotId : $userId;
         $t = self::validateStartTrigger($c, $trigger);
+        $robot = $c['is_robot'];
         $outer = !$this->db->inTransaction();
         if ($outer) {
             $this->db->beginTransaction();
@@ -179,8 +190,9 @@ final class CodeComponentStore
                 ->execute([json_encode($t, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), $id, $userId]);
             // the schedules already on this option carry a copy of its watch: an edit reaches them too
             $watch = json_decode(json_encode($t['watch']), true);   // validateStartTrigger hands back objects
-            $rows = $this->db->prepare('SELECT id, workflow_id FROM scheduled_workflows WHERE user_id = ? AND trigger_component_id = ?');
-            $rows->execute([$userId, $id]);
+            $rows = $this->db->prepare('SELECT id, workflow_id FROM scheduled_workflows WHERE trigger_component_id = ?'
+                . ($robot ? '' : ' AND user_id = ?'));
+            $rows->execute($robot ? [$id] : [$id, $userId]);
             $upd = $this->db->prepare('UPDATE scheduled_workflows SET event_trigger = ? WHERE id = ?');
             foreach ($rows->fetchAll(PDO::FETCH_ASSOC) as $r) {   // each keeps its own Start's args
                 $upd->execute([ScheduledWorkflowService::eventTrigger(json_encode(
@@ -202,10 +214,11 @@ final class CodeComponentStore
     public function startTriggerImpact(int $userId, int $id, ?int $robotId = null): array
     {
         $userId = $this->ownerOf($userId, $id, $robotId);
+        $robot = $this->isRobotComponent($id, $robotId);   // a robot option is scheduled by any permitted user
         $st = $this->db->prepare('SELECT DISTINCT s.workflow_id, w.name FROM scheduled_workflows s
             JOIN agent_workflows w ON w.id = s.workflow_id
-            WHERE s.user_id = ? AND s.trigger_component_id = ?');
-        $st->execute([$userId, $id]);
+            WHERE s.trigger_component_id = ?' . ($robot ? '' : ' AND s.user_id = ?'));
+        $st->execute($robot ? [$id] : [$id, $userId]);
         $names = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $names[(int) $r['workflow_id']] = (string) $r['name'];
@@ -234,7 +247,8 @@ final class CodeComponentStore
             $this->db->beginTransaction();
         }
         try {
-            $this->db->prepare('DELETE FROM scheduled_workflows WHERE user_id = ? AND trigger_component_id = ?')->execute([$userId, $id]);
+            $this->db->prepare('DELETE FROM scheduled_workflows WHERE trigger_component_id = ?' . ($c['is_robot'] ? '' : ' AND user_id = ?'))
+                ->execute($c['is_robot'] ? [$id] : [$id, $userId]);
             if ($c['start_trigger'] !== null) {
                 $this->revertStarts($userId, $id, $c['exits'], $c['start_trigger']['work_exit'], $robotId);
             }
@@ -325,11 +339,13 @@ final class CodeComponentStore
     private function linkedNodes(int $userId, int $id, ?int $robotId = null): array
     {
         $o = self::owners($userId, $robotId);
+        // A robot component is linked from any permitted user's workflows: scan them all.
+        $robots = $this->isRobotComponent($id, $robotId);
         // The link lives in the node's config JSON: decoded here, so the query stays portable (MySQL and SQLite).
         $st = $this->db->prepare("SELECT n.id AS node_id, n.node_type, n.config, w.id AS workflow_id, w.name AS workflow_name
-            FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id
-            WHERE w.user_id IN (" . self::in($o) . ") ORDER BY w.name, n.id");
-        $st->execute(array_map('strval', $o));
+            FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id"
+            . ($robots ? '' : " WHERE w.user_id IN (" . self::in($o) . ")") . " ORDER BY w.name, n.id");
+        $st->execute($robots ? [] : array_map('strval', $o));
         $nodes = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $cfg = json_decode((string) $r['config'], true);

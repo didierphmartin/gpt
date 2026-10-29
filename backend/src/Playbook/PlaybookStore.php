@@ -95,7 +95,7 @@ final class PlaybookStore
     }
 
     /** Create ($id null) or update. The text must parse; the key defaults to the title's (create) or stays (update). */
-    public function save(int $userId, ?int $id, string $text, ?string $pkey): array
+    public function save(int $userId, ?int $id, string $text, ?string $pkey, ?int $robotId = null): array
     {
         try {
             $title = PlaybookDocument::fromConsoleText($text)->title;
@@ -105,10 +105,12 @@ final class PlaybookStore
         if (mb_strlen($title) > self::TITLE_MAX) {
             throw new PlaybookStoreError('invalid_text', "The title is longer than 255 characters (" . mb_strlen($title) . "); shorten the \"Title:\" line.", 422);
         }
-        $current = $id === null ? null : $this->get($userId, $id);
+        $current = $id === null ? null : $this->get($userId, $id, $robotId);
         if ($id !== null && $current === null) {
             throw new PlaybookStoreError('not_found', "Playbook #{$id} not found", 404);
         }
+        // a robot playbook stays the robot's (updated by id); a new one is always the caller's
+        $userId = $current !== null && $current['is_robot'] ? $robotId : $userId;
         $key = $pkey ?? ($current['pkey'] ?? self::keyFromTitle($title));
         if (!self::isValidKey($key)) {
             throw new PlaybookStoreError('invalid_key',
@@ -128,7 +130,7 @@ final class PlaybookStore
                 WHERE id = ? AND user_id = ?');
             $st->execute([$key, $title, $text, $id, $userId]);
         }
-        return $this->get($userId, $id);
+        return $this->get($userId, $id, $robotId);
     }
 
     /**
@@ -246,12 +248,14 @@ final class PlaybookStore
         return $name !== '' ? $name : (string) $u['email'];
     }
 
-    public function delete(int $userId, int $id): void
+    public function delete(int $userId, int $id, ?int $robotId = null): void
     {
-        if ($this->get($userId, $id) === null) {
+        $current = $this->get($userId, $id, $robotId);
+        if ($current === null) {
             throw new PlaybookStoreError('not_found', "Playbook #{$id} not found", 404);
         }
-        $used = $this->usedBy($userId, $id);
+        $userId = $current['is_robot'] ? $robotId : $userId;
+        $used = $this->usedBy($userId, $id, $robotId);
         $names = array_merge(
             array_map(fn($a) => "agent \"{$a['name']}\"", $used['agents']),
             array_map(fn($n) => "node \"{$n['node_name']}\" in workflow \"{$n['workflow_name']}\"", $used['nodes'])
@@ -267,15 +271,19 @@ final class PlaybookStore
     {
         $o = self::owners($userId, $robotId);
         $in = implode(',', array_fill(0, count($o), '?'));
-        $st = $this->db->prepare("SELECT id, name FROM agents WHERE user_id IN ({$in}) AND playbook_id = ? ORDER BY name");
-        $st->execute([...$o, $id]);
+        // a robot playbook is linked from any permitted user's agents and workflows: scan them all
+        $own = $this->db->prepare('SELECT 1 FROM playbooks WHERE id = ? AND user_id = ?');
+        $own->execute([$id, $robotId ?? 0]);
+        $all = $robotId !== null && $own->fetchColumn() !== false;
+        $st = $this->db->prepare("SELECT id, name FROM agents WHERE " . ($all ? '' : "user_id IN ({$in}) AND ") . "playbook_id = ? ORDER BY name");
+        $st->execute($all ? [$id] : [...$o, $id]);
         $agents = array_map(fn($a) => ['id' => (int) $a['id'], 'name' => (string) $a['name']], $st->fetchAll(PDO::FETCH_ASSOC));
 
         // The node's link lives in its config JSON: decoded here, so the query stays portable (MySQL and SQLite).
         $st = $this->db->prepare("SELECT n.config, w.id AS workflow_id, w.name AS workflow_name
             FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id
-            WHERE w.user_id IN ({$in}) AND n.node_type = 'playbook' ORDER BY w.name, n.id");
-        $st->execute(array_map('strval', $o));
+            WHERE " . ($all ? '' : "w.user_id IN ({$in}) AND ") . "n.node_type = 'playbook' ORDER BY w.name, n.id");
+        $st->execute($all ? [] : array_map('strval', $o));
         $nodes = [];
         foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
             $cfg = json_decode((string) $r['config'], true);

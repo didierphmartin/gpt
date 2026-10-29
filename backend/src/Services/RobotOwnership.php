@@ -28,11 +28,7 @@ final class RobotOwnership
     /** The robot's id when the caller may use the robot, else null. */
     public function robotFor(int $callerId): ?int
     {
-        try {
-            return $this->policy->canUse($callerId) ? $this->robotId() : null;
-        } catch (\PDOException) {
-            return null;   // no users/packages tables to ask: nothing is shared
-        }
+        return $this->policy->canUse($callerId) ? $this->robotId() : null;
     }
 
     public function isRobotOwned(int $workflowId): bool

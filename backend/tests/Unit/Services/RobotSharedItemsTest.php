@@ -15,8 +15,14 @@ final class RobotSharedItemsTest extends TestCase
 {
     private PDO $db;
 
+    protected function tearDown(): void
+    {
+        unset($_ENV['GPT_EDITION']);
+    }
+
     protected function setUp(): void
     {
+        $_ENV['GPT_EDITION'] = 'individual';
         $db = $this->db = new PDO('sqlite::memory:');
         $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         $db->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
@@ -131,5 +137,61 @@ final class RobotSharedItemsTest extends TestCase
         $r = $this->agentUpdate(4, 'corporate', 50, ['instructions' => 'new']);
         $this->assertSame(404, $r['status_code']);
         $this->assertSame('old', $this->db->query('SELECT instructions FROM agents WHERE id = 50')->fetchColumn());
+    }
+
+    private function linkFromPersonalWorkflow(int $cid): void
+    {
+        $this->db->exec("INSERT INTO agent_workflows (id, user_id, name) VALUES (9, '3', 'Mine')");
+        $this->db->prepare('INSERT INTO workflow_nodes (id, workflow_id, node_type, config) VALUES (1, 9, ?, ?)')
+            ->execute(['code', json_encode(['type' => 'code', 'code_component_id' => $cid])]);
+    }
+
+    public function testARobotComponentLinkedByAPersonalWorkflowCannotBeDeleted(): void
+    {
+        $cid = $this->component(120, 'robot_comp');
+        $this->linkFromPersonalWorkflow($cid);
+        $store = new CodeComponentStore($this->db);
+        $this->assertCount(1, $store->usedBy(3, $cid, 120));
+        try {
+            $store->delete(3, $cid, 120);
+            $this->fail('delete should be refused');
+        } catch (\Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentError $e) {
+            $this->assertSame('in_use', $e->kind);
+        }
+    }
+
+    public function testExitChangeOnARobotComponentRemapsPersonalWorkflowEdges(): void
+    {
+        $store = new CodeComponentStore($this->db);
+        $cid = $store->save(120, null, ['name' => 'rc', 'code' => '', 'exits' => ['a', 'b'], 'mcp_servers' => []])['id'];
+        $this->linkFromPersonalWorkflow($cid);
+        $this->db->exec("INSERT INTO workflow_edges (workflow_id, from_node_id, to_node_id, from_port) VALUES (9, 1, 2, 'output_2')");
+        $store->save(3, $cid, ['name' => 'rc', 'code' => '', 'exits' => ['b', 'c'], 'mcp_servers' => [], 'confirm_drop_links' => true], 120);
+        $this->assertSame('output_1', $this->db->query('SELECT from_port FROM workflow_edges')->fetchColumn());
+    }
+
+    public function testAWorkflowOfAUserWithoutRobotPermissionNeverResolvesRobotRows(): void
+    {
+        $_ENV['GPT_EDITION'] = 'corporate';
+        $cid = $this->component(120, 'robot_comp');
+        $this->linkFromPersonalWorkflow($cid);
+        $cfg = (new WorkflowGraphRepository($this->db))->getGraph(9)['nodes'][0]['config'];
+        $this->assertTrue($cfg['code_component_missing']);
+        $this->assertArrayNotHasKey('code', $cfg);
+    }
+
+    public function testRobotPermittedUserEditsAndDeletesARobotPlaybookInPlace(): void
+    {
+        $s = new PlaybookStore($this->db);
+        $pid = $s->save(120, null, PlaybookStoreTest::OKTA, 'okta-reset')['id'];
+        $row = $s->save(3, $pid, PlaybookStoreTest::OKTA, null, 120);
+        $this->assertSame($pid, $row['id']);
+        $this->assertTrue($row['is_robot']);
+        $this->assertSame(1, (int) $this->db->query('SELECT COUNT(*) FROM playbooks')->fetchColumn());
+        $this->assertFalse($s->save(3, null, PlaybookStoreTest::OKTA, 'mine', 120)['is_robot']);
+        $s->delete(3, $pid, 120);
+        $this->assertSame(1, (int) $this->db->query('SELECT COUNT(*) FROM playbooks')->fetchColumn());
+        $this->expectException(\Quantis\AIPortfolioAssistant\Playbook\PlaybookStoreError::class);
+        $s->delete(4, $pid);
     }
 }

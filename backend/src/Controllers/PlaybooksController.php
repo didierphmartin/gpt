@@ -64,19 +64,19 @@ final class PlaybooksController
     public function create(array $request): array
     {
         return $this->guard($request, fn(int $u) => ['success' => true,
-            'data' => $this->store->save($u, null, $this->text($request), $this->key($request))]);
+            'data' => $this->store->save($u, null, $this->text($request), $this->key($request), $this->ownership->robotFor($u))]);
     }
 
     public function update(array $request): array
     {
         return $this->guard($request, fn(int $u) => ['success' => true,
-            'data' => $this->store->save($u, (int) ($request['params']['id'] ?? 0), $this->text($request), $this->key($request))]);
+            'data' => $this->store->save($u, (int) ($request['params']['id'] ?? 0), $this->text($request), $this->key($request), $this->ownership->robotFor($u))]);
     }
 
     public function destroy(array $request): array
     {
         return $this->guard($request, function (int $u) use ($request) {
-            $this->store->delete($u, (int) ($request['params']['id'] ?? 0));
+            $this->store->delete($u, (int) ($request['params']['id'] ?? 0), $this->ownership->robotFor($u));
             return ['success' => true];
         });
     }

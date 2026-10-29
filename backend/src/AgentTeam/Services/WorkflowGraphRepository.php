@@ -44,14 +44,14 @@ class WorkflowGraphRepository
         return array_map('intval', array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'workflow_id'));
     }
 
-    /** The robot's user id, or null (no robot yet, or a database without users). */
-    private function robotId(): ?int
+    /**
+     * The robot rows a workflow's links may resolve to: the robot's id when the workflow's owner may use the
+     * robot (or is the robot), else null, so a guessed robot id in a node never reveals the robot's code.
+     */
+    private function robotFor(int $ownerId): ?int
     {
-        try {
-            return \Quantis\AIPortfolioAssistant\Services\RobotAccount::id($this->db);
-        } catch (\PDOException) {
-            return null;
-        }
+        $own = new \Quantis\AIPortfolioAssistant\Services\RobotOwnership($this->db, ['edition' => $_ENV['GPT_EDITION'] ?? '']);
+        return $own->robotId() === $ownerId ? $ownerId : $own->robotFor($ownerId);
     }
 
     /**
@@ -81,14 +81,13 @@ class WorkflowGraphRepository
             return $owner;
         };
         // links resolve against the owner's rows or the robot's (a personal workflow may link robot rows)
-        $robotId = $this->robotId();
         $store = new \Quantis\AIPortfolioAssistant\Playbook\PlaybookStore($this->db);
         foreach ($rows as &$row) {
             $cfg = $row['config'];
             if (($row['node_type'] ?? '') !== 'playbook' || !is_array($cfg) || !isset($cfg['playbook_id'])) {
                 continue;
             }
-            $pb = $store->get($ownerId(), (int) $cfg['playbook_id'], $robotId);
+            $pb = $store->get($ownerId(), (int) $cfg['playbook_id'], $this->robotFor($ownerId()));
             if ($pb === null) {
                 unset($cfg['playbook']);
                 $cfg['playbook_missing'] = true;
@@ -107,7 +106,7 @@ class WorkflowGraphRepository
                 || !is_array($cfg) || empty($cfg['code_component_id'])) {
                 continue;
             }
-            $c = $codeStore->get($ownerId(), (int) $cfg['code_component_id'], $robotId);
+            $c = $codeStore->get($ownerId(), (int) $cfg['code_component_id'], $this->robotFor($ownerId()));
             unset($cfg['code'], $cfg['exits'], $cfg['mcp_servers'], $cfg['timeout_s'], $cfg['arg_decls'], $cfg['provides'], $cfg['code_component_missing']);
             if ($c === null) {
                 $cfg['code_component_missing'] = true;
@@ -127,7 +126,7 @@ class WorkflowGraphRepository
             }
             $cfg = $row['config'];
             unset($cfg['exits'], $cfg['start_option_label'], $cfg['start_option_missing']);
-            $c = $codeStore->get($ownerId(), $cid, $robotId);
+            $c = $codeStore->get($ownerId(), $cid, $this->robotFor($ownerId()));
             if ($c === null || $c['start_trigger'] === null) {
                 $cfg['start_option_missing'] = true;
             } else {
@@ -164,14 +163,13 @@ class WorkflowGraphRepository
         ];
         $owner = null;
         $codeStore = new \Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentStore($this->db);
-        $robotId = $this->robotId();
-        return StartOptionGraph::expand($graph, function (int $id) use (&$owner, $codeStore, $workflowId, $robotId): ?array {
+        return StartOptionGraph::expand($graph, function (int $id) use (&$owner, $codeStore, $workflowId): ?array {
             if ($owner === null) {
                 $st = $this->db->prepare('SELECT user_id FROM agent_workflows WHERE id = ?');
                 $st->execute([$workflowId]);
                 $owner = (int) $st->fetchColumn();
             }
-            return $codeStore->get($owner, $id, $robotId);
+            return $codeStore->get($owner, $id, $this->robotFor($owner));
         });
     }
 

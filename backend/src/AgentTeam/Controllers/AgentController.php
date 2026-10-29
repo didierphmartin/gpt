@@ -88,8 +88,9 @@ class AgentController
         // Remove null filters
         $filters = array_filter($filters, fn($v) => $v !== null);
 
-        $agents = $this->repository->findAccessibleByUser($userId, $filters, $this->robotFor($userId));
-        $total = $this->repository->countAccessible($userId, $this->robotFor($userId));
+        $robotId = $this->robotFor($userId);
+        $agents = $this->repository->findAccessibleByUser($userId, $filters, $robotId);
+        $total = $this->repository->countAccessible($userId, $robotId);
 
         return [
             'success' => true,
