@@ -41,6 +41,14 @@
     }
 
     /**
+     * A run door that looks disabled while the workflow is locked: one that runs in the browser (a prompt-mode ▶, a
+     * swarm's or an ingestion's Start, an audio workflow's ▶). ■ on an active workflow opens the live view: kept.
+     */
+    function runDoorDisabled(locked, { button, swarm, ingestion, realtime } = {}) {
+        return !!locked && !!(realtime || swarm || ingestion || button === 'run');
+    }
+
+    /**
      * chat save_workflow onto an existing workflow: a locked robot workflow is refused with the lock message, never
      * stopped (spec: the person unlocks deliberately). `apiJson(method, path)` → {ok, status, json}. Null = go on.
      */
@@ -52,5 +60,5 @@
             error: `${wf.name || `Workflow #${workflowId}`} is running as the robot. Unlock it first.` };
     }
 
-    return { isLocked, rowMarks, ownerView, previewLines, clashLines, chatSaveRefusal };
+    return { isLocked, runDoorDisabled, rowMarks, ownerView, previewLines, clashLines, chatSaveRefusal };
 });

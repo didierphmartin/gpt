@@ -1932,8 +1932,29 @@ class WorkflowEditor {
         this.currentWorkflowLocked = on;
         if (this.editor) this.editor.editor_mode = on ? 'view' : 'edit';
         this._renderLockBanner(on);
+        this._markRunDoors();
         const row = (this.workflows || []).find((w) => String(w.id) === String(this.currentWorkflowId));
         if (row && !!row.locked !== on) { row.locked = on; this.renderSavedWorkflowsList(); }
+    }
+
+    /** The run doors look disabled while locked (the clicks are refused by _refuseIfLocked); restored on unlock. */
+    _markRunDoors() {
+        const locked = !!this.currentWorkflowLocked;
+        const mark = (btn, off) => {
+            if (!btn) return;
+            btn.disabled = off;
+            btn.classList.toggle('opacity-50', off);
+            btn.classList.toggle('cursor-not-allowed', off);
+            btn.style.opacity = off ? '0.4' : '';
+            btn.style.cursor = off ? 'not-allowed' : '';
+        };
+        const view = locked && this.currentWorkflowId ? this._startView() : {};
+        const flags = { button: view.button, swarm: this._isSwarm?.(), ingestion: this._isIngestionWorkflow?.() };
+        this.container?.querySelectorAll('.workflow-node.start-node .node-play-btn')
+            .forEach((b) => mark(b, window.RobotOwner.runDoorDisabled(locked, flags)));
+        this.container?.querySelectorAll('.realtime-play-btn')
+            .forEach((b) => mark(b, window.RobotOwner.runDoorDisabled(locked, { realtime: true })));
+        mark(document.getElementById('workflow-run-btn'), locked);
     }
 
     /** True (with a notice) when the open workflow is a locked robot workflow: edits and browser runs stop here. */
@@ -3661,6 +3682,7 @@ class WorkflowEditor {
     /** Start's hint, ▶ and state line: "Runs on <option>"; ▶ runs in prompt mode, else activates / deactivates. */
     _refreshStartHint() {
         this._refreshMonitoring();
+        this._markRunDoors();
         if (this._isSwarm()) return;
         const id = this._startNodeId();
         const d = id ? this.editor.getNodeFromId(id)?.data : null;
@@ -8439,6 +8461,7 @@ class WorkflowEditor {
      * Opens an overlay with mic/speaker, runs the workflow engine.
      */
     async startRealtimeTest() {
+        if (this._refuseIfLocked()) return;
         // Guard against double-invocation — the canvas-level click handler
         // and the inner Play button both fire for the same click.
         if (document.getElementById('realtime-overlay')) return;
@@ -12530,6 +12553,7 @@ class WorkflowEditor {
      * `opts.render(data)` formats the panel text. Drives glow + the round bar.
      */
     async _runNodeRound(nodeId, opts) {
+        if (this._refuseIfLocked()) return;
         const outputPre = document.getElementById('ingestion-output-code');
         if (!outputPre) return;
         const nodeEl = document.getElementById('node-' + nodeId);
@@ -14478,6 +14502,7 @@ class WorkflowEditor {
      * execution (needs no vector DB / API key).
      */
     async _runIngestion() {
+        if (this._refuseIfLocked()) return;
         // No re-save when parameters change — the workflow exists only to host
         // the pipeline; the per-node code is generated from the LIVE form attrs.
         // Only create it once (to get an id for the endpoints) if it's brand new.

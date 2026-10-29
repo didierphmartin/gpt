@@ -33,6 +33,14 @@ const t = (key, params = {}) => `${key}${Object.keys(params).length ? JSON.strin
     assert.ok(!RO.isLocked({ is_robot: true, locked: false }));
     assert.ok(!RO.isLocked({ is_robot: false, locked: true }));
 
+    // Start's ▶ looks disabled on a locked workflow only where it is a browser run; ■ (the live view) stays usable
+    assert.ok(RO.runDoorDisabled(true, { button: 'run' }));
+    assert.ok(RO.runDoorDisabled(true, { button: 'deactivate', swarm: true }));
+    assert.ok(RO.runDoorDisabled(true, { button: 'deactivate', ingestion: true }));
+    assert.ok(RO.runDoorDisabled(true, { realtime: true }));
+    assert.ok(!RO.runDoorDisabled(true, { button: 'deactivate' }));
+    assert.ok(!RO.runDoorDisabled(false, { button: 'run' }));
+
     // chat save: a locked robot workflow is refused, and nothing stops it
     const calls = [];
     const api = (wf) => async (method, path) => {
