@@ -62,12 +62,14 @@ class WorkflowRepository
     /**
      * Find all workflows for a user
      */
-    public function findByUser(int $userId, bool $includeGraph = false): array
+    public function findByUser(int $userId, bool $includeGraph = false, ?int $robotId = null): array
     {
         $stmt = $this->db->prepare(
-            "SELECT * FROM agent_workflows WHERE user_id = ? ORDER BY name ASC"
+            $robotId === null
+                ? "SELECT * FROM agent_workflows WHERE user_id = ? ORDER BY name ASC"
+                : "SELECT * FROM agent_workflows WHERE user_id = ? OR user_id = ? ORDER BY name ASC"
         );
-        $stmt->execute([$userId]);
+        $stmt->execute($robotId === null ? [$userId] : [$userId, $robotId]);
 
         return array_map(
             function ($row) use ($includeGraph) {
@@ -201,23 +203,23 @@ class WorkflowRepository
     /**
      * Check if a user can access a workflow
      */
-    public function canUserAccess(int $userId, int $workflowId): bool
+    public function canUserAccess(int $userId, int $workflowId, ?int $robotId = null): bool
     {
         $workflow = $this->findById($workflowId);
         if (!$workflow) {
             return false;
         }
 
-        return $workflow->getUserId() === $userId;
+        return $workflow->getUserId() === $userId || ($robotId !== null && $workflow->getUserId() === $robotId);
     }
 
     /**
      * Check if a user owns a workflow
      */
-    public function isOwner(int $userId, int $workflowId): bool
+    public function isOwner(int $userId, int $workflowId, ?int $robotId = null): bool
     {
         $workflow = $this->findById($workflowId);
-        return $workflow && $workflow->getUserId() === $userId;
+        return $workflow && ($workflow->getUserId() === $userId || ($robotId !== null && $workflow->getUserId() === $robotId));
     }
 
     /**
