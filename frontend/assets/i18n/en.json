@@ -684,6 +684,22 @@
     "noteNotExported": "Note: memory is applied at runtime only. It is not included in generated LangGraph Python exports, which remain portable and user-agnostic."
   },
   "workflow": {
+    "owner": {
+      "label": "Owner",
+      "me": "Me",
+      "robot": "Robot",
+      "confirmTitle": "Make the robot the owner?",
+      "confirmIntro": "This cannot be undone. \"{{name}}\" and everything it uses (code components, playbooks, agents) will belong to the robot and be shared with every user. Its runs will use the robot's connections.",
+      "confirmShared": "Your workflow \"{{name}}\" uses some of them too: it will use the robot's from now on.",
+      "confirmServers": "The robot has no connection to {{name}}: connect it before running.",
+      "confirm": "Make the robot the owner",
+      "clash": "The robot already has a {{kind}} named \"{{name}}\": rename yours first."
+    },
+    "lock": {
+      "banner": "Running as the robot — locked. Unlock to edit or run it.",
+      "unlock": "Unlock",
+      "unlockWarn": "Unlocking stops the robot's run of \"{{name}}\"."
+    },
     "active": {
       "activate": "Activate: run on its schedule or event",
       "deactivate": "Deactivate",

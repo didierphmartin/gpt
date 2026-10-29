@@ -684,6 +684,22 @@
     "noteNotExported": "Remarque : la mémoire est appliquée uniquement à l'exécution. Elle n'est pas incluse dans les exports Python LangGraph générés, qui restent portables et indépendants de l'utilisateur."
   },
   "workflow": {
+    "owner": {
+      "label": "Propriétaire",
+      "me": "Moi",
+      "robot": "Robot",
+      "confirmTitle": "Faire du robot le propriétaire ?",
+      "confirmIntro": "C'est irréversible. « {{name}} » et tout ce qu'il utilise (composants de code, playbooks, agents) appartiendront au robot et seront partagés avec tous les utilisateurs. Ses exécutions utiliseront les connexions du robot.",
+      "confirmShared": "Votre workflow « {{name}} » en utilise aussi : il utilisera désormais ceux du robot.",
+      "confirmServers": "Le robot n'a pas de connexion à {{name}} : connectez-le avant d'exécuter.",
+      "confirm": "Faire du robot le propriétaire",
+      "clash": "Le robot a déjà un {{kind}} nommé « {{name}} » : renommez le vôtre d'abord."
+    },
+    "lock": {
+      "banner": "Exécuté par le robot — verrouillé. Déverrouillez-le pour le modifier ou l'exécuter.",
+      "unlock": "Déverrouiller",
+      "unlockWarn": "Déverrouiller arrête l'exécution de « {{name}} » par le robot."
+    },
     "active": {
       "activate": "Activer : exécuter selon sa planification ou son événement",
       "deactivate": "Désactiver",

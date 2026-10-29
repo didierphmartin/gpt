@@ -450,6 +450,9 @@ class ChatApp {
 
         let wasActive = false;
         if (workflowId) {
+            // A running robot workflow is locked: refused, never stopped -- the person unlocks it deliberately.
+            const refused = await window.RobotOwner.chatSaveRefusal((m, p) => this._apiJson(m, p), workflowId);
+            if (refused) return refused;
             const active = await this._apiJson('GET', '/workflows/active');
             wasActive = Number(active.json?.data?.workflow_id) === workflowId;
             if (wasActive) {
