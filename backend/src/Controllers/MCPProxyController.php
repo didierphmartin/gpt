@@ -6,7 +6,9 @@ namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use PDO;
 use Exception;
+use AgentTeam\Services\CodeNodeEmit;
 use Quantis\AIPortfolioAssistant\Services\McpEndpoint;
+use Quantis\AIPortfolioAssistant\Services\RobotOwnership;
 
 /**
  * MCP Proxy Controller
@@ -49,6 +51,18 @@ class MCPProxyController
 
         switch ($action) {
             case 'proxy':
+                // A workflow run's call: a robot workflow's goes to the robot's server of the same slug, as the robot.
+                $workflowId = (int) ($input['workflow_id'] ?? 0);
+                if ($serverId && $workflowId > 0 && ctype_digit($userId)) {
+                    $actor = (string) (new RobotOwnership($this->db, $this->config))->runAs((int) $userId, $workflowId);
+                    if ($actor !== $userId) {
+                        $mapped = $this->robotServer($serverId, $userId, $actor);
+                        if (!is_int($mapped)) {
+                            return $mapped;
+                        }
+                        [$serverId, $userId] = [$mapped, $actor];
+                    }
+                }
                 return $this->proxyRequest($serverUrl, $serverId, $input['jsonrpc'] ?? null, $userId);
 
             case 'test_connection':
@@ -464,6 +478,37 @@ class MCPProxyController
         $stmt->execute([$serverId, $userId]);
         $row = $stmt->fetch(\PDO::FETCH_ASSOC);
         return $row ?: null;
+    }
+
+    /**
+     * The robot's enabled server (its own, else a global one) with the slug of the caller's server
+     * $serverId; 404 when the caller may not use $serverId, 422 robot_server_missing when the robot has none.
+     * Servers have no slug column: the slug is the name's (CodeNodeEmit::slug, as code nodes resolve them).
+     */
+    private function robotServer(int $serverId, string $callerId, string $robotId): int|array
+    {
+        $stmt = $this->db->prepare('SELECT name FROM mcp_servers WHERE id = ? AND (user_id IS NULL OR user_id = ? OR user_id = ?)');
+        $stmt->execute([$serverId, $callerId, $robotId]);
+        $name = $stmt->fetchColumn();
+        if ($name === false) {
+            return $this->unknownServer();
+        }
+        $slug = CodeNodeEmit::slug((string) $name);
+        $stmt = $this->db->prepare('SELECT id, name FROM mcp_servers WHERE enabled = 1 AND (user_id IS NULL OR user_id = ?)
+            ORDER BY CASE WHEN user_id IS NULL THEN 1 ELSE 0 END, id');
+        $stmt->execute([$robotId]);
+        foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+            if (CodeNodeEmit::slug((string) $row['name']) === $slug) {
+                return (int) $row['id'];
+            }
+        }
+        return [
+            'success' => false,
+            'error_code' => 'robot_server_missing',
+            'server' => (string) $name,
+            'error' => ['code' => -32602, 'message' => "The robot has no enabled \"{$name}\" MCP server."],
+            'status_code' => 422
+        ];
     }
 
     private function unknownServer(): array

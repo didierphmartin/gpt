@@ -45,6 +45,18 @@ class ScheduledWorkflowController
         return WorkflowController::lockedResponse((string) $stmt->fetchColumn());
     }
 
+    /** Who a schedule of this workflow belongs to: the robot for a robot workflow the caller may use, else the caller. */
+    private function owner(int $userId, int $workflowId): int
+    {
+        return $workflowId > 0 ? (new RobotOwnership($this->db, $this->config))->runAs($userId, $workflowId) : $userId;
+    }
+
+    /** The schedule's owner as owner() decides it for its workflow. */
+    private function ownerForSchedule(int $userId, int $scheduleId): int
+    {
+        return $this->owner($userId, (int) ($this->scheduleService->findById($scheduleId)['workflow_id'] ?? 0));
+    }
+
     /** The 423 body when the schedule belongs to a running robot workflow, else null. */
     private function lockedGuardForSchedule(int $userId, int $scheduleId): ?array
     {
@@ -102,8 +114,11 @@ class ScheduledWorkflowController
             ];
         }
 
+        // a robot workflow's schedule is the robot's, and so is its Start option
+        $owner = $this->owner((int) $userId, (int) ($body['workflow_id'] ?? 0));
+
         try {   // a Start option names its component; the component supplies the event (spec §3)
-            $body = (new CodeComponentStore($this->db))->scheduleBody((int) $userId, $body);
+            $body = (new CodeComponentStore($this->db))->scheduleBody($owner, $body);
         } catch (CodeComponentError $e) {
             return ['success' => false, 'error' => $e->getMessage(), 'kind' => $e->kind, 'status_code' => $e->status];
         }
@@ -131,7 +146,7 @@ class ScheduledWorkflowController
 
         // Verify the workflow exists and belongs to the user
         $workflow = $this->workflowRepository->findById((int) $body['workflow_id']);
-        if (!$workflow || $workflow->getUserId() !== $userId) {
+        if (!$workflow || $workflow->getUserId() !== $owner) {
             return [
                 'success' => false,
                 'error' => 'Workflow not found',
@@ -160,7 +175,7 @@ class ScheduledWorkflowController
 
         try {
             $schedule = $this->scheduleService->create([
-                'user_id' => $userId,
+                'user_id' => $owner,
                 'workflow_id' => (int) $body['workflow_id'],
                 'input_prompt' => $body['input_prompt'] ?? null,
                 'scheduled_time' => $body['scheduled_time'],
@@ -207,7 +222,7 @@ class ScheduledWorkflowController
         try {
             $schedule = $this->scheduleService->findById($id);
 
-            if (!$schedule || $schedule['user_id'] !== $userId) {
+            if (!$schedule || $schedule['user_id'] !== $this->owner((int) $userId, (int) $schedule['workflow_id'])) {
                 return [
                     'success' => false,
                     'error' => 'Schedule not found',
@@ -252,7 +267,7 @@ class ScheduledWorkflowController
         }
 
         try {   // a Start option names its component; the component supplies the event (spec §3)
-            $body = (new CodeComponentStore($this->db))->scheduleBody((int) $userId, $body,
+            $body = (new CodeComponentStore($this->db))->scheduleBody($this->ownerForSchedule((int) $userId, $id), $body,
                 (int) ($this->scheduleService->findById($id)['workflow_id'] ?? 0));
         } catch (CodeComponentError $e) {
             return ['success' => false, 'error' => $e->getMessage(), 'kind' => $e->kind, 'status_code' => $e->status];
@@ -280,7 +295,7 @@ class ScheduledWorkflowController
         }
 
         try {
-            $schedule = $this->scheduleService->update($id, $userId, $body);
+            $schedule = $this->scheduleService->update($id, $this->ownerForSchedule((int) $userId, $id), $body);
 
             if (!$schedule) {
                 return [
@@ -330,7 +345,7 @@ class ScheduledWorkflowController
         }
 
         try {
-            $deleted = $this->scheduleService->delete($id, $userId);
+            $deleted = $this->scheduleService->delete($id, $this->ownerForSchedule((int) $userId, $id));
 
             if (!$deleted) {
                 return [
@@ -377,7 +392,7 @@ class ScheduledWorkflowController
         }
 
         try {
-            $paused = $this->scheduleService->pause($id, $userId);
+            $paused = $this->scheduleService->pause($id, $this->ownerForSchedule((int) $userId, $id));
 
             if (!$paused) {
                 return [
@@ -424,7 +439,7 @@ class ScheduledWorkflowController
         }
 
         try {
-            $resumed = $this->scheduleService->resume($id, $userId);
+            $resumed = $this->scheduleService->resume($id, $this->ownerForSchedule((int) $userId, $id));
 
             if (!$resumed) {
                 return [
@@ -510,7 +525,7 @@ class ScheduledWorkflowController
         }
 
         try {
-            $schedules = $this->scheduleService->findByWorkflow($workflowId, $userId);
+            $schedules = $this->scheduleService->findByWorkflow($workflowId, $this->owner((int) $userId, $workflowId));
 
             return [
                 'success' => true,

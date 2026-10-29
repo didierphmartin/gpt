@@ -877,11 +877,12 @@ class WorkflowController
             $hasGraphNodes = $this->graphRepository->getNodes($workflowId);
             $isGraphWorkflow = !empty($hasGraphNodes);
 
-            // Run the workflow with the appropriate runner
+            // Run the workflow with the appropriate runner: a robot workflow runs (and is recorded) as the robot
+            $runAs = $this->ownership()->runAs((int) $userId, $workflowId);
             if ($isGraphWorkflow) {
-                $result = $this->graphWorkflowRunner->run($workflow, $userId, $inputVariables);
+                $result = $this->graphWorkflowRunner->run($workflow, $runAs, $inputVariables);
             } else {
-                $result = $this->workflowRunner->run($workflow, $userId, $inputVariables);
+                $result = $this->workflowRunner->run($workflow, $runAs, $inputVariables);
             }
 
             $result['status_code'] = $result['success'] ? 200 : 500;
@@ -902,7 +903,8 @@ class WorkflowController
      * Body: { workflow: string, variables?: object }
      *
      * The name is resolved against the caller's own workflows — (user_id,
-     * name) is unique — and execution then delegates to run(), so the scope
+     * name) is unique — then the robot's when the caller may use the robot
+     * (the caller's own wins a tie); execution then delegates to run(), so the scope
      * check, ownership check, enabled check and run path are all identical
      * to the id-based endpoint. The numeric id never leaves the server.
      */
@@ -932,6 +934,11 @@ class WorkflowController
         );
         $stmt->execute([$userId, $name]);
         $workflowId = $stmt->fetchColumn();
+        $robot = $this->ownership()->robotFor((int) $userId);
+        if ($workflowId === false && $robot !== null) {
+            $stmt->execute([$robot, $name]);
+            $workflowId = $stmt->fetchColumn();
+        }
 
         if ($workflowId === false) {
             return [
@@ -1074,12 +1081,14 @@ class WorkflowController
                 $streamContext = new StreamContext($sseCallback, $userId);
                 $this->graphWorkflowRunner->setStreamContext($streamContext);
 
-                // Run the graph workflow with streaming
-                $result = $this->graphWorkflowRunner->run($workflow, $userId, $inputVariables, $clientSkills, $inlineDocuments, $scratchFiles);
+                // Run the graph workflow with streaming; a robot workflow runs (and is recorded) as the robot.
+                // The stream context keeps the caller: the browser at the editor answers its client tools.
+                $result = $this->graphWorkflowRunner->run($workflow, $this->ownership()->runAs((int) $userId, $workflowId),
+                    $inputVariables, $clientSkills, $inlineDocuments, $scratchFiles);
             } else {
                 // Old-style workflow doesn't support streaming
                 $sseCallback(['type' => 'info', 'message' => 'Step-based workflow - running without streaming']);
-                $result = $this->workflowRunner->run($workflow, $userId, $inputVariables);
+                $result = $this->workflowRunner->run($workflow, $this->ownership()->runAs((int) $userId, $workflowId), $inputVariables);
                 $sseCallback([
                     'type' => 'workflow_complete',
                     'success' => $result['success'] ?? false,
@@ -1323,10 +1332,11 @@ class WorkflowController
         }
         $log = new WorkflowRunLog(WorkflowRunLog::defaultDir($this->config));
         $active = new ActiveWorkflowService($this->db);
+        $activeOwner = $this->ownership()->runAs($userId, $workflowId);   // a robot workflow's active row is the robot's
         $cursor = isset($request['query']['cursor']) ? (string) $request['query']['cursor'] : null;
         LiveStream::run(
             fn(?string $c) => LiveFeed::next($log, $workflowId, $c),
-            fn() => $active->get($userId),
+            fn() => $active->get($activeOwner),
             $emit,
             fn(float $s) => usleep((int) ($s * 1e6)),
             fn() => microtime(true),

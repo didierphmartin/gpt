@@ -15158,7 +15158,7 @@ class WorkflowEditor {
             (u) => nodes[u]?.data?.agent_type === 'dispatcher');
         // _codeNodeExecute never throws: a timeout or worker failure comes back harness-shaped.
         // The node's args reach the harness as ARGS, as on the server (CodeNodeExecutor).
-        const r = await this._codeNodeExecute(window.CodeNode.runRequest(d, parents, userPrompt));
+        const r = await this._codeNodeExecute(window.CodeNode.runRequest(d, parents, userPrompt, this.currentWorkflowId));
         // The agent nodes' record shape: the modal's Input, Output and Logs tabs read it.
         this.nodeExecutionData[id] = window.CodeNode.runData(r, { parents, user_prompt: userPrompt, name: d.name || 'Code', ts: Date.now() });
         this.highlightNode(id, r.ok ? 'completed' : 'error', id, 'agent');
@@ -15237,7 +15237,7 @@ class WorkflowEditor {
     _codeWorkerJob(verb, payload, limitMs, timeoutMsg) {
         const runOne = () => {
             const cold = !this._codeWorker || !this._codeWorkerWarm;
-            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261028-meta');
+            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261029-robot-run');
             const w = this._codeWorker;
             const id = (this._codeSeq = (this._codeSeq || 0) + 1);
             const limit = limitMs + (cold ? 90000 : 0);
