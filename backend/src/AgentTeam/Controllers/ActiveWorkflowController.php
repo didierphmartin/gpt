@@ -52,7 +52,7 @@ class ActiveWorkflowController
                 $data = $this->active->activate($this->ownership->runAs($userId, $workflowId), $workflowId);
                 return ['success' => true, 'data' => $data, 'status_code' => 200];
             } catch (ActiveWorkflowError $e) {
-                return ['success' => false, 'error' => $e->getMessage(), 'kind' => $e->kind, 'status_code' => $e->status];
+                return ['success' => false, 'error' => $e->getMessage(), 'kind' => $e->kind, 'error_code' => $e->kind, 'status_code' => $e->status];
             }
         });
     }

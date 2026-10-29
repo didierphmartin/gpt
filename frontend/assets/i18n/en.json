@@ -278,6 +278,7 @@
     "linksDroppedTitle": "Remove links in workflows?",
     "linksDroppedIntro": "Saving removes exits from \"{{name}}\". These workflows lose the links on them:",
     "linksDroppedLine": "{{workflow}} — {{node}}: \"{{exit}}\" ({{count}} link(s))",
+    "linksDroppedOthers": "{{count}} other workflow(s) you cannot open ({{links}} link(s))",
     "linksDroppedConfirm": "Save and remove links"
   },
   "playbookLibrary": {
@@ -693,7 +694,9 @@
       "confirmShared": "Your workflow \"{{name}}\" uses some of them too: it will use the robot's from now on.",
       "confirmServers": "The robot has no connection to {{name}}: connect it before running.",
       "confirm": "Make the robot the owner",
-      "clash": "The robot already has a {{kind}} named \"{{name}}\": rename yours first."
+      "clash": "The robot already has a {{kind}} named \"{{name}}\": rename yours first.",
+      "clashPublished": "The playbook \"{{name}}\" is published to the robot: unpublish it first.",
+      "otherWorkflows": "{{count}} other workflow(s) you cannot open"
     },
     "lock": {
       "banner": "Running as the robot — locked. Unlock to edit or run it.",

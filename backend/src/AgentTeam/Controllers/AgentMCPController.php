@@ -183,7 +183,7 @@ class AgentMCPController
             throw new \InvalidArgumentException('agent_id is required');
         }
 
-        if (!$this->repository->canUserAccess($userId, (int) $agentId)) {
+        if (!$this->repository->canUserAccess($userId, (int) $agentId, $this->robotFor($userId))) {
             throw new \InvalidArgumentException('Agent not found');
         }
 
@@ -236,7 +236,7 @@ class AgentMCPController
             throw new \InvalidArgumentException('agent_id is required');
         }
 
-        if (!$this->repository->isOwner($userId, (int) $agentId)) {
+        if (!$this->repository->isOwner($userId, (int) $agentId, $this->robotFor($userId))) {
             throw new \InvalidArgumentException('Agent not found or access denied');
         }
 
@@ -296,7 +296,7 @@ class AgentMCPController
             throw new \InvalidArgumentException('agent_id is required');
         }
 
-        if (!$this->repository->isOwner($userId, (int) $agentId)) {
+        if (!$this->repository->isOwner($userId, (int) $agentId, $this->robotFor($userId))) {
             throw new \InvalidArgumentException('Agent not found or access denied');
         }
 
@@ -469,6 +469,12 @@ class AgentMCPController
     /**
      * Create JSON-RPC success response
      */
+    /** The robot's id when the caller may use the robot (its agents are shared), else null. */
+    private function robotFor(int $userId): ?int
+    {
+        return (new \Quantis\AIPortfolioAssistant\Services\RobotOwnership($this->db, $this->config))->robotFor($userId);
+    }
+
     private function jsonRpcSuccess($id, array $result): array
     {
         return [

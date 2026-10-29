@@ -44,8 +44,12 @@ final class WorkflowOwnerTransfer
             $moved = $this->plan($owner, $this->links($workflowId));
             $clashes = $this->clashes($robot, $workflowId, $name, $moved);
             if ($clashes !== []) {
-                $names = implode(', ', array_map(fn($c) => "{$c['kind']} \"{$c['name']}\"", $clashes));
-                throw new WorkflowTransferError('clash', "The robot already has $names: rename yours first.", 409, $clashes);
+                $published = array_filter($clashes, fn($c) => !empty($c['published']));
+                $named = array_filter($clashes, fn($c) => empty($c['published']));
+                $say = fn(array $cs) => implode(', ', array_map(fn($c) => "{$c['kind']} \"{$c['name']}\"", $cs));
+                $parts = array_merge($named === [] ? [] : ["The robot already has {$say($named)}: rename yours first."],
+                    array_map(fn($c) => "The playbook \"{$c['name']}\" is published to the robot: unpublish it first.", array_values($published)));
+                throw new WorkflowTransferError('clash', implode(' ', $parts), 409, $clashes);
             }
             $this->db->beginTransaction();
             try {
@@ -161,9 +165,11 @@ final class WorkflowOwnerTransfer
                 continue;
             }
             $ids = $plan[$planKey];
-            foreach ($this->column("SELECT m.$key FROM $table m JOIN $table r ON r.$key = m.$key AND r.user_id = ?
-                WHERE m.id IN (" . $this->marks($ids) . ") ORDER BY m.$key", [$robot, ...$ids]) as $n) {
-                $clashes[] = ['kind' => $kind, 'name' => (string) $n];
+            // a robot playbook with a source_id is a published copy (the ServiceNow bridge's): unpublished, not renamed
+            $published = $kind === 'playbook' ? 'r.source_id IS NOT NULL' : '0';
+            foreach ($this->rows("SELECT m.$key AS name, $published AS published FROM $table m JOIN $table r ON r.$key = m.$key AND r.user_id = ?
+                WHERE m.id IN (" . $this->marks($ids) . ") ORDER BY m.$key", [$robot, ...$ids]) as $r) {
+                $clashes[] = ['kind' => $kind, 'name' => (string) $r['name']] + ((bool) $r['published'] ? ['published' => true] : []);
             }
         }
         return $clashes;

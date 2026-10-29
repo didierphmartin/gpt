@@ -227,6 +227,14 @@ class AgentController
 
         $agent = $this->repository->findById($agentId);
 
+        // Names are unique per owner: a robot agent renamed onto another robot agent's name.
+        if (isset($data['name'])) {
+            $holder = $this->repository->findOwnedByName((string) $data['name'], $agent->getUserId());
+            if ($holder !== null && $holder->getId() !== $agentId) {
+                return $this->nameTaken((string) $data['name']);
+            }
+        }
+
         // Update fields
         if (isset($data['name'])) {
             $agent->setName($data['name']);
@@ -276,7 +284,12 @@ class AgentController
 
         // Only a playbook agent has a playbook; a linked agent keeps its text in the collection only.
         if (array_key_exists('playbook_id', $data) && $data['playbook_id'] !== null && $agent->getAgentType() === 'playbook') {
-            if ($this->findPlaybook($userId, (int) $data['playbook_id'], $this->robotFor($userId)) === null) {
+            // a robot agent links only the robot's playbooks (it runs as the robot); a person's, theirs or the robot's
+            $robotId = $this->robotFor($userId);
+            $pb = $robotId !== null && $agent->getUserId() === $robotId
+                ? $this->findPlaybook($robotId, (int) $data['playbook_id'], $robotId)
+                : $this->findPlaybook($userId, (int) $data['playbook_id'], $robotId);
+            if ($pb === null) {
                 return $this->error('Playbook #' . (int) $data['playbook_id'] . ' not found', 404);
             }
             $agent->setPlaybookId((int) $data['playbook_id']);
@@ -309,6 +322,11 @@ class AgentController
                 'data' => $updated->toArray(),
                 'message' => "Agent '{$updated->getName()}' updated successfully",
             ];
+        } catch (\PDOException $e) {
+            if (isset($data['name']) && $e->getCode() === '23000') {
+                return $this->nameTaken((string) $data['name']);   // lost a race for the name
+            }
+            return $this->error('Failed to update agent: ' . $e->getMessage(), 500);
         } catch (\Exception $e) {
             return $this->error('Failed to update agent: ' . $e->getMessage(), 500);
         }
@@ -324,7 +342,7 @@ class AgentController
         $agentId = $this->getAgentId($request);
 
         // Check ownership
-        if (!$this->repository->isOwner($userId, $agentId)) {
+        if (!$this->repository->isOwner($userId, $agentId, $this->robotFor($userId))) {
             return $this->error('Agent not found or access denied', 404);
         }
 
@@ -651,8 +669,8 @@ class AgentController
         $agentId = $this->getAgentId($request);
         $data = $request['body'] ?? [];
 
-        // Check access
-        if (!$this->repository->canUserAccess($userId, $agentId)) {
+        // Check access (a robot agent too, for a robot-permitted caller; the copy is the caller's)
+        if (!$this->repository->canUserAccess($userId, $agentId, $this->robotFor($userId))) {
             return $this->error('Agent not found', 404);
         }
 
@@ -685,7 +703,7 @@ class AgentController
         $agentId = $this->getAgentId($request);
 
         // Check ownership
-        if (!$this->repository->isOwner($userId, $agentId)) {
+        if (!$this->repository->isOwner($userId, $agentId, $this->robotFor($userId))) {
             return $this->error('Agent not found or access denied', 404);
         }
 
@@ -719,7 +737,7 @@ class AgentController
         $agentId = $this->getAgentId($request);
 
         // Check ownership
-        if (!$this->repository->isOwner($userId, $agentId)) {
+        if (!$this->repository->isOwner($userId, $agentId, $this->robotFor($userId))) {
             return $this->error('Agent not found or access denied', 404);
         }
 
@@ -830,6 +848,11 @@ class AgentController
     private function robotFor(int $userId): ?int
     {
         return (new \Quantis\AIPortfolioAssistant\Services\RobotOwnership($this->db, $this->config))->robotFor($userId);
+    }
+
+    private function nameTaken(string $name): array
+    {
+        return ['error_code' => 'name_taken'] + $this->error("An agent named \"$name\" already exists.", 409);
     }
 
     private function getAgentId(array $request): int

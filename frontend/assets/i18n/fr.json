@@ -278,6 +278,7 @@
     "linksDroppedTitle": "Supprimer des liens dans les workflows ?",
     "linksDroppedIntro": "L'enregistrement retire des sorties de « {{name}} ». Ces workflows perdent leurs liens :",
     "linksDroppedLine": "{{workflow}} — {{node}} : « {{exit}} » ({{count}} lien(s))",
+    "linksDroppedOthers": "{{count}} autre(s) flux que vous ne pouvez pas ouvrir ({{links}} lien(s))",
     "linksDroppedConfirm": "Enregistrer et supprimer les liens"
   },
   "playbookLibrary": {
@@ -693,7 +694,9 @@
       "confirmShared": "Votre workflow « {{name}} » en utilise aussi : il utilisera désormais ceux du robot.",
       "confirmServers": "Le robot n'a pas de connexion à {{name}} : connectez-le avant d'exécuter.",
       "confirm": "Faire du robot le propriétaire",
-      "clash": "Le robot a déjà un {{kind}} nommé « {{name}} » : renommez le vôtre d'abord."
+      "clash": "Le robot a déjà un {{kind}} nommé « {{name}} » : renommez le vôtre d'abord.",
+      "clashPublished": "Le playbook « {{name}} » est publié sur le robot : dépubliez-le d'abord.",
+      "otherWorkflows": "{{count}} autre(s) flux que vous ne pouvez pas ouvrir"
     },
     "lock": {
       "banner": "Exécuté par le robot — verrouillé. Déverrouillez-le pour le modifier ou l'exécuter.",

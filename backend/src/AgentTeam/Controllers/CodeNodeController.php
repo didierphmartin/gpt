@@ -48,6 +48,9 @@ final class CodeNodeController
             return ['ok' => false, 'error' => 'body must be {server: slug, tool: name, args: object}', 'status_code' => 400];
         }
         $workflowId = (int) ($body['workflow_id'] ?? 0);
+        if ($workflowId > 0 && ($locked = $this->ownership->lockedRunName($userId, $workflowId)) !== null) {
+            return WorkflowController::lockedResponse($locked);
+        }
         $actor = $workflowId > 0 ? $this->ownership->runAs($userId, $workflowId) : $userId;
         return (($this->callerFor)($actor))($server, $tool, $args);
     }

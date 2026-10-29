@@ -134,18 +134,32 @@ class WorkflowController
             // runtime_mode for the icon (🎙 realtime vs ⚙️ batch), so we
             // batch-detect it with a single extra query and override
             // the toApiArray()'s fallback 'batch' result below.
-            $workflows = $this->workflowRepository->findByUser($userId, false, $this->ownership()->robotFor((int) $userId));
+            $robotFor = $this->ownership()->robotFor((int) $userId);
+            $workflows = $this->workflowRepository->findByUser($userId, false, $robotFor);
 
             $ids = array_map(fn($w) => $w->getId(), $workflows);
             $realtimeIds = $this->graphRepository->findRealtimeWorkflowIds($ids);
             $realtimeSet = array_flip($realtimeIds);
 
+            // Robot marks and locks for the whole list in at most one query (no per-row lookups on a remote DB):
+            // robot rows are listed only for a caller who may use the robot.
+            $robotIds = $robotFor === null ? [] : array_values(array_filter($ids,
+                fn($id, $i) => $workflows[$i]->getUserId() === $robotFor, ARRAY_FILTER_USE_BOTH));
+            $lockedSet = [];
+            if ($robotIds !== []) {
+                $st = $this->db->prepare('SELECT workflow_id FROM active_workflows WHERE workflow_id IN ('
+                    . implode(',', array_fill(0, count($robotIds), '?')) . ')');
+                $st->execute($robotIds);
+                $lockedSet = array_flip(array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN)));
+            }
+            $robotSet = array_flip($robotIds);
+
             return [
                 'success' => true,
-                'data' => array_map(function($workflow) use ($realtimeSet) {
+                'data' => array_map(function($workflow) use ($realtimeSet, $robotSet, $lockedSet) {
                     $arr = $workflow->toApiArray();
-                    $arr['is_robot'] = $this->ownership()->isRobotOwned($workflow->getId());
-                    $arr['locked'] = $this->ownership()->isLocked($workflow->getId());
+                    $arr['is_robot'] = isset($robotSet[$workflow->getId()]);
+                    $arr['locked'] = isset($lockedSet[$workflow->getId()]);
                     $arr['runtime_mode'] = isset($realtimeSet[$workflow->getId()]) ? 'realtime' : 'batch';
                     return $arr;
                 }, $workflows),
@@ -201,7 +215,7 @@ class WorkflowController
                     ->resolve((int) $userId, $graphData['nodes'] ?? $graphData['steps'] ?? [], $graphData['edges'] ?? [],
                         $this->ownership()->robotFor((int) $userId));
             } catch (\AgentTeam\Services\UnresolvedRefsException $e) {
-                return ['success' => false, 'error' => 'unknown references', 'missing' => $e->missing, 'status_code' => 422];
+                return ['success' => false, 'error' => 'unknown references', 'error_code' => 'unknown_references', 'missing' => $e->missing, 'status_code' => 422];
             }
         }
 
@@ -270,7 +284,7 @@ class WorkflowController
                 'status_code' => 201
             ];
         } catch (\AgentTeam\Services\UnresolvedRefsException $e) {
-            return ['success' => false, 'error' => 'unknown references', 'missing' => $e->missing, 'status_code' => 422];
+            return ['success' => false, 'error' => 'unknown references', 'error_code' => 'unknown_references', 'missing' => $e->missing, 'status_code' => 422];
         } catch (\Exception $e) {
             return [
                 'success' => false,
@@ -672,23 +686,49 @@ class WorkflowController
                 }
             }
 
-            // Update the workflow metadata
-            $updated = $this->workflowRepository->update($workflow);
+            // Names are unique per owner (uq_workflows_user_name): a robot workflow renamed onto another robot workflow's name.
+            if (isset($body['name']) && $this->nameTaken($workflow->getUserId(), (string) $body['name'], $workflowId)) {
+                return self::nameTakenResponse((string) $body['name']);
+            }
 
-            error_log("[WorkflowController] Update - hasGraph: " . ($hasGraph ? 'true' : 'false'));
-
-            // If we have graph data, update it
+            // Links resolve against the workflow's OWNER (and the robot's rows when the owner is the robot or may use
+            // it), never the editor's own rows; a robot workflow may link only what the robot can use. Checked before
+            // anything is written.
+            $resolved = null;
             if ($hasGraph) {
                 $graphData = $body['definition'] ?? $body['graph'] ?? [];
                 $nodes = $graphData['nodes'] ?? $graphData['steps'] ?? [];
                 $edges = $graphData['edges'] ?? [];
+                $owner = $workflow->getUserId();
+                $refs = new \AgentTeam\Services\WorkflowRefResolver($this->db);
+                $resolved = $refs->resolve($owner, $nodes, $edges, $this->ownership()->linkRobotFor($owner));
+                if ($owner === $this->ownership()->robotId()) {
+                    $foreign = $refs->foreignToRobot($owner, $resolved['nodes']);
+                    if ($foreign !== []) {
+                        throw new \AgentTeam\Services\UnresolvedRefsException($foreign);
+                    }
+                }
+            }
 
-                error_log("[WorkflowController] Updating graph with " . count($nodes) . " nodes and " . count($edges) . " edges");
+            // Update the workflow metadata
+            try {
+                $updated = $this->workflowRepository->update($workflow);
+            } catch (\PDOException $e) {
+                if (isset($body['name']) && $e->getCode() === '23000') {
+                    return self::nameTakenResponse((string) $body['name']);   // lost a race for the name
+                }
+                throw $e;
+            }
+
+            error_log("[WorkflowController] Update - hasGraph: " . ($hasGraph ? 'true' : 'false'));
+
+            // If we have graph data, update it
+            if ($resolved !== null) {
+                error_log("[WorkflowController] Updating graph with " . count($resolved['nodes']) . " nodes and " . count($resolved['edges']) . " edges");
 
                 // Validate the graph
                 // First clear and save, then validate
                 try {
-                    $resolved = (new \AgentTeam\Services\WorkflowRefResolver($this->db))->resolve($userId, $nodes, $edges, $this->ownership()->robotFor((int) $userId));
                     $this->graphRepository->saveGraph($workflowId, $resolved['nodes'], $resolved['edges']);
                     error_log("[WorkflowController] Graph updated successfully");
                 } catch (\Exception $e) {
@@ -710,7 +750,8 @@ class WorkflowController
                 'status_code' => 200
             ];
         } catch (\AgentTeam\Services\UnresolvedRefsException $e) {
-            return ['success' => false, 'error' => 'unknown references', 'missing' => $e->missing, 'status_code' => 422];
+            return ['success' => false, 'error' => 'unknown references', 'error_code' => 'unknown_references',
+                'missing' => $e->missing, 'status_code' => 422];
         } catch (\Exception $e) {
             return [
                 'success' => false,
@@ -718,6 +759,19 @@ class WorkflowController
                 'status_code' => 500
             ];
         }
+    }
+
+    /** Another workflow of this owner already has the name. */
+    private function nameTaken(int $ownerId, string $name, int $workflowId): bool
+    {
+        $st = $this->db->prepare('SELECT 1 FROM agent_workflows WHERE user_id = ? AND name = ? AND id <> ?');
+        $st->execute([$ownerId, $name, $workflowId]);
+        return $st->fetchColumn() !== false;
+    }
+
+    private static function nameTakenResponse(string $name): array
+    {
+        return ['success' => false, 'error_code' => 'name_taken', 'error' => "A workflow named \"$name\" already exists.", 'status_code' => 409];
     }
 
     /**
@@ -1144,6 +1198,16 @@ class WorkflowController
             return;
         }
 
+        // A locked robot workflow's node does not run (checked after access: runAs is the caller's otherwise).
+        $workflowId = (int) ($body['workflow_id'] ?? 0);
+        if ($workflowId > 0 && ($locked = $this->ownership()->lockedRunName($userId, $workflowId)) !== null) {
+            http_response_code(423);
+            echo "event: error\n";
+            echo "data: " . json_encode(self::lockedResponse($locked)) . "\n\n";
+            flush();
+            return;
+        }
+
         $nodeConfig = is_array($body['node_config'] ?? null) ? $body['node_config'] : [];
         $prompt = (string) ($body['prompt'] ?? '');
         // The first parent's text names the playbook and the job (as on the server engine); the prompt when absent.
@@ -1178,7 +1242,6 @@ class WorkflowController
                     $runner = $this->playbookNodeRunner();
                     // Attended: gates go to the person at the editor. A robot workflow's node (workflow_id)
                     // takes its tools from the robot's MCP servers; the run and its gates stay the caller's.
-                    $workflowId = (int) ($body['workflow_id'] ?? 0);
                     $mcpUser = $workflowId > 0 ? $this->ownership()->runAs($userId, $workflowId) : $userId;
                     $result = $runner->run($userId, $nodeConfig, $prompt, $sseCallback, false, $mcpUser);
                     $transcript = (string) ($result['output'] ?? '');
@@ -1206,6 +1269,12 @@ class WorkflowController
             echo "data: " . json_encode(['error' => $e->getMessage()]) . "\n\n";
             flush();
         }
+    }
+
+    /** Where workflow outputs are read (a seam for tests). */
+    protected function outputStorage(): WorkflowOutputStorage
+    {
+        return new WorkflowOutputStorage($this->db, $this->config);
     }
 
     /** The playbook node runner of runPlaybookNode (a seam for tests). */
@@ -1562,8 +1631,9 @@ class WorkflowController
                 ];
             }
 
-            $outputStorage = new WorkflowOutputStorage($this->db, $this->config);
-            $result = $outputStorage->listOutputs($workflowId, $userId);
+            // a robot workflow's outputs are the robot's runs': read as the robot
+            $outputStorage = $this->outputStorage();
+            $result = $outputStorage->listOutputs($workflowId, $this->ownership()->runAs((int) $userId, $workflowId));
 
             return array_merge($result, ['status_code' => 200]);
         } catch (\Exception $e) {
@@ -1610,8 +1680,9 @@ class WorkflowController
                 ];
             }
 
-            $outputStorage = new WorkflowOutputStorage($this->db, $this->config);
-            $result = $outputStorage->getOutput($workflowId, $userId, $filename);
+            // a robot workflow's outputs are the robot's runs': read as the robot
+            $outputStorage = $this->outputStorage();
+            $result = $outputStorage->getOutput($workflowId, $this->ownership()->runAs((int) $userId, $workflowId), $filename);
 
             return array_merge($result, ['status_code' => $result['success'] ? 200 : 404]);
         } catch (\Exception $e) {

@@ -278,6 +278,7 @@
     "linksDroppedTitle": "¿Quitar enlaces en los flujos?",
     "linksDroppedIntro": "Al guardar se quitan salidas de \"{{name}}\". Estos flujos pierden sus enlaces:",
     "linksDroppedLine": "{{workflow}} — {{node}}: \"{{exit}}\" ({{count}} enlace(s))",
+    "linksDroppedOthers": "{{count}} flujo(s) más que no puedes abrir ({{links}} enlace(s))",
     "linksDroppedConfirm": "Guardar y quitar enlaces"
   },
   "playbookLibrary": {
@@ -693,7 +694,9 @@
       "confirmShared": "Tu workflow «{{name}}» también usa algunos de ellos: a partir de ahora usará los del robot.",
       "confirmServers": "El robot no tiene conexión a {{name}}: conéctalo antes de ejecutar.",
       "confirm": "Hacer del robot el propietario",
-      "clash": "El robot ya tiene un {{kind}} llamado «{{name}}»: cambia el nombre del tuyo primero."
+      "clash": "El robot ya tiene un {{kind}} llamado «{{name}}»: cambia el nombre del tuyo primero.",
+      "clashPublished": "El playbook «{{name}}» está publicado en el robot: anula su publicación primero.",
+      "otherWorkflows": "{{count}} flujo(s) más que no puedes abrir"
     },
     "lock": {
       "banner": "Ejecutándose como el robot — bloqueado. Desbloquéalo para editarlo o ejecutarlo.",

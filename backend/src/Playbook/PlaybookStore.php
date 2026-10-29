@@ -50,21 +50,36 @@ final class PlaybookStore
         return $robotId === null || $robotId === $userId ? [$userId] : [$userId, $robotId];
     }
 
+    /**
+     * The rows a caller sees, as a WHERE fragment and its parameters: the user's, plus with $robotId the robot's shared
+     * rows. The robot's published copies (source_id set: the ServiceNow bridge's frozen set, managed by publish /
+     * robotList / unpublish) are never shared rows.
+     */
+    private static function scope(int $userId, ?int $robotId): array
+    {
+        if ($robotId === null) {
+            return ['user_id = ?', [$userId]];
+        }
+        if ($robotId === $userId) {
+            return ['user_id = ? AND source_id IS NULL', [$userId]];
+        }
+        return ['(user_id = ? OR user_id = ? AND source_id IS NULL)', [$userId, $robotId]];
+    }
+
     /** $robotId: also the robot's rows (is_robot = true), for a caller who may use the robot. */
     public function list(int $userId, ?int $robotId = null): array
     {
-        $o = self::owners($userId, $robotId);
-        $in = implode(',', array_fill(0, count($o), '?'));
+        [$where, $args] = self::scope($userId, $robotId);
         // automation_id: the automation that manages the playbook (null = none); save_playbook_agent checks it on a key clash.
-        $st = $this->db->prepare("SELECT id, user_id, pkey, title, text, updated_at, automation_id FROM playbooks WHERE user_id IN ({$in}) ORDER BY title");
-        $st->execute($o);
+        $st = $this->db->prepare("SELECT id, user_id, pkey, title, text, updated_at, automation_id FROM playbooks WHERE {$where} ORDER BY title");
+        $st->execute($args);
         $rows = $st->fetchAll(PDO::FETCH_ASSOC);
         foreach ($rows as &$r) {
             $r['id'] = (int) $r['id'];
             $r['is_robot'] = $robotId !== null && (int) $r['user_id'] === $robotId;
             unset($r['user_id']);
             $r['automation_id'] = $r['automation_id'] === null ? null : (int) $r['automation_id'];
-            $used = $this->usedBy($userId, $r['id'], $robotId);
+            $used = $this->links($userId, $r['id'], $robotId);   // every link counts, named or not
             $r['used_by'] = count($used['agents']) + count($used['nodes']);
         }
         unset($r);
@@ -73,10 +88,9 @@ final class PlaybookStore
 
     public function get(int $userId, int $id, ?int $robotId = null): ?array
     {
-        $o = self::owners($userId, $robotId);
-        $in = implode(',', array_fill(0, count($o), '?'));
-        $st = $this->db->prepare("SELECT id, user_id, pkey, title, text, updated_at FROM playbooks WHERE id = ? AND user_id IN ({$in})");
-        $st->execute([$id, ...$o]);
+        [$where, $args] = self::scope($userId, $robotId);
+        $st = $this->db->prepare("SELECT id, user_id, pkey, title, text, updated_at FROM playbooks WHERE id = ? AND {$where}");
+        $st->execute([$id, ...$args]);
         $row = $st->fetch(PDO::FETCH_ASSOC);
         if ($row === false) {
             return null;
@@ -254,11 +268,14 @@ final class PlaybookStore
         if ($current === null) {
             throw new PlaybookStoreError('not_found', "Playbook #{$id} not found", 404);
         }
+        // every link refuses; only those on the caller's and the robot's agents and workflows are named
+        [$agents, $nodes, $otherAgents, $otherWorkflows] = $this->split($this->links($userId, $id, $robotId), $userId, $robotId);
         $userId = $current['is_robot'] ? $robotId : $userId;
-        $used = $this->usedBy($userId, $id, $robotId);
         $names = array_merge(
-            array_map(fn($a) => "agent \"{$a['name']}\"", $used['agents']),
-            array_map(fn($n) => "node \"{$n['node_name']}\" in workflow \"{$n['workflow_name']}\"", $used['nodes'])
+            array_map(fn($a) => "agent \"{$a['name']}\"", $agents),
+            array_map(fn($n) => "node \"{$n['node_name']}\" in workflow \"{$n['workflow_name']}\"", $nodes),
+            $otherWorkflows === 0 ? [] : [$otherWorkflows === 1 ? '1 other workflow' : "$otherWorkflows other workflows"],
+            $otherAgents === 0 ? [] : [$otherAgents === 1 ? '1 other agent' : "$otherAgents other agents"]
         );
         if ($names !== []) {
             throw new PlaybookStoreError('in_use', 'This playbook is used by ' . implode(', ', $names) . '.', 409);
@@ -266,21 +283,46 @@ final class PlaybookStore
         $this->db->prepare('DELETE FROM playbooks WHERE id = ? AND user_id = ?')->execute([$id, $userId]);
     }
 
-    /** The agents and workflow nodes (the user's own) that link to the playbook. */
+    /**
+     * The agents and workflow nodes (the user's own) that link to the playbook. A robot playbook is linked from every
+     * user's: only the caller's and the robot's are named; `others` counts the other agents and workflows.
+     */
     public function usedBy(int $userId, int $id, ?int $robotId = null): array
+    {
+        [$agents, $nodes, $otherAgents, $otherWorkflows] = $this->split($this->links($userId, $id, $robotId), $userId, $robotId);
+        $strip = fn(array $r) => array_diff_key($r, ['owner' => 1]);
+        return ['agents' => array_map($strip, $agents), 'nodes' => array_map($strip, $nodes), 'others' => $otherAgents + $otherWorkflows];
+    }
+
+    /** [agents and nodes the caller may open (their own, the robot's), the number of other agents, of other workflows]. */
+    private function split(array $links, int $caller, ?int $robotId): array
+    {
+        $sees = fn(array $r) => $r['owner'] === $caller || ($robotId !== null && $r['owner'] === $robotId);
+        $hiddenNodes = array_filter($links['nodes'], fn($n) => !$sees($n));
+        return [array_values(array_filter($links['agents'], $sees)), array_values(array_filter($links['nodes'], $sees)),
+            count($links['agents']) - count(array_filter($links['agents'], $sees)),
+            count(array_unique(array_column($hiddenNodes, 'workflow_id')))];
+    }
+
+    /** usedBy, unfiltered, with each row's owner. */
+    private function links(int $userId, int $id, ?int $robotId): array
     {
         $o = self::owners($userId, $robotId);
         $in = implode(',', array_fill(0, count($o), '?'));
-        // a robot playbook is linked from any permitted user's agents and workflows: scan them all
-        $own = $this->db->prepare('SELECT 1 FROM playbooks WHERE id = ? AND user_id = ?');
-        $own->execute([$id, $robotId ?? 0]);
-        $all = $robotId !== null && $own->fetchColumn() !== false;
-        $st = $this->db->prepare("SELECT id, name FROM agents WHERE " . ($all ? '' : "user_id IN ({$in}) AND ") . "playbook_id = ? ORDER BY name");
+        // a robot playbook (not a published copy) is linked from any permitted user's agents and workflows: scan them all
+        $all = false;
+        if ($robotId !== null) {
+            $own = $this->db->prepare('SELECT 1 FROM playbooks WHERE id = ? AND user_id = ? AND source_id IS NULL');
+            $own->execute([$id, $robotId]);
+            $all = $own->fetchColumn() !== false;
+        }
+        $st = $this->db->prepare("SELECT id, name, user_id FROM agents WHERE " . ($all ? '' : "user_id IN ({$in}) AND ") . "playbook_id = ? ORDER BY name");
         $st->execute($all ? [$id] : [...$o, $id]);
-        $agents = array_map(fn($a) => ['id' => (int) $a['id'], 'name' => (string) $a['name']], $st->fetchAll(PDO::FETCH_ASSOC));
+        $agents = array_map(fn($a) => ['id' => (int) $a['id'], 'name' => (string) $a['name'], 'owner' => (int) $a['user_id']],
+            $st->fetchAll(PDO::FETCH_ASSOC));
 
         // The node's link lives in its config JSON: decoded here, so the query stays portable (MySQL and SQLite).
-        $st = $this->db->prepare("SELECT n.config, w.id AS workflow_id, w.name AS workflow_name
+        $st = $this->db->prepare("SELECT n.config, w.id AS workflow_id, w.name AS workflow_name, w.user_id AS owner
             FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id
             WHERE " . ($all ? '' : "w.user_id IN ({$in}) AND ") . "n.node_type = 'playbook' ORDER BY w.name, n.id");
         $st->execute($all ? [] : array_map('strval', $o));
@@ -289,7 +331,7 @@ final class PlaybookStore
             $cfg = json_decode((string) $r['config'], true);
             if (is_array($cfg) && (int) ($cfg['playbook_id'] ?? 0) === $id) {
                 $nodes[] = ['workflow_id' => (int) $r['workflow_id'], 'workflow_name' => (string) $r['workflow_name'],
-                    'node_name' => (string) ($cfg['name'] ?? 'Playbook')];
+                    'node_name' => (string) ($cfg['name'] ?? 'Playbook'), 'owner' => (int) $r['owner']];
             }
         }
         return ['agents' => $agents, 'nodes' => $nodes];

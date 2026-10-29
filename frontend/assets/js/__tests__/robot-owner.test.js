@@ -27,6 +27,24 @@ const t = (key, params = {}) => `${key}${Object.keys(params).length ? JSON.strin
     assert.deepStrictEqual(RO.clashLines({ clashes: [{ kind: 'component', name: 'Mail' }] }, t),
         ['workflow.owner.clash{"kind":"component","name":"Mail"}']);
     assert.deepStrictEqual(RO.clashLines({}, t), []);
+    // a published robot copy of the playbook: unpublish it, not rename yours
+    assert.deepStrictEqual(RO.clashLines({ clashes: [{ kind: 'playbook', name: 'filing', published: true }] }, t),
+        ['workflow.owner.clashPublished{"name":"filing"}']);
+
+    // link lists of a robot item: other users' workflows come as one {others} entry -- a line, and counted
+    const used = [{ workflow_name: 'Mine', node_name: 'SP' }, { others: 2 }];
+    assert.deepStrictEqual(used.map((u) => RO.linkLine(u, t, (x) => `${x.workflow_name} — ${x.node_name}`)),
+        ['Mine — SP', 'workflow.owner.otherWorkflows{"count":2}']);
+    assert.strictEqual(RO.linkCount(used), 3);
+    assert.strictEqual(RO.linkCount([]), 0);
+
+    // every new key is in en, es and fr
+    for (const lang of ['en', 'es', 'fr']) {
+        const dict = require(`../../i18n/${lang}.json`);
+        for (const key of ['workflow.owner.clashPublished', 'workflow.owner.otherWorkflows', 'codeLibrary.linksDroppedOthers']) {
+            assert.strictEqual(typeof key.split('.').reduce((o, k) => (o ? o[k] : undefined), dict), 'string', `${lang} ${key}`);
+        }
+    }
 
     // locked = robot-owned and running
     assert.ok(RO.isLocked({ is_robot: true, locked: true }));

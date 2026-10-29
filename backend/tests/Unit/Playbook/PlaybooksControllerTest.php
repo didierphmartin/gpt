@@ -53,7 +53,7 @@ final class PlaybooksControllerTest extends TestCase
         $id = $this->c->create($this->req(['text' => PlaybookStoreTest::OKTA]))['data']['id'];
         $u = $this->c->update($this->req(['text' => PlaybookStoreTest::OKTA, 'pkey' => 'okta-reset'], ['id' => $id]));
         $this->assertSame('okta-reset', $u['data']['pkey']);
-        $this->assertSame(['agents' => [], 'nodes' => []], $this->c->usedBy($this->req([], ['id' => $id]))['data']);
+        $this->assertSame(['agents' => [], 'nodes' => [], 'others' => 0], $this->c->usedBy($this->req([], ['id' => $id]))['data']);
         $this->assertTrue($this->c->destroy($this->req([], ['id' => $id]))['success']);
         $this->assertSame([], $this->c->index($this->req())['data']);
     }

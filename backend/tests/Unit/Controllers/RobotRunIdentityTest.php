@@ -131,6 +131,59 @@ final class RobotRunIdentityTest extends TestCase
         }
     }
 
+    private function lock(): void
+    {
+        $this->db->exec("INSERT INTO active_workflows (user_id, workflow_id, mode, activated_at) VALUES ({$this->robot}, 75, 'event', '2026-10-29 09:00:00')");
+    }
+
+    private function assertLocked(array $r): void
+    {
+        $this->assertSame([false, 'locked', 423, 'Mail to PDF is running as the robot. Unlock it first.'],
+            [$r['success'] ?? null, $r['error_code'] ?? null, $r['status_code'] ?? null, $r['error'] ?? null], json_encode($r));
+    }
+
+    public function test_browser_run_doors_refuse_a_locked_robot_workflow_after_access(): void
+    {
+        $this->lock();
+        $seen = [];
+        $body = ['server' => 'outlook', 'tool' => 'list_mail', 'args' => [], 'workflow_id' => 75];
+        $this->assertLocked($this->codeNode($seen)->toolCall(['user_id' => 3, 'body' => $body]));
+        $this->assertSame([], $seen);
+        $this->codeNode($seen)->toolCall(['user_id' => 1, 'body' => $body]);   // no access: the lock is not revealed
+        $this->assertSame(['1'], $seen);
+
+        $loaded = [];
+        $this->assertLocked($this->chat(3, ['tools' => ['mcp_list_mail'], 'workflow_id' => 75], $loaded));
+        $this->assertSame([], $loaded);
+        $r = $this->chat(1, ['tools' => ['mcp_list_mail'], 'workflow_id' => 75], $loaded);
+        $this->assertNotSame(423, $r['status_code'] ?? null);
+        $this->assertSame(['1'], $loaded);
+
+        foreach ([[3, true], [1, false]] as [$u, $locked]) {
+            $wf = new RunIdentityWorkflows($this->db, self::CONFIG);
+            ob_start();
+            ob_start();   // runPlaybookNode closes one buffer level
+            $wf->runPlaybookNode(['user_id' => $u, 'body' => ['node_config' => ['playbook' => "Title: T\nInstructions: Do #Leave Internal Note."],
+                'prompt' => 'go', 'workflow_id' => 75]]);
+            $out = '';
+            while (ob_get_level() > $this->baseLevel) {
+                $out = ob_get_clean() . $out;
+            }
+            $this->assertSame($locked, str_contains($out, 'running as the robot'), "user $u: $out");
+            $this->assertSame($locked ? [] : [1], $wf->mcpUsers);
+        }
+        http_response_code(200);
+    }
+
+    public function test_outputs_of_a_robot_workflow_are_read_as_the_robot(): void
+    {
+        $wf = new OutputsWorkflows($this->db, self::CONFIG);
+        $wf->listOutputs(['user_id' => 3, 'params' => ['id' => 75]]);
+        $wf->getOutput(['user_id' => 3, 'params' => ['id' => 75, 'filename' => 'a.json']]);
+        $wf->listOutputs(['user_id' => 3, 'params' => ['id' => 9]]);
+        $this->assertSame([[75, 120], [75, 120], [9, 3]], $wf->storage->calls);
+    }
+
     public function test_schedule_of_a_robot_workflow_is_the_robots(): void
     {
         $this->db->exec("UPDATE code_components SET user_id = {$this->robot}");
@@ -204,5 +257,33 @@ class RunIdentityWorkflows extends WorkflowController
                 throw new \RuntimeException('stop');
             },
             pdoFactory: fn() => new PDO('sqlite::memory:'));
+    }
+}
+
+/** WorkflowController whose output storage records (workflow, user) and reads nothing. */
+class OutputsWorkflows extends WorkflowController
+{
+    public ?RecordingOutputStorage $storage = null;
+
+    protected function outputStorage(): \AgentTeam\Services\WorkflowOutputStorage
+    {
+        return $this->storage ??= new RecordingOutputStorage(new PDO('sqlite::memory:'));
+    }
+}
+
+class RecordingOutputStorage extends \AgentTeam\Services\WorkflowOutputStorage
+{
+    public array $calls = [];
+
+    public function listOutputs(int $workflowId, int $userId): array
+    {
+        $this->calls[] = [$workflowId, $userId];
+        return ['success' => true, 'files' => []];
+    }
+
+    public function getOutput(int $workflowId, int $userId, string $filename): array
+    {
+        $this->calls[] = [$workflowId, $userId];
+        return ['success' => true, 'content' => ''];
     }
 }

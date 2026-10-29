@@ -3,6 +3,7 @@ declare(strict_types=1);
 namespace AgentTeam\Services;
 
 use PDO;
+use Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentStore;
 
 /**
  * Turns the names a compiled workflow graph uses (playbook_ref = pkey, code_component_ref / start_option_ref =
@@ -93,10 +94,50 @@ final class WorkflowRefResolver
         return ['nodes' => $nodes, 'edges' => $edges];
     }
 
+    /**
+     * The links of a robot workflow's (resolved) nodes the robot cannot use: another user's code component, Start
+     * option or playbook (the robot's published playbook copies included), or an agent neither the robot's nor
+     * public/workspace. Named "code component #8" and so on; [] when every link is the robot's.
+     */
+    public function foreignToRobot(int $robotId, array $nodes): array
+    {
+        $missing = [];
+        $has = function (string $sql, int $id) use ($robotId): bool {
+            $st = $this->db->prepare($sql);
+            $st->execute([$id, $robotId]);
+            return $st->fetchColumn() !== false;
+        };
+        foreach ($nodes as $node) {
+            $cfg = $node['config'] ?? $node['data'] ?? [];
+            $cfg = is_array($cfg) ? $cfg : [];
+            $type = (string) ($node['node_type'] ?? $node['type'] ?? $cfg['type'] ?? '');
+            if (CodeComponentStore::isCodeNode($type, $cfg) && !empty($cfg['code_component_id'])
+                && !$has('SELECT 1 FROM code_components WHERE id = ? AND user_id = ?', (int) $cfg['code_component_id'])) {
+                $missing[] = 'code component #' . (int) $cfg['code_component_id'];
+            }
+            $option = StartOptionGraph::optionId(['node_type' => $type, 'config' => $cfg]);
+            if ($option !== null && !$has('SELECT 1 FROM code_components WHERE id = ? AND user_id = ?', $option)) {
+                $missing[] = "start option component #$option";
+            }
+            if (!empty($cfg['playbook_id'])
+                && !$has('SELECT 1 FROM playbooks WHERE id = ? AND user_id = ? AND source_id IS NULL', (int) $cfg['playbook_id'])) {
+                $missing[] = 'playbook #' . (int) $cfg['playbook_id'];
+            }
+            $agent = $node['agent_id'] ?? null;
+            if (is_numeric($agent) && (int) $agent > 0 && !$has("SELECT 1 FROM agents WHERE id = ?
+                    AND (user_id = ? OR visibility IN ('public', 'workspace'))", (int) $agent)) {
+                $missing[] = 'agent #' . (int) $agent;
+            }
+        }
+        return array_values(array_unique($missing));
+    }
+
     private function playbookId(int $userId, string $pkey, ?int $robotId): ?int
     {
-        $st = $this->db->prepare('SELECT id FROM playbooks WHERE user_id = ? AND pkey = ? ORDER BY id LIMIT 1');
-        foreach ($robotId === null ? [$userId] : [$userId, $robotId] as $owner) {
+        foreach ($robotId === null ? [$userId] : array_unique([$userId, $robotId]) as $owner) {
+            // the robot's published copies (source_id set, the ServiceNow bridge's) are not shared rows
+            $st = $this->db->prepare('SELECT id FROM playbooks WHERE user_id = ? AND pkey = ?'
+                . ($owner === $robotId ? ' AND source_id IS NULL' : '') . ' ORDER BY id LIMIT 1');
             $st->execute([$owner, $pkey]);
             $id = $st->fetchColumn();
             if ($id !== false) {

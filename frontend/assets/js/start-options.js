@@ -76,8 +76,12 @@
         const tail = [{ key: 'workflow.startOptions.warnEverywhere', params: {} },
             { key: 'workflow.startOptions.warnLibrary', params: {} }];
         if (!impact.length) return tail;
+        // a robot option's impact names only the workflows the caller may open, then {others: n}
+        const named = impact.filter((w) => !w.others);
+        const others = impact.reduce((n, w) => n + (w.others || 0), 0);
         return [
-            { key: 'workflow.startOptions.warnActive', params: { count: impact.length, names: impact.map((w) => w.workflow_name).join(', ') } },
+            { key: 'workflow.startOptions.warnActive', params: { count: named.length + others, names: named.map((w) => w.workflow_name).join(', ') } },
+            ...(others ? [{ key: 'workflow.owner.otherWorkflows', params: { count: others } }] : []),
             { key: 'workflow.startOptions.warnStops', params: { label } },
             { key: 'workflow.startOptions.warnPorts', params: { exit: workExit } },
             ...tail,

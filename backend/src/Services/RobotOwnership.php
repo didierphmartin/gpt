@@ -31,6 +31,12 @@ final class RobotOwnership
         return $this->policy->canUse($callerId) ? $this->robotId() : null;
     }
 
+    /** The robot rows a workflow owned by $ownerId may link: the robot's when the owner is the robot or may use it, else null. */
+    public function linkRobotFor(int $ownerId): ?int
+    {
+        return $this->robotId() === $ownerId ? $ownerId : $this->robotFor($ownerId);
+    }
+
     public function isRobotOwned(int $workflowId): bool
     {
         $robot = $this->robotId();
@@ -47,6 +53,20 @@ final class RobotOwnership
     {
         $robot = $this->robotFor($callerId);
         return $robot !== null && $this->isRobotOwned($workflowId) ? $robot : $callerId;
+    }
+
+    /**
+     * The workflow's name when the caller would run it as the robot (they may use the robot and it is robot-owned)
+     * and it is locked, else null: a browser run door's refusal, checked only after access so it reveals nothing.
+     */
+    public function lockedRunName(int $callerId, int $workflowId): ?string
+    {
+        if ($this->runAs($callerId, $workflowId) === $callerId || !$this->isLocked($workflowId)) {
+            return null;
+        }
+        $st = $this->db->prepare('SELECT name FROM agent_workflows WHERE id = ?');
+        $st->execute([$workflowId]);
+        return (string) $st->fetchColumn();
     }
 
     /** Robot-owned and active: nobody edits it until it is unlocked. */

@@ -100,6 +100,19 @@ final class ActiveWorkflowControllerTest extends TestCase
         $this->assertNull($this->rc()->forWorkflow(['user_id' => 3, 'params' => ['id' => 75]])['data']);
     }
 
+    public function testOnTheOldKeyASecondRobotActivationAnswers409(): void
+    {
+        $robot = $this->robotFixture();
+        $this->db->exec('DROP TABLE active_workflows');
+        $this->db->exec("CREATE TABLE active_workflows (user_id INTEGER NOT NULL PRIMARY KEY, workflow_id INTEGER NOT NULL,
+            mode TEXT NOT NULL, trigger_component_id INTEGER, activated_at TEXT NOT NULL, watch_state TEXT NOT NULL DEFAULT 'starting',
+            watch_message TEXT, watch_checked_at TEXT)");
+        $this->db->exec("INSERT INTO active_workflows (user_id, workflow_id, mode, activated_at) VALUES ($robot, 80, 'schedule', '2026-10-29 09:00:00')");
+        $r = $this->rc()->activate(['user_id' => 3, 'params' => ['id' => 75]]);
+        $this->assertSame([false, 409, 'robot_busy', 'The robot can run one workflow at a time until the database is updated.'],
+            [$r['success'], $r['status_code'], $r['error_code'] ?? null, $r['error']]);
+    }
+
     public function testACallerWithoutAccessGetsNotFound(): void
     {
         $robot = $this->robotFixture();

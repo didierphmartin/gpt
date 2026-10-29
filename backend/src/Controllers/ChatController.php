@@ -833,7 +833,11 @@ class ChatController
         // servers (each requested one must have a robot server of its slug). Keys, memory and usage stay the caller's.
         $workflowId = (int) ($input['workflow_id'] ?? 0);
         if ($workflowId > 0 && ctype_digit($userId)) {
-            $actor = (string) (new RobotOwnership($this->db, $this->config))->runAs((int) $userId, $workflowId);
+            $ownership = new RobotOwnership($this->db, $this->config);
+            if (($locked = $ownership->lockedRunName((int) $userId, $workflowId)) !== null) {
+                return \AgentTeam\Controllers\WorkflowController::lockedResponse($locked);
+            }
+            $actor = (string) $ownership->runAs((int) $userId, $workflowId);
             if ($actor !== $userId) {
                 $missing = RobotMcpServers::missing($this->db, $userId, $actor, $toolsFilter);
                 if ($missing !== []) {

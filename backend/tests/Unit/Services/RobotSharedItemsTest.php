@@ -26,7 +26,7 @@ final class RobotSharedItemsTest extends TestCase
         $db = $this->db = new PDO('sqlite::memory:');
         $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         $db->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
-        $db->exec("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, role TEXT, kind TEXT NOT NULL DEFAULT 'person')");
+        $db->exec("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, first_name TEXT, last_name TEXT, role TEXT, kind TEXT NOT NULL DEFAULT 'person')");
         $db->exec('CREATE TABLE packages (role TEXT PRIMARY KEY, name TEXT, builtin INTEGER, capabilities TEXT, updated_at TEXT)');
         $db->exec("INSERT INTO packages (role, name, builtin, capabilities) VALUES ('user', 'User', 1, '{}')");
         $db->exec("INSERT INTO users (id, email, role, kind) VALUES (3, 'p@x.test', 'user', 'person'), (4, 'q@x.test', 'user', 'person'), (120, 'r@x.test', 'robot', 'service')");
@@ -34,7 +34,8 @@ final class RobotSharedItemsTest extends TestCase
             description TEXT, code TEXT NOT NULL, exits TEXT NOT NULL, mcp_servers TEXT NOT NULL, timeout_s INTEGER NOT NULL DEFAULT 30,
             start_trigger TEXT, args TEXT, provides TEXT, created_at TEXT, updated_at TEXT, UNIQUE (user_id, name))');
         $db->exec('CREATE TABLE playbooks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, pkey TEXT NOT NULL,
-            title TEXT NOT NULL, text TEXT NOT NULL, automation_id INTEGER, created_at TEXT, updated_at TEXT, UNIQUE (user_id, pkey))');
+            title TEXT NOT NULL, text TEXT NOT NULL, automation_id INTEGER, published_by INTEGER, published_at TEXT, source_id INTEGER,
+            created_at TEXT, updated_at TEXT, UNIQUE (user_id, pkey))');
         $db->exec('CREATE TABLE agent_workflows (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, name TEXT)');
         $db->exec('CREATE TABLE workflow_nodes (id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_id INTEGER, node_type TEXT, agent_id INTEGER, config TEXT, pos_x INTEGER, pos_y INTEGER, drawflow_node_id TEXT)');
         $db->exec("CREATE TABLE workflow_edges (id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_id INTEGER, from_node_id INTEGER,
@@ -193,5 +194,133 @@ final class RobotSharedItemsTest extends TestCase
         $this->assertSame(1, (int) $this->db->query('SELECT COUNT(*) FROM playbooks')->fetchColumn());
         $this->expectException(\Quantis\AIPortfolioAssistant\Playbook\PlaybookStoreError::class);
         $s->delete(4, $pid);
+    }
+
+    /** A playbook of user 3 published to the robot: the robot's copy (source_id set), the ServiceNow bridge's. Returns its id. */
+    private function publishedCopy(): int
+    {
+        $s = new PlaybookStore($this->db);
+        $src = $s->save(3, null, PlaybookStoreTest::OKTA, 'okta-reset')['id'];
+        return $s->publish(3, $src, 120, false)['id'];
+    }
+
+    public function testTheRobotsPublishedCopiesAreNotSharedRows(): void
+    {
+        $copy = $this->publishedCopy();
+        $s = new PlaybookStore($this->db);
+        $this->assertSame([], array_values(array_filter($s->list(4, 120), fn($r) => $r['id'] === $copy)));
+        $this->assertNull($s->get(4, $copy, 120));
+        foreach ([fn() => $s->save(4, $copy, PlaybookStoreTest::OKTA, null, 120), fn() => $s->delete(4, $copy, 120)] as $write) {
+            try {
+                $write();
+                $this->fail('a published copy is not editable as a shared robot row');
+            } catch (\Quantis\AIPortfolioAssistant\Playbook\PlaybookStoreError $e) {
+                $this->assertSame('not_found', $e->kind);
+            }
+        }
+        // the publish mechanism still sees it
+        $this->assertSame([$copy], array_column($s->robotList(120), 'id'));
+        $this->assertSame([1 => 'published'], $s->publishStatus(3, 120));
+        $this->assertNotNull($s->get(120, $copy));
+    }
+
+    public function testLinksNeverResolveToAPublishedCopy(): void
+    {
+        $copy = $this->publishedCopy();
+        $this->db->exec("INSERT INTO agent_workflows (id, user_id, name) VALUES (9, '4', 'Theirs')");
+        $this->db->prepare('INSERT INTO workflow_nodes (workflow_id, node_type, config) VALUES (9, ?, ?)')
+            ->execute(['playbook', json_encode(['type' => 'playbook', 'playbook_id' => $copy])]);
+        $this->assertTrue((new WorkflowGraphRepository($this->db))->getGraph(9)['nodes'][0]['config']['playbook_missing']);
+        try {
+            (new \AgentTeam\Services\WorkflowRefResolver($this->db))->resolve(4, [['id' => '1', 'config' => ['playbook_ref' => 'okta-reset']]], [], 120);
+            $this->fail('the published copy must not resolve');
+        } catch (\AgentTeam\Services\UnresolvedRefsException $e) {
+            $this->assertSame(["playbook 'okta-reset'"], $e->missing);
+        }
+        // usedBy of the copy is not the robot fallback's every-user scan
+        $this->assertSame([], (new PlaybookStore($this->db))->usedBy(3, $copy, 120)['nodes']);
+    }
+
+    /** A robot component (exits a, b, c) linked from user 3's wf 9, user 4's wf 10 and the robot's wf 75, each with an edge on b. */
+    private function linkedEverywhere(): int
+    {
+        $cid = (new CodeComponentStore($this->db))->save(120, null, ['name' => 'rc', 'code' => '', 'exits' => ['a', 'b', 'c'], 'mcp_servers' => []])['id'];
+        $this->db->exec("INSERT INTO agent_workflows (id, user_id, name) VALUES (9, '3', 'Mine'), (10, '4', 'Secret of 4'), (75, '120', 'Robot wf')");
+        foreach ([9, 10, 75] as $wf) {
+            $this->db->prepare('INSERT INTO workflow_nodes (workflow_id, node_type, config) VALUES (?, ?, ?)')
+                ->execute([$wf, 'code', json_encode(['type' => 'code', 'name' => "N$wf", 'code_component_id' => $cid])]);
+            $this->db->prepare("INSERT INTO workflow_edges (workflow_id, from_node_id, to_node_id, from_port) VALUES (?, ?, 99, 'output_2')")
+                ->execute([$wf, (int) $this->db->lastInsertId()]);
+        }
+        return $cid;
+    }
+
+    public function testOtherUsersWorkflowsAreCountedNotNamed(): void
+    {
+        $cid = $this->linkedEverywhere();
+        $store = new CodeComponentStore($this->db);
+        $used = $store->usedBy(3, $cid, 120);
+        $this->assertSame(['Mine', 'Robot wf'], array_column(array_slice($used, 0, 2), 'workflow_name'));
+        $this->assertSame(['others' => 1], $used[2]);
+        $this->assertStringNotContainsString('Secret', json_encode($used));
+        $this->assertSame(3, $store->list(3, 120)[0]['used_by']);   // the count is every link
+        try {
+            $store->delete(3, $cid, 120);
+            $this->fail('in use');
+        } catch (\Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentError $e) {
+            $this->assertSame('in_use', $e->kind);
+            $this->assertStringContainsString('"Mine"', $e->getMessage());
+            $this->assertStringContainsString('1 other workflow', $e->getMessage());
+            $this->assertStringNotContainsString('Secret', $e->getMessage());
+        }
+        try {
+            $store->save(3, $cid, ['name' => 'rc', 'code' => '', 'exits' => ['a', 'c'], 'mcp_servers' => []], 120);
+            $this->fail('links dropped');
+        } catch (\Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentError $e) {
+            $this->assertSame('links_dropped', $e->kind);
+            $this->assertSame(['Mine', 'Robot wf'], array_column(array_slice($e->data, 0, 2), 'workflow_name'));
+            $this->assertSame(['others' => 1, 'count' => 1], $e->data[2]);
+            $this->assertStringNotContainsString('Secret', $e->getMessage() . json_encode($e->data));
+        }
+    }
+
+    public function testStartOptionImpactCountsOtherUsersWorkflows(): void
+    {
+        $this->db->exec("CREATE TABLE scheduled_workflows (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, workflow_id INTEGER,
+            event_trigger TEXT, trigger_component_id INTEGER)");
+        $store = new CodeComponentStore($this->db);
+        $cid = $store->save(120, null, ['name' => 'poll', 'code' => '', 'exits' => ['new_mail', 'none'], 'mcp_servers' => ['Outlook']])['id'];
+        $store->setStartTrigger(120, $cid, ['label' => 'New', 'work_exit' => 'new_mail',
+            'watch' => ['server' => 'Outlook', 'tool' => 'wait_for_new', 'args' => []]]);
+        $this->db->exec("INSERT INTO agent_workflows (id, user_id, name) VALUES (9, '3', 'Mine'), (10, '4', 'Secret of 4')");
+        $this->db->exec("INSERT INTO scheduled_workflows (user_id, workflow_id, trigger_component_id) VALUES (4, 10, $cid)");
+        $this->db->prepare('INSERT INTO workflow_nodes (workflow_id, node_type, config) VALUES (9, ?, ?)')
+            ->execute(['start', json_encode(['type' => 'start', 'start_option' => $cid])]);
+        $impact = $store->startTriggerImpact(3, $cid, 120);
+        $this->assertSame([['workflow_id' => 9, 'workflow_name' => 'Mine'], ['others' => 1]], $impact);
+    }
+
+    public function testPlaybookUsedByCountsOtherUsersLinks(): void
+    {
+        $s = new PlaybookStore($this->db);
+        $pid = $s->save(120, null, PlaybookStoreTest::OKTA, 'okta-reset')['id'];
+        $this->db->exec("INSERT INTO agent_workflows (id, user_id, name) VALUES (9, '3', 'Mine'), (10, '4', 'Secret of 4')");
+        foreach ([9, 10] as $wf) {
+            $this->db->prepare('INSERT INTO workflow_nodes (workflow_id, node_type, config) VALUES (?, ?, ?)')
+                ->execute([$wf, 'playbook', json_encode(['type' => 'playbook', 'name' => "P$wf", 'playbook_id' => $pid])]);
+        }
+        $this->db->exec("INSERT INTO agents (user_id, name, playbook_id) VALUES (4, 'Secret agent', $pid), (3, 'My agent', $pid)");
+        $used = $s->usedBy(3, $pid, 120);
+        $this->assertSame([['My agent'], ['Mine'], 2], [array_column($used['agents'], 'name'), array_column($used['nodes'], 'workflow_name'), $used['others']]);
+        $this->assertSame(4, $s->list(3, 120)[0]['used_by']);
+        try {
+            $s->delete(3, $pid, 120);
+            $this->fail('in use');
+        } catch (\Quantis\AIPortfolioAssistant\Playbook\PlaybookStoreError $e) {
+            $this->assertStringContainsString('"Mine"', $e->getMessage());
+            $this->assertStringContainsString('1 other workflow', $e->getMessage());
+            $this->assertStringContainsString('1 other agent', $e->getMessage());
+            $this->assertStringNotContainsString('Secret', $e->getMessage());
+        }
     }
 }

@@ -9945,7 +9945,7 @@ class WorkflowEditor {
             f('link').style.display = '';
             f('link').textContent = this.t('codeLibrary.linkedHeader', { name: comp.name, count: '…' });
             CC.api().usedBy(comp.id).then((r) => {
-                f('link').textContent = this.t('codeLibrary.linkedHeader', { name: comp.name, count: (r.data || []).length });
+                f('link').textContent = this.t('codeLibrary.linkedHeader', { name: comp.name, count: window.RobotOwner.linkCount(r.data) });
             }).catch(() => {});
         } else if (libraryUnavailable) {
             f('link').style.display = '';
@@ -10321,7 +10321,9 @@ class WorkflowEditor {
                     if (e.kind !== 'links_dropped') throw e;
                     const t = (k, p) => this.t(`codeLibrary.${k}`, p);
                     const ok = await this._confirmLinksDialog(t('linksDroppedTitle'), t('linksDroppedIntro', { name: compName }),
-                        (e.data || []).map((l) => t('linksDroppedLine', { workflow: l.workflow_name, node: l.node_name, exit: l.exit, count: l.count })),
+                        (e.data || []).map((l) => (l.others   // other users' workflows: counted, not named
+                            ? t('linksDroppedOthers', { count: l.others, links: l.count })
+                            : t('linksDroppedLine', { workflow: l.workflow_name, node: l.node_name, exit: l.exit, count: l.count }))),
                         t('linksDroppedConfirm'));
                     if (!ok) return;
                     row = (await CC.api().update(comp.id, { ...body, confirm_drop_links: true })).data;

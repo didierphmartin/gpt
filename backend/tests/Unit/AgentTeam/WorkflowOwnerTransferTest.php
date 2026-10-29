@@ -121,6 +121,15 @@ final class WorkflowOwnerTransferTest extends TestCase
         $this->assertSame([['kind' => 'playbook', 'name' => 'filing']], $e->clashes);
     }
 
+    public function test_a_clash_with_a_published_robot_copy_says_unpublish_first(): void
+    {
+        $this->db->exec("INSERT INTO playbooks (user_id, pkey, title, text, source_id) VALUES ({$this->robot}, 'filing', 'Filing', 't', 6)");
+        $e = $this->error(fn() => $this->transfer()->toRobot(self::OWNER, self::WF));
+        $this->assertSame([['kind' => 'playbook', 'name' => 'filing', 'published' => true]], $e->clashes);
+        $this->assertStringContainsString('playbook "filing" is published to the robot: unpublish it first', $e->getMessage());
+        $this->assertSame($e->clashes, $this->transfer()->preview(self::OWNER, self::WF)['clashes']);
+    }
+
     public function test_preview_lists_shared_workflows_and_missing_servers(): void
     {
         $add = $this->db->prepare('INSERT INTO mcp_servers (user_id, name, url, enabled) VALUES (?, ?, ?, ?)');

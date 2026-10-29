@@ -90,7 +90,9 @@ class CodeLibrary {
         box.textContent = '…';
         try {
             const used = (await window.CodeComponents.api().usedBy(this.contextTarget)).data || [];
-            const lines = used.length ? used.map(u => `• ${u.workflow_name} — ${u.node_name}`) : [this.t('codeLibrary.unused')];
+            const RO = window.RobotOwner;   // a robot component: other users' workflows end the list as one {others} entry
+            const lines = used.length ? used.map(u => `• ${RO.linkLine(u, (k, p) => this.t(k, p), (x) => `${x.workflow_name} — ${x.node_name}`)}`)
+                : [this.t('codeLibrary.unused')];
             box.replaceChildren(...lines.map(text => {
                 const line = document.createElement('div');
                 line.className = used.length ? 'px-5 py-0.5 text-gray-600' : 'px-5 py-0.5 text-gray-400 italic';

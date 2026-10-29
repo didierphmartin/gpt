@@ -35,9 +35,24 @@
         ];
     }
 
-    /** The names the robot already has: the change is refused until they are renamed. */
+    /** The names the robot already has: the change is refused until they are renamed (a published playbook copy: unpublished). */
     function clashLines(preview, t) {
-        return (preview?.clashes || []).map((c) => t('workflow.owner.clash', { kind: c.kind, name: c.name }));
+        return (preview?.clashes || []).map((c) => (c.published
+            ? t('workflow.owner.clashPublished', { name: c.name })
+            : t('workflow.owner.clash', { kind: c.kind, name: c.name })));
+    }
+
+    /**
+     * One entry of a robot item's link list (used-by, Start option impact): the server names only the workflows the
+     * caller may open and ends the list with {others: n} for the rest.
+     */
+    function linkLine(entry, t, named) {
+        return entry?.others ? t('workflow.owner.otherWorkflows', { count: entry.others }) : named(entry);
+    }
+
+    /** How many links such a list stands for: an {others} entry counts its workflows. */
+    function linkCount(list) {
+        return (list || []).reduce((n, e) => n + (e?.others || 1), 0);
     }
 
     /**
@@ -60,5 +75,5 @@
             error: `${wf.name || `Workflow #${workflowId}`} is running as the robot. Unlock it first.` };
     }
 
-    return { isLocked, runDoorDisabled, rowMarks, ownerView, previewLines, clashLines, chatSaveRefusal };
+    return { isLocked, runDoorDisabled, rowMarks, ownerView, previewLines, clashLines, linkLine, linkCount, chatSaveRefusal };
 });

@@ -83,6 +83,11 @@ final class ActiveWorkflowService
             $this->db->commit();
         } catch (\Throwable $e) {
             $this->db->rollBack();
+            // Until 2026-10-29_active_workflows_per_workflow.sql runs, the table is keyed by user alone: the robot's
+            // second workflow is a duplicate key there, a refusal and not a server error.
+            if ($several && $e instanceof \PDOException && $e->getCode() === '23000') {
+                throw new ActiveWorkflowError('robot_busy', 'The robot can run one workflow at a time until the database is updated.', 409);
+            }
             throw $e;
         }
         return ['active' => $this->row($userId, $workflowId), 'replaced' => $replaced];

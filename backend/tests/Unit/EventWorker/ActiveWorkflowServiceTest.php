@@ -228,6 +228,32 @@ final class ActiveWorkflowServiceTest extends TestCase
         $this->assertSame(76, (int) $this->svc()->forWorkflow(76)['workflow_id']);
     }
 
+    /** The production table before 2026-10-29_active_workflows_per_workflow.sql: keyed by user_id alone. */
+    private function oldPrimaryKey(): void
+    {
+        $this->db->exec('DROP TABLE active_workflows');
+        $this->db->exec("CREATE TABLE active_workflows (user_id INTEGER NOT NULL PRIMARY KEY, workflow_id INTEGER NOT NULL,
+            mode TEXT NOT NULL, trigger_component_id INTEGER, activated_at TEXT NOT NULL, watch_state TEXT NOT NULL DEFAULT 'starting',
+            watch_message TEXT, watch_checked_at TEXT)");
+    }
+
+    public function testOnTheOldKeyASecondRobotWorkflowIsBusyNotAnSqlError(): void
+    {
+        $this->oldPrimaryKey();
+        EventWorkerSchema::workflow($this->db, 75, 9, null);
+        EventWorkerSchema::row($this->db, 75, 9, 'daily');
+        EventWorkerSchema::workflow($this->db, 76, 9, null);
+        EventWorkerSchema::row($this->db, 76, 9, 'daily');
+        $this->svc()->activate(9, 75);
+        $e = $this->refused(fn() => $this->svc()->activate(9, 76));
+        $this->assertSame(['robot_busy', 409, 'The robot can run one workflow at a time until the database is updated.'],
+            [$e->kind, $e->status, $e->getMessage()]);
+        $this->assertSame([[9, 75]], $this->rows());
+        $this->assertFalse($this->db->inTransaction());
+        $this->svc()->activate(9, 75);                                  // the same one again still works
+        $this->assertSame([[9, 75]], $this->rows());
+    }
+
     private function rows(): array
     {
         return array_map(fn($r) => [(int) $r['user_id'], (int) $r['workflow_id']],

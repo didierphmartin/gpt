@@ -56,12 +56,13 @@ final class RobotSchema
         return $ids;
     }
 
-    /** The agents and playbooks tables (unique per owner, as in MySQL) and workflow_nodes.agent_id. */
+    /** The agents and playbooks tables (unique per owner, as in MySQL; playbooks with the publish columns) and workflow_nodes.agent_id. */
     public static function agentsAndPlaybooks(PDO $db): void
     {
         $db->exec('ALTER TABLE workflow_nodes ADD COLUMN agent_id INTEGER');
         $db->exec('CREATE TABLE playbooks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, pkey TEXT NOT NULL,
-            title TEXT NOT NULL, text TEXT NOT NULL, automation_id INTEGER, created_at TEXT, updated_at TEXT, UNIQUE (user_id, pkey))');
+            title TEXT NOT NULL, text TEXT NOT NULL, automation_id INTEGER, published_by INTEGER, published_at TEXT, source_id INTEGER,
+            created_at TEXT, updated_at TEXT, UNIQUE (user_id, pkey))');
         $db->exec("CREATE TABLE agents (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, team_id INTEGER,
             category TEXT, name TEXT NOT NULL, description TEXT, agent_type TEXT DEFAULT 'standard', parent_agent_id INTEGER,
             can_delegate_to TEXT, display_order INTEGER DEFAULT 0, provider TEXT DEFAULT 'claude', model TEXT, instructions TEXT,
