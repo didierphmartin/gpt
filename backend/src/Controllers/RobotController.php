@@ -2,20 +2,14 @@
 declare(strict_types=1);
 namespace Quantis\AIPortfolioAssistant\Controllers;
 
-use AgentTeam\Controllers\WorkflowController;
-use AgentTeam\Services\ActiveWorkflowError;
-use AgentTeam\Services\ActiveWorkflowService;
-use AgentTeam\Services\WorkflowPublishError;
-use AgentTeam\Services\WorkflowRobotPublisher;
 use PDO;
-use Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentStore;
 use Quantis\AIPortfolioAssistant\Playbook\PlaybookStore;
 use Quantis\AIPortfolioAssistant\Playbook\PlaybookStoreError;
 use Quantis\AIPortfolioAssistant\Services\Edition;
 use Quantis\AIPortfolioAssistant\Services\RobotAccount;
 use Quantis\AIPortfolioAssistant\Services\RobotPolicy;
 
-/** /api/v1/robot — the robot account's status and its published playbooks and workflows. */
+/** /api/v1/robot — the robot account's status and its published playbooks. */
 final class RobotController
 {
     private RobotPolicy $policy;
@@ -56,80 +50,6 @@ final class RobotController
         });
     }
 
-    /** GET /api/v1/robot/workflows: [{id, name, source_id, published_by, published_at, active}]. */
-    public function workflows(array $request): array
-    {
-        return $this->guard($request, function (int $u) {
-            $this->requireUse($u);
-            return ['success' => true, 'data' => $this->publisher()->robotList(RobotAccount::ensure($this->db))];
-        });
-    }
-
-    /** DELETE /api/v1/robot/workflows/{id}: deactivates the robot's copy, then deletes it. */
-    public function unpublishWorkflow(array $request): array
-    {
-        return $this->guard($request, function (int $u) use ($request) {
-            $this->requireUse($u);
-            $this->publisher()->unpublish(RobotAccount::ensure($this->db), (int) ($request['params']['id'] ?? 0));
-            return ['success' => true];
-        });
-    }
-
-    /** POST /api/v1/robot/workflows/{id}/activate: the robot's own active row (a person's coexists). */
-    public function activateWorkflow(array $request): array
-    {
-        return $this->guard($request, function (int $u) use ($request) {
-            $this->requireUse($u);
-            $data = (new ActiveWorkflowService($this->db))->activate(RobotAccount::ensure($this->db), (int) ($request['params']['id'] ?? 0));
-            return ['success' => true, 'data' => $data];
-        });
-    }
-
-    /** DELETE /api/v1/robot/workflows/{id}/activate */
-    public function deactivateWorkflow(array $request): array
-    {
-        return $this->guard($request, function (int $u) use ($request) {
-            $this->requireUse($u);
-            (new ActiveWorkflowService($this->db))->deactivate(RobotAccount::ensure($this->db), (int) ($request['params']['id'] ?? 0));
-            return ['success' => true];
-        });
-    }
-
-    /** GET /api/v1/robot/workflows/{id}/executions: the person's body, for a robot-owned workflow. */
-    public function workflowExecutions(array $request): array
-    {
-        return $this->guard($request, function (int $u) use ($request) {
-            $this->requireUse($u);
-            return $this->workflowController()->executionsOf(RobotAccount::ensure($this->db), $request);
-        });
-    }
-
-    /** GET /api/v1/robot/workflows/{id}/live: the person's SSE stream, for a robot-owned workflow. */
-    public function workflowLive(array $request): array
-    {
-        return $this->guard($request, function (int $u) use ($request) {
-            $this->requireUse($u);
-            return $this->workflowController()->liveOf(RobotAccount::ensure($this->db), $request);
-        });
-    }
-
-    private function workflowController(): WorkflowController
-    {
-        return new WorkflowController($this->db, $this->config);
-    }
-
-    private function publisher(): WorkflowRobotPublisher
-    {
-        return new WorkflowRobotPublisher($this->db, new CodeComponentStore($this->db));
-    }
-
-    private function requireUse(int $userId): void
-    {
-        if (!$this->policy->canUse($userId)) {
-            throw new WorkflowPublishError('forbidden', "Your role can't publish to the robot", 403);
-        }
-    }
-
     private function requireAccess(int $userId): void
     {
         if (!$this->policy->canUse($userId) && !$this->policy->canManage($userId)) {
@@ -145,7 +65,7 @@ final class RobotController
         }
         try {
             return $action($userId);
-        } catch (PlaybookStoreError | WorkflowPublishError | ActiveWorkflowError $e) {
+        } catch (PlaybookStoreError $e) {
             return ['success' => false, 'error' => $e->getMessage(), 'kind' => $e->kind, 'status_code' => $e->status];
         }
     }

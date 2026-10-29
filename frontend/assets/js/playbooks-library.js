@@ -17,10 +17,8 @@ class PlaybooksLibrary {
         this.contextTarget = null;
         this.robot = null;        // GET /robot, once: {can_use, ...}; {can_use:false} when it fails
         this.robotRows = [];
-        this.robotWorkflows = [];
         this.robotServers = [];
         this.robotServerForm = null; // the open Add / Edit robot connection form: {id?} ({} = Add)
-        this.robotRunsOpen = null;   // the robot workflow id whose Runs list is open
         this.tab = 'mine';       // 'mine' | 'robot'
         this.publishState = null; // the menu's Publish replace confirmation (PlaybookCollection.publishStep)
         this.unpublishArmed = null; // the armed Unpublish target ('menu:<id>' | 'robot:<robotId>'), PlaybookCollection.armClick
@@ -109,8 +107,8 @@ class PlaybooksLibrary {
         const load = async (call) => {
             try { return (await call()).data || []; } catch (err) { this.setStatus(err.message); return []; }
         };
-        [this.robotRows, this.robotWorkflows, this.robotServers] = await Promise.all([
-            load(() => this.api.robotPlaybooks()), load(() => this.api.robotWorkflows()), load(() => this.api.robotServers())]);
+        [this.robotRows, this.robotServers] = await Promise.all([
+            load(() => this.api.robotPlaybooks()), load(() => this.api.robotServers())]);
     }
 
     async switchTab(tab) {
@@ -171,14 +169,11 @@ class PlaybooksLibrary {
                 <code class="mcp-lib-name text-gray-700">${this.esc(r.pkey)}</code>
                 <button class="mcp-lib-menu" data-robot-playbook-id="${r.id}" title="More">⋮</button>
             </div>`).join('') : empty('playbookLibrary.robotEmpty');
-        const workflows = this.robotWorkflows.filter(w => has(w.name));
         const servers = this.robotServers.filter(s => has(s.name, s.url));
         this.treeContainer.innerHTML = head('robot.playbooks') + playbooks
-            + head('robot.workflows') + (workflows.length ? workflows.map(w => this.renderRobotWorkflow(w)).join('') : empty('robot.noWorkflows'))
             + head('robot.connections', `<button type="button" class="text-blue-600 hover:text-blue-700 font-medium" data-robot-server-add>${this.esc(this.t('robot.add'))}</button>`)
             + (this.robotServerForm && !this.robotServerForm.id ? this.renderRobotServerForm({}) : '')
             + (servers.length ? servers.map(s => this.renderRobotServer(s)).join('') : empty('robot.noConnections'));
-        this.wireRobotWorkflows();
         this.wireRobotServers();
         this.treeContainer.querySelectorAll('.mcp-lib-menu[data-robot-playbook-id]').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -215,77 +210,6 @@ class PlaybooksLibrary {
             }));
         }
         this.placeMenu(this.robotMenu);
-    }
-
-    // A published workflow: name, who published it and when, Active badge, Activate / Stop, Runs, Unpublish.
-    renderRobotWorkflow(w) {
-        const btn = (action, key, cls = 'text-blue-600 hover:text-blue-700') =>
-            `<button type="button" class="${cls}" data-robot-wf-action="${action}" data-robot-wf-id="${w.id}">${this.esc(this.t(key))}</button>`;
-        return `
-            <div class="px-2 py-1.5 mb-1 bg-white rounded border border-gray-200 text-xs" data-robot-workflow-id="${w.id}">
-                <div class="flex items-center gap-1">
-                    <span>🤖</span>
-                    <span class="font-semibold text-gray-800 truncate flex-1">${this.esc(w.name)}</span>
-                    ${w.active ? `<span class="mcp-badge mcp-badge-global">${this.esc(this.t('robot.active'))}</span>` : ''}
-                </div>
-                <div class="text-gray-500">${this.esc(this.t('robot.publishedBy', { id: w.published_by ?? '?', date: String(w.published_at || '').slice(0, 10) }))}</div>
-                <div class="flex gap-3 mt-1">
-                    ${w.active ? btn('stop', 'robot.stop') : btn('activate', 'robot.activate')}
-                    ${btn('runs', 'robot.runs')}
-                    ${btn('unpublish', 'robot.unpublish', 'text-red-600 hover:text-red-700')}
-                </div>
-                ${Number(this.robotRunsOpen) === Number(w.id) ? '<div data-robot-runs class="mt-1 text-gray-600"></div>' : ''}
-            </div>`;
-    }
-
-    wireRobotWorkflows() {
-        this.treeContainer.querySelectorAll('[data-robot-wf-action]').forEach(btn => btn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            const id = Number(btn.dataset.robotWfId);
-            const w = this.robotWorkflows.find(x => Number(x.id) === id);
-            this.setStatus('');
-            try {
-                switch (btn.dataset.robotWfAction) {
-                    case 'activate': await this.api.activateRobotWorkflow(id); break;
-                    case 'stop': await this.api.stopRobotWorkflow(id); break;
-                    case 'runs':
-                        this.robotRunsOpen = this.robotRunsOpen === id ? null : id;
-                        this.renderTree();
-                        if (this.robotRunsOpen === id) await this.showRobotRuns(id);
-                        return;
-                    case 'unpublish':
-                        if (!this.armUnpublish(btn, `wf:${id}`, w?.name, 'robot.confirmUnpublish', 'robot.unpublish')) return;
-                        await this.api.unpublishWorkflow(id);
-                        break;
-                    default: return;
-                }
-            } catch (err) {
-                this.setStatus(err.message);
-            }
-            await this.loadRobotRows();
-            this.renderTree();
-        }));
-    }
-
-    // The robot copy's recent runs; a click opens that run in the workflow editor's results view.
-    async showRobotRuns(id) {
-        const box = this.treeContainer.querySelector(`[data-robot-workflow-id="${id}"] [data-robot-runs]`);
-        if (!box) return;
-        let runs = [];
-        try { runs = (await this.api.robotWorkflowRuns(id)).data || []; } catch (err) { this.setStatus(err.message); }
-        if (!box.isConnected) return;
-        if (!runs.length) { box.textContent = this.t('robot.noRuns'); return; }
-        box.replaceChildren(...runs.map(run => {
-            const line = document.createElement('button');
-            line.type = 'button';
-            line.className = 'block w-full text-left hover:bg-gray-100 rounded px-1';
-            line.textContent = `${String(run.started_at || '').slice(0, 16)} · ${run.status || ''}`;
-            line.addEventListener('click', async () => {
-                const editor = await this.ensureWorkflowEditor();
-                editor?.showWorkflowResults?.(window.PlaybookCollection.runResultsData(run));
-            });
-            return line;
-        }));
     }
 
     // A robot connection: name, URL, header names (never the keys), Edit / Delete, and the Connect box

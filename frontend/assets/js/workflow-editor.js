@@ -574,17 +574,6 @@ class WorkflowEditor {
             });
         }
 
-        // Top-left "Publish to robot": only for a caller whose role may use the robot (GET /robot can_use).
-        const publishRobotBtn = document.getElementById('wf-publish-robot');
-        if (publishRobotBtn && !publishRobotBtn.dataset.robotBound) {
-            publishRobotBtn.dataset.robotBound = '1';
-            publishRobotBtn.addEventListener('click', () => this._publishWorkflowToRobot(publishRobotBtn));
-            const robot = window.playbooksLibrary?.robotInfo
-                ? window.playbooksLibrary.robotInfo()
-                : this._playbookApi().robot().then((b) => b.data || {}).catch(() => ({}));
-            robot.then((r) => { publishRobotBtn.style.display = r?.can_use ? 'flex' : 'none'; });
-        }
-
         // Shared genesis on-ramp used by both the toolbar button above and the
         // sidebar workflow ⋮ menu: one reflection call → approval overlay.
         // Callers own any button busy-state; this method owns the in-flight
@@ -21934,44 +21923,6 @@ Based on the analysis...
             .forEach(b => b.classList.toggle('hidden', b.id !== 'tab-system-prompt'));
         this.switchAgentModalTab('system-prompt');
         await this._addPlaybookPublishButton();
-    }
-
-    /**
-     * Publish the saved workflow to the robot (a frozen copy). A `replaces` answer (the robot's copy is active)
-     * arms the button (PlaybookCollection.publishStep); a second click on the same workflow confirms. The notice
-     * names the MCP connections the robot still lacks (needs_servers).
-     */
-    async _publishWorkflowToRobot(btn) {
-        const PC = window.PlaybookCollection;
-        const label = btn.querySelector('[data-robot-label]') || btn;
-        const id = this.currentWorkflowId;
-        if (!id) { this.showToast(this.t('workflow.messages.saveFirst'), 'warning'); return; }
-        // The robot copies the saved workflow: unsaved edits would silently not be published.
-        if (!this._unchangedSinceLoad()) { this.showToast(this.t('robot.saveFirst'), 'warning'); return; }
-        if (btn.dataset.busy === '1') return;
-        const step = PC.publishStep(this._wfPublishState, { type: 'click', key: id });
-        clearTimeout(this._wfPublishTimer);
-        btn.dataset.busy = '1';
-        try {
-            const res = await this._playbookApi().publishWorkflow(id, step.confirmReplace);
-            this._wfPublishState = null;
-            label.textContent = this.t('robot.publish');
-            const notice = PC.needsServersNotice(res.data?.needs_servers, this.t.bind(this));
-            this.showNotification(notice ? `${this.t('robot.published')} ${notice}` : this.t('robot.published'), 'success');
-            if (window.playbooksLibrary?.tab === 'robot') window.playbooksLibrary.loadTree();
-        } catch (e) {
-            this._wfPublishState = PC.publishStep(step, { type: 'error', error: e, key: id }, this.t.bind(this), 'robot.replaceConfirm');
-            if (this._wfPublishState.armed) {
-                label.textContent = this._wfPublishState.message;
-                this._wfPublishTimer = setTimeout(() => { this._wfPublishState = null; label.textContent = this.t('robot.publish'); }, 6000);
-            } else {
-                label.textContent = this.t('robot.publish');
-                this.showNotification(this._wfPublishState.message, 'error');
-                this._wfPublishState = null;
-            }
-        } finally {
-            btn.dataset.busy = '0';
-        }
     }
 
     /** The form's Publish button, next to Save, only when the caller can use the robot. */

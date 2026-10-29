@@ -13,8 +13,7 @@ final class EventWorkerSchema
         $db->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
         $db->sqliteCreateFunction('NOW', $now, 0);
         $db->exec('PRAGMA foreign_keys = ON');
-        $db->exec('CREATE TABLE agent_workflows (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT, enabled INTEGER DEFAULT 1,
-            published_by INTEGER, published_at TEXT, source_id INTEGER)');
+        $db->exec('CREATE TABLE agent_workflows (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT, enabled INTEGER DEFAULT 1)');
         $db->exec('CREATE TABLE workflow_nodes (id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_id INTEGER, node_type TEXT, config TEXT)');
         $db->exec("CREATE TABLE workflow_edges (id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_id INTEGER, from_node_id INTEGER,
             to_node_id INTEGER, from_port TEXT DEFAULT 'output_1', to_port TEXT DEFAULT 'input_1')");
