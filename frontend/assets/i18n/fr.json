@@ -893,7 +893,7 @@
     "step2": "Connectez les nœuds en glissant des sorties vers les entrées",
     "step3": "Ajoutez des nœuds Début et Sortie pour définir le flux",
     "step4": "Enregistrez et exécutez votre workflow",
-    "batchWorkflowSettings": "Paramètres du workflow batch",
+    "batchWorkflowSettings": "Paramètres du workflow",
     "savedWorkflows": "Workflows Enregistrés",
     "newWorkflow": "Nouveau",
     "importWorkflow": "Importer",

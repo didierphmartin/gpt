@@ -893,7 +893,7 @@
     "step2": "Connect nodes by dragging from outputs to inputs",
     "step3": "Add Start and Output nodes to define flow",
     "step4": "Save and run your workflow",
-    "batchWorkflowSettings": "Batch Workflow Settings",
+    "batchWorkflowSettings": "Workflow Settings",
     "savedWorkflows": "Saved Workflows",
     "newWorkflow": "New",
     "importWorkflow": "Import",
