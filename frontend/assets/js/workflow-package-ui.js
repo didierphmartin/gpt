@@ -65,23 +65,28 @@
 
     /**
      * Folder not readable: explain, then ask for it (re-grant a lapsed permission, else pick the folder).
-     * Resolves when done or skipped; the export goes on either way (the summary then warns).
+     * opts.textKey / opts.skipKey: the explanation and the skip button's i18n keys (default: export's).
+     * Resolves true when the folder is readable afterwards, false when skipped, refused or unsupported.
+     * The export goes on either way (the summary then warns); the import stops on false.
      */
-    async function askFolderAccess(editor) {
-        if (!window.localFs || await folderReadable()) return;
+    async function askFolderAccess(editor, opts = {}) {
+        if (!window.localFs) return false;
+        if (await folderReadable()) return true;
         let status = { state: 'unsupported' };
         try { status = await window.localFs.getStatus(); } catch (_) { /* unsupported */ }
-        if (status.state === 'unsupported') return;
+        if (status.state === 'unsupported') return false;
         const t = (key) => esc(editor.t(`workflow.package.${key}`));
+        const textKey = opts.textKey || 'needFolderExport', skipKey = opts.skipKey || 'folderSkip';
+        let picked = false;
         await new Promise((resolve) => {
             document.body.insertAdjacentHTML('beforeend', `
                 <div id="workflow-package-folder-modal" class="workflow-results-overlay">
                     <div class="workflow-results-container" style="max-width: 520px;">
                         <div class="workflow-results-header"><h2 style="margin: 0;">📁 ${t('folderTitle')}</h2></div>
                         <div class="workflow-results-body" style="padding: 16px; display: flex; flex-direction: column; gap: 12px;">
-                            <div>${t('needFolder')}</div>
+                            <div>${t(textKey)}</div>
                             <div style="display: flex; gap: 8px; justify-content: flex-end;">
-                                <button data-folder-skip style="padding: 6px 14px; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer; font-size: 13px;">${t('folderSkip')}</button>
+                                <button data-folder-skip style="padding: 6px 14px; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer; font-size: 13px;">${t(skipKey)}</button>
                                 <button data-folder-pick style="padding: 6px 14px; background: #2563eb; color: #fff; border: 1px solid #1d4ed8; border-radius: 6px; cursor: pointer; font-size: 13px;">${t('folderPick')}</button>
                             </div>
                         </div>
@@ -96,9 +101,11 @@
                     const res = status.handle ? await window.localFs.regrantAccess() : null;
                     if (!res || !res.ok) await window.localFs.requestRootAccess('synergyAI');
                 } catch (e) { console.warn('[workflow-package] folder access:', e); }
+                picked = true;
                 done();
             };
         });
+        return picked && folderReadable();
     }
 
     /**
@@ -297,5 +304,5 @@
         };
     }
 
-    window.WorkflowPackageUI = { buildPackageBytes, exportPackage };
+    window.WorkflowPackageUI = { buildPackageBytes, exportPackage, askFolderAccess, folderReadable, esc };
 })();

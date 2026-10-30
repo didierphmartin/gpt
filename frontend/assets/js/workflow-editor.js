@@ -7241,7 +7241,7 @@ class WorkflowEditor {
 
         const input = document.createElement('input');
         input.type = 'file';
-        input.accept = 'application/json,.json';
+        input.accept = 'application/json,.json,application/zip,.zip';
         input.style.display = 'none';
 
         const done = () => {
@@ -7252,7 +7252,9 @@ class WorkflowEditor {
         input.addEventListener('change', async (e) => {
             const file = e.target.files?.[0];
             try {
-                if (file) await this._applyImportedWorkflow(JSON.parse(await file.text()));
+                // A .zip is a workflow package (with its dependencies): the review screen takes over.
+                if (file && /\.zip$/i.test(file.name)) await window.WorkflowPackageUI.importPackage(this, file);
+                else if (file) await this._applyImportedWorkflow(JSON.parse(await file.text()));
             } catch (err) {
                 console.error('[WorkflowEditor] Import failed:', err);
                 alert(`Import failed: ${err.message}`);
