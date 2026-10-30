@@ -269,8 +269,8 @@ access from outside is needed.
 
 For one person on their own computer.
 
-**You need:** Docker Desktop (or Docker Engine + Compose v2), and either your
-own LLM provider keys or an account with us (you can create one in the wizard).
+**You need:** Docker Desktop, [Rancher Desktop](#using-rancher-desktop) or
+Docker Engine + Compose v2, and either your own LLM provider keys or an account with us (you can create one in the wizard).
 
 1. **Get the files and start the app.**
 
@@ -291,6 +291,31 @@ own LLM provider keys or an account with us (you can create one in the wizard).
 
 4. **Optional: install the local runner** if you want to run compiled
    workflows. See *First run* below.
+
+### Using Rancher Desktop
+
+Rancher Desktop runs both Docker installs above, once it is set up for the
+`docker` command:
+
+1. **Windows only, before installing:** Rancher Desktop needs WSL2 and does
+   not install it — run `wsl --install` in an admin terminal and reboot first.
+2. **Start Rancher Desktop first,** every time, and wait until it has finished
+   starting before any `docker compose` command. Otherwise `docker` cannot
+   reach the engine.
+3. **Engine:** Preferences → **Container Engine** → **dockerd (moby)**, then
+   wait for the restart to finish. With **containerd**, `docker compose` fails
+   with `unable to get image 'gpt-web'`.
+4. **PATH:** Preferences → **Application** → **Environment** (**Path** in some
+   versions) → automatic. Rancher's `docker` and `docker compose` live in
+   `~/.rd/bin`. Open a new terminal afterwards.
+5. **Context:** `docker context ls` should mark `rancher-desktop` with `*`;
+   if not, run `docker context use rancher-desktop`.
+6. **Check:** `docker info` shows a `Server:` section and
+   `docker compose version` prints v2.x. Then run `docker compose up -d --build`.
+
+Kubernetes is not needed (Preferences → **Kubernetes** → off). If the build or
+MySQL runs out of memory, give the VM 4 GB or more (Preferences →
+**Virtual Machine**, or **WSL** on Windows).
 
 ### Corporate install (Docker on your intranet)
 
