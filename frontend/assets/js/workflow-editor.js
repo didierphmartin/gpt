@@ -1259,6 +1259,9 @@ class WorkflowEditor {
                 <button id="workflow-export-btn" class="workflow-io-btn" title="Export the current workflow as JSON">
                     📤 Export
                 </button>
+                <button id="workflow-package-export-btn" class="workflow-io-btn" title="${this.escapeHtml(this.t('workflow.package.exportTitle'))}">
+                    📦 ${this.escapeHtml(this.t('workflow.package.export'))}
+                </button>
             </div>
             <div class="workflow-btn-group">
                 <button id="workflow-save-btn" class="workflow-save-btn" title="Save Workflow">
@@ -1631,6 +1634,8 @@ class WorkflowEditor {
         if (importBtn) importBtn.onclick = () => this._handleImportWorkflow();
         const exportBtn = document.getElementById('workflow-export-btn');
         if (exportBtn) exportBtn.onclick = () => this._showWorkflowJson();
+        const packageBtn = document.getElementById('workflow-package-export-btn');
+        if (packageBtn) packageBtn.onclick = () => window.WorkflowPackageUI?.exportPackage(this);
 
         // Delete button handler
         const deleteBtn = document.getElementById('workflow-delete-btn');
@@ -7126,29 +7131,43 @@ class WorkflowEditor {
     }
 
     /**
-     * Show the JSON payload this workflow would POST to /api/v1/workflows on save.
-     * Reuses exportWorkflow() + the same payload assembly as saveWorkflow() so the
-     * preview is byte-for-byte what the backend receives.
+     * The export payload (what Save sends, plus the linked code components), with ingestion
+     * secrets stripped. Used by the JSON export and the package export.
+     * Returns { workflow, payload, stripped, codeComponents }.
      */
-    _showWorkflowJson() {
-        const existingModal = document.getElementById('workflow-json-modal');
-        if (existingModal) existingModal.remove();
-
+    async _buildWorkflowPayload() {
         const workflow = this.exportWorkflow();
+        const codeComponents = await this._bundleCodeComponents(workflow.nodes);
+        const { nodes, stripped } = WorkflowPackage.stripSecrets(workflow.nodes);
         const payload = {
             name: this.currentWorkflowName || 'My Workflow',
             description: this.currentWorkflowDescription || '',
             definition: {
                 runtime_mode: this.runtimeMode || 'batch',
                 llm_provider: this.runtimeMode === 'realtime' ? (this.audioLlmProvider || 'grok') : undefined,
-                nodes: workflow.nodes,
+                nodes,
                 edges: workflow.edges
             },
             triggers: { schedule: { enabled: this.scheduleEnabled } },
             output_storage_enabled: this.outputStorageEnabled ? 1 : 0,
             orchestration: this.orchestration,
-            output_folder: this.outputFolder || null
+            output_folder: this.outputFolder || null,
+            // The components the nodes link to, so the file imports where they do not exist (another account or install).
+            ...(codeComponents.length ? { code_components: codeComponents } : {})
         };
+        return { workflow, payload, stripped, codeComponents };
+    }
+
+    /**
+     * Show the JSON payload this workflow would POST to /api/v1/workflows on save.
+     * Reuses exportWorkflow() + the same payload assembly as saveWorkflow() so the
+     * preview is byte-for-byte what the backend receives.
+     */
+    async _showWorkflowJson() {
+        const existingModal = document.getElementById('workflow-json-modal');
+        if (existingModal) existingModal.remove();
+
+        const { workflow, payload } = await this._buildWorkflowPayload();
         const pretty = JSON.stringify(payload, null, 2);
         const method = this.currentWorkflowId ? 'PUT' : 'POST';
         const path = this.currentWorkflowId
@@ -7222,7 +7241,7 @@ class WorkflowEditor {
 
         const input = document.createElement('input');
         input.type = 'file';
-        input.accept = 'application/json,.json';
+        input.accept = 'application/json,.json,application/zip,.zip';
         input.style.display = 'none';
 
         const done = () => {
@@ -7233,7 +7252,9 @@ class WorkflowEditor {
         input.addEventListener('change', async (e) => {
             const file = e.target.files?.[0];
             try {
-                if (file) this._applyImportedWorkflow(JSON.parse(await file.text()));
+                // A .zip is a workflow package (with its dependencies): the review screen takes over.
+                if (file && /\.zip$/i.test(file.name)) await window.WorkflowPackageUI.importPackage(this, file);
+                else if (file) await this._applyImportedWorkflow(JSON.parse(await file.text()));
             } catch (err) {
                 console.error('[WorkflowEditor] Import failed:', err);
                 alert(`Import failed: ${err.message}`);
@@ -7256,14 +7277,16 @@ class WorkflowEditor {
      * Apply a parsed workflow JSON payload to the editor. Mirrors the
      * re-hydration done by loadWorkflow() but without hitting the backend.
      */
-    _applyImportedWorkflow(payload) {
+    async _applyImportedWorkflow(payload) {
         const def = payload?.definition || {};
-        const nodes = def.nodes;
+        let nodes = def.nodes;
         const edges = def.edges || [];
         if (!Array.isArray(nodes) || nodes.length === 0) {
             alert('Import failed: JSON has no definition.nodes array.');
             return;
         }
+        // Before the canvas is touched: a failure here leaves the current workflow as it was.
+        nodes = await this._importCodeComponents(payload.code_components, nodes);
 
         this.clearWorkflow(true);
         this.dbNodeToDrawflowMap = {};
@@ -7302,12 +7325,78 @@ class WorkflowEditor {
 
         this.importGraphFromBackend({ nodes, edges });
         this._refreshDecisionBadges().catch(() => {});
+        this._refreshMissingBadges().catch(() => {});
         this.restorePromptFromStartNode(nodes);
         this._applyOrchestrationToCanvas();
 
         this.updateWorkflowInfoBox();
         this.renderSavedWorkflowsList();
         this.hideHelpOverlay();
+    }
+
+    /**
+     * Export: the full definition of every code component a node links to -- a code node's
+     * code_component_id or a Start's start_option -- read from the library. A link whose
+     * component is gone is left out (the node is already shown as missing).
+     */
+    async _bundleCodeComponents(nodes) {
+        const CC = window.CodeComponents;
+        const ids = new Set();
+        for (const n of nodes) {
+            const cfg = n.config || {};
+            if (n.node_type === 'code' && cfg.code_component_id) ids.add(Number(cfg.code_component_id));
+            if (n.node_type === 'start' && cfg.start_option) ids.add(Number(cfg.start_option));
+        }
+        if (!ids.size || !CC) return [];
+        if ([...ids].some(id => !CC.cache.get(id))) await CC.cache.load(CC.api()).catch(() => {});
+        return [...ids].map(id => CC.cache.get(id)).filter(Boolean).map(r => ({
+            id: Number(r.id), name: r.name, description: r.description || '', code: r.code,
+            exits: [...r.exits], mcp_servers: [...r.mcp_servers], timeout_s: r.timeout_s,
+            args: [...(r.args || [])], provides: [...(r.provides || [])],
+            ...(r.start_trigger ? { start_trigger: r.start_trigger } : {}),
+        }));
+    }
+
+    /**
+     * Import: give every bundled component a row in this user's library and re-link the nodes to it.
+     * An identical component is reused -- the same id (the file comes from this account) or the same
+     * name; otherwise it is created, under "<name> (imported)" when the name is taken by a different one.
+     * Files exported before components were bundled come through unchanged.
+     */
+    async _importCodeComponents(bundle, nodes) {
+        if (!Array.isArray(bundle) || !bundle.length) return nodes;
+        const CC = window.CodeComponents;
+        await CC.cache.load(CC.api());
+        const rows = new Map();   // exported id -> this library's row
+        const created = [];
+        for (const b of bundle) {
+            let row = window.WorkflowPackage.matchComponent(b, CC.cache.all());
+            if (!row) {
+                let name = b.name;
+                for (let k = 1; CC.nameClash(name, null); k++) name = `${b.name} (imported${k > 1 ? ' ' + k : ''})`;
+                row = (await CC.api().create({ name, description: b.description || '', code: b.code, exits: b.exits,
+                    mcp_servers: b.mcp_servers, timeout_s: b.timeout_s, args: b.args || [], provides: b.provides || [] })).data;
+                if (b.start_trigger) row = (await CC.api().setStartOption(row.id, b.start_trigger)).data;
+                CC.cache.put(row);
+                created.push(row.name);
+            }
+            rows.set(Number(b.id), row);
+        }
+        if (created.length) {
+            this.showToast?.(`Added to your code library: ${created.join(', ')}`, 'info');
+        }
+        return nodes.map(n => {
+            const cfg = n.config || {};
+            const type = n.node_type || n.type;
+            const row = type === 'code' ? rows.get(Number(cfg.code_component_id))
+                : type === 'start' ? rows.get(Number(cfg.start_option)) : null;
+            if (!row) return n;
+            const config = type === 'code'
+                ? { ...cfg, ...CC.linkedNodeConfig(row, cfg.name), code_component_missing: false }
+                : { ...cfg, start_option: Number(row.id), exits: [...row.exits],
+                    start_option_label: row.start_trigger?.label || cfg.start_option_label, start_option_missing: false };
+            return { ...n, config };
+        });
     }
 
     /**
@@ -9842,7 +9931,8 @@ class WorkflowEditor {
 
     /** Only a broken link is shown: most nodes come from a library, and servers would not scale (the name says what it talks to). */
     _codeBadgesHtml(cfg) {
-        if (!cfg.code_component_id || !cfg.code_component_missing) return '';
+        // A package import clears a link it could not map (id null): still shown as missing.
+        if (!cfg.code_component_missing) return '';
         return `<span class="tool-badge" style="background:#fee2e2;color:#b91c1c;" title="${this.escapeHtml(this.t('codeLibrary.missingTitle'))}">📚 ${this.escapeHtml(this.t('codeLibrary.missing'))}</span>`;
     }
 
@@ -13784,6 +13874,7 @@ class WorkflowEditor {
                 if (workflowData.graph.nodes.some(n => (n.type || n.node_type || n.config?.type) === 'playbook')) await this._loadPlaybookCache();
                 this.importGraphFromBackend(workflowData.graph);
                 this._refreshDecisionBadges().catch(() => {});
+                this._refreshMissingBadges().catch(() => {});
 
                 // Restore prompt from start node if saved
                 this.restorePromptFromStartNode(workflowData.graph.nodes);
@@ -15359,7 +15450,7 @@ class WorkflowEditor {
     async _runNodeAsCodeUnit(id, nodes, userPrompt) {
         const d = nodes[id].data || {};
         if (d.code_component_missing) {
-            const r = window.CodeNode.failureResult(d.exits || ['next'], `Code component #${d.code_component_id} not found (node ${d.name || 'Code'}).`);
+            const r = window.CodeNode.failureResult(d.exits || ['next'], `Code component ${d.code_component_id ? '#' + d.code_component_id + ' ' : ''}not found (node ${d.name || 'Code'}).`);
             this.nodeExecutionData[id] = window.CodeNode.runData(r, { parents: [], user_prompt: userPrompt, name: d.name || 'Code', ts: Date.now() });
             this.highlightNode(id, 'error', id, 'agent');
             return r;
@@ -21266,6 +21357,54 @@ Based on the analysis...
         st.textContent = tf('decisionKeyMissing', { provider: label });
         st.className = 'text-sm text-amber-700';
         sw?.classList.remove('hidden');
+    }
+
+    /**
+     * One red "missing" chip per node that needs something this install lacks (skill, tool, MCP server,
+     * playbook); the tooltip lists it. Display only. A source that cannot be read is skipped, not badged.
+     */
+    async _refreshMissingBadges() {
+        const WP = window.WorkflowPackage;
+        if (!WP?.missingByNode) return;
+        const have = { skills: null, servers: null, tools: null, playbookIds: null };
+        const sk = window.skillsManager?.skills;
+        if (Array.isArray(sk) && sk.length) have.skills = sk.map((x) => x.dir_name).filter(Boolean);
+        try {
+            const { servers, toolServers } = await window.WorkflowPackageUI.loadServers();
+            // Without mcpClient loadServers returns empty lists, which would read as 'no servers exist'
+            // and badge every server use; leave them unknown (null) instead.
+            if (window.mcpClient) { have.servers = servers; have.tools = toolServers; }
+        } catch (e) { /* unknown: server checks are skipped */ }
+        const PC = window.PlaybookCollection;
+        if (PC) {
+            try {
+                if (!PC.cache.all().length) await PC.cache.load(this._playbookApi());
+                have.playbookIds = PC.cache.all().map((r) => Number(r.id));
+            } catch (e) { /* unknown: playbook checks are skipped */ }
+        }
+        // Read the canvas after the waits: a Save or another load may have replaced it meanwhile.
+        const missing = WP.missingByNode(this.exportWorkflow().nodes, have);
+        this.container?.querySelectorAll('.missing-badges').forEach((el) => el.remove());
+        for (const [id, items] of Object.entries(missing)) {
+            const box = document.querySelector(`#node-${id} .workflow-node`);
+            if (!box) continue;
+            const text = items.map((it) => {
+                const i = it.indexOf(':');
+                return this.t(`workflow.package.missing_${it.slice(0, i)}`, { name: it.slice(i + 1) });
+            }).join('; ');
+            const title = `${this.t('workflow.package.missingPrefix')} ${text}`;
+            const row = document.createElement('div');
+            row.className = 'missing-badges';
+            row.style.cssText = 'padding:0 8px 4px;display:flex;flex-wrap:wrap;max-width:230px;';
+            // Built without HTML strings: the title carries names from workflow/package data.
+            const chip = document.createElement('span');
+            chip.className = 'tool-badge';
+            chip.style.cssText = 'background:#fee2e2;color:#b91c1c;';
+            chip.title = title;
+            chip.textContent = `⚠ ${this.t('workflow.package.missing')}`;
+            row.appendChild(chip);
+            box.appendChild(row);
+        }
     }
 
     /** GET /dispatch/providers → {default, providers} or null when it cannot be read. `fresh` skips the per-run cache. */

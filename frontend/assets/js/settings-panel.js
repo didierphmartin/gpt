@@ -1090,6 +1090,8 @@ class SettingsPanel {
         if (urlInput) urlInput.value = server?.url || '';
         if (descInput) descInput.value = server?.description || '';
         if (authInput) authInput.value = '';
+        this._mcpEditOrigName = server?.name || null;
+        this.prefillMCPLocalFolder(this.editingServerId, server?.name || null);
 
         this.setMCPTestStatus('', null);
         urlInput?.addEventListener('input', () => this.setMCPTestStatus('', null), { once: true });
@@ -1139,6 +1141,9 @@ class SettingsPanel {
         if (authInput) authInput.value = '';
         const mockInput = document.getElementById('mcp-server-is-mock');
         if (mockInput) mockInput.checked = false;
+        const folderInput = document.getElementById('mcp-server-local-folder');
+        if (folderInput) folderInput.value = '';
+        this._mcpEditOrigName = null;
 
         this.setMCPTestStatus('', null);
 
@@ -1234,6 +1239,13 @@ class SettingsPanel {
             this.showNotification('Name and URL are required', 'warning');
             return;
         }
+        const folderInput = document.getElementById('mcp-server-local-folder');
+        const folder = folderInput && !folderInput.disabled ? folderInput.value.trim() : null;   // null = leave the map alone
+        if (folder && !this.isValidMCPLocalFolder(folder)) {
+            this.showNotification(this.t('settings.mcpLocalFolderInvalid'), 'warning');
+            return;
+        }
+        const origName = this._mcpEditOrigName;
 
         const saveBtn = document.getElementById('mcp-save-server');
         const originalText = saveBtn?.textContent;
@@ -1251,6 +1263,7 @@ class SettingsPanel {
             }
 
             if (result?.success) {
+                if (folder !== null) await this.saveMCPLocalFolder(origName, name, folder);
                 if (this.editingServerId) {
                     this.showNotification('Server updated', 'success');
                 } else {
@@ -1497,6 +1510,7 @@ class SettingsPanel {
 
         if (this.editingServerId) this.placeMCPForm();
         if (this.toolsServerId) this.showMCPServerTools(this.toolsServerId);
+        this.refreshMCPLocal(servers);
     }
 
     /** Markup for a server's list of functions (its info panel). */
@@ -1571,6 +1585,240 @@ class SettingsPanel {
         this.mcpServerList?.querySelectorAll('.mcp-server-functions').forEach(el => el.remove());
         this.mcpServerList?.querySelectorAll('.mcp-server-item.showing-functions')
             .forEach(el => el.classList.remove('showing-functions'));
+    }
+
+    // ---- Local MCP servers: <user folder>/mcps/servers.json maps a server name to mcps/<folder>/ ----
+
+    _escAttr(s) {
+        return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    /** i18n with {{params}} (this.t takes none). */
+    _tp(key, params) {
+        return window.i18n && typeof window.i18n.t === 'function' ? window.i18n.t(key, params) : key.split('.').pop();
+    }
+
+    /** One folder name under mcps/: the package installer's own rule (WorkflowPackage.isSafeSegment). */
+    isValidMCPLocalFolder(folder) {
+        return !!window.WorkflowPackage?.isSafeSegment && window.WorkflowPackage.isSafeSegment(folder);
+    }
+
+    /** map[name] only when it is the map's own entry (server names may be "__proto__", "constructor" ...). */
+    _ownEntry(map, name) {
+        return map && Object.prototype.hasOwnProperty.call(map, name) ? map[name] : undefined;
+    }
+
+    async _mcpFolderGranted() {
+        try { return (await window.localFs?.getStatus())?.state === 'granted'; } catch (_) { return false; }
+    }
+
+    async _readLocalText(path) {
+        const fh = await window.localFs.resolvePath(path, { kind: 'file' });
+        return fh ? (await fh.getFile()).text() : null;
+    }
+
+    async _writeLocalText(path, text) {
+        const fh = await window.localFs.resolvePath(path, { create: true, kind: 'file' });
+        if (!fh) throw new Error('cannot write');
+        const w = await fh.createWritable();
+        await w.write(text);
+        await w.close();
+    }
+
+    /** { name: folder } from mcps/servers.json (null-prototype); empty when absent. Throws when unreadable. */
+    async _readMCPServerMap() {
+        const out = Object.create(null);
+        const text = await this._readLocalText('mcps/servers.json');
+        if (!text) return out;
+        const map = JSON.parse(text);
+        if (map && typeof map === 'object' && !Array.isArray(map)) for (const k of Object.keys(map)) out[k] = map[k];
+        return out;
+    }
+
+    /** The edit form's Local folder field: enabled only with folder access, prefilled from the map. */
+    async prefillMCPLocalFolder(serverId, name) {
+        const input = document.getElementById('mcp-server-local-folder');
+        const hint = document.getElementById('mcp-server-local-folder-hint');
+        if (!input) return;
+        input.value = '';
+        input.disabled = true;
+        const granted = await this._mcpFolderGranted();
+        if (this.editingServerId !== serverId) return;   // the form moved on meanwhile
+        hint?.classList.toggle('hidden', granted);
+        if (!granted) return;
+        let map = Object.create(null);
+        try { map = await this._readMCPServerMap(); } catch (_) { /* unreadable map: start empty */ }
+        if (this.editingServerId !== serverId) return;
+        input.disabled = false;
+        const folder = name ? this._ownEntry(map, name) : undefined;
+        if (typeof folder === 'string') input.value = folder;
+    }
+
+    /** Write / move / remove this server's entry in mcps/servers.json after a save. */
+    async saveMCPLocalFolder(origName, name, folder) {
+        try {
+            const map = await this._readMCPServerMap();
+            const had = (origName && this._ownEntry(map, origName) !== undefined) || this._ownEntry(map, name) !== undefined;
+            if (!folder && !had) return;   // nothing recorded, nothing to record
+            if (origName && origName !== name) delete map[origName];
+            if (folder) map[name] = folder; else delete map[name];
+            await this._writeLocalText('mcps/servers.json', JSON.stringify(map, null, 2) + '\n');
+        } catch (e) {
+            console.warn('[settings:mcp] servers.json update failed:', e.message);
+            this.showNotification(this.t('settings.mcpLocalFolderSaveFailed'), 'warning');
+        }
+    }
+
+    /** One local server's manifest, declared settings and current values. */
+    async _readMCPLocalInfo(folder) {
+        const base = `mcps/${folder}`;
+        const info = { folder, fields: [], values: {}, manifest: null, missing: [], error: false };
+        try {
+            const [manText, exText, envText] = await Promise.all([
+                this._readLocalText(`${base}/synergyai-mcp.json`).catch(() => null),
+                this._readLocalText(`${base}/.env.example`).catch(() => null),
+                this._readLocalText(`${base}/.env`).catch(() => null),
+            ]);
+            info.manifest = manText ? JSON.parse(manText) : null;
+            info.fields = window.WorkflowPackage.envFields(info.manifest, exText || '');
+            info.values = window.WorkflowPackage.parseEnv(envText || '');
+            info.missing = window.WorkflowPackage.missingRequired(info.fields, info.values);
+        } catch (_) {
+            info.error = true;
+        }
+        return info;
+    }
+
+    /**
+     * After a render: read the map once, then only the mapped servers' folders, and decorate those rows
+     * (⚠ badge + the private-settings panel button). Any failure leaves the list as rendered.
+     */
+    async refreshMCPLocal(servers) {
+        const token = this._mcpLocalToken = (this._mcpLocalToken || 0) + 1;
+        this.mcpLocal = new Map();
+        if (!window.localFs || !window.WorkflowPackage || !(await this._mcpFolderGranted())) return;
+        let map;
+        try { map = await this._readMCPServerMap(); } catch (_) { return; }
+        const folderOf = (s) => this._ownEntry(map, s.name);
+        const local = (servers || []).filter(s => typeof folderOf(s) === 'string' && this.isValidMCPLocalFolder(folderOf(s)));
+        const infos = await Promise.all(local.map(s => this._readMCPLocalInfo(folderOf(s))));
+        if (token !== this._mcpLocalToken) return;   // re-rendered meanwhile
+        local.forEach((s, i) => {
+            this.mcpLocal.set(Number(s.id), infos[i]);
+            this._decorateMCPLocalRow(Number(s.id));
+        });
+        if (this.localServerId != null) {
+            if (this.mcpLocal.has(this.localServerId)) this.showMCPLocalPanel(this.localServerId);
+            else this.localServerId = null;
+        }
+    }
+
+    _decorateMCPLocalRow(id) {
+        const item = this.mcpServerList?.querySelector(`.mcp-server-item[data-server-id="${id}"]`);
+        const info = this.mcpLocal?.get(id);
+        if (!item || !info) return;
+        item.querySelector('.mcp-local-badge')?.remove();
+        if (!info.error && info.missing.length) {
+            const nameEl = item.querySelector('.mcp-server-name');
+            nameEl?.insertAdjacentHTML('beforeend',
+                `<span class="mcp-scope-badge mcp-local-badge" title="${this._escAttr(this._tp('settings.mcpSettingsMissingTitle', { names: info.missing.join(', ') }))}">⚠ ${this._escAttr(this.t('settings.mcpSettingsMissing'))}</span>`);
+        }
+        if (!item.querySelector('.mcp-server-btn.local')) {
+            const label = this._escAttr(this.t('settings.mcpLocalPanelButton'));
+            item.querySelector('.mcp-server-btn.info')?.insertAdjacentHTML('beforebegin',
+                `<button class="mcp-server-btn local" data-server-id="${id}" title="${label}" aria-label="${label}">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                </button>`);
+            item.querySelector('.mcp-server-btn.local')?.addEventListener('click', () => this.toggleMCPLocalPanel(id));
+        }
+    }
+
+    /** Key icon: expand the row with its private settings form and install / start commands; again collapses. */
+    toggleMCPLocalPanel(serverId) {
+        const id = Number(serverId);
+        const reopen = this.localServerId !== id;
+        this.hideMCPLocalPanel();
+        if (reopen) this.showMCPLocalPanel(id);
+    }
+
+    hideMCPLocalPanel() {
+        this.localServerId = null;
+        this.mcpServerList?.querySelectorAll('.mcp-server-local').forEach(el => el.remove());
+        this.mcpServerList?.querySelectorAll('.mcp-server-item.showing-local')
+            .forEach(el => el.classList.remove('showing-local'));
+    }
+
+    showMCPLocalPanel(id) {
+        const item = this.mcpServerList?.querySelector(`.mcp-server-item[data-server-id="${id}"]`);
+        const info = this.mcpLocal?.get(id);
+        const UI = window.WorkflowPackageUI;
+        if (!item || !info || !UI?.settingsFieldsHtml) { this.localServerId = null; return; }
+        this.localServerId = id;
+        const esc = (x) => this._escAttr(x);
+        const tp = (key, params) => esc(this._tp(`workflow.package.${key}`, params));   // reused import-form text
+        const tPlain = (key) => this._tp(`workflow.package.${key}`);
+        let body;
+        if (info.error) {
+            body = `<div class="text-sm text-gray-500">${esc(this.t('settings.mcpLocalUnreadable'))}</div>`;
+        } else {
+            // Defaults fill what the server's folder has no value for yet (display only; the badge uses saved values).
+            const shown = { ...Object.fromEntries(info.fields.map(f => [f.name, f.default])), ...info.values };
+            const form = info.fields.length
+                ? `<div class="mcp-local-form">${UI.settingsFieldsHtml(tp, info.fields, shown)}</div>
+                   <div class="mcp-local-actions"><button type="button" class="mcp-btn mcp-btn-primary" data-local-save>${esc(this.t('settings.mcpLocalSave'))}</button></div>`
+                : `<div class="text-sm text-gray-500">${esc(this.t('settings.mcpLocalNoSettings'))}</div>`;
+            const man = info.manifest || {};
+            const install = typeof man.install === 'string' ? man.install : '';
+            const start = typeof man.start === 'string' ? man.start : '';
+            const cmds = install || start
+                ? `<div class="mcp-local-commands"><div class="mcp-server-functions-title">${esc(this.t('settings.mcpLocalCommandsTitle'))}</div>
+                   <div class="text-sm text-gray-500">${tp('commandsHelp')}</div>
+                   ${UI.commandBlockHtml(tp, tp('installCommand'), install)}${UI.commandBlockHtml(tp, tp('startCommand'), start)}</div>`
+                : '';
+            body = `<div class="mcp-server-functions-title">${esc(this._tp('settings.mcpLocalPanelTitle', { folder: info.folder }))}</div>
+                <strong class="mcp-local-subtitle">${tp('settingsTitle')}</strong>${form}${cmds}`;
+        }
+        const panel = document.createElement('div');
+        panel.className = 'mcp-server-local';
+        panel.innerHTML = body;
+        item.querySelector('.mcp-server-local')?.remove();
+        item.classList.add('showing-local');
+        item.appendChild(panel);
+
+        panel.addEventListener('click', (e) => {
+            const toggle = e.target.closest('[data-toggle-secret]');
+            if (toggle) UI.toggleSecret(toggle, tPlain);
+        });
+        UI.wireCopyButtons(panel, tPlain);
+        panel.querySelector('[data-local-save]')?.addEventListener('click', () => this.saveMCPLocalSettings(id, panel));
+    }
+
+    /** Write the declared settings to the server's folder, keeping every other line already there, then refresh its badge. */
+    async saveMCPLocalSettings(id, panel) {
+        const info = this.mcpLocal?.get(id);
+        if (!info) return;
+        const values = Object.create(null);
+        for (const f of info.fields) {
+            const input = Array.from(panel.querySelectorAll('[data-value]')).find(el => el.dataset.value === f.name);
+            values[f.name] = input ? input.value : (this._ownEntry(info.values, f.name) ?? f.default);
+        }
+        const btn = panel.querySelector('[data-local-save]');
+        if (btn) btn.disabled = true;
+        try {
+            // Undeclared keys and comments in the file stay: only the declared keys' lines change.
+            const path = `mcps/${info.folder}/.env`;
+            const current = await this._readLocalText(path).catch(() => null);
+            await this._writeLocalText(path, window.WorkflowPackage.mergeEnv(current || '', values));
+            info.values = Object.assign(Object.create(null), info.values, values);
+            info.missing = window.WorkflowPackage.missingRequired(info.fields, values);
+            this._decorateMCPLocalRow(id);
+            this.showNotification(this.t('settings.mcpLocalSaved'), 'success');
+        } catch (e) {
+            console.warn('[settings:mcp] private settings write failed:', e.message);
+            this.showNotification(this.t('settings.mcpLocalSaveFailed'), 'error');
+        } finally {
+            if (btn) btn.disabled = false;
+        }
     }
 
     /**

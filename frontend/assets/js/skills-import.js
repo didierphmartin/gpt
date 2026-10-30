@@ -407,6 +407,31 @@
         return { ok: true, name: safeName, fileCount };
     }
 
+    /** The skill filter: junk, dotfiles (may hold secrets) and __pycache__ are left out. */
+    const skillEntryFilter = (entry) => !(isJunk(entry.name) || entry.name.startsWith('.') || entry.name === '__pycache__');
+
+    /**
+     * Every file under dirHandle as { "<prefix>/<relative path>": bytes } (no prefix: bare relative paths).
+     * filter(entry, path) is asked for each file and folder; false skips it (a folder is not entered).
+     * Default filter: the skill export's.
+     */
+    async function readFolderFiles(dirHandle, prefix = '', filter = skillEntryFilter) {
+        const files = {};
+        const walk = async (handle, base) => {
+            for await (const entry of handle.values()) {
+                const path = base ? `${base}/${entry.name}` : entry.name;
+                if (!filter(entry, path)) continue;
+                if (entry.kind === 'file') {
+                    files[path] = new Uint8Array(await (await entry.getFile()).arrayBuffer());
+                } else {
+                    await walk(entry, path);
+                }
+            }
+        };
+        await walk(dirHandle, prefix);
+        return files;
+    }
+
     /**
      * Export: zip <root>/skills/<dirName>/ with every file under one top-level
      * folder named after the skill, the layout importFromZipFile() reads back.
@@ -420,19 +445,7 @@
         const dir = window.localFs && await window.localFs.resolvePath(`skills/${dirName}`);
         if (!dir) return { ok: false, error: `Skill folder "${dirName}" not found.` };
 
-        const files = {};
-        const walk = async (handle, prefix) => {
-            for await (const entry of handle.values()) {
-                if (isJunk(entry.name) || entry.name.startsWith('.') || entry.name === '__pycache__') continue;
-                const path = `${prefix}/${entry.name}`;
-                if (entry.kind === 'file') {
-                    files[path] = new Uint8Array(await (await entry.getFile()).arrayBuffer());
-                } else {
-                    await walk(entry, path);
-                }
-            }
-        };
-        await walk(dir, dir.name);
+        const files = await readFolderFiles(dir, dir.name);
 
         const bytes = await new Promise((resolve, reject) => {
             window.fflate.zip(files, { level: 6 }, (err, data) => err ? reject(err) : resolve(data));
@@ -446,5 +459,6 @@
         importFromZipFile,    // exposed for drag-drop later
         importFromGitHub,
         exportSkillZip,
+        readFolderFiles,
     };
 })();

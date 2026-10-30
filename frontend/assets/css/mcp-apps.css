@@ -171,8 +171,54 @@
 
 /* Editing / showing functions: the row wraps and the panel opens full-width inside the rectangle */
 .mcp-server-item.editing,
-.mcp-server-item.showing-functions {
+.mcp-server-item.showing-functions,
+.mcp-server-item.showing-local {
     flex-wrap: wrap;
+}
+
+/* Local server: private settings + install / start commands, inside the rectangle */
+.mcp-server-local {
+    flex-basis: 100%;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color, #e0e0e0);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.mcp-server-local .mcp-local-subtitle {
+    font-size: 13px;
+}
+.mcp-server-local .mcp-local-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid var(--border-color, #e2e8f0);
+    border-radius: 6px;
+    background: var(--bg-primary, #fff);
+}
+.mcp-server-local .mcp-local-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+.mcp-server-local .mcp-local-commands {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.mcp-local-badge {
+    background: #fffbeb;
+    color: #92400e;
+    border: 1px solid #f59e0b;
+}
+.mcp-form-hint {
+    display: block;
+    margin-top: 3px;
+    font-size: 12px;
+    color: #64748b;
+}
+.mcp-form-hint.hidden {
+    display: none;
 }
 
 .mcp-server-functions {
