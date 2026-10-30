@@ -80,4 +80,61 @@ assert.ok(!inj.split('\n').some((l) => l.startsWith('INJECT=')));
 assert.throws(() => WP.renderEnv({ 'BAD-KEY': '1' }), /invalid setting name: BAD-KEY/);
 assert.deepStrictEqual(WP.selectServerFiles(['.secrets/.env.example', 'cfg/.env.example'], null), ['cfg/.env.example']);
 
-console.log('workflow-package: ok');
+
+// classify
+assert.strictEqual(WP.classify('server', { name: 'Workday', url: 'u' }, [{ name: ' workday ', url: 'u' }]).status, 'present');
+const sc = WP.classify('server', { name: 'Workday', url: 'u' }, [{ name: 'workday', url: 'v' }]);
+assert.strictEqual(sc.status, 'clash');
+assert.strictEqual(sc.match.url, 'v');
+assert.deepStrictEqual(WP.classify('server', { name: 'Other', url: 'u' }, [{ name: 'workday', url: 'u' }]), { status: 'install' });
+assert.strictEqual(WP.classify('playbook', { pkey: 'A', text: 't' }, [{ pkey: 'a', text: 't' }]).status, 'present');
+assert.strictEqual(WP.classify('playbook', { pkey: 'A', text: 't' }, [{ pkey: 'a', text: 'x' }]).status, 'clash');
+assert.strictEqual(WP.classify('playbook', { pkey: 'B', text: 't' }, [{ pkey: 'a', text: 't' }]).status, 'install');
+assert.strictEqual(WP.classify('skill', { dir: 'Pdf', hash: 'h' }, [{ dir: 'pdf', hash: 'h' }]).status, 'present');
+assert.strictEqual(WP.classify('skill', { dir: 'pdf', hash: 'h' }, [{ dir: 'pdf', hash: 'g' }]).status, 'clash');
+assert.strictEqual(WP.classify('skill', { dir: 'new', hash: 'h' }, []).status, 'install');
+
+// playbook md
+const pb = { pkey: 'k1', title: 'Reset: password', text: 'line\n---\nmore: x\n---\nend\n' };
+const md = WP.playbookToMd(pb);
+assert.ok(md.startsWith('---\npkey: k1\ntitle: Reset: password\n---\nline'));
+assert.deepStrictEqual(WP.mdToPlaybook(md), pb);
+assert.deepStrictEqual(WP.mdToPlaybook(WP.playbookToMd({ pkey: 'a', title: 'b', text: '' })), { pkey: 'a', title: 'b', text: '' });
+
+// relink
+const maps = {
+    serverNameByOldId: new Map([[7, 'Workday']]),
+    serverIdByName: new Map([['Workday', 42]]),
+    playbookIdByOldId: new Map([[3, 19]]),
+};
+const rnodes = [
+    { node_type: 'vectorstore', config: { store: 'mcp:7', x: 1 } },
+    { node_type: 'loader', config: { store: 'mcp:8' } },
+    { node_type: 'splitter', config: { store: 'mcp:7' } },
+    { node_type: 'playbook', playbook_id: 3 },
+    { node_type: 'agent', playbook_id: 3, name: 'a' },
+    { node_type: 'agent', playbook_id: 99 },
+    { node_type: 'output', config: {} },
+];
+const frozen = JSON.stringify(rnodes);
+const out = WP.relinkNodes(rnodes, maps);
+assert.strictEqual(JSON.stringify(rnodes), frozen);
+assert.strictEqual(out[0].config.store, 'mcp:42');
+assert.strictEqual(out[0].config.x, 1);
+assert.strictEqual(out[1].config.store, 'mcp:8');
+assert.strictEqual(out[2].config.store, 'mcp:42');
+assert.strictEqual(out[3].playbook_id, 19);
+assert.strictEqual(out[4].playbook_id, 19);
+assert.strictEqual(out[5].playbook_id, 99);
+assert.deepStrictEqual(out[6], rnodes[6]);
+
+(async () => {
+    const enc = (s) => new TextEncoder().encode(s);
+    const h1 = await WP.filesHash({ 'a.txt': enc('1'), 'b/c.txt': enc('2') });
+    const h2 = await WP.filesHash({ 'b/c.txt': enc('2'), 'a.txt': enc('1') });
+    const h3 = await WP.filesHash({ 'a.txt': enc('1'), 'b/c.txt': enc('3') });
+    assert.match(h1, /^[0-9a-f]{64}$/);
+    assert.strictEqual(h1, h2);
+    assert.notStrictEqual(h1, h3);
+    console.log('workflow-package: ok');
+})().catch((e) => { console.error(e); process.exit(1); });

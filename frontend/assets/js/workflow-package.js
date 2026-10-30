@@ -143,5 +143,69 @@
         return (fields || []).filter((f) => f.required && !String((values || {})[f.name] || '').trim()).map((f) => f.name);
     }
 
-    return { collectDependencies, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, envFields, renderEnv, missingRequired };
+    const norm = (v) => String(v === undefined || v === null ? '' : v).trim().toLowerCase();
+
+    /** present = identical item already here; clash = same name, different content; install = new. */
+    function classify(kind, incoming, existing) {
+        const nameKey = { server: 'name', playbook: 'pkey', skill: 'dir' }[kind];
+        if (!nameKey) throw new Error('unknown kind: ' + kind);
+        const match = (existing || []).find((e) => norm(e[nameKey]) === norm(incoming[nameKey]));
+        if (!match) return { status: 'install' };
+        let same;
+        if (kind === 'server') same = norm(match.name) === norm(incoming.name) && String(match.url || '').trim() === String(incoming.url || '').trim();
+        else if (kind === 'playbook') same = match.text === incoming.text;
+        else same = match.hash === incoming.hash;
+        return same ? { status: 'present', match } : { status: 'clash', match };
+    }
+
+    function playbookToMd(p) {
+        return `---\npkey: ${p.pkey}\ntitle: ${p.title}\n---\n${p.text}`;
+    }
+
+    function mdToPlaybook(md) {
+        const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/.exec(String(md));
+        if (!m) throw new Error('not a playbook file');
+        const out = { pkey: '', title: '', text: m[2] };
+        for (const line of m[1].split(/\r?\n/)) {
+            const i = line.indexOf(': ');
+            const key = i < 0 ? line.replace(/:$/, '') : line.slice(0, i);
+            if (key === 'pkey' || key === 'title') out[key] = i < 0 ? '' : line.slice(i + 2);
+        }
+        return { pkey: out.pkey, title: out.title, text: out.text };
+    }
+
+    /** Rewrite server / playbook ids to this install's ids; returns new nodes, inputs untouched. */
+    function relinkNodes(nodes, maps) {
+        const { serverNameByOldId, serverIdByName, playbookIdByOldId } = maps || {};
+        return (nodes || []).map((n) => {
+            const out = { ...n };
+            if (['loader', 'splitter', 'vectorstore'].includes(n.node_type) && n.config && typeof n.config.store === 'string') {
+                const m = /^mcp:(\d+)$/.exec(n.config.store);
+                const name = m && serverNameByOldId && serverNameByOldId.get(Number(m[1]));
+                const id = name !== undefined && serverIdByName ? serverIdByName.get(name) : undefined;
+                if (id !== undefined) out.config = { ...n.config, store: 'mcp:' + id };
+            }
+            if ((n.node_type === 'playbook' || n.node_type === 'agent') && n.playbook_id !== undefined && n.playbook_id !== null && playbookIdByOldId) {
+                const id = playbookIdByOldId.get(n.playbook_id);
+                if (id !== undefined) out.playbook_id = id;
+            }
+            return out;
+        });
+    }
+
+    /** SHA-256 hex over path-sorted entries: path \0 bytes \0. */
+    async function filesHash(files) {
+        const enc = new TextEncoder();
+        const parts = [];
+        for (const path of Object.keys(files).sort()) {
+            parts.push(enc.encode(path), new Uint8Array([0]), files[path], new Uint8Array([0]));
+        }
+        const buf = new Uint8Array(parts.reduce((a, p) => a + p.length, 0));
+        let off = 0;
+        for (const p of parts) { buf.set(p, off); off += p.length; }
+        const d = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', buf));
+        return Array.from(d, (b) => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    return { collectDependencies, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, envFields, renderEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash };
 });
