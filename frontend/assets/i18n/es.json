@@ -1487,7 +1487,6 @@
       "one": "1 DE {{total}}"
     },
     "package": {
-      "export": "Exportar con dependencias",
       "exportTitle": "Exportar el flujo de trabajo con las habilidades, servidores MCP, componentes de código y playbooks que necesita, en un solo .zip",
       "summaryTitle": "Exportar con dependencias",
       "needs": "Este flujo de trabajo necesita:",

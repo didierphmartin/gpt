@@ -1487,7 +1487,6 @@
       "one": "1 SUR {{total}}"
     },
     "package": {
-      "export": "Exporter avec les dépendances",
       "exportTitle": "Exporter le flux de travail avec les compétences, serveurs MCP, composants de code et playbooks dont il a besoin, en un seul .zip",
       "summaryTitle": "Exporter avec les dépendances",
       "needs": "Ce flux de travail a besoin de :",
