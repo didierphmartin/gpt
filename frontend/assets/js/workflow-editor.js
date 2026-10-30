@@ -1256,11 +1256,8 @@ class WorkflowEditor {
                 <button id="workflow-import-btn" class="workflow-io-btn" title="Import a workflow from a JSON file">
                     📥 Import
                 </button>
-                <button id="workflow-export-btn" class="workflow-io-btn" title="Export the current workflow as JSON">
+                <button id="workflow-export-btn" class="workflow-io-btn" title="${this.escapeHtml(this.t('workflow.package.exportTitle'))}">
                     📤 Export
-                </button>
-                <button id="workflow-package-export-btn" class="workflow-io-btn" title="${this.escapeHtml(this.t('workflow.package.exportTitle'))}">
-                    📦 ${this.escapeHtml(this.t('workflow.package.export'))}
                 </button>
             </div>
             <div class="workflow-btn-group">
@@ -1625,17 +1622,14 @@ class WorkflowEditor {
             }
         });
 
-        // Import / Export — JSON interchange. Export reuses the existing
-        // _showWorkflowJson() modal (with a Download .json button added);
-        // Import re-hydrates the canvas from a pasted/uploaded JSON file.
+        // Import / Export. Export builds the .zip package (the workflow and what it needs);
+        // Import takes a package or a workflow JSON file.
         // onclick (single slot), not addEventListener — this binding code re-runs
         // on re-init; addEventListener would stack listeners → duplicate pickers.
         const importBtn = document.getElementById('workflow-import-btn');
         if (importBtn) importBtn.onclick = () => this._handleImportWorkflow();
         const exportBtn = document.getElementById('workflow-export-btn');
-        if (exportBtn) exportBtn.onclick = () => this._showWorkflowJson();
-        const packageBtn = document.getElementById('workflow-package-export-btn');
-        if (packageBtn) packageBtn.onclick = () => window.WorkflowPackageUI?.exportPackage(this);
+        if (exportBtn) exportBtn.onclick = () => window.WorkflowPackageUI?.exportPackage(this);
 
         // Delete button handler
         const deleteBtn = document.getElementById('workflow-delete-btn');
@@ -7132,7 +7126,7 @@ class WorkflowEditor {
 
     /**
      * The export payload (what Save sends, plus the linked code components), with ingestion
-     * secrets stripped. Used by the JSON export and the package export.
+     * secrets stripped. Used by the JSON view and the package export.
      * Returns { workflow, payload, stripped, codeComponents }.
      */
     async _buildWorkflowPayload() {

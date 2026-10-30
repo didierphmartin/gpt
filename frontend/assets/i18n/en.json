@@ -1487,7 +1487,6 @@
       "one": "1 OF {{total}}"
     },
     "package": {
-      "export": "Export with dependencies",
       "exportTitle": "Export the workflow with the skills, MCP servers, code components and playbooks it needs, as one .zip",
       "summaryTitle": "Export with dependencies",
       "needs": "This workflow needs:",
