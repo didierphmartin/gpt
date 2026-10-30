@@ -111,9 +111,10 @@ const rnodes = [
     { node_type: 'vectorstore', config: { store: 'mcp:7', x: 1 } },
     { node_type: 'loader', config: { store: 'mcp:8' } },
     { node_type: 'splitter', config: { store: 'mcp:7' } },
-    { node_type: 'playbook', playbook_id: 3 },
-    { node_type: 'agent', playbook_id: 3, name: 'a' },
-    { node_type: 'agent', playbook_id: 99 },
+    { node_type: 'playbook', config: { playbook_id: 3 } },
+    { node_type: 'agent', config: { playbook_id: 3, name: 'a' } },
+    { node_type: 'agent', config: { playbook_id: 99 } },
+    { node_type: 'agent', config: { playbook_id: '3' } },
     { node_type: 'output', config: {} },
 ];
 const frozen = JSON.stringify(rnodes);
@@ -123,10 +124,12 @@ assert.strictEqual(out[0].config.store, 'mcp:42');
 assert.strictEqual(out[0].config.x, 1);
 assert.strictEqual(out[1].config.store, 'mcp:8');
 assert.strictEqual(out[2].config.store, 'mcp:42');
-assert.strictEqual(out[3].playbook_id, 19);
-assert.strictEqual(out[4].playbook_id, 19);
-assert.strictEqual(out[5].playbook_id, 99);
-assert.deepStrictEqual(out[6], rnodes[6]);
+assert.strictEqual(out[3].config.playbook_id, 19);
+assert.strictEqual(out[4].config.playbook_id, 19);
+assert.strictEqual(out[5].config.playbook_id, 99);
+assert.strictEqual(out[6].config.playbook_id, 19);
+assert.strictEqual(rnodes[6].config.playbook_id, '3');
+assert.deepStrictEqual(out[7], rnodes[7]);
 
 (async () => {
     const enc = (s) => new TextEncoder().encode(s);

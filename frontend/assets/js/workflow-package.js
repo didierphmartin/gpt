@@ -185,9 +185,10 @@
                 const id = name !== undefined && serverIdByName ? serverIdByName.get(name) : undefined;
                 if (id !== undefined) out.config = { ...n.config, store: 'mcp:' + id };
             }
-            if ((n.node_type === 'playbook' || n.node_type === 'agent') && n.playbook_id !== undefined && n.playbook_id !== null && playbookIdByOldId) {
-                const id = playbookIdByOldId.get(n.playbook_id);
-                if (id !== undefined) out.playbook_id = id;
+            if ((n.node_type === 'playbook' || n.node_type === 'agent') && n.config && playbookIdByOldId) {
+                const raw = n.config.playbook_id;
+                const id = raw === undefined || raw === null || raw === '' ? undefined : playbookIdByOldId.get(Number(raw));
+                if (id !== undefined) out.config = { ...(out.config || n.config), playbook_id: id };
             }
             return out;
         });
