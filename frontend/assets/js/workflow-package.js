@@ -262,5 +262,106 @@
         };
     }
 
-    return { collectDependencies, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, envFields, renderEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest };
+
+    const dec = (u8) => new TextDecoder().decode(u8);
+
+    /** Decode a package's entries ({path: Uint8Array}) into manifest, workflow, servers and the raw files. */
+    function readPackage(entries) {
+        const files = entries || {};
+        const json = (path, dflt) => { try { return files[path] ? JSON.parse(dec(files[path])) : dflt; } catch (e) { return dflt; } };
+        const manifest = json('manifest.json', null);
+        if (!manifest || manifest.format !== 'synergyai-workflow-package') throw new Error('not a workflow package');
+        const servers = json('mcps/servers.json', []);
+        return { manifest, workflow: json('workflow.json', null), servers: Array.isArray(servers) ? servers : [], files };
+    }
+
+    const componentContent = (c) => JSON.stringify([c.code, c.exits, c.mcp_servers, Number(c.timeout_s), c.args || [], c.provides || [], c.start_trigger || null]);
+
+    /** The existing component row this one equals (same id + content, else same name + content), or null. */
+    function matchComponent(item, rows) {
+        const list = rows || [];
+        const content = componentContent(item);
+        return list.find((r) => item.id !== undefined && item.id !== null && String(r.id) === String(item.id) && componentContent(r) === content)
+            || list.find((r) => norm(r.name) === norm(item.name) && componentContent(r) === content) || null;
+    }
+
+    function isLocalUrl(url) {
+        const m = /^[a-z][a-z0-9+.-]*:\/\/(?:[^/@]*@)?(\[[^\]]*\]|[^/:?#]*)/i.exec(String(url || '').trim());
+        return !!m && /^(localhost|127\.0\.0\.1|\[::1\]|.*\.localhost)$/i.test(m[1]);
+    }
+
+    /** One row per thing the package brings, with its status against what the user already has. */
+    async function reviewRows(pkg, have) {
+        const h = have || {};
+        const files = pkg.files || {};
+        const deps = (pkg.manifest && pkg.manifest.dependencies) || [];
+        const rows = [];
+        const base = (kind, name, destination) => ({ kind, name, status: 'install', destination, reasons: [], choice: null });
+
+        // skills: every folder holding a SKILL.md under skills/
+        const dirs = Object.keys(files).filter((p) => /^skills\/.+\/SKILL\.md$/.test(p)).map((p) => p.slice(7, -9));
+        for (const dir of dirs) {
+            const prefix = `skills/${dir}/`;
+            const own = {};
+            for (const p of Object.keys(files)) if (p.startsWith(prefix)) own[p.slice(prefix.length)] = files[p];
+            const r = base('skill', dir, `skills/${dir}`);
+            r.status = classify('skill', { dir, hash: await filesHash(own) }, h.skills).status;
+            rows.push(r);
+        }
+
+        for (const s of pkg.servers || []) {
+            const dep = deps.find((d) => d.kind === 'server' && d.name === s.name);
+            const folder = s.local ? ((dep && dep.folder) ? dep.folder.replace(/\/$/, '') : `mcps/${s.name}`) : null;
+            const r = base('server', s.name, folder);
+            if (folder) {
+                const mj = files[`${folder}/synergyai-mcp.json`], ex = files[`${folder}/.env.example`];
+                let man = null;
+                try { man = mj ? JSON.parse(dec(mj)) : null; } catch (e) { man = null; }
+                const fields = envFields(man, ex ? dec(ex) : '');
+                if (fields.some((f) => f.required)) { r.reasons.push('settings-required'); r.envFields = fields; }
+            }
+            if (isLocalUrl(s.url)) { r.reasons.push('localhost-url'); r.url = s.url; }
+            if (s.needs_auth) r.reasons.push('needs-key');
+            if (s.global) r.reasons.push('global-server');
+            const cls = classify('server', s, h.servers).status;
+            r.status = cls === 'clash' ? 'clash' : r.reasons.some((x) => x !== 'global-server') ? 'attention' : cls;
+            rows.push(r);
+        }
+
+        for (const dep of deps.filter((d) => d.kind === 'component')) {
+            const r = base('component', dep.name, null);
+            const item = files[dep.file] ? JSON.parse(dec(files[dep.file])) : null;
+            if (item) {
+                if (matchComponent(item, h.components)) r.status = 'present';
+                else if ((h.components || []).some((c) => norm(c.name) === norm(item.name || dep.name))) r.reasons.push('renamed');
+            }
+            rows.push(r);
+        }
+
+        for (const dep of deps.filter((d) => d.kind === 'playbook')) {
+            const r = base('playbook', dep.pkey || dep.name, null);
+            if (files[dep.file]) r.status = classify('playbook', mdToPlaybook(dec(files[dep.file])), h.playbooks).status;
+            rows.push(r);
+        }
+
+        const stripped = (pkg.manifest && pkg.manifest.strippedSecrets) || [];
+        if (stripped.length) rows.push({ kind: 'secrets', name: 'workflow keys', status: 'attention', destination: null, reasons: ['workflow-keys'], choice: null, fields: stripped });
+        return rows;
+    }
+
+    /** May the import start? Clashes need a choice; required private settings need a value or "fill later". */
+    function canConfirm(rows, values) {
+        const vals = values || {};
+        return (rows || []).every((r) => {
+            if (r.choice === 'skip') return true;
+            if (r.status === 'clash' && r.choice === null) return false;
+            if (r.envFields && r.choice !== 'use-existing') {
+                const v = vals[r.name] || {};
+                if (missingRequired(r.envFields, v).length && !v.fillLater) return false;
+            }
+            return true;
+        });
+    }
+
+    return { collectDependencies, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, envFields, renderEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest, readPackage, matchComponent, reviewRows, canConfirm };
 });

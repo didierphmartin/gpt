@@ -181,5 +181,79 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
     assert.match(h1, /^[0-9a-f]{64}$/);
     assert.strictEqual(h1, h2);
     assert.notStrictEqual(h1, h3);
+
+    // ---- Task 6: reader + review model
+    const J = (o) => enc(JSON.stringify(o));
+    assert.throws(() => WP.readPackage({ 'SKILL.md': enc('x') }), /not a workflow package/);
+    assert.throws(() => WP.readPackage({ 'manifest.json': J({ format: 'other' }) }), /not a workflow package/);
+    const comp = { id: 12, name: 'Make PDF', code: 'c', exits: ['ok'], mcp_servers: [], timeout_s: 30, args: [], provides: [], start_trigger: null };
+    const pbText = WP.playbookToMd({ pkey: 'triage', title: 'Triage', text: 'body' });
+    const entries = {
+        'manifest.json': J({ format: 'synergyai-workflow-package', version: 1, workflow: { name: 'W' }, strippedSecrets: [{ node: '5', field: 'api_key' }],
+            dependencies: [
+                { kind: 'component', name: 'Make PDF', old_id: 12, file: 'components/Make_PDF.json' },
+                { kind: 'playbook', name: 'Triage', pkey: 'triage', old_id: 3, file: 'playbooks/triage.md' },
+            ] }),
+        'workflow.json': J({ definition: { nodes: [] } }),
+        'mcps/servers.json': J([
+            { name: 'Outlook', url: 'http://localhost:8765/mcp', transport: 'http', needs_auth: true, global: false, local: true },
+            { name: 'Hosted', url: 'https://x.example/mcp', transport: 'http', needs_auth: false, global: true, local: false },
+        ]),
+        'mcps/Outlook/.env.example': enc('# Tenant\nTENANT_ID=\n'),
+        'mcps/Outlook/main.py': enc('x'),
+        'skills/GEO/geo-compare/SKILL.md': enc('skill'),
+        'components/Make_PDF.json': J(comp),
+        'playbooks/triage.md': enc(pbText),
+    };
+    const pkg = WP.readPackage(entries);
+    assert.strictEqual(pkg.servers.length, 2);
+    assert.strictEqual(pkg.workflow.definition.nodes.length, 0);
+    assert.deepStrictEqual(WP.readPackage({ 'manifest.json': J({ format: 'synergyai-workflow-package' }) }).servers, []);
+    const skillHash = await WP.filesHash({ 'SKILL.md': enc('skill') });
+    let rows = await WP.reviewRows(pkg, { servers: [], playbooks: [], skills: [], components: [] });
+    const row = (k, n) => rows.find((r) => r.kind === k && r.name === n);
+    const out = row('server', 'Outlook');
+    assert.strictEqual(out.status, 'attention');
+    assert.deepStrictEqual(out.reasons, ['localhost-url', 'needs-key']);
+    assert.strictEqual(out.url, 'http://localhost:8765/mcp');
+    assert.strictEqual(out.destination, 'mcps/Outlook');
+    assert.strictEqual(row('server', 'Hosted').destination, null);
+    assert.deepStrictEqual(row('server', 'Hosted').reasons, ['global-server']);
+    assert.strictEqual(row('server', 'Hosted').status, 'install');
+    assert.strictEqual(row('skill', 'GEO/geo-compare').destination, 'skills/GEO/geo-compare');
+    assert.strictEqual(row('component', 'Make PDF').status, 'install');
+    assert.strictEqual(row('secrets', 'workflow keys').status, 'attention');
+    assert.deepStrictEqual(row('secrets', 'workflow keys').fields, [{ node: '5', field: 'api_key' }]);
+    // settings-required for a required env field
+    const pkg2 = WP.readPackage({ ...entries, 'mcps/Outlook/synergyai-mcp.json': J({ env: [{ name: 'TENANT_ID', required: true }] }) });
+    rows = await WP.reviewRows(pkg2, { servers: [], playbooks: [], skills: [], components: [] });
+    assert.ok(row('server', 'Outlook').reasons.includes('settings-required'));
+    assert.strictEqual(row('server', 'Outlook').envFields[0].name, 'TENANT_ID');
+    assert.strictEqual(WP.canConfirm(rows, {}), false);
+    assert.strictEqual(WP.canConfirm(rows, { Outlook: { TENANT_ID: 't' } }), true);
+    assert.strictEqual(WP.canConfirm(rows, { Outlook: { fillLater: true } }), true);
+    // secrets row never blocks
+    assert.strictEqual(WP.canConfirm([{ kind: 'secrets', status: 'attention', choice: null, reasons: ['workflow-keys'] }], {}), true);
+    // present / clash
+    rows = await WP.reviewRows(pkg, { servers: [{ name: 'hosted', url: 'https://x.example/mcp' }, { name: 'Outlook', url: 'http://other' }],
+        playbooks: [{ pkey: 'triage', text: 'body' }], skills: [{ dir: 'GEO/geo-compare', hash: skillHash }], components: [comp] });
+    assert.strictEqual(row('skill', 'GEO/geo-compare').status, 'present');
+    assert.strictEqual(row('component', 'Make PDF').status, 'present');
+    assert.strictEqual(row('playbook', 'triage').status, 'present');
+    assert.strictEqual(row('server', 'Hosted').status, 'present');
+    assert.strictEqual(row('server', 'Outlook').status, 'clash');
+    assert.deepStrictEqual(row('server', 'Outlook').reasons, ['localhost-url', 'needs-key']);
+    assert.strictEqual(WP.canConfirm(rows, {}), false);
+    row('server', 'Outlook').choice = 'use-existing';
+    assert.strictEqual(WP.canConfirm(rows, {}), true);
+    row('server', 'Outlook').choice = null;
+    row('server', 'Outlook').choice = 'skip';
+    assert.strictEqual(WP.canConfirm(rows, {}), true);
+    // component renamed
+    rows = await WP.reviewRows(pkg, { servers: [], playbooks: [], skills: [], components: [{ ...comp, id: 99, code: 'different' }] });
+    assert.deepStrictEqual(row('component', 'Make PDF').reasons, ['renamed']);
+    assert.strictEqual(row('component', 'Make PDF').status, 'install');
+    assert.strictEqual(WP.matchComponent(comp, [{ ...comp, id: 7, name: ' make pdf ' }]).id, 7);
+    assert.strictEqual(WP.matchComponent(comp, [{ ...comp, id: 7, code: 'z' }]), null);
     console.log('workflow-package: ok');
 })().catch((e) => { console.error(e); process.exit(1); });
