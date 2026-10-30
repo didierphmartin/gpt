@@ -7130,11 +7130,12 @@ class WorkflowEditor {
      * Reuses exportWorkflow() + the same payload assembly as saveWorkflow() so the
      * preview is byte-for-byte what the backend receives.
      */
-    _showWorkflowJson() {
+    async _showWorkflowJson() {
         const existingModal = document.getElementById('workflow-json-modal');
         if (existingModal) existingModal.remove();
 
         const workflow = this.exportWorkflow();
+        const codeComponents = await this._bundleCodeComponents(workflow.nodes);
         const payload = {
             name: this.currentWorkflowName || 'My Workflow',
             description: this.currentWorkflowDescription || '',
@@ -7147,7 +7148,9 @@ class WorkflowEditor {
             triggers: { schedule: { enabled: this.scheduleEnabled } },
             output_storage_enabled: this.outputStorageEnabled ? 1 : 0,
             orchestration: this.orchestration,
-            output_folder: this.outputFolder || null
+            output_folder: this.outputFolder || null,
+            // The components the nodes link to, so the file imports where they do not exist (another account or install).
+            ...(codeComponents.length ? { code_components: codeComponents } : {})
         };
         const pretty = JSON.stringify(payload, null, 2);
         const method = this.currentWorkflowId ? 'PUT' : 'POST';
@@ -7233,7 +7236,7 @@ class WorkflowEditor {
         input.addEventListener('change', async (e) => {
             const file = e.target.files?.[0];
             try {
-                if (file) this._applyImportedWorkflow(JSON.parse(await file.text()));
+                if (file) await this._applyImportedWorkflow(JSON.parse(await file.text()));
             } catch (err) {
                 console.error('[WorkflowEditor] Import failed:', err);
                 alert(`Import failed: ${err.message}`);
@@ -7256,14 +7259,16 @@ class WorkflowEditor {
      * Apply a parsed workflow JSON payload to the editor. Mirrors the
      * re-hydration done by loadWorkflow() but without hitting the backend.
      */
-    _applyImportedWorkflow(payload) {
+    async _applyImportedWorkflow(payload) {
         const def = payload?.definition || {};
-        const nodes = def.nodes;
+        let nodes = def.nodes;
         const edges = def.edges || [];
         if (!Array.isArray(nodes) || nodes.length === 0) {
             alert('Import failed: JSON has no definition.nodes array.');
             return;
         }
+        // Before the canvas is touched: a failure here leaves the current workflow as it was.
+        nodes = await this._importCodeComponents(payload.code_components, nodes);
 
         this.clearWorkflow(true);
         this.dbNodeToDrawflowMap = {};
@@ -7308,6 +7313,78 @@ class WorkflowEditor {
         this.updateWorkflowInfoBox();
         this.renderSavedWorkflowsList();
         this.hideHelpOverlay();
+    }
+
+    /**
+     * Export: the full definition of every code component a node links to -- a code node's
+     * code_component_id or a Start's start_option -- read from the library. A link whose
+     * component is gone is left out (the node is already shown as missing).
+     */
+    async _bundleCodeComponents(nodes) {
+        const CC = window.CodeComponents;
+        const ids = new Set();
+        for (const n of nodes) {
+            const cfg = n.config || {};
+            if (n.node_type === 'code' && cfg.code_component_id) ids.add(Number(cfg.code_component_id));
+            if (n.node_type === 'start' && cfg.start_option) ids.add(Number(cfg.start_option));
+        }
+        if (!ids.size || !CC) return [];
+        if ([...ids].some(id => !CC.cache.get(id))) await CC.cache.load(CC.api()).catch(() => {});
+        return [...ids].map(id => CC.cache.get(id)).filter(Boolean).map(r => ({
+            id: Number(r.id), name: r.name, description: r.description || '', code: r.code,
+            exits: [...r.exits], mcp_servers: [...r.mcp_servers], timeout_s: r.timeout_s,
+            args: [...(r.args || [])], provides: [...(r.provides || [])],
+            ...(r.start_trigger ? { start_trigger: r.start_trigger } : {}),
+        }));
+    }
+
+    /**
+     * Import: give every bundled component a row in this user's library and re-link the nodes to it.
+     * An identical component is reused -- the same id (the file comes from this account) or the same
+     * name; otherwise it is created, under "<name> (imported)" when the name is taken by a different one.
+     * Files exported before components were bundled come through unchanged.
+     */
+    async _importCodeComponents(bundle, nodes) {
+        if (!Array.isArray(bundle) || !bundle.length) return nodes;
+        const CC = window.CodeComponents;
+        await CC.cache.load(CC.api());
+        const content = (c) => JSON.stringify([c.code, c.exits, c.mcp_servers, Number(c.timeout_s),
+            c.args || [], c.provides || [], c.start_trigger || null]);
+        const rows = new Map();   // exported id -> this library's row
+        const created = [];
+        for (const b of bundle) {
+            const want = content(b);
+            let row = CC.cache.get(b.id);
+            if (!row || content(row) !== want) {
+                row = CC.cache.all().find(r => String(r.name).trim().toLowerCase() === String(b.name).trim().toLowerCase()
+                    && content(r) === want) || null;
+            }
+            if (!row) {
+                let name = b.name;
+                for (let k = 1; CC.nameClash(name, null); k++) name = `${b.name} (imported${k > 1 ? ' ' + k : ''})`;
+                row = (await CC.api().create({ name, description: b.description || '', code: b.code, exits: b.exits,
+                    mcp_servers: b.mcp_servers, timeout_s: b.timeout_s, args: b.args || [], provides: b.provides || [] })).data;
+                if (b.start_trigger) row = (await CC.api().setStartOption(row.id, b.start_trigger)).data;
+                CC.cache.put(row);
+                created.push(row.name);
+            }
+            rows.set(Number(b.id), row);
+        }
+        if (created.length) {
+            this.showToast?.(`Added to your code library: ${created.join(', ')}`, 'info');
+        }
+        return nodes.map(n => {
+            const cfg = n.config || {};
+            const type = n.node_type || n.type;
+            const row = type === 'code' ? rows.get(Number(cfg.code_component_id))
+                : type === 'start' ? rows.get(Number(cfg.start_option)) : null;
+            if (!row) return n;
+            const config = type === 'code'
+                ? { ...cfg, ...CC.linkedNodeConfig(row, cfg.name), code_component_missing: false }
+                : { ...cfg, start_option: Number(row.id), exits: [...row.exits],
+                    start_option_label: row.start_trigger?.label || cfg.start_option_label, start_option_missing: false };
+            return { ...n, config };
+        });
     }
 
     /**
