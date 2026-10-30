@@ -7515,12 +7515,14 @@ class WorkflowEditor {
      * The prompt box, with the schedule fields when `schedule` (Start's "Set Schedule"). How the workflow starts is
      * chosen on the Start node itself (_renderStartNodeOptions); this form holds the prompt and the schedule details.
      */
-    showPromptForm(callback = null, { schedule: withSchedule = false } = {}) {
+    showPromptForm(callback = null, { schedule: withSchedule = false, play = false } = {}) {
         // Remove existing modal if any
         const existingModal = document.getElementById('prompt-form-modal');
         if (existingModal) existingModal.remove();
 
-        const buttonText = callback ? this.t('workflow.promptForm.run') : this.t('workflow.promptForm.save');
+        // play: the Enter Prompt door -- the box starts empty and Play runs what is typed; nothing is saved.
+        const buttonText = play ? `▶ ${this.t('workflow.promptForm.play')}`
+            : callback ? this.t('workflow.promptForm.run') : this.t('workflow.promptForm.save');
         const isRunMode = !!callback;
 
         // Get current schedule data
@@ -7560,7 +7562,7 @@ class WorkflowEditor {
                             id="prompt-form-textarea"
                             style="width: 100%; min-height: 120px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; resize: vertical; font-family: inherit; margin-bottom: 16px;"
                             placeholder="${this.t('workflow.promptForm.placeholder')}"
-                        >${this.lastUserPrompt || schedule.input_prompt || ''}</textarea>
+                        >${play ? '' : (this.lastUserPrompt || schedule.input_prompt || '')}</textarea>
 
                         <!-- Schedule Section -->
                         <div id="schedule-section" style="border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-bottom: 16px; background: #f9fafb; display: ${scheduleEnabled ? 'block' : 'none'};">
@@ -7778,6 +7780,12 @@ class WorkflowEditor {
         // Handle submit
         submitBtn.addEventListener('click', () => {
             const prompt = textarea.value.trim();
+            if (play) {
+                if (!prompt) { textarea.focus(); return; }
+                modal.remove();
+                callback(prompt);
+                return;
+            }
             modal.remove();
             // Always persist the prompt to the start node so it's available
             // for code generation and future sessions.
@@ -10620,7 +10628,9 @@ class WorkflowEditor {
     async _switchStart(key, { open = false } = {}) {
         const CC = window.CodeComponents;
         const t = (k, p) => this.t(`workflow.startOptions.${k}`, p);
+        // Enter Prompt is a run door like ▶: an empty prompt and Play, which sends it to the conversation.
         const openForm = () => (typeof key === 'number' ? this._openStartArgsDialog(key)
+            : key === 'prompt' ? this.showPromptForm((prompt) => this._playPrompt(prompt), { play: true })
             : this.showPromptForm(null, { schedule: key === 'schedule' }));
         this.container.querySelectorAll('.node-start-options input[data-start]').forEach((b) => { b.disabled = true; });
         try {
@@ -17254,6 +17264,18 @@ class WorkflowEditor {
                 + ` on its run server${left.base ? ` (${left.base})` : ''}.`
                 + ` Use "Stop the run server" in that framework's menu to end it.`);
         }
+    }
+
+    /**
+     * Play from the Enter Prompt form: open the conversation and send the prompt through its composer, so
+     * the feed shows the prompt, then the answer -- the same turn as typing it there.
+     */
+    async _playPrompt(prompt) {
+        await this._openBatchSession();
+        const input = document.getElementById('pb-ov-input');
+        if (this._pbSessionMode !== 'batch' || !input) return;   // refused (a locked robot workflow): no conversation
+        input.value = prompt;
+        document.getElementById('pb-ov-send')?.click();
     }
 
     /**

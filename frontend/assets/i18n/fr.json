@@ -904,7 +904,8 @@
       "title": "Prompt Utilisateur",
       "placeholder": "Entrez votre prompt ici...",
       "save": "Enregistrer",
-      "run": "Exécuter le Workflow"
+      "run": "Exécuter le Workflow",
+      "play": "Lancer"
     },
     "codeAssist": {
       "title": "Assistant",
