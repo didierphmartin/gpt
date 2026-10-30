@@ -38,4 +38,13 @@ assert.deepStrictEqual(d4.playbooks, [3]);
 assert.strictEqual(d4.playbookAtRunTime, false);
 assert.deepStrictEqual(d4.servers, []);
 
+// stripSecrets: connection secrets removed, input untouched
+const orig = [{ id: '5', node_type: 'vectorstore', config: { connection: { url: 'u', api_key: 'K', collection: 'c' } } }];
+const ss = WP.stripSecrets(orig);
+assert.deepStrictEqual(ss.nodes[0].config.connection, { url: 'u', collection: 'c' });
+assert.deepStrictEqual(ss.stripped, [{ node: '5', field: 'api_key' }]);
+assert.strictEqual(orig[0].config.connection.api_key, 'K');
+assert.ok(WP.SECRET_FIELD_RE.test('Password'));
+assert.deepStrictEqual(WP.stripSecrets([{ id: '1', node_type: 'agent', config: {} }]).stripped, []);
+
 console.log('workflow-package: ok');

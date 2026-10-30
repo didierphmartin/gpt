@@ -7142,7 +7142,7 @@ class WorkflowEditor {
             definition: {
                 runtime_mode: this.runtimeMode || 'batch',
                 llm_provider: this.runtimeMode === 'realtime' ? (this.audioLlmProvider || 'grok') : undefined,
-                nodes: workflow.nodes,
+                nodes: WorkflowPackage.stripSecrets(workflow.nodes).nodes,
                 edges: workflow.edges
             },
             triggers: { schedule: { enabled: this.scheduleEnabled } },

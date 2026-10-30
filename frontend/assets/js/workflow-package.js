@@ -60,5 +60,23 @@
         };
     }
 
-    return { collectDependencies };
+    const SECRET_FIELD_RE = /key|secret|token|password|passwd|credential/i;
+
+    /** Copy of `nodes` with secret-looking fields removed from each config.connection; input untouched. */
+    function stripSecrets(nodes) {
+        const stripped = [];
+        const out = (nodes || []).map((node) => {
+            const conn = node && node.config && node.config.connection;
+            if (!conn || typeof conn !== 'object') return node;
+            const clean = {};
+            for (const [k, v] of Object.entries(conn)) {
+                if (SECRET_FIELD_RE.test(k)) stripped.push({ node: node.id, field: k });
+                else clean[k] = v;
+            }
+            return { ...node, config: { ...node.config, connection: clean } };
+        });
+        return { nodes: out, stripped };
+    }
+
+    return { collectDependencies, SECRET_FIELD_RE, stripSecrets };
 });
