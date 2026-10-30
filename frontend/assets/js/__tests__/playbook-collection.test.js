@@ -26,6 +26,10 @@ assert.deepStrictEqual(nd, { type: 'playbook', node_type: 'playbook', name: 'Okt
     agent_provider: '', model: 'm', mcp_servers: [], writes_enabled: true, disabled: false });
 assert.strictEqual(PC.nodeData({ writes_enabled: false }).writes_enabled, false);
 assert.strictEqual(PC.nodeData(null).name, 'Playbook');
+// a package import's cleared link: the flag stays until the node links a playbook again
+assert.strictEqual(PC.nodeData({ playbook_id: null, playbook_missing: true }).playbook_missing, true);
+assert.strictEqual(PC.nodeData({ playbook_id: 4, playbook_missing: true }).playbook_missing, undefined);
+assert.strictEqual(PC.nodeData({}).playbook_missing, undefined);
 assert.strictEqual(PC.nodeData(null).playbook_id, null);
 
 // Summary and badges read the text from the cache; a missing id says so.

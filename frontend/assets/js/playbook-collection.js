@@ -125,6 +125,8 @@
         if (Array.isArray(c.exits) && c.exits.length) d.exits = [...c.exits];
         if (c.policy !== undefined) d.policy = c.policy;       // run settings carried by the migration
         if (c.approvers !== undefined) d.approvers = c.approvers;
+        // A package import cleared a link it could not map: kept until the node is linked again.
+        if (!d.playbook_id && c.playbook_missing === true) d.playbook_missing = true;
         return d;
     }
     // A JSON-object node playbook as console text (twin of PlaybookMigration::render).

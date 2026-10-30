@@ -26,7 +26,10 @@
     const BTN_PLAIN = `${BTN} background: #fff; border: 1px solid #cbd5e1;`;
     const BTN_ON = `${BTN} background: #eff6ff; border: 1px solid #2563eb; color: #1d4ed8; font-weight: 600;`;
     const INPUT = 'padding: 5px 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; min-width: 0; flex: 1;';
-    const SKILL_RE = /^skills\/.+\/SKILL\.md$/;   // the same skill folders reviewRows sees
+    /** values[name] when it is values' own (row names come from the package: "__proto__" ...). */
+    const own = (o, k) => (o && Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined);
+    /** The per-row values object, created null-prototype on first use. */
+    const rowValues = (values, name) => own(values, name) || (values[name] = Object.create(null));
 
     /** The io installPackage writes through: the user's folder, the server list, playbooks, components. */
     function defaultIo(editor) {
@@ -88,7 +91,8 @@
         }
         if (!have.skills) {
             have.skills = [];
-            const dirs = Object.keys(pkg.files || {}).filter((p) => SKILL_RE.test(p)).map((p) => p.slice(7, -9));
+            // The same skill folders reviewRows sees: the manifest's skill entries with a safe folder name.
+            const dirs = WP().packageSkills(pkg.manifest).filter((x) => x.safe).map((x) => x.dir);
             for (const dir of dirs) {
                 const handle = window.localFs && await window.localFs.resolvePath(`skills/${dir}`);
                 // Bare relative paths with the skill export's filter: the same convention reviewRows hashes.
@@ -101,7 +105,7 @@
     const STATUS_ICON = { present: '✓', install: '➕', clash: '⚠', attention: '⚠' };
     const REASON_KEY = {
         'settings-required': 'reasonSettings', 'localhost-url': 'reasonLocalhost', 'needs-key': 'reasonNeedsKey',
-        'global-server': 'reasonGlobal', renamed: 'reasonRenamed', unreadable: 'reasonUnreadable',
+        'global-server': 'reasonGlobal', renamed: 'reasonRenamed', unreadable: 'reasonUnreadable', 'unsafe-path': 'reasonUnsafePath',
     };
     const KIND_KEY = { skill: 'kindSkill', server: 'kindServer', component: 'kindComponent', playbook: 'kindPlaybook', secrets: 'kindKeys' };
 
@@ -123,8 +127,8 @@
     function settingsFieldsHtml(t, fields, values) {
         const v = values || {};
         return fields.map((f) => fieldRow(esc(f.name), f.required,
-            f.secret ? secretInput(t, `data-value="${esc(f.name)}"`, v[f.name] || '')
-                : `<input type="text" data-value="${esc(f.name)}" value="${esc(v[f.name] || '')}" style="${INPUT}">`,
+            f.secret ? secretInput(t, `data-value="${esc(f.name)}"`, own(v, f.name) || '')
+                : `<input type="text" data-value="${esc(f.name)}" value="${esc(own(v, f.name) || '')}" style="${INPUT}">`,
             esc(f.label), t('required'))).join('');
     }
 
@@ -153,7 +157,7 @@
 
     function cardHtml(editor, state, r, i) {
         const t = (key, params) => esc(editor.t(`workflow.package.${key}`, params));
-        const v = state.values[r.name] || {};
+        const v = own(state.values, r.name) || {};
         const skipped = r.choice === 'skip';
         const live = !skipped && r.choice !== 'use-existing' && r.status !== 'present';   // will be installed
         const warn = r.status === 'clash' || r.status === 'attention';
@@ -173,7 +177,7 @@
             parts.push(`<div style="display: flex; gap: 8px;">
                 <button type="button" data-choice="use-existing" style="${r.choice === 'use-existing' ? BTN_ON : BTN_PLAIN}">${t('useExisting')}</button>
                 <button type="button" data-choice="skip" style="${skipped ? BTN_ON : BTN_PLAIN}">${t('skipIt')}</button></div>`);
-        } else if ((r.reasons || []).includes('unreadable')) {
+        } else if ((r.reasons || []).some((x) => x === 'unreadable' || x === 'unsafe-path')) {
             parts.push(`<div><button type="button" data-choice="skip" style="${skipped ? BTN_ON : BTN_PLAIN}">${t('skipIt')}</button></div>`);
         }
         if (live && r.kind === 'server') {
@@ -192,11 +196,11 @@
         }
         if (r.kind === 'secrets') {
             const nodes = (state.pkg.workflow && state.pkg.workflow.definition && state.pkg.workflow.definition.nodes) || [];
-            const keys = state.values['workflow keys'];
+            const keys = state.values[WP().WORKFLOW_KEYS];
             parts.push(`<div style="color: #475569; font-size: 13px;">${t('workflowKeysHelp')}</div>` + (r.fields || []).map((f) => {
                 const n = nodes.find((x) => String(x.id) === String(f.node)) || {};
                 const label = `${esc(n.name || n.label || (n.config && n.config.name) || n.node_type || f.node)} — ${esc(f.field)}`;
-                return fieldRow(label, false, secretInput(t, `data-key="${esc(`${f.node}.${f.field}`)}"`, keys[`${f.node}.${f.field}`] || ''), '');
+                return fieldRow(label, false, secretInput(t, `data-key="${esc(`${f.node}.${f.field}`)}"`, own(keys, `${f.node}.${f.field}`) || ''), '');
             }).join(''));
         }
         const border = warn && !skipped && r.choice !== 'use-existing' ? '#f59e0b' : '#e2e8f0';
@@ -226,7 +230,7 @@
         const box = 'border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px;';
         let html = `<div style="${box} border-color: #16a34a; background: #f0fdf4;"><strong>✓ ${t('resultDone')}</strong>
             ${result.installed.length ? installedHtml(editor, result.installed) : `<div style="margin-top: 6px;">${t('resultNothing')}</div>`}</div>`;
-        const later = state.rows.filter((r) => r.envFields && (state.values[r.name] || {}).fillLater && r.choice !== 'skip' && r.choice !== 'use-existing');
+        const later = state.rows.filter((r) => r.envFields && (own(state.values, r.name) || {}).fillLater && r.choice !== 'skip' && r.choice !== 'use-existing');
         if (later.length) {
             html += `<div style="${box} border-color: #f59e0b; background: #fffbeb;">⚠ ${t('resultFillLater', { names: later.map((r) => r.name).join(', ') })}</div>`;
         }
@@ -300,14 +304,14 @@
             const card = e.target.closest('[data-row]');
             if (!card) return;
             const r = state.rows[Number(card.dataset.row)];
-            if (e.target.dataset.key !== undefined) state.values['workflow keys'][e.target.dataset.key] = e.target.value;
-            else if (e.target.dataset.value !== undefined) (state.values[r.name] = state.values[r.name] || {})[e.target.dataset.value] = e.target.value;
+            if (e.target.dataset.key !== undefined) state.values[WP().WORKFLOW_KEYS][e.target.dataset.key] = e.target.value;
+            else if (e.target.dataset.value !== undefined) rowValues(state.values, r.name)[e.target.dataset.value] = e.target.value;
             refresh();
         });
         list.addEventListener('change', (e) => {
             if (e.target.dataset.fillLater === undefined) return;
             const r = state.rows[Number(e.target.closest('[data-row]').dataset.row)];
-            (state.values[r.name] = state.values[r.name] || {}).fillLater = e.target.checked;
+            rowValues(state.values, r.name).fillLater = e.target.checked;
             render();
         });
 
@@ -376,10 +380,15 @@
             return undefined;
         }
         const rows = await WP().reviewRows(pkg, have);
-        const values = { 'workflow keys': {} };
+        // Null-prototype maps keyed by row name; the workflow keys sit under a Symbol no server name can be.
+        const values = Object.create(null);
+        values[WP().WORKFLOW_KEYS] = Object.create(null);
         // Defaults count as filled in: installPackage would write them anyway.
         for (const r of rows) {
-            if (r.envFields) values[r.name] = Object.fromEntries(r.envFields.filter((f) => f.default !== '').map((f) => [f.name, f.default]));
+            if (r.envFields) {
+                const v = rowValues(values, r.name);
+                for (const f of r.envFields) if (f.default !== '') v[f.name] = f.default;
+            }
         }
         const io = { ...defaultIo(editor), ...(overrides.io || {}) };
         const state = { pkg, rows, values, have };

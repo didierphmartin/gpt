@@ -46,6 +46,12 @@ assert.deepStrictEqual(ss.stripped, [{ node: '5', field: 'api_key' }]);
 assert.strictEqual(orig[0].config.connection.api_key, 'K');
 assert.ok(WP.SECRET_FIELD_RE.test('Password'));
 assert.deepStrictEqual(WP.stripSecrets([{ id: '1', node_type: 'agent', config: {} }]).stripped, []);
+// dsn / connection strings hold the password inside the value (pgvector, Azure)
+const conn2 = WP.stripSecrets([{ id: '6', node_type: 'vectorstore', config: { connection: {
+    dsn: 'postgresql://u:pw@h/db', connection_string: 'DefaultEndpointsProtocol=https;AccountKey=abc', conn_str: 'x', auth_header: 'y', bearer: 'z', private_pem: 'p', host: 'h' } } }]);
+assert.deepStrictEqual(conn2.nodes[0].config.connection, { host: 'h' });
+assert.deepStrictEqual(conn2.stripped.map((x) => x.field), ['dsn', 'connection_string', 'conn_str', 'auth_header', 'bearer', 'private_pem']);
+for (const f of ['DSN', 'Connection_String', 'connstr', 'PRIVATE_KEY']) assert.ok(WP.SECRET_FIELD_RE.test(f), f);
 
 // selectServerFiles
 const files = ['server.py','tests/t.py','.env','.env.example','.venv/x','a/__pycache__/b.pyc','data.sqlite-wal','README.md'];
@@ -54,6 +60,9 @@ assert.deepStrictEqual(WP.selectServerFiles(files, { include: ['*.py', '.env'], 
 assert.deepStrictEqual(WP.selectServerFiles(['a.py', 'sub/b.py', 'sub/c.txt'], { exclude: ['sub/b.py'] }), ['a.py', 'sub/c.txt']);
 assert.deepStrictEqual(WP.selectServerFiles(['x/node_modules/y.js', 'x/logs/a.txt', 'app.log', 'docs/a.md', '.git/config', 'x/.hidden/f'], null), []);
 assert.ok(WP.DEFAULT_EXCLUDES.includes('.env'));
+// generic secret files never ship
+assert.deepStrictEqual(WP.selectServerFiles(['server.py', 'cert.pem', 'tls.key', 'id.p12', 'a/b.pfx', 'credentials.json', 'credentials-prod.json',
+    'token.json', 'token_cache.json', 'client_secret.txt', 'my-secrets.yaml', 'keys.py', 'config.json'], null), ['server.py', 'keys.py', 'config.json']);
 
 // envFields / missingRequired / renderEnv
 const ef = WP.envFields(null, '# Azure tenant\nAZURE_TENANT_ID=\nCLIENT_SECRET=abc\nPORT=8765\n');
@@ -91,6 +100,17 @@ const rt = { PLAIN: 'abc', SPACES: 'a b  c', QUOTES: 'say "hi" and \'yo\'', BACK
 const back = WP.parseEnv(WP.renderEnv(rt));
 assert.deepStrictEqual(back, { ...rt, NL: 'line1\nline2\nline3' });
 
+
+// mergeEnv: comments and undeclared keys kept, declared keys replaced in place, new ones appended, renderEnv escaping
+const before = '# Outlook settings\nTENANT_ID=old\nSHAREPOINT_LIBRARY=Docs\n\n# python\nexport OUTLOOK_PYTHON=/usr/bin/python3\nPORT=8765\n';
+assert.strictEqual(WP.mergeEnv(before, { TENANT_ID: 'new id', PORT: '9000', CLIENT_SECRET: 's"x' }),
+    '# Outlook settings\nTENANT_ID="new id"\nSHAREPOINT_LIBRARY=Docs\n\n# python\nexport OUTLOOK_PYTHON=/usr/bin/python3\nPORT=9000\nCLIENT_SECRET="s\\"x"\n');
+assert.deepStrictEqual(WP.parseEnv(WP.mergeEnv(before, { TENANT_ID: 'a\nINJECT=1' })), { TENANT_ID: 'a\nINJECT=1', SHAREPOINT_LIBRARY: 'Docs', OUTLOOK_PYTHON: '/usr/bin/python3', PORT: '8765' });
+assert.strictEqual(WP.mergeEnv('', { A: '1' }), WP.renderEnv({ A: '1' }));
+assert.strictEqual(WP.mergeEnv(null, {}), '\n');
+assert.strictEqual(WP.mergeEnv('A=1\r\nB=2', { B: '3' }), 'A=1\nB=3\n');
+assert.strictEqual(WP.mergeEnv('A=1\n', { constructor: 'c' }), 'A=1\nconstructor=c\n');
+assert.throws(() => WP.mergeEnv('A=1\n', { 'BAD-KEY': 'x' }), /invalid setting name/);
 
 // classify
 assert.strictEqual(WP.classify('server', { name: 'Workday', url: 'u' }, [{ name: ' workday ', url: 'u' }]).status, 'present');
@@ -202,6 +222,7 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
     const entries = {
         'manifest.json': J({ format: 'synergyai-workflow-package', version: 1, workflow: { name: 'W' }, strippedSecrets: [{ node: '5', field: 'api_key' }],
             dependencies: [
+                { kind: 'skill', name: 'GEO/geo-compare', folder: 'skills/GEO/geo-compare/' },
                 { kind: 'component', name: 'Make PDF', old_id: 12, file: 'components/Make_PDF.json' },
                 { kind: 'playbook', name: 'Triage', pkey: 'triage', old_id: 3, file: 'playbooks/triage.md' },
             ] }),
@@ -333,7 +354,8 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
                 addServer: async (reg) => { calls.push(['addServer', reg]); if (opts.failServer === reg.name) throw new Error('boom'); return { id: nextId++ }; },
                 createPlaybook: async (pb) => { calls.push(['createPlaybook', pb]); return { id: 55 }; },
                 importComponents: async (bundle, nodes) => { calls.push(['importComponents', bundle]);
-                    return nodes.map((n) => (n.node_type === 'code' ? { ...n, config: { ...n.config, code_component_id: 77 } } : n)); },
+                    const ids = new Set(bundle.map((c) => Number(c.id)));
+                    return nodes.map((n) => (n.node_type === 'code' && ids.has(Number(n.config.code_component_id)) ? { ...n, config: { ...n.config, code_component_id: 77 } } : n)); },
             };
         };
         const ihave = { servers: [{ id: 31, name: 'Hosted', url: 'https://x.example/mcp' }], playbooks: [], skills: [], components: [] };
@@ -342,7 +364,7 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
         assert.strictEqual(irow('server', 'Outlook').destination, 'mcps/outlook_mcp');
         assert.strictEqual(irow('server', 'Hosted').status, 'present');
         const ivalues = { Outlook: { TENANT_ID: 't 1', PORT: '9000', url: 'http://localhost:9000/mcp', authorization: 'Bearer k' },
-            'workflow keys': { '5.api_key': 'SECRET', '2.api_key': '' } };
+            [WP.WORKFLOW_KEYS]: { '5.api_key': 'SECRET', '2.api_key': '' } };
         let io = memIo({ fs: { 'mcps/servers.json': JSON.stringify({ Old: 'old_mcp' }) } });
         let res = await WP.installPackage(irows, ipkg, ivalues, io, ihave);
         const writes = io.calls.filter((c) => c[0] === 'writeFile').map((c) => c[1]);
@@ -393,7 +415,12 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
         assert.deepStrictEqual(io.calls.filter((c) => c[0] !== 'ensureDir' && c[0] !== 'importComponents'), []);
         assert.deepStrictEqual(io.calls.find((c) => c[0] === 'importComponents')[1], []);
         assert.strictEqual(res.nodes.find((n) => n.id === '1').config.store, 'mcp:40');
-        assert.strictEqual(res.nodes.find((n) => n.id === '3').config.playbook_id, 3);
+        // a skipped playbook: its exporter id would point at an unrelated row here -> cleared and flagged
+        assert.strictEqual(res.nodes.find((n) => n.id === '3').config.playbook_id, null);
+        assert.strictEqual(res.nodes.find((n) => n.id === '3').config.playbook_missing, true);
+        // a skipped component: the link is cleared and flagged before the import
+        assert.strictEqual(res.nodes.find((n) => n.id === '4').config.code_component_id, null);
+        assert.strictEqual(res.nodes.find((n) => n.id === '4').config.code_component_missing, true);
         assert.deepStrictEqual(res.installed, []);
         assert.deepStrictEqual(res.commands, []);
 
@@ -436,6 +463,181 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
         assert.strictEqual(io.fs['components/Make_PDF.json'], 'mine');
         assert.ok(io.fs['components/Make_PDF_2.json'].includes('Make PDF'));
         assert.strictEqual(res.installed.find((x) => x.kind === 'component').destination, 'components/Make_PDF_2.json');
+
+        // ---- final review fixes: path confinement (finding 1)
+        {
+            const P = WP.isSafeWritePath;
+            assert.strictEqual(P('skills/pdf/SKILL.md', 'skills'), true);
+            assert.strictEqual(P('skills', 'skills'), true);
+            for (const bad of ['/x', '../x', 'skills/../python/x', 'skills/a\\b/c', 'skills/a//b', 'skills/./a', 'python/x', 'skills/.venv/x', 'skills/a/.hidden'])
+                assert.strictEqual(P(bad, 'skills'), false, bad);
+            assert.strictEqual(P('mcps/x/.env', 'mcps'), false);
+            assert.strictEqual(P('mcps/x/.env', 'mcps', true), true);
+            assert.strictEqual(P('mcps/x/.env.example', 'mcps'), true);
+            assert.strictEqual(P('mcps/x/.git/config', 'mcps', true), false);
+            assert.strictEqual(P('python/.venv/lib/python3.13/site-packages/zz.pth', 'mcps'), false);
+            assert.strictEqual(P('skills/x', 'python'), false);
+            assert.ok(WP.isSafeSegment('outlook_mcp'));
+            for (const bad of ['', '.', '..', 'a/b', 'a\\b', '.venv', 'x..y', null]) assert.ok(!WP.isSafeSegment(bad), String(bad));
+
+            const writesOf = (m) => m.calls.filter((c) => c[0] === 'writeFile' || c[0] === 'writeJson').map((c) => c[1]);
+            const insideRoots = (m) => writesOf(m).every((p) => ['skills/', 'mcps/', 'components/', 'playbooks/'].some((r) => p.startsWith(r)) && !p.split('/').includes('..'));
+            const pth = enc('import os; os.system("x")');
+            const mkPkg = (deps, extra, servers = []) => WP.readPackage({
+                'manifest.json': J({ format: 'synergyai-workflow-package', version: 1, workflow: { name: 'W' }, dependencies: deps }),
+                'workflow.json': J({ definition: { nodes: [] } }),
+                'mcps/servers.json': J(servers),
+                ...extra,
+            });
+            const empty = { servers: [], playbooks: [], skills: [], components: [] };
+            const unsafeRows = (rs) => rs.filter((r) => r.reasons.includes('unsafe-path'));
+
+            // skills: only manifest entries, 1-2 safe segments; every file inside its folder
+            for (const dir of ['../python', '/abs', 'a\\b', 'python/.venv', 'a/b/c', '..', '']) {
+                const p = mkPkg([{ kind: 'skill', name: dir }], { [`skills/${dir}/SKILL.md`]: enc('s'), [`skills/${dir}/zz.pth`]: pth });
+                const rs = await WP.reviewRows(p, empty);
+                assert.strictEqual(unsafeRows(rs).length, 1, dir);
+                assert.strictEqual(rs[0].status, 'attention');
+                assert.strictEqual(WP.canConfirm(rs, {}), false, dir);
+                rs[0].choice = 'skip';
+                assert.strictEqual(WP.canConfirm(rs, {}), true);
+                const m = memIo();
+                await WP.installPackage(rs, p, {}, m, empty);
+                assert.deepStrictEqual(writesOf(m), [], dir);
+            }
+            const trav = mkPkg([{ kind: 'skill', name: 'pdf' }], { 'skills/pdf/SKILL.md': enc('s'), 'skills/pdf/../../python/.venv/zz.pth': pth });
+            let rs = await WP.reviewRows(trav, empty);
+            assert.deepStrictEqual(rs.map((r) => [r.name, r.reasons]), [['pdf', ['unsafe-path']]]);
+            // forged rows (the review bypassed): the installer's own check refuses before any write
+            let m = memIo();
+            await assert.rejects(WP.installPackage([{ kind: 'skill', name: 'pdf', status: 'install', reasons: [], choice: null, destination: 'skills/pdf' }], trav, {}, m, empty),
+                /install refused: unsafe path skills\/pdf\/\.\.\/\.\.\/python/);
+            assert.deepStrictEqual(m.calls, []);
+            m = memIo();
+            await assert.rejects(WP.installPackage([{ kind: 'skill', name: '../python', status: 'install', reasons: [], choice: null, destination: 'python' }],
+                mkPkg([{ kind: 'skill', name: '../python' }], { 'skills/../python/zz.pth': pth }), {}, m, empty), /install refused: unsafe path skill \.\.\/python/);
+            assert.deepStrictEqual(m.calls, []);
+            // a nested SKILL.md no longer makes a phantom row; a folder in the zip the manifest doesn't name is ignored
+            rs = await WP.reviewRows(mkPkg([{ kind: 'skill', name: 'pdf' }], { 'skills/pdf/SKILL.md': enc('s'), 'skills/pdf/sub/SKILL.md': enc('t'), 'skills/other/SKILL.md': enc('o') }), empty);
+            assert.deepStrictEqual(rs.map((r) => [r.kind, r.name, r.status]), [['skill', 'pdf', 'install']]);
+            rs = await WP.reviewRows(mkPkg([{ kind: 'skill', name: 'gone' }], {}), empty);
+            assert.deepStrictEqual(rs[0].reasons, ['unreadable']);
+
+            // servers: folder from the manifest must be mcps/<safe segment>; else the server name; files stay inside
+            const local = (name) => [{ name, url: 'https://h.example/mcp', local: true, old_id: 4 }];
+            for (const [folder, name, extra] of [
+                ['mcps/../python/', 'S', {}],
+                ['python/.venv/lib/python3.13/site-packages/', 'S', {}],
+                ['mcps/.venv/', 'S', {}],
+                ['mcps/a\\b/', 'S', {}],
+                [undefined, '../evil', {}],
+                [undefined, '/abs', {}],
+                ['mcps/outlook_mcp/', 'S', { 'mcps/outlook_mcp/../../python/.venv/lib/python3.13/site-packages/zz.pth': pth }],
+                ['mcps/outlook_mcp/', 'S', { 'mcps/outlook_mcp/sub\\..\\..\\zz.pth': pth }],
+                ['mcps/outlook_mcp/', 'S', { 'mcps/outlook_mcp/.venv/lib/zz.pth': pth }],
+            ]) {
+                const dep = { kind: 'server', name, old_id: 4, local: true, ...(folder !== undefined ? { folder } : {}) };
+                const p = mkPkg([dep], { 'mcps/outlook_mcp/server.py': enc('x'), ...extra }, local(name));
+                const rs2 = await WP.reviewRows(p, empty);
+                assert.deepStrictEqual(rs2[0].reasons, ['unsafe-path'], String(folder) + name);
+                assert.strictEqual(rs2[0].destination, null);
+                assert.strictEqual(WP.canConfirm(rs2, {}), false);
+                const m2 = memIo();
+                await assert.rejects(WP.installPackage(rs2, p, {}, m2, empty), /unresolved/);
+                rs2[0].status = 'install'; rs2[0].reasons = [];   // forged past the review
+                await assert.rejects(WP.installPackage(rs2, p, {}, m2, empty), /install refused: unsafe path/);
+                assert.deepStrictEqual(m2.calls, [], String(folder) + name);
+            }
+
+            // playbooks: written to playbooks/<pkey>.md whatever the manifest's file says; a bad key is refused
+            const pbMd = enc(WP.playbookToMd({ pkey: 'triage', title: 'T', text: 'b' }));
+            let p = mkPkg([{ kind: 'playbook', name: 'T', pkey: 'triage', old_id: 3, file: 'python/.venv/lib/python3.13/site-packages/zz.pth' }],
+                { 'python/.venv/lib/python3.13/site-packages/zz.pth': pbMd });
+            rs = await WP.reviewRows(p, empty);
+            m = memIo();
+            let r2 = await WP.installPackage(rs, p, {}, m, empty);
+            assert.deepStrictEqual(writesOf(m), ['playbooks/triage.md']);
+            assert.strictEqual(r2.installed[0].destination, 'playbooks/triage.md');
+            for (const pkey of ['../x', '/x', 'a\\b', 'Triage', 'a/b', '']) {
+                p = mkPkg([{ kind: 'playbook', name: 'T', pkey, old_id: 3, file: 'playbooks/x.md' }], { 'playbooks/x.md': pbMd });
+                rs = await WP.reviewRows(p, empty);
+                assert.deepStrictEqual(rs[0].reasons, ['unsafe-path'], pkey);
+                assert.strictEqual(WP.canConfirm(rs, {}), false);
+            }
+            // an unreadable playbook file is a review item, not a crash
+            p = mkPkg([{ kind: 'playbook', name: 'T', pkey: 'triage', old_id: 3, file: 'playbooks/triage.md' }], { 'playbooks/triage.md': enc('no front matter') });
+            rs = await WP.reviewRows(p, empty);
+            assert.deepStrictEqual([rs[0].status, rs[0].reasons], ['attention', ['unreadable']]);
+
+            // components: components/<safe name>.json whatever the manifest's file says
+            p = mkPkg([{ kind: 'component', name: '../../python/.venv/zz', old_id: 12, file: 'python/.venv/zz.pth' }], { 'python/.venv/zz.pth': J(comp) });
+            rs = await WP.reviewRows(p, empty);
+            m = memIo();
+            await WP.installPackage(rs, p, {}, m, empty);
+            assert.deepStrictEqual(writesOf(m), ['components/python_.venv_zz.json']);
+            assert.ok(insideRoots(m));
+        }
+
+        // ---- finding 3: ids no row maps are cleared and flagged
+        {
+            const p = WP.readPackage({
+                'manifest.json': J({ format: 'synergyai-workflow-package', version: 1, workflow: { name: 'W' }, dependencies: [
+                    { kind: 'playbook', name: 'Gone', pkey: 'gone', old_id: 5, file: 'playbooks/gone.md' },   // file not in the zip
+                ] }),
+                'workflow.json': J({ definition: { nodes: [
+                    { id: '1', node_type: 'vectorstore', config: { store: 'mcp:66' } },        // server not exported
+                    { id: '2', node_type: 'playbook', config: { playbook_id: 5 } },            // missing file
+                    { id: '3', node_type: 'agent', config: { playbook_id: 8 } },               // never exported
+                    { id: '4', node_type: 'code', config: { code_component_id: 12 } },         // not bundled
+                    { id: '5', node_type: 'loader', config: { store: 'local:x' } },            // not an id: kept
+                    { id: '6', node_type: 'start', config: { start_option: 9 } },              // not bundled
+                ] } }),
+            });
+            const empty = { servers: [], playbooks: [], skills: [], components: [] };
+            const rs = await WP.reviewRows(p, empty);
+            const m = memIo();
+            const res2 = await WP.installPackage(rs, p, {}, m, empty);
+            const n = (id) => res2.nodes.find((x) => x.id === id).config;
+            assert.deepStrictEqual([n('1').store, n('1').store_missing], ['', true]);
+            assert.deepStrictEqual([n('2').playbook_id, n('2').playbook_missing], [null, true]);
+            assert.deepStrictEqual([n('3').playbook_id, n('3').playbook_missing], [null, true]);
+            assert.deepStrictEqual([n('4').code_component_id, n('4').code_component_missing], [null, true]);
+            assert.deepStrictEqual(n('5'), { store: 'local:x' });
+            assert.deepStrictEqual([n('6').start_option, n('6').start_option_missing], [null, true]);
+            // the missing badge sees the flags (with or without the other sources known)
+            const mb = WP.missingByNode(res2.nodes, { skills: null, servers: null, tools: null, playbookIds: null });
+            assert.deepStrictEqual(mb, { 1: ['store_missing:'], 2: ['playbook_missing:'], 3: ['playbook_missing:'] });
+            // a new link clears the marker
+            assert.deepStrictEqual(WP.missingByNode([{ id: '2', node_type: 'playbook', config: { playbook_id: 7, playbook_missing: true } }], { playbookIds: [7] }), {});
+            assert.deepStrictEqual(WP.missingByNode([{ id: '1', node_type: 'vectorstore', config: { store: 'mcp:1', store_missing: true } }], {}), {});
+            // the plain relink (no clearUnmapped) is unchanged
+            assert.strictEqual(WP.relinkNodes([{ node_type: 'agent', config: { playbook_id: 8 } }], { playbookIdByOldId: new Map() })[0].config.playbook_id, 8);
+        }
+
+        // ---- finding 5: review values are own properties; no server name reaches the workflow keys
+        {
+            const p = WP.readPackage({
+                'manifest.json': J({ format: 'synergyai-workflow-package', version: 1, workflow: { name: 'W' }, strippedSecrets: [{ node: '1', field: 'api_key' }],
+                    dependencies: [{ kind: 'server', name: 'workflow keys', old_id: 1 }, { kind: 'server', name: '__proto__', old_id: 2 }] }),
+                'workflow.json': J({ definition: { nodes: [{ id: '1', node_type: 'vectorstore', config: { store: 'mcp:1', connection: {} } }] } }),
+                'mcps/servers.json': J([{ name: 'workflow keys', url: 'https://a.example/mcp', old_id: 1 }, { name: '__proto__', url: 'https://b.example/mcp', old_id: 2 }]),
+            });
+            const empty = { servers: [], playbooks: [], skills: [], components: [] };
+            const rs = await WP.reviewRows(p, empty);
+            const values = Object.create(null);
+            values[WP.WORKFLOW_KEYS] = Object.assign(Object.create(null), { '1.api_key': 'K' });
+            values['workflow keys'] = Object.assign(Object.create(null), { url: 'https://evil.example', '1.api_key': 'X' });
+            values['__proto__'] = Object.assign(Object.create(null), { authorization: 'Bearer z' });
+            const m = memIo();
+            const res2 = await WP.installPackage(rs, p, values, m, empty);
+            assert.strictEqual(res2.nodes[0].config.connection.api_key, 'K');
+            const adds = m.calls.filter((c) => c[0] === 'addServer').map((c) => c[1]);
+            assert.deepStrictEqual(adds.map((a) => [a.name, a.url, a.headers]), [['workflow keys', 'https://evil.example', {}], ['__proto__', 'https://b.example/mcp', { Authorization: 'Bearer z' }]]);
+            assert.strictEqual({}.authorization, undefined);   // nothing polluted
+            // a plain {} values object: inherited names are not read as values
+            assert.strictEqual(WP.canConfirm([{ kind: 'server', name: 'constructor', status: 'install', reasons: [], choice: null, envFields: [{ name: 'A', required: true }] }], {}), false);
+            assert.deepStrictEqual(WP.missingRequired([{ name: 'constructor', required: true }], {}), ['constructor']);
+        }
     }
     console.log('workflow-package: ok');
 })().catch((e) => { console.error(e); process.exit(1); });

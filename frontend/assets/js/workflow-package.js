@@ -9,10 +9,70 @@
     const INGESTION_TYPES = ['loader', 'splitter', 'vectorstore'];
 
     const isId = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
+    const own = (o, k) => o !== null && o !== undefined && Object.prototype.hasOwnProperty.call(o, k);
+    /** o[k] only when it is o's own property (package data may name "__proto__", "constructor" ...). */
+    const pick = (o, k) => (own(o, k) ? o[k] : undefined);
+
+    /** One folder / file name with no way out of its parent: non-empty, no "/", "\\" or "..", no leading ".". */
+    function isSafeSegment(s) {
+        return typeof s === 'string' && !!s && !s.includes('/') && !s.includes('\\') && !s.includes('..') && !s.startsWith('.');
+    }
+    /** A playbook key (twin of playbook-collection.js isValidKey). */
+    const isPlaybookKey = (k) => typeof k === 'string' && k.length <= 64 && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(k);
+    /** A skill folder: one or two safe segments ("pdf", "GEO/geo-compare"). */
+    const isSkillDir = (d) => typeof d === 'string' && d.split('/').length <= 2 && d.split('/').every(isSafeSegment);
+
+    const WRITE_ROOTS = ['skills', 'mcps', 'components', 'playbooks'];
+    /**
+     * May the installer write `path`? Under one of WRITE_ROOTS (or that root itself), no empty, ".", ".."
+     * or backslash segment, no segment starting with "." except a final ".env.example" -- or ".env"
+     * when `allowEnv` (only the installer's own settings file).
+     */
+    function isSafeWritePath(path, root, allowEnv) {
+        if (typeof path !== 'string' || !WRITE_ROOTS.includes(root)) return false;
+        if (path === root) return true;
+        if (!path.startsWith(root + '/')) return false;
+        const segs = path.split('/');
+        return segs.every((seg, i) => {
+            if (!seg || seg === '.' || seg === '..' || seg.includes('\\')) return false;
+            if (!seg.startsWith('.')) return true;
+            return i === segs.length - 1 && (seg === '.env.example' || (allowEnv && seg === '.env'));
+        });
+    }
+
+    /** Where a package skill goes: `skills/<dir>` from the manifest's kind:'skill' entries only. */
+    function packageSkills(manifest) {
+        const deps = (manifest && Array.isArray(manifest.dependencies)) ? manifest.dependencies : [];
+        const seen = new Set();
+        const out = [];
+        for (const d of deps) {
+            if (!d || d.kind !== 'skill') continue;
+            const dir = String(d.name === undefined || d.name === null ? '' : d.name);
+            if (seen.has(dir)) continue;
+            seen.add(dir);
+            out.push({ dir, safe: isSkillDir(dir) });
+        }
+        return out;
+    }
+
+    /** A local server's folder under mcps/ (reader-side: the manifest's folder or the server name), or null when unsafe. */
+    function serverFolder(s, dep) {
+        const raw = dep && dep.folder !== undefined && dep.folder !== null ? String(dep.folder) : null;
+        let folder;
+        if (raw !== null) {
+            const m = /^mcps\/([^/]*)\/?$/.exec(raw);
+            folder = m ? m[1] : null;
+        } else folder = s && typeof s.name === 'string' ? s.name : null;
+        return isSafeSegment(folder) ? folder : null;
+    }
+
+    /** Fixed file names for a playbook / component of the package (never the manifest's own file paths). */
+    const playbookDestination = (pkey) => (isPlaybookKey(pkey) ? `playbooks/${safeFileName(pkey)}.md` : null);
+    const componentBase = (name) => `components/${safeFileName(name)}`;
 
     /**
      * What each node needs that this install lacks: { [nodeId]: ['skill:<dir>', 'tool:<name>', 'server:<name>',
-     * 'store:<id>', 'playbook:<id>'] }. `have` lists what exists; a null list is unknown and skips its check.
+     * 'store:<id>', 'playbook:<id>', 'playbook_missing:', 'store_missing:'] } (the last two: a package import cleared a link it could not map). `have` lists what exists; a null list is unknown and skips its check.
      */
     function missingByNode(nodes, have) {
         const h = have || {};
@@ -38,6 +98,9 @@
                 if (m && !serverIds.has(Number(m[1]))) miss.push(`store:${m[1]}`);
             }
             if (playbooks && (type === 'playbook' || type === 'agent') && isId(cfg.playbook_id) && !playbooks.has(Number(cfg.playbook_id))) miss.push(`playbook:${Number(cfg.playbook_id)}`);
+            // Ids an import could not map were cleared and flagged: the marker stands until a new link is set.
+            if ((type === 'playbook' || type === 'agent') && cfg.playbook_missing === true && !isId(cfg.playbook_id)) miss.push('playbook_missing:');
+            if (INGESTION_TYPES.includes(type) && cfg.store_missing === true && !cfg.store) miss.push('store_missing:');
             if (miss.length) out[node.id] = miss;
         }
         return out;
@@ -93,7 +156,8 @@
         };
     }
 
-    const SECRET_FIELD_RE = /key|secret|token|password|passwd|credential/i;
+    // dsn / connection strings carry the password (pgvector DSN, Azure AccountKey) inside the value.
+    const SECRET_FIELD_RE = /key|secret|token|password|passwd|credential|dsn|connection_string|conn_str|connstr|auth|bearer|private/i;
 
     /** Copy of `nodes` with secret-looking fields removed from each config.connection; input untouched. */
     function stripSecrets(nodes) {
@@ -111,7 +175,9 @@
         return { nodes: out, stripped };
     }
 
-    const DEFAULT_EXCLUDES = ['.venv/', 'venv/', 'node_modules/', 'vendor/', '__pycache__/', 'dist/', 'build/', '.git/', 'log/', 'logs/', 'tests/', 'docs/', '.env', '*.sqlite*', '*.log'];
+    const DEFAULT_EXCLUDES = ['.venv/', 'venv/', 'node_modules/', 'vendor/', '__pycache__/', 'dist/', 'build/', '.git/', 'log/', 'logs/', 'tests/', 'docs/', '.env', '*.sqlite*', '*.log',
+        // generic secret files
+        '*.pem', '*.key', '*.p12', '*.pfx', 'credentials*.json', 'token*.json', '*secret*'];
 
     const globRe = (g) => new RegExp('^' + g.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$');
 
@@ -171,6 +237,28 @@
         }).join('\n') + '\n';
     }
 
+    /**
+     * `existingText` with the declared `values` set: every other line (comments, undeclared keys) is kept,
+     * a declared key's line is replaced in place, a declared key not there yet is appended. renderEnv's escaping.
+     */
+    function mergeEnv(existingText, values) {
+        const vals = values || {};
+        const line = (k) => renderEnv({ [k]: vals[k] }).replace(/\n$/, '');
+        const keys = Object.keys(vals);
+        keys.forEach((k) => line(k));   // invalid names throw before anything is merged
+        const text = String(existingText || '');
+        if (!text) return renderEnv(vals);
+        const done = new Set();
+        const lines = text.replace(/\r?\n$/, '').split(/\r?\n/).map((raw) => {
+            const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(raw);
+            if (!m || !own(vals, m[1])) return raw;
+            done.add(m[1]);
+            return line(m[1]);
+        });
+        for (const k of keys) if (!done.has(k)) lines.push(line(k));
+        return lines.join('\n') + '\n';
+    }
+
     /** KEY=value lines back to { KEY: value } (renderEnv's inverse): "..." unescapes \\ \" \n, '...' is literal,
      *  an unquoted value ends at " #". Comments, blank and malformed lines are skipped. */
     function parseEnv(text) {
@@ -203,7 +291,7 @@
 
     /** Names of required fields with no value. */
     function missingRequired(fields, values) {
-        return (fields || []).filter((f) => f.required && !String((values || {})[f.name] || '').trim()).map((f) => f.name);
+        return (fields || []).filter((f) => f.required && !String(pick(values, f.name) || '').trim()).map((f) => f.name);
     }
 
     const norm = (v) => String(v === undefined || v === null ? '' : v).trim().toLowerCase();
@@ -237,9 +325,13 @@
         return { pkey: out.pkey, title: out.title, text: out.text };
     }
 
-    /** Rewrite server / playbook ids to this install's ids; returns new nodes, inputs untouched. */
+    /**
+     * Rewrite server / playbook ids to this install's ids; returns new nodes, inputs untouched.
+     * maps.clearUnmapped (the package import): an id no map knows would point at an unrelated row here,
+     * so it is cleared and flagged instead -- store '' + store_missing, playbook_id null + playbook_missing.
+     */
     function relinkNodes(nodes, maps) {
-        const { serverNameByOldId, serverIdByName, playbookIdByOldId } = maps || {};
+        const { serverNameByOldId, serverIdByName, playbookIdByOldId, clearUnmapped } = maps || {};
         return (nodes || []).map((n) => {
             const out = { ...n };
             if (['loader', 'splitter', 'vectorstore'].includes(n.node_type) && n.config && typeof n.config.store === 'string') {
@@ -247,11 +339,13 @@
                 const name = m && serverNameByOldId && serverNameByOldId.get(Number(m[1]));
                 const id = name !== undefined && serverIdByName ? serverIdByName.get(name) : undefined;
                 if (id !== undefined) out.config = { ...n.config, store: 'mcp:' + id };
+                else if (m && clearUnmapped) out.config = { ...n.config, store: '', store_missing: true };
             }
-            if ((n.node_type === 'playbook' || n.node_type === 'agent') && n.config && playbookIdByOldId) {
+            if ((n.node_type === 'playbook' || n.node_type === 'agent') && n.config && (playbookIdByOldId || clearUnmapped)) {
                 const raw = n.config.playbook_id;
-                const id = raw === undefined || raw === null || raw === '' ? undefined : playbookIdByOldId.get(Number(raw));
+                const id = raw === undefined || raw === null || raw === '' || !playbookIdByOldId ? undefined : playbookIdByOldId.get(Number(raw));
                 if (id !== undefined) out.config = { ...(out.config || n.config), playbook_id: id };
+                else if (isId(raw) && clearUnmapped) out.config = { ...(out.config || n.config), playbook_id: null, playbook_missing: true };
             }
             return out;
         });
@@ -327,6 +421,9 @@
 
 
     const dec = (u8) => new TextDecoder().decode(u8);
+    const isEnvFile = (p) => p.split('/').pop() === '.env';   // a package never ships one; never copied
+    /** The key of the review's workflow-keys values: a Symbol, so no server name can collide with it. */
+    const WORKFLOW_KEYS = Symbol('workflow keys');
 
     /** Decode a package's entries ({path: Uint8Array}) into manifest, workflow, servers and the raw files. */
     function readPackage(entries) {
@@ -360,22 +457,31 @@
         const deps = (pkg.manifest && pkg.manifest.dependencies) || [];
         const rows = [];
         const base = (kind, name, destination) => ({ kind, name, status: 'install', destination, reasons: [], choice: null });
+        const unsafe = (r) => { r.status = 'attention'; r.reasons.push('unsafe-path'); r.destination = null; rows.push(r); };
 
-        // skills: every folder holding a SKILL.md under skills/
-        const dirs = Object.keys(files).filter((p) => /^skills\/.+\/SKILL\.md$/.test(p)).map((p) => p.slice(7, -9));
-        for (const dir of dirs) {
-            const prefix = `skills/${dir}/`;
-            const own = {};
-            for (const p of Object.keys(files)) if (p.startsWith(prefix)) own[p.slice(prefix.length)] = files[p];
+        // skills: the manifest's kind:'skill' entries; every file of the folder must stay inside it
+        for (const { dir, safe } of packageSkills(pkg.manifest)) {
             const r = base('skill', dir, `skills/${dir}`);
-            r.status = classify('skill', { dir, hash: await filesHash(own) }, h.skills).status;
+            const prefix = `skills/${dir}/`;
+            const paths = safe ? Object.keys(files).filter((p) => p.startsWith(prefix)) : [];
+            if (!safe || paths.some((p) => !isEnvFile(p) && !isSafeWritePath(p, 'skills'))) { unsafe(r); continue; }
+            if (!files[`${prefix}SKILL.md`]) { r.status = 'attention'; r.reasons.push('unreadable'); rows.push(r); continue; }
+            const tree = {};
+            for (const p of paths) tree[p.slice(prefix.length)] = files[p];
+            r.status = classify('skill', { dir, hash: await filesHash(tree) }, h.skills).status;
             rows.push(r);
         }
 
         for (const s of pkg.servers || []) {
             const dep = deps.find((d) => d.kind === 'server' && d.name === s.name);
-            const folder = s.local ? ((dep && dep.folder) ? dep.folder.replace(/\/$/, '') : `mcps/${s.name}`) : null;
-            const r = base('server', s.name, folder);
+            const r = base('server', s.name, null);
+            if (s.local) {
+                const f = serverFolder(s, dep);
+                const prefix = `mcps/${f}/`;
+                if (!f || Object.keys(files).some((p) => p.startsWith(prefix) && !isEnvFile(p) && !isSafeWritePath(p, 'mcps'))) { unsafe(r); continue; }
+                r.destination = `mcps/${f}`;
+            }
+            const folder = r.destination;
             const cls = classify('server', s, h.servers).status;
             if (folder && cls !== 'present') {
                 const mj = files[`${folder}/synergyai-mcp.json`], ex = files[`${folder}/.env.example`];
@@ -394,7 +500,7 @@
         for (const dep of deps.filter((d) => d.kind === 'component')) {
             const r = base('component', dep.name, null);
             let item = null;
-            try { item = files[dep.file] ? JSON.parse(dec(files[dep.file])) : null; } catch (e) { item = undefined; }
+            try { item = pick(files, dep.file) ? JSON.parse(dec(files[dep.file])) : null; } catch (e) { item = undefined; }
             if (item === undefined) { r.status = 'attention'; r.reasons.push('unreadable'); }
             else if (item) {
                 if (matchComponent(item, h.components)) r.status = 'present';
@@ -405,7 +511,14 @@
 
         for (const dep of deps.filter((d) => d.kind === 'playbook')) {
             const r = base('playbook', dep.pkey || dep.name, null);
-            if (files[dep.file]) r.status = classify('playbook', mdToPlaybook(dec(files[dep.file])), h.playbooks).status;
+            if (!playbookDestination(dep.pkey)) { unsafe(r); continue; }
+            const raw = own(files, dep.file) ? files[dep.file] : null;
+            if (raw) {
+                let pb = null;
+                try { pb = mdToPlaybook(dec(raw)); } catch (e) { pb = null; }
+                if (pb) r.status = classify('playbook', pb, h.playbooks).status;
+                else { r.status = 'attention'; r.reasons.push('unreadable'); }
+            }
             rows.push(r);
         }
 
@@ -414,17 +527,19 @@
         return rows;
     }
 
-    /** May the import start? Clashes need a choice; required private settings need a value or "fill later". */
+    /** May the import start? Clashes need a choice; required private settings need a value or "fill later";
+     *  an unreadable item or one whose files would land outside its folder must be skipped. */
     function canConfirm(rows, values) {
         const vals = values || {};
         return (rows || []).every((r) => {
             if (r.choice === 'skip') return true;
+            if ((r.reasons || []).includes('unsafe-path')) return false;
             if (r.status === 'present') return true;
             if (r.status === 'clash' && r.choice === null) return false;
             if ((r.reasons || []).includes('unreadable')) return false;
             if (r.envFields && r.choice !== 'use-existing') {
-                const v = vals[r.name] || {};
-                if (missingRequired(r.envFields, v).length && !v.fillLater) return false;
+                const v = pick(vals, r.name) || {};
+                if (missingRequired(r.envFields, v).length && !pick(v, 'fillLater')) return false;
             }
             return true;
         });
@@ -438,8 +553,12 @@
      *   importComponents(bundle, nodes) -> nodes.
      * Skipped rows do nothing; use-existing / present rows write nothing but lend their existing id
      * (from `have`) to the re-link. Refuses (writing nothing) while a review item is unresolved or when a
-     * skill folder, server folder or playbook file to install already exists. Any io failure rejects with the step and item named; err.installed
-     * lists what was done before it. Returns { installed, commands, nodes }.
+     * skill folder, server folder or playbook file to install already exists, or when a path to write would leave its
+     * kind's folder (skills/, mcps/, components/, playbooks/). Destinations come from names, never from the manifest's paths.
+     * values: { [row name]: {...} } plus values[WORKFLOW_KEYS] for the workflow keys; only own properties are read.
+     * Ids no row maps are cleared and flagged on the nodes (playbook_missing, store_missing, code_component_missing).
+     * Any io failure rejects with the step and item named; err.installed lists what was done before it.
+     * Returns { installed, commands, nodes }.
      */
     async function installPackage(rows, pkg, values, io, have) {
         const vals = values || {};
@@ -458,48 +577,75 @@
         const active = (r) => r.choice !== 'skip';
         const toInstall = (r) => active(r) && r.choice !== 'use-existing' && r.status !== 'present';
         const ofKind = (k) => (rows || []).filter((r) => r.kind === k);
-        const isEnvFile = (p) => p.split('/').pop() === '.env';
-        const copyTree = async (prefix, label) => {
-            for (const p of Object.keys(files).filter((x) => x.startsWith(prefix) && !isEnvFile(x)).sort()) {
-                await step(`${label}: ${p}`, () => io.writeFile(p, files[p]));
-            }
-        };
-        const parse = (path) => { try { return files[path] ? JSON.parse(dec(files[path])) : null; } catch (e) { return null; } };
+        const rowValues = (r) => pick(vals, r.name) || {};
+        const parse = (path) => { try { return own(files, path) ? JSON.parse(dec(files[path])) : null; } catch (e) { return null; } };
         const playbookDep = (r) => deps.find((d) => d.kind === 'playbook' && (d.pkey || d.name) === r.name);
+        const serverOf = (r) => (pkg.servers || []).find((x) => x.name === r.name);
+        const serverDep = (r) => deps.find((d) => d.kind === 'server' && d.name === r.name);
+        const treeOf = (prefix) => Object.keys(files).filter((x) => x.startsWith(prefix) && !isEnvFile(x)).sort();
+
+        // Every write goes through here: inside its kind's folder, no way out (".."), no dotfile but the settings files.
+        const guard = (path, root, allowEnv) => {
+            if (!isSafeWritePath(path, root, allowEnv)) throw new Error('install refused: unsafe path ' + path);
+            return path;
+        };
+        const writeFile = (path, root, bytes, allowEnv) => io.writeFile(guard(path, root, allowEnv), bytes);
 
         if (!canConfirm(rows, vals)) throw new Error('install refused: unresolved items in the review');
+
+        // Where each item to install goes, worked out here from names (never the manifest's paths), then checked.
+        const skillDirs = new Set(packageSkills(pkg.manifest).filter((x) => x.safe).map((x) => x.dir));
+        const plan = { skills: [], servers: [], playbooks: [], components: [] };
+        for (const r of ofKind('skill').filter(toInstall)) {
+            const dest = skillDirs.has(r.name) ? `skills/${r.name}` : null;
+            plan.skills.push({ r, dest, paths: dest ? treeOf(`${dest}/`) : [] });
+        }
+        for (const r of ofKind('server').filter(toInstall)) {
+            const s = serverOf(r);
+            if (!s || !s.local) continue;
+            const f = serverFolder(s, serverDep(r));
+            const dest = f ? `mcps/${f}` : null;
+            plan.servers.push({ r, folder: f, dest, paths: dest ? treeOf(`${dest}/`) : [] });
+        }
+        for (const r of ofKind('playbook').filter(toInstall)) {
+            const d = playbookDep(r);
+            if (!d || !own(files, d.file) || !files[d.file]) continue;
+            plan.playbooks.push({ r, dep: d, dest: playbookDestination(d.pkey) });
+        }
+        const unsafePaths = [
+            ...plan.skills.flatMap((x) => (x.dest ? x.paths.filter((p) => !isSafeWritePath(p, 'skills')) : [`skill ${x.r.name}`])),
+            ...plan.servers.flatMap((x) => (x.dest ? x.paths.filter((p) => !isSafeWritePath(p, 'mcps')).concat(isSafeWritePath(`${x.dest}/.env`, 'mcps', true) ? [] : [`${x.dest}/.env`])
+                : [`server ${x.r.name}`])),
+            ...plan.playbooks.filter((x) => !x.dest).map((x) => `playbook ${x.r.name}`),
+        ];
+        if (unsafePaths.length) throw new Error('install refused: unsafe path ' + unsafePaths.join(', '));
+
         // Never overwrite: every destination of an item to install must be free before anything is written.
-        const targets = [
-            ...ofKind('skill').filter(toInstall).map((r) => r.destination),
-            ...ofKind('server').filter((r) => toInstall(r) && r.destination).map((r) => r.destination),
-            ...ofKind('playbook').filter(toInstall).map((r) => { const d = playbookDep(r); return d && files[d.file] ? d.file : null; }),
-        ].filter(Boolean);
+        const targets = [...plan.skills.map((x) => x.dest), ...plan.servers.map((x) => x.dest), ...plan.playbooks.map((x) => x.dest)];
         const taken = [];
         for (const t of targets) if (await step(`check ${t}`, () => io.exists(t))) taken.push(t);
         if (taken.length) throw new Error('install refused: would overwrite ' + taken.join(', '));
 
-        for (const dir of ['skills', 'mcps', 'components', 'playbooks']) await step(`create folder ${dir}`, () => io.ensureDir(dir));
+        for (const dir of WRITE_ROOTS) await step(`create folder ${dir}`, () => io.ensureDir(guard(dir, dir)));
 
-        for (const r of ofKind('skill').filter(toInstall)) {
-            await copyTree(`${r.destination}/`, `write skill ${r.name}`);
-            installed.push({ kind: 'skill', name: r.name, destination: r.destination });
+        for (const { r, dest, paths } of plan.skills) {
+            for (const p of paths) await step(`write skill ${r.name}: ${p}`, () => writeFile(p, 'skills', files[p]));
+            installed.push({ kind: 'skill', name: r.name, destination: dest });
         }
 
         // Local server source + private settings, then the name -> folder map.
-        const servers = ofKind('server').filter(toInstall);
-        const map = {};
-        for (const r of servers.filter((x) => x.destination)) {
-            const folder = r.destination.replace(/^mcps\//, '');
-            await copyTree(`${r.destination}/`, `write server ${r.name}`);
-            installed.push({ kind: 'server-files', name: r.name, destination: r.destination });
-            const v = vals[r.name] || {};
-            const ex = files[`${r.destination}/.env.example`];
-            const man = parse(`${r.destination}/synergyai-mcp.json`);
+        const map = Object.create(null);
+        for (const { r, folder, dest, paths } of plan.servers) {
+            for (const p of paths) await step(`write server ${r.name}: ${p}`, () => writeFile(p, 'mcps', files[p]));
+            installed.push({ kind: 'server-files', name: r.name, destination: dest });
+            const v = rowValues(r);
+            const ex = pick(files, `${dest}/.env.example`);
+            const man = parse(`${dest}/synergyai-mcp.json`);
             const fields = envFields(man, ex ? dec(ex) : '');
-            if (!v.fillLater && fields.length) {
-                const env = {};
-                for (const f of fields) env[f.name] = v[f.name] !== undefined && v[f.name] !== null ? v[f.name] : f.default;
-                await step(`write settings for ${r.name}`, () => io.writeFile(`${r.destination}/.env`, new TextEncoder().encode(renderEnv(env))));
+            if (!pick(v, 'fillLater') && fields.length) {
+                const env = Object.create(null);
+                for (const f of fields) { const x = pick(v, f.name); env[f.name] = x !== undefined && x !== null ? x : f.default; }
+                await step(`write settings for ${r.name}`, () => writeFile(`${dest}/.env`, 'mcps', new TextEncoder().encode(renderEnv(env)), true));
             }
             map[r.name] = folder;
             commands.push({ server: r.name, install: (man && man.install) || null, start: (man && man.start) || null });
@@ -507,27 +653,30 @@
         if (Object.keys(map).length) {
             await step('update mcps/servers.json', async () => {
                 const cur = await io.readJson('mcps/servers.json');
-                const base = cur && typeof cur === 'object' && !Array.isArray(cur) ? cur : {};
-                await io.writeJson('mcps/servers.json', { ...base, ...map });
+                const next = Object.create(null);
+                if (cur && typeof cur === 'object' && !Array.isArray(cur)) for (const k of Object.keys(cur)) next[k] = cur[k];
+                for (const k of Object.keys(map)) next[k] = map[k];
+                await io.writeJson(guard('mcps/servers.json', 'mcps'), next);
             });
         }
 
         // Registrations; existing ids for use-existing / present rows.
         const serverIdByName = new Map();
         for (const r of ofKind('server').filter(active)) {
-            const s = (pkg.servers || []).find((x) => x.name === r.name);
+            const s = serverOf(r);
             if (!s) continue;
             if (!toInstall(r)) {
                 const ex = (h.servers || []).find((e) => norm(e.name) === norm(r.name));
                 if (ex && isId(ex.id)) serverIdByName.set(r.name, Number(ex.id));
                 continue;
             }
-            const v = vals[r.name] || {};
-            const reg = { name: s.name, url: v.url !== undefined && v.url !== '' ? v.url : s.url, description: s.description || '',
-                transport: s.transport || 'http', is_mock: !!s.is_mock, headers: v.authorization ? { Authorization: v.authorization } : {} };
+            const v = rowValues(r);
+            const url = pick(v, 'url'), auth = pick(v, 'authorization');
+            const reg = { name: s.name, url: url !== undefined && url !== '' ? url : s.url, description: s.description || '',
+                transport: s.transport || 'http', is_mock: !!s.is_mock, headers: auth ? { Authorization: auth } : {} };
             const res = await step(`register server ${r.name}`, () => io.addServer(reg));
             serverIdByName.set(r.name, Number(res.id));
-            installed.push({ kind: 'server', name: r.name, destination: r.destination });
+            installed.push({ kind: 'server', name: r.name, destination: plan.servers.find((x) => x.r === r)?.dest || null });
         }
         const serverNameByOldId = new Map((pkg.servers || []).filter((s) => isId(s.old_id)).map((s) => [Number(s.old_id), s.name]));
 
@@ -540,12 +689,13 @@
                 const ex = (h.playbooks || []).find((e) => norm(e.pkey) === norm(r.name));
                 id = ex && isId(ex.id) ? Number(ex.id) : undefined;
             } else {
-                if (!files[dep.file]) continue;
+                const p = plan.playbooks.find((x) => x.r === r);
+                if (!p) continue;   // its file is not in the package: the nodes are flagged below
                 const pb = mdToPlaybook(dec(files[dep.file]));
-                await step(`write playbook ${r.name}`, () => io.writeFile(dep.file, files[dep.file]));
+                await step(`write playbook ${r.name}`, () => writeFile(p.dest, 'playbooks', files[dep.file]));
                 const res = await step(`create playbook ${r.name}`, () => io.createPlaybook(pb));
                 id = Number(res.id);
-                installed.push({ kind: 'playbook', name: r.name, destination: dep.file });
+                installed.push({ kind: 'playbook', name: r.name, destination: p.dest });
             }
             if (id !== undefined && isId(dep.old_id)) playbookIdByOldId.set(Number(dep.old_id), id);
         }
@@ -557,25 +707,37 @@
             const dep = deps.find((d) => d.kind === 'component' && d.name === r.name);
             if (!dep) continue;
             if (!active(r)) { skippedIds.add(Number(dep.old_id)); continue; }
-            if (toInstall(r) && files[dep.file]) {
+            if (toInstall(r) && own(files, dep.file) && files[dep.file]) {
                 // A folder copy never refuses: the next free name, <base>.json then <base>_2.json ...
-                const base = dep.file.replace(/\.json$/, '');
+                const base = componentBase(r.name);
                 let path = `${base}.json`;
                 for (let k = 2; await step(`check ${path}`, () => io.exists(path)); k++) path = `${base}_${k}.json`;
-                await step(`write component ${r.name}`, () => io.writeFile(path, files[dep.file]));
+                await step(`write component ${r.name}`, () => writeFile(path, 'components', files[dep.file]));
                 installed.push({ kind: 'component', name: r.name, destination: path });
             }
         }
         const bundle = (workflow.code_components || []).filter((c) => !skippedIds.has(Number(c.id)));
-        let nodes = (workflow.definition && workflow.definition.nodes) || [];
+        const bundled = new Set(bundle.map((c) => Number(c.id)));
+        // A component link the bundle does not bring would point at an unrelated row here: cleared and flagged.
+        let nodes = ((workflow.definition && workflow.definition.nodes) || []).map((n) => {
+            const cfg = n.config || {};
+            if (n.node_type === 'code' && isId(cfg.code_component_id) && !bundled.has(Number(cfg.code_component_id))) {
+                return { ...n, config: { ...cfg, code_component_id: null, code_component_missing: true } };
+            }
+            if (n.node_type === 'start' && isId(cfg.start_option) && !bundled.has(Number(cfg.start_option))) {
+                return { ...n, config: { ...cfg, start_option: null, start_option_missing: true } };
+            }
+            return n;
+        });
         nodes = await step('import code components', () => io.importComponents(bundle, nodes));
-        nodes = relinkNodes(nodes, { serverNameByOldId, serverIdByName, playbookIdByOldId });
+        nodes = relinkNodes(nodes, { serverNameByOldId, serverIdByName, playbookIdByOldId, clearUnmapped: true });
 
         // Workflow keys entered in the review go back into each node's connection.
         const keysRow = ofKind('secrets')[0];
         if (!keysRow || active(keysRow)) {
-            const keys = vals['workflow keys'] || {};
-            for (const [k, v] of Object.entries(keys)) {
+            const keys = pick(vals, WORKFLOW_KEYS) || {};
+            for (const k of Object.keys(keys)) {
+                const v = keys[k];
                 const i = k.lastIndexOf('.');
                 if (i < 0 || v === undefined || v === null || String(v) === '') continue;
                 const id = k.slice(0, i), field = k.slice(i + 1);
@@ -587,5 +749,5 @@
         return { installed, commands, nodes };
     }
 
-    return { collectDependencies, missingByNode, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, envFields, renderEnv, parseEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest, readPackage, matchComponent, reviewRows, canConfirm, installPackage };
+    return { WORKFLOW_KEYS, isSafeSegment, isSafeWritePath, packageSkills, mergeEnv, collectDependencies, missingByNode, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, envFields, renderEnv, parseEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest, readPackage, matchComponent, reviewRows, canConfirm, installPackage };
 });

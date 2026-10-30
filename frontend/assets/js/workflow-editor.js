@@ -9923,7 +9923,8 @@ class WorkflowEditor {
 
     /** Only a broken link is shown: most nodes come from a library, and servers would not scale (the name says what it talks to). */
     _codeBadgesHtml(cfg) {
-        if (!cfg.code_component_id || !cfg.code_component_missing) return '';
+        // A package import clears a link it could not map (id null): still shown as missing.
+        if (!cfg.code_component_missing) return '';
         return `<span class="tool-badge" style="background:#fee2e2;color:#b91c1c;" title="${this.escapeHtml(this.t('codeLibrary.missingTitle'))}">📚 ${this.escapeHtml(this.t('codeLibrary.missing'))}</span>`;
     }
 
@@ -15439,7 +15440,7 @@ class WorkflowEditor {
     async _runNodeAsCodeUnit(id, nodes, userPrompt) {
         const d = nodes[id].data || {};
         if (d.code_component_missing) {
-            const r = window.CodeNode.failureResult(d.exits || ['next'], `Code component #${d.code_component_id} not found (node ${d.name || 'Code'}).`);
+            const r = window.CodeNode.failureResult(d.exits || ['next'], `Code component ${d.code_component_id ? '#' + d.code_component_id + ' ' : ''}not found (node ${d.name || 'Code'}).`);
             this.nodeExecutionData[id] = window.CodeNode.runData(r, { parents: [], user_prompt: userPrompt, name: d.name || 'Code', ts: Date.now() });
             this.highlightNode(id, 'error', id, 'agent');
             return r;
