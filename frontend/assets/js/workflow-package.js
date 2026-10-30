@@ -96,7 +96,8 @@
         const exclude = DEFAULT_EXCLUDES.concat((manifest && manifest.exclude) || []);
         return (paths || []).filter((p) => {
             const segs = p.split('/');
-            if (segs.some((s) => s.startsWith('.')) && segs[segs.length - 1] !== '.env.example') return false;
+            if (segs.slice(0, -1).some((s) => s.startsWith('.'))) return false;
+            if (segs[segs.length - 1].startsWith('.') && segs[segs.length - 1] !== '.env.example') return false;
             if (exclude.some((x) => matches(p, x))) return false;
             return !include || include.some((x) => matches(p, x));
         });
@@ -129,8 +130,11 @@
     /** KEY=value lines for the server's .env; values with spaces, # or quotes are double-quoted. */
     function renderEnv(values) {
         return Object.entries(values || {}).map(([k, v]) => {
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) throw new Error('invalid setting name: ' + k);
             const str = String(v === undefined || v === null ? '' : v);
-            return `${k}=${/[\s#"']/.test(str) ? '"' + str.replace(/"/g, '\\"') + '"' : str}`;
+            if (!/[\s#"'\\]/.test(str)) return `${k}=${str}`;
+            const esc = str.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r\n|\n|\r/g, '\\n');
+            return `${k}="${esc}"`;
         }).join('\n') + '\n';
     }
 

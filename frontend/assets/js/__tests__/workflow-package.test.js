@@ -72,4 +72,12 @@ assert.deepStrictEqual(WP.missingRequired([{ name: 'A', required: true }], { A: 
 assert.strictEqual(WP.renderEnv({ A: 'x', B: 'a b' }), 'A=x\nB="a b"\n');
 assert.strictEqual(WP.renderEnv({ C: 'say "hi"', D: 'a#b' }), 'C="say \\"hi\\""\nD="a#b"\n');
 
+assert.strictEqual(WP.renderEnv({ K: 'x y\\' }), 'K="x y\\\\"\n');
+assert.strictEqual(WP.renderEnv({ K: 'C:\\new dir' }), 'K="C:\\\\new dir"\n');
+const inj = WP.renderEnv({ K: 'a"\nINJECT=1' });
+assert.strictEqual(inj.split('\n').filter(Boolean).length, 1);
+assert.ok(!inj.split('\n').some((l) => l.startsWith('INJECT=')));
+assert.throws(() => WP.renderEnv({ 'BAD-KEY': '1' }), /invalid setting name: BAD-KEY/);
+assert.deepStrictEqual(WP.selectServerFiles(['.secrets/.env.example', 'cfg/.env.example'], null), ['cfg/.env.example']);
+
 console.log('workflow-package: ok');
