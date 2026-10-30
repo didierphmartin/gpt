@@ -370,11 +370,12 @@
     /**
      * Install what the review rows say into the user's folder and this account, in the spec's order.
      * io (paths relative to the user's folder; writeFile creates parent folders):
-     *   ensureDir(path), writeFile(path, Uint8Array), readJson(path) -> obj|undefined, writeJson(path, obj),
+     *   exists(path) -> boolean, ensureDir(path), writeFile(path, Uint8Array), readJson(path) -> obj|undefined, writeJson(path, obj),
      *   addServer({name,url,description,transport,is_mock,headers}) -> {id}, createPlaybook({pkey,title,text}) -> {id},
      *   importComponents(bundle, nodes) -> nodes.
      * Skipped rows do nothing; use-existing / present rows write nothing but lend their existing id
-     * (from `have`) to the re-link. Any io failure rejects with the step and item named; err.installed
+     * (from `have`) to the re-link. Refuses (writing nothing) while a review item is unresolved or when a
+     * skill folder, server folder or playbook file to install already exists. Any io failure rejects with the step and item named; err.installed
      * lists what was done before it. Returns { installed, commands, nodes }.
      */
     async function installPackage(rows, pkg, values, io, have) {
@@ -401,6 +402,18 @@
             }
         };
         const parse = (path) => { try { return files[path] ? JSON.parse(dec(files[path])) : null; } catch (e) { return null; } };
+        const playbookDep = (r) => deps.find((d) => d.kind === 'playbook' && (d.pkey || d.name) === r.name);
+
+        if (!canConfirm(rows, vals)) throw new Error('install refused: unresolved items in the review');
+        // Never overwrite: every destination of an item to install must be free before anything is written.
+        const targets = [
+            ...ofKind('skill').filter(toInstall).map((r) => r.destination),
+            ...ofKind('server').filter((r) => toInstall(r) && r.destination).map((r) => r.destination),
+            ...ofKind('playbook').filter(toInstall).map((r) => { const d = playbookDep(r); return d && files[d.file] ? d.file : null; }),
+        ].filter(Boolean);
+        const taken = [];
+        for (const t of targets) if (await step(`check ${t}`, () => io.exists(t))) taken.push(t);
+        if (taken.length) throw new Error('install refused: would overwrite ' + taken.join(', '));
 
         for (const dir of ['skills', 'mcps', 'components', 'playbooks']) await step(`create folder ${dir}`, () => io.ensureDir(dir));
 
@@ -415,6 +428,7 @@
         for (const r of servers.filter((x) => x.destination)) {
             const folder = r.destination.replace(/^mcps\//, '');
             await copyTree(`${r.destination}/`, `write server ${r.name}`);
+            installed.push({ kind: 'server-files', name: r.name, destination: r.destination });
             const v = vals[r.name] || {};
             const ex = files[`${r.destination}/.env.example`];
             const man = parse(`${r.destination}/synergyai-mcp.json`);
@@ -456,7 +470,7 @@
 
         const playbookIdByOldId = new Map();
         for (const r of ofKind('playbook').filter(active)) {
-            const dep = deps.find((d) => d.kind === 'playbook' && (d.pkey || d.name) === r.name);
+            const dep = playbookDep(r);
             if (!dep) continue;
             let id;
             if (!toInstall(r)) {
@@ -481,8 +495,12 @@
             if (!dep) continue;
             if (!active(r)) { skippedIds.add(Number(dep.old_id)); continue; }
             if (toInstall(r) && files[dep.file]) {
-                await step(`write component ${r.name}`, () => io.writeFile(dep.file, files[dep.file]));
-                installed.push({ kind: 'component', name: r.name, destination: dep.file });
+                // A folder copy never refuses: the next free name, <base>.json then <base>_2.json ...
+                const base = dep.file.replace(/\.json$/, '');
+                let path = `${base}.json`;
+                for (let k = 2; await step(`check ${path}`, () => io.exists(path)); k++) path = `${base}_${k}.json`;
+                await step(`write component ${r.name}`, () => io.writeFile(path, files[dep.file]));
+                installed.push({ kind: 'component', name: r.name, destination: path });
             }
         }
         const bundle = (workflow.code_components || []).filter((c) => !skippedIds.has(Number(c.id)));

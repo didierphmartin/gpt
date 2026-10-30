@@ -314,6 +314,7 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
             const calls = [];
             let nextId = 100;
             return { fs, calls,
+                exists: async (p) => Object.keys(fs).some((k) => k === p || k.startsWith(p + '/')),
                 ensureDir: async (p) => { calls.push(['ensureDir', p]); },
                 writeFile: async (p, b) => { calls.push(['writeFile', p]); assert.ok(b instanceof Uint8Array); fs[p] = new TextDecoder().decode(b); },
                 readJson: async (p) => (fs[p] === undefined ? undefined : JSON.parse(fs[p])),
@@ -363,7 +364,7 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
         assert.deepStrictEqual(rn('5').config.connection, { url: 'u', api_key: 'SECRET' });
         assert.strictEqual(rn('2').config.connection, undefined);  // empty key skipped
         assert.deepStrictEqual(res.installed.map((x) => [x.kind, x.name, x.destination]), [
-            ['skill', 'pdf', 'skills/pdf'], ['server', 'Outlook', 'mcps/outlook_mcp'], ['playbook', 'triage', 'playbooks/triage.md'],
+            ['skill', 'pdf', 'skills/pdf'], ['server-files', 'Outlook', 'mcps/outlook_mcp'], ['server', 'Outlook', 'mcps/outlook_mcp'], ['playbook', 'triage', 'playbooks/triage.md'],
             ['component', 'Make PDF', 'components/Make_PDF.json']]);
         assert.strictEqual(JSON.parse(ientries['workflow.json'] && new TextDecoder().decode(ientries['workflow.json'])).definition.nodes[4].config.connection.api_key, undefined);
 
@@ -400,8 +401,30 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
         try { await WP.installPackage(irows, ipkg, { Outlook: { fillLater: true } }, io, ihave); } catch (e) { err = e; }
         assert.ok(err instanceof Error);
         assert.strictEqual(err.message, 'install failed at "register server Outlook": boom');
-        assert.deepStrictEqual(err.installed.map((x) => x.name), ['pdf']);
+        assert.deepStrictEqual(err.installed.map((x) => [x.kind, x.name]), [['skill', 'pdf'], ['server-files', 'Outlook']]);
         assert.ok(!io.calls.some((c) => c[0] === 'createPlaybook'));
+
+        // fix round 1: refuses unresolved items and existing destinations, writing nothing
+        const noWrites = (m) => assert.ok(!m.calls.some((c) => ['writeFile', 'ensureDir', 'addServer', 'writeJson', 'createPlaybook'].includes(c[0])), 'nothing written');
+        irows = await WP.reviewRows(ipkg, have2);   // Outlook clashes, no choice
+        io = memIo();
+        await assert.rejects(WP.installPackage(irows, ipkg, {}, io, have2), { message: 'install refused: unresolved items in the review' });
+        noWrites(io);
+        irows = await WP.reviewRows(ipkg, ihave);
+        io = memIo({ fs: { 'skills/pdf/SKILL.md': 'mine' } });
+        await assert.rejects(WP.installPackage(irows, ipkg, { Outlook: { fillLater: true } }, io, ihave), { message: 'install refused: would overwrite skills/pdf' });
+        noWrites(io);
+        assert.strictEqual(io.fs['skills/pdf/SKILL.md'], 'mine');
+        io = memIo({ fs: { 'mcps/outlook_mcp/server.py': 'mine', 'playbooks/triage.md': 'mine' } });
+        await assert.rejects(WP.installPackage(irows, ipkg, { Outlook: { fillLater: true } }, io, ihave),
+            { message: 'install refused: would overwrite mcps/outlook_mcp, playbooks/triage.md' });
+        noWrites(io);
+        // a component folder copy takes the next free name
+        io = memIo({ fs: { 'components/Make_PDF.json': 'mine' } });
+        res = await WP.installPackage(irows, ipkg, { Outlook: { fillLater: true } }, io, ihave);
+        assert.strictEqual(io.fs['components/Make_PDF.json'], 'mine');
+        assert.ok(io.fs['components/Make_PDF_2.json'].includes('Make PDF'));
+        assert.strictEqual(res.installed.find((x) => x.kind === 'component').destination, 'components/Make_PDF_2.json');
     }
     console.log('workflow-package: ok');
 })().catch((e) => { console.error(e); process.exit(1); });
