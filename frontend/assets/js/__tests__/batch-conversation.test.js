@@ -756,6 +756,34 @@ asyncCheck('a second call to _pbPending does not add a second indicator', async 
     assert.strictEqual(pendingCount(ed), 1, 'a second _pbPending() call added a second indicator');
 });
 
+// Play in the Enter Prompt form: the conversation opens and the prompt goes through its composer (the REAL method).
+const playSrc = extract('    async _playPrompt(prompt) {');
+function playEditor({ refused = false } = {}) {
+    const sent = [];
+    const input = { value: '' };
+    const ed = eval('({ ' + playSrc + ' })');
+    ed._openBatchSession = async () => { if (!refused) ed._pbSessionMode = 'batch'; };
+    const doc = { getElementById: (id) => (id === 'pb-ov-input' ? input
+        : id === 'pb-ov-send' ? { click: () => sent.push(input.value) } : null) };
+    return { ed, sent, doc };
+}
+
+asyncCheck('Play opens the conversation and sends the prompt through its composer', async () => {
+    const { ed, sent, doc } = playEditor();
+    const prevDoc = globalThis.document;
+    globalThis.document = doc;
+    try { await ed._playPrompt('Two days of vacation next week.'); } finally { globalThis.document = prevDoc; }
+    assert.deepStrictEqual(sent, ['Two days of vacation next week.']);
+});
+
+asyncCheck('a refused conversation (locked robot workflow) sends nothing', async () => {
+    const { ed, sent, doc } = playEditor({ refused: true });
+    const prevDoc = globalThis.document;
+    globalThis.document = doc;
+    try { await ed._playPrompt('anything'); } finally { globalThis.document = prevDoc; }
+    assert.deepStrictEqual(sent, []);
+});
+
 (async () => {
     for (const [name, fn] of checks) {
         try { await fn(); console.log('ok   ' + name); }

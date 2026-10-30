@@ -904,7 +904,8 @@
       "title": "User Prompt",
       "placeholder": "Enter your prompt here...",
       "save": "Save",
-      "run": "Run Workflow"
+      "run": "Run Workflow",
+      "play": "Play"
     },
     "codeAssist": {
       "title": "Assistant",
