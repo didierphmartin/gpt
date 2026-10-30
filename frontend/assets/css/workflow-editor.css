@@ -325,7 +325,7 @@
 
 /* Template cards (new unconfigured templates) */
 .workflow-agent-card.template {
-    border-style: dashed;
+    border-style: solid;
     border-color: #cbd5e1;
     background: #ffffff;
 }
