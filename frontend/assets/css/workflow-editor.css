@@ -60,7 +60,6 @@
     width: 40px;
 }
 .workflow-agents-panel.collapsed:not(.peek) .panel-title,
-.workflow-agents-panel.collapsed:not(.peek) .workflow-agents-list,
 .workflow-agents-panel.collapsed:not(.peek) .workflow-actions {
     display: none;
 }
@@ -70,13 +69,67 @@
     background: transparent;
     border-bottom: none;
 }
-/* The folded rail is gray so it stands out against the white canvas, like the dark left sidebar. */
+/* The folded rail matches the left sidebar's: black, with each node's icon (still draggable onto the canvas). */
 .workflow-agents-panel.collapsed:not(.peek) {
-    background: #9ca3af;
-    border-left-color: #6b7280;
+    background: #1f2937;
+    border-left-color: #374151;
+    color: #d1d5db;
 }
 .workflow-agents-panel.collapsed:not(.peek) .workflow-panel-toggle {
+    color: #d1d5db;
+}
+.workflow-agents-panel.collapsed:not(.peek) .workflow-panel-toggle:hover {
+    background: rgba(255, 255, 255, 0.08);
     color: #ffffff;
+}
+.workflow-agents-panel.collapsed:not(.peek) .workflow-agents-list {
+    padding: 4px 0;
+    overflow-x: hidden;
+}
+.workflow-agents-panel.collapsed:not(.peek) .workflow-section-header,
+.workflow-agents-panel.collapsed:not(.peek) .agent-info,
+.workflow-agents-panel.collapsed:not(.peek) .ingestion-order,
+.workflow-agents-panel.collapsed:not(.peek) .agent-edit-btn,
+.workflow-agents-panel.collapsed:not(.peek) .template-badge {
+    display: none;
+}
+.workflow-agents-panel.collapsed:not(.peek) .workflow-section {
+    margin: 0;
+    padding: 4px 0;
+}
+.workflow-agents-panel.collapsed:not(.peek) .workflow-section + .workflow-section {
+    border-top: 1px solid #374151;
+}
+.workflow-agents-panel.collapsed:not(.peek) .workflow-section-content,
+.workflow-agents-panel.collapsed:not(.peek) .workflow-section-content.collapsed {
+    max-height: none;
+    opacity: 1;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+.workflow-agents-panel.collapsed:not(.peek) .workflow-agent-card {
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    margin: 0;
+    justify-content: center;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    transform: none;
+}
+.workflow-agents-panel.collapsed:not(.peek) .workflow-agent-card:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+.workflow-agents-panel.collapsed:not(.peek) .workflow-agent-card .agent-icon {
+    background: transparent !important;
+    color: #d1d5db !important;
+    font-size: 18px;
+    width: auto;
+    height: auto;
 }
 
 /* Hover peek (hover-peek.js): the collapsed panel opens OVER the canvas while the mouse rests on it. Full width
