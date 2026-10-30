@@ -58,6 +58,49 @@
         return { files, manifest };
     }
 
+    /** True when the user's folder is granted (readable now). */
+    async function folderReadable() {
+        try { return !!window.localFs && (await window.localFs.getStatus()).state === 'granted'; } catch (_) { return false; }
+    }
+
+    /**
+     * Folder not readable: explain, then ask for it (re-grant a lapsed permission, else pick the folder).
+     * Resolves when done or skipped; the export goes on either way (the summary then warns).
+     */
+    async function askFolderAccess(editor) {
+        if (!window.localFs || await folderReadable()) return;
+        let status = { state: 'unsupported' };
+        try { status = await window.localFs.getStatus(); } catch (_) { /* unsupported */ }
+        if (status.state === 'unsupported') return;
+        const t = (key) => esc(editor.t(`workflow.package.${key}`));
+        await new Promise((resolve) => {
+            document.body.insertAdjacentHTML('beforeend', `
+                <div id="workflow-package-folder-modal" class="workflow-results-overlay">
+                    <div class="workflow-results-container" style="max-width: 520px;">
+                        <div class="workflow-results-header"><h2 style="margin: 0;">📁 ${t('folderTitle')}</h2></div>
+                        <div class="workflow-results-body" style="padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+                            <div>${t('needFolder')}</div>
+                            <div style="display: flex; gap: 8px; justify-content: flex-end;">
+                                <button data-folder-skip style="padding: 6px 14px; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer; font-size: 13px;">${t('folderSkip')}</button>
+                                <button data-folder-pick style="padding: 6px 14px; background: #2563eb; color: #fff; border: 1px solid #1d4ed8; border-radius: 6px; cursor: pointer; font-size: 13px;">${t('folderPick')}</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>`);
+            const modal = document.getElementById('workflow-package-folder-modal');
+            const done = () => { modal.remove(); resolve(); };
+            modal.querySelector('[data-folder-skip]').onclick = done;
+            modal.querySelector('[data-folder-pick]').onclick = async () => {
+                // This click is the user gesture the permission prompt / folder picker needs.
+                try {
+                    const res = status.handle ? await window.localFs.regrantAccess() : null;
+                    if (!res || !res.ok) await window.localFs.requestRootAccess('synergyAI');
+                } catch (e) { console.warn('[workflow-package] folder access:', e); }
+                done();
+            };
+        });
+    }
+
     /**
      * Collect the dependencies of the workflow on the canvas and zip them.
      * opts.playbookIds: extra playbooks to bundle (the workflow picks its playbook at run time).
@@ -73,11 +116,15 @@
         const warnings = [...deps.warnings];
         const warn = (kind, key, params) => warnings.push({ kind, message: t(key, params) });
         const files = { 'workflow.json': encode(payload) };
+        // Skills and local server source are read from the user's folder: say so when it can't be read.
+        const canRead = await folderReadable();
+        if (!canRead) warn('folder-not-accessible', 'warnFolderNotAccessible');
 
         // Skills: each bound folder, with the skill export's filter.
         const skills = [];
         for (const dir of deps.skills) {
-            const handle = window.localFs && await window.localFs.resolvePath(`skills/${dir}`);
+            if (!canRead) { warn('skill-unreadable', 'warnSkillUnreadable', { name: dir }); continue; }
+            const handle = await window.localFs.resolvePath(`skills/${dir}`);
             if (!handle) { warn('skill-missing', 'warnSkillMissing', { name: dir }); continue; }
             Object.assign(files, await window.skillsImport.readFolderFiles(handle, `skills/${dir}`));
             skills.push(dir);
@@ -85,7 +132,7 @@
 
         // MCP servers: every registration; a local one's source too (named in mcps/servers.json).
         let localMap = {};
-        try { localMap = (await readJsonFile('mcps/servers.json')) || {}; } catch (_) { warn('servers-map', 'warnServersMap'); }
+        if (canRead) try { localMap = (await readJsonFile('mcps/servers.json')) || {}; } catch (_) { warn('servers-map', 'warnServersMap'); }
         const uid = String(window.mcpClient?.getUserId?.() ?? '');
         const servers = [];
         for (const name of deps.servers) {
@@ -189,6 +236,7 @@
         const t = (key, params) => editor.t(`workflow.package.${key}`, params);
         const notify = (msg, type) => (editor.showNotification ? editor.showNotification(msg, type) : console.log(msg));
         document.getElementById('workflow-package-modal')?.remove();
+        await askFolderAccess(editor);
         let built;
         try {
             built = await buildPackageBytes(editor, {});

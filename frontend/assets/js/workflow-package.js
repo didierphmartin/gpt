@@ -224,6 +224,8 @@
             needs_auth: Object.keys(headers).some((k) => k.toLowerCase() === 'authorization'),
             old_id: isId(s.id) ? Number(s.id) : null,
             local: !!s.local,
+            // A global server (no owner) carries its keys on the administrator's side.
+            global: s.user_id === null || s.user_id === undefined || s.user_id === '',
         };
     }
 

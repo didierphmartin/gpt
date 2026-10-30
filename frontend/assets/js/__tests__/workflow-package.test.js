@@ -136,11 +136,11 @@ const man = WP.buildManifest({
     workflowName: 'Mail to PDF',
     deps: { warnings: [{ kind: 'tool-missing', node: '9', message: 'x' }] },
     servers: [
-        { id: 4, name: 'Outlook', url: 'http://localhost:8765/mcp', description: 'mail', transport: 'http', is_mock: 0,
+        { id: 4, name: 'Outlook', url: 'http://localhost:8765/mcp', description: 'mail', transport: 'http', is_mock: 0, user_id: 5,
           headers: { authorization: 'Bearer x' }, local: true, folder: 'outlook_mcp', hasManifest: true },
-        { id: 9, name: 'Hosted', url: 'https://h.example/mcp', description: '', transport: 'http', is_mock: 1,
+        { id: 9, name: 'Hosted', url: 'https://h.example/mcp', description: '', transport: 'http', is_mock: 1, user_id: null,
           headers: { Authorization: 'Bearer x', 'X-Other': 'y' } },
-        { id: 10, name: 'Open', url: 'https://o.example/mcp', headers: null },
+        { id: 10, name: 'Open', url: 'https://o.example/mcp', user_id: 5, headers: null },
     ],
     components: [{ id: 12, name: 'Make PDF', code: 'def run(): pass' }],
     playbooks: [{ id: 3, pkey: 'triage', title: 'Triage', text: 't' }],
@@ -155,10 +155,12 @@ assert.ok(!JSON.stringify(man).includes('X-Other'));
 const srv = man.dependencies.filter((x) => x.kind === 'server');
 assert.strictEqual(srv.length, 3);
 assert.deepStrictEqual(srv[0], { kind: 'server', name: 'Outlook', url: 'http://localhost:8765/mcp', description: 'mail', transport: 'http',
-    is_mock: false, needs_auth: true, old_id: 4, local: true, folder: 'mcps/outlook_mcp/', has_install_manifest: true });
+    is_mock: false, needs_auth: true, old_id: 4, local: true, global: false, folder: 'mcps/outlook_mcp/', has_install_manifest: true });
 assert.strictEqual(srv[1].needs_auth, true);
 assert.strictEqual(srv[1].local, false);
 assert.strictEqual(srv[1].is_mock, true);
+assert.strictEqual(srv[1].global, true);
+assert.strictEqual(srv[2].global, false);
 assert.strictEqual(srv[2].needs_auth, false);
 assert.ok(!('folder' in srv[1]));
 assert.deepStrictEqual(man.dependencies.find((x) => x.kind === 'component'), { kind: 'component', name: 'Make PDF', old_id: 12, file: 'components/Make_PDF.json' });
@@ -168,7 +170,7 @@ assert.deepStrictEqual(man.strippedSecrets, [{ node: '5', field: 'api_key' }]);
 assert.deepStrictEqual(man.warnings, [{ kind: 'tool-missing', node: '9', message: 'x' }]);
 // mcps/servers.json in the zip: the same registrations
 assert.deepStrictEqual(WP.serverRegistration({ id: 1, name: 'A', url: 'u', headers: { AUTHORIZATION: 'k' } }),
-    { name: 'A', url: 'u', description: '', transport: 'http', is_mock: false, needs_auth: true, old_id: 1, local: false });
+    { name: 'A', url: 'u', description: '', transport: 'http', is_mock: false, needs_auth: true, old_id: 1, local: false, global: true });
 assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
 
 (async () => {

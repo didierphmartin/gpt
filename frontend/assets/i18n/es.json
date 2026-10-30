@@ -1494,7 +1494,13 @@
       "warnNoInstall": "\"{{name}}\" no tiene instrucciones de instalación — consulte su README.",
       "warnComponentMissing": "El componente de código #{{id}} no está aquí — no se exporta.",
       "warnPlaybookMissing": "El playbook #{{id}} no está aquí — no se exporta.",
-      "warnServersMap": "No se pudo leer la lista de servidores MCP locales — todos los servidores se exportan solo con su registro."
+      "warnServersMap": "No se pudo leer la lista de servidores MCP locales — todos los servidores se exportan solo con su registro.",
+      "warnFolderNotAccessible": "Su carpeta SynergyAI no es accesible — no se pudieron incluir sus habilidades ni el código de los servidores MCP locales.",
+      "warnSkillUnreadable": "La habilidad \"{{name}}\" no se puede leer — acceso a la carpeta no concedido.",
+      "folderTitle": "Carpeta SynergyAI",
+      "needFolder": "Seleccione su carpeta SynergyAI para que se incluyan sus habilidades y servidores MCP locales.",
+      "folderPick": "Seleccionar carpeta",
+      "folderSkip": "Continuar sin ella"
     }
   },
   "robot": {

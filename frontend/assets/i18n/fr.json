@@ -1494,7 +1494,13 @@
       "warnNoInstall": "« {{name}} » n’a pas d’instructions d’installation — voir son README.",
       "warnComponentMissing": "Le composant de code n°{{id}} est absent ici — non exporté.",
       "warnPlaybookMissing": "Le playbook n°{{id}} est absent ici — non exporté.",
-      "warnServersMap": "La liste des serveurs MCP locaux n’a pas pu être lue — chaque serveur est exporté en enregistrement seulement."
+      "warnServersMap": "La liste des serveurs MCP locaux n’a pas pu être lue — chaque serveur est exporté en enregistrement seulement.",
+      "warnFolderNotAccessible": "Votre dossier SynergyAI n’est pas accessible — ses compétences et le code des serveurs MCP locaux n’ont pas pu être inclus.",
+      "warnSkillUnreadable": "La compétence « {{name}} » n’est pas lisible — accès au dossier non accordé.",
+      "folderTitle": "Dossier SynergyAI",
+      "needFolder": "Sélectionnez votre dossier SynergyAI pour inclure ses compétences et ses serveurs MCP locaux.",
+      "folderPick": "Choisir le dossier",
+      "folderSkip": "Continuer sans"
     }
   },
   "robot": {

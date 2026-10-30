@@ -1494,7 +1494,13 @@
       "warnNoInstall": "\"{{name}}\" has no install instructions — see its README.",
       "warnComponentMissing": "Code component #{{id}} is missing here — not exported.",
       "warnPlaybookMissing": "Playbook #{{id}} is missing here — not exported.",
-      "warnServersMap": "The list of local MCP servers could not be read — every server is exported as registration only."
+      "warnServersMap": "The list of local MCP servers could not be read — every server is exported as registration only.",
+      "warnFolderNotAccessible": "Your SynergyAI folder is not accessible — its skills and local MCP server source could not be included.",
+      "warnSkillUnreadable": "Skill \"{{name}}\" is not readable — folder access not granted.",
+      "folderTitle": "SynergyAI folder",
+      "needFolder": "Select your SynergyAI folder so its skills and local MCP servers can be included.",
+      "folderPick": "Select folder",
+      "folderSkip": "Continue without"
     }
   },
   "robot": {
