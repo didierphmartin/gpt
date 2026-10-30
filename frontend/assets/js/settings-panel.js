@@ -36,8 +36,6 @@ class SettingsPanel {
 
         // MCP elements
         this.mcpServerList = document.getElementById('mcp-server-list');
-        this.mcpToolsList = document.getElementById('mcp-tools-list');
-        this.mcpToolCount = document.getElementById('mcp-tool-count');
         this.mcpAddBtn = document.getElementById('mcp-add-server-btn');
         this.mcpAddForm = document.getElementById('mcp-add-server-form');
         this.mcpRefreshBtn = document.getElementById('mcp-refresh');
@@ -79,6 +77,7 @@ class SettingsPanel {
         this.userKeys = {};
         this.activeTab = 'usage';
         this.editingServerId = null;
+        this.toolsServerId = null;
 
         // Initialize
         this.init();
@@ -580,6 +579,7 @@ class SettingsPanel {
             return d.innerHTML;
         };
 
+        this.skillExport = null;   // the rows are rebuilt below, so any open export form goes with them
         list.innerHTML = skills
             .slice()
             .sort((a, b) => (a.dir_name || '').localeCompare(b.dir_name || ''))
@@ -588,7 +588,7 @@ class SettingsPanel {
                 const desc = (s.description || '').replace(/\s+/g, ' ').trim();
                 const truncated = desc.length > 240 ? desc.slice(0, 237) + '…' : desc;
                 return `
-                    <div class="flex items-start justify-between gap-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50">
+                    <div class="flex flex-wrap items-start justify-between gap-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50" data-skill-row="${escape(s.dir_name)}">
                         <div class="min-w-0 flex-1">
                             <div class="flex items-center gap-2">
                                 <span class="font-medium text-sm text-gray-900">${escape(s.name || s.dir_name)}</span>
@@ -596,6 +596,9 @@ class SettingsPanel {
                             </div>
                             <div class="text-xs text-gray-600 mt-1 leading-relaxed">${escape(truncated || '(no description)')}</div>
                         </div>
+                        <button type="button" class="mcp-server-btn flex-shrink-0 -mt-1" data-skill-export="${escape(s.dir_name)}" title="Export as .zip" aria-label="Export as .zip">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                        </button>
                         <label class="relative inline-flex items-center cursor-pointer flex-shrink-0 mt-0.5" title="${enabled ? 'Enabled — visible to the chat auto-router' : 'Disabled — hidden from the auto-router'}">
                             <!-- Positioned over the visible toggle (not sr-only) so focusing it on click doesn't scroll the hidden input "into view" and jump the panel to a blank offset. -->
                             <input type="checkbox" data-skill-toggle="${escape(s.dir_name)}" class="peer absolute inset-0 w-full h-full opacity-0 cursor-pointer m-0" ${enabled ? 'checked' : ''}>
@@ -622,6 +625,13 @@ class SettingsPanel {
             list.addEventListener('pointerdown', (e) => {
                 if (e.target.closest('label')) { const p = panelEl(); if (p) scrollBefore = p.scrollTop; }
             }, true);
+            list.addEventListener('click', (e) => {
+                const exportBtn = e.target.closest('[data-skill-export]');
+                if (exportBtn) this.toggleSkillExport(exportBtn.dataset.skillExport);
+                else if (e.target.closest('[data-skill-export-browse]')) this.browseSkillExport();
+                else if (e.target.closest('[data-skill-export-go]')) this.runSkillExport();
+                else if (e.target.closest('[data-skill-export-cancel]')) this.closeSkillExport();
+            });
             list.addEventListener('change', (e) => {
                 const cb = e.target.closest('input[type="checkbox"][data-skill-toggle]');
                 if (!cb) return;
@@ -666,6 +676,107 @@ class SettingsPanel {
                     this.loadSkills(); // re-render rows + refresh the master state
                 });
             }
+        }
+    }
+
+    /**
+     * Export icon: expand the skill's rectangle with the export form; a second click collapses it.
+     * State: this.skillExport = { dir, handle } where handle is the file chosen in the save dialog.
+     */
+    toggleSkillExport(dir) {
+        const wasOpen = this.skillExport?.dir === dir;
+        this.closeSkillExport();
+        if (wasOpen) return;
+
+        const row = [...document.querySelectorAll('#skills-list [data-skill-row]')]
+            .find(el => el.dataset.skillRow === dir);
+        if (!row) return;
+        this.skillExport = { dir, handle: null };
+        const panel = document.createElement('div');
+        panel.className = 'skill-export-panel w-full pt-3 border-t border-gray-200 flex flex-col gap-2';
+        panel.innerHTML = `
+            <label class="text-xs font-medium text-gray-600">Target location</label>
+            <div class="flex gap-2">
+                <input type="text" readonly data-skill-export-target
+                       class="flex-1 min-w-0 text-sm border border-gray-300 rounded px-2 py-1 bg-gray-50"
+                       placeholder="Click Browse… to choose where to save the .zip">
+                <button type="button" class="settings-btn settings-btn-secondary flex-shrink-0" data-skill-export-browse>Browse…</button>
+            </div>
+            <div class="flex items-center gap-2">
+                <span class="text-xs text-gray-500 mr-auto" data-skill-export-status></span>
+                <button type="button" class="settings-btn settings-btn-secondary" data-skill-export-cancel>Cancel</button>
+                <button type="button" class="settings-btn settings-btn-primary" data-skill-export-go>Export</button>
+            </div>`;
+        row.appendChild(panel);
+    }
+
+    closeSkillExport() {
+        this.skillExport = null;
+        document.querySelectorAll('#skills-list .skill-export-panel').forEach(el => el.remove());
+    }
+
+    _skillExportStatus(text, isError = false) {
+        const el = document.querySelector('#skills-list [data-skill-export-status]');
+        if (!el) return;
+        el.textContent = text;
+        el.classList.toggle('text-red-600', isError);
+    }
+
+    /** Browse…: the system save dialog picks the folder and file name. Returns false if cancelled. */
+    async browseSkillExport() {
+        const state = this.skillExport;
+        if (!state) return false;
+        if (typeof window.showSaveFilePicker !== 'function') {
+            this._skillExportStatus('This browser has no save dialog — Export will download the .zip instead.');
+            return true;
+        }
+        try {
+            state.handle = await window.showSaveFilePicker({
+                suggestedName: `${state.dir.split('/').pop()}.zip`,
+                types: [{ description: 'Zip archive', accept: { 'application/zip': ['.zip'] } }],
+            });
+        } catch (e) {
+            if (e?.name === 'AbortError') return false;   // the user closed the dialog
+            this._skillExportStatus(`Save dialog failed: ${e.message}`, true);
+            return false;
+        }
+        const target = document.querySelector('#skills-list [data-skill-export-target]');
+        if (target) target.value = state.handle.name;
+        this._skillExportStatus('');
+        return true;
+    }
+
+    /** Export: zip the skill and write it to the chosen file (or download it without a save dialog). */
+    async runSkillExport() {
+        const state = this.skillExport;
+        if (!state) return;
+        // No location yet: open the dialog now, while this click still counts as a user gesture.
+        if (!state.handle && typeof window.showSaveFilePicker === 'function' && !(await this.browseSkillExport())) return;
+
+        this._skillExportStatus('Exporting…');
+        try {
+            const result = await window.skillsImport?.exportSkillZip(state.dir);
+            if (!result?.ok) throw new Error(result?.error || 'Skill export is not available.');
+            const blob = new Blob([result.bytes], { type: 'application/zip' });
+            let savedAs;
+            if (state.handle) {
+                const w = await state.handle.createWritable();
+                await w.write(blob);
+                await w.close();
+                savedAs = state.handle.name;
+            } else {
+                savedAs = `${result.name}.zip`;
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = savedAs;
+                a.click();
+                setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+            }
+            this.closeSkillExport();
+            this.showNotification?.(`Skill exported to ${savedAs}`, 'success');
+        } catch (err) {
+            console.error('[settings:skills] export failed:', err);
+            this._skillExportStatus(`Export failed: ${err.message}`, true);
         }
     }
 
@@ -965,6 +1076,8 @@ class SettingsPanel {
      */
     showAddServerForm(server = null) {
         this.editingServerId = server?.id || null;
+        // Edit opens the form inside that server's rectangle; Add opens it above the list.
+        this.placeMCPForm();
 
         const nameInput = document.getElementById('mcp-server-name');
         const urlInput = document.getElementById('mcp-server-url');
@@ -985,7 +1098,26 @@ class SettingsPanel {
             this.mcpAddForm.classList.remove('hidden');
         }
         if (this.mcpAddBtn) {
-            this.mcpAddBtn.classList.add('hidden');
+            this.mcpAddBtn.classList.toggle('hidden', !this.editingServerId);
+        }
+    }
+
+    /**
+     * Put the add/edit form where it belongs: inside the edited server's rectangle,
+     * or back in its home slot just above the server list.
+     */
+    placeMCPForm() {
+        if (!this.mcpAddForm || !this.mcpServerList) return;
+        this.mcpServerList.querySelectorAll('.mcp-server-item.editing')
+            .forEach(el => el.classList.remove('editing'));
+        const item = this.editingServerId
+            ? this.mcpServerList.querySelector(`.mcp-server-item[data-server-id="${this.editingServerId}"]`)
+            : null;
+        if (item) {
+            item.classList.add('editing');
+            item.appendChild(this.mcpAddForm);
+        } else {
+            this.mcpServerList.before(this.mcpAddForm);
         }
     }
 
@@ -994,6 +1126,7 @@ class SettingsPanel {
      */
     hideAddServerForm() {
         this.editingServerId = null;
+        this.placeMCPForm();
 
         const nameInput = document.getElementById('mcp-server-name');
         const urlInput = document.getElementById('mcp-server-url');
@@ -1185,7 +1318,6 @@ class SettingsPanel {
         this.renderMCPServers();
 
         await window.mcpClient.loadAllTools();
-        this.renderMCPTools();
     }
 
     /**
@@ -1280,6 +1412,11 @@ class SettingsPanel {
             return;
         }
 
+        // The edit form may be inside a row; move it out before the rows are rebuilt.
+        if (this.mcpAddForm && this.mcpServerList.contains(this.mcpAddForm)) {
+            this.mcpServerList.before(this.mcpAddForm);
+        }
+
         this.mcpServerList.innerHTML = servers.map(server => {
             const sid = Number(server.id);
             const rich = richById && richById.get ? richById.get(sid) : undefined;
@@ -1310,11 +1447,9 @@ class SettingsPanel {
                         <span>📱 ${uiToolCount} with UI</span>
                     </div>
                 </div>
-                <div class="mcp-server-toggle ${on ? 'active' : ''}"
-                     data-server-id="${server.id}"
-                     data-is-global="${isGlobal ? '1' : '0'}"
-                     title="${on ? 'Disable for me' : 'Enable for me'}">
-                </div>
+                <button class="mcp-server-btn info" data-server-id="${server.id}" title="Show functions" aria-label="Show functions">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                </button>
                 <button class="mcp-server-btn refresh" data-action="rediscover" data-server-id="${server.id}" data-server-url="${this.escapeHtml(server.url)}" title="Rediscover tools" aria-label="Rediscover tools">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
                 </button>
@@ -1325,6 +1460,11 @@ class SettingsPanel {
                 <button class="mcp-server-btn delete" data-server-id="${server.id}" title="Delete">
                     🗑️
                 </button>`}
+                <div class="mcp-server-toggle ${on ? 'active' : ''}"
+                     data-server-id="${server.id}"
+                     data-is-global="${isGlobal ? '1' : '0'}"
+                     title="${on ? 'Disable for me' : 'Enable for me'}">
+                </div>
             </div>
         `;
         }).join('');
@@ -1344,36 +1484,24 @@ class SettingsPanel {
         });
 
         this.mcpServerList.querySelectorAll('.mcp-server-btn.edit').forEach(btn => {
-            btn.addEventListener('click', (e) => this.editMCPServer(e.target.dataset.serverId));
+            btn.addEventListener('click', (e) => this.editMCPServer(e.currentTarget.dataset.serverId));
         });
 
         this.mcpServerList.querySelectorAll('.mcp-server-btn.delete').forEach(btn => {
             btn.addEventListener('click', (e) => this.deleteMCPServer(e.target.dataset.serverId));
         });
+
+        this.mcpServerList.querySelectorAll('.mcp-server-btn.info').forEach(btn => {
+            btn.addEventListener('click', (e) => this.toggleMCPServerTools(e.currentTarget.dataset.serverId));
+        });
+
+        if (this.editingServerId) this.placeMCPForm();
+        if (this.toolsServerId) this.showMCPServerTools(this.toolsServerId);
     }
 
-    /**
-     * Render MCP tools list
-     */
-    renderMCPTools() {
-        if (!this.mcpToolsList) return;
-
-        const tools = window.mcpClient?.getAllTools() || [];
-
-        if (this.mcpToolCount) {
-            this.mcpToolCount.textContent = `(${tools.length})`;
-        }
-
-        if (tools.length === 0) {
-            this.mcpToolsList.innerHTML = `
-                <div class="text-center text-gray-400 text-sm py-4" data-i18n="settings.mcpNoTools">
-                    No tools available. Add and enable MCP servers to see their tools.
-                </div>
-            `;
-            return;
-        }
-
-        this.mcpToolsList.innerHTML = tools.map(tool => `
+    /** Markup for a server's list of functions (its info panel). */
+    renderMCPToolItems(tools) {
+        return tools.map(tool => `
             <div class="mcp-tool-item">
                 <div class="mcp-tool-icon ${tool.hasUi ? 'has-ui' : ''}">
                     ${tool.hasUi ? '📱' : '🔧'}
@@ -1387,6 +1515,62 @@ class SettingsPanel {
                 </div>
             </div>
         `).join('');
+    }
+
+    /**
+     * Info icon: expand the server's rectangle with its list of functions; a second click collapses it.
+     */
+    toggleMCPServerTools(serverId) {
+        const id = parseInt(serverId, 10);
+        if (this.toolsServerId === id) {
+            this.hideMCPServerTools();
+        } else {
+            this.hideMCPServerTools();
+            this.showMCPServerTools(id);
+        }
+    }
+
+    async showMCPServerTools(id) {
+        const item = this.mcpServerList?.querySelector(`.mcp-server-item[data-server-id="${id}"]`);
+        if (!item) { this.toolsServerId = null; return; }
+        this.toolsServerId = id;
+
+        const panel = document.createElement('div');
+        panel.className = 'mcp-server-functions';
+        panel.innerHTML = `
+            <div class="mcp-server-functions-title">Functions</div>
+            <div class="mcp-server-functions-body text-gray-400 text-sm">Loading…</div>`;
+        item.querySelector('.mcp-server-functions')?.remove();
+        item.classList.add('showing-functions');
+        item.appendChild(panel);
+
+        // Enabled servers' tools are already loaded; a switched-off server needs its own fetch.
+        let tools = (window.mcpClient?.getAllTools() || []).filter(t => Number(t.server_id) === id);
+        if (!tools.length) {
+            const rows = await window.mcpClient?.getServerTools(id) || [];
+            tools = rows.map(t => ({
+                name: t.tool_name,
+                description: t.tool_description,
+                hasUi: Number(t.has_ui) === 1,
+            }));
+        }
+        if (this.toolsServerId !== id || !panel.isConnected) return;   // closed or re-rendered meanwhile
+
+        panel.querySelector('.mcp-server-functions-title').textContent = `Functions (${tools.length})`;
+        const body = panel.querySelector('.mcp-server-functions-body');
+        if (tools.length) {
+            body.className = 'mcp-server-functions-body mcp-tools-list';
+            body.innerHTML = this.renderMCPToolItems(tools);
+        } else {
+            body.textContent = 'No functions found. Turn the server on, or click the refresh icon to rediscover its functions.';
+        }
+    }
+
+    hideMCPServerTools() {
+        this.toolsServerId = null;
+        this.mcpServerList?.querySelectorAll('.mcp-server-functions').forEach(el => el.remove());
+        this.mcpServerList?.querySelectorAll('.mcp-server-item.showing-functions')
+            .forEach(el => el.classList.remove('showing-functions'));
     }
 
     /**
@@ -1467,11 +1651,25 @@ class SettingsPanel {
     /**
      * Edit MCP server
      */
-    editMCPServer(serverId) {
-        const server = window.mcpClient?.servers?.get(parseInt(serverId));
+    async editMCPServer(serverId) {
+        const id = parseInt(serverId, 10);
+        // A second click on the same pencil collapses the form again.
+        if (Number(this.editingServerId) === id) {
+            this.hideAddServerForm();
+            return;
+        }
+        let server = window.mcpClient?.servers?.get(id);
+        if (!server && window.mcpClient) {
+            // The client map holds enabled servers only; a switched-off server of yours is
+            // still listed here, so fetch the full row (disabled included) without touching the map.
+            const qs = `user_id=${encodeURIComponent(window.mcpClient.getUserId())}&include_disabled=1`;
+            const data = await window.mcpClient.request(`/mcp/servers?${qs}`).catch(() => null);
+            server = (data?.servers || []).find(s => Number(s.id) === id);
+        }
         if (!server) return;
 
         this.showAddServerForm(server);
+        this.mcpAddForm?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
     /**

@@ -1,13 +1,15 @@
 /**
- * Skill import service.
+ * Skill import (and zip export) service.
  *
- * Two paths:
+ * Import paths:
  *   1. importFromFolder() — opens a folder picker, copies the source folder
  *      tree into <root>/skills/<name>/.
  *   2. importFromZipPicker() — opens a file picker for a .zip, extracts it
  *      via fflate, writes the contents into <root>/skills/<name>/.
  *
- * Both validate that the source contains a SKILL.md at its root and that
+ * exportSkillZip() is the reverse of path 2: it zips a skill folder.
+ *
+ * Both imports validate that the source contains a SKILL.md at its root and that
  * the destination name doesn't already exist under <root>/skills/. Failure
  * modes return { ok: false, error: ... } so the caller can surface them.
  *
@@ -405,10 +407,44 @@
         return { ok: true, name: safeName, fileCount };
     }
 
+    /**
+     * Export: zip <root>/skills/<dirName>/ with every file under one top-level
+     * folder named after the skill, the layout importFromZipFile() reads back.
+     * Junk, dotfiles (may hold secrets) and __pycache__ are left out.
+     * Returns { ok, name, bytes } or { ok: false, error }.
+     */
+    async function exportSkillZip(dirName) {
+        if (!window.fflate || typeof window.fflate.zip !== 'function') {
+            return { ok: false, error: 'Zip library (fflate) is not loaded.' };
+        }
+        const dir = window.localFs && await window.localFs.resolvePath(`skills/${dirName}`);
+        if (!dir) return { ok: false, error: `Skill folder "${dirName}" not found.` };
+
+        const files = {};
+        const walk = async (handle, prefix) => {
+            for await (const entry of handle.values()) {
+                if (isJunk(entry.name) || entry.name.startsWith('.') || entry.name === '__pycache__') continue;
+                const path = `${prefix}/${entry.name}`;
+                if (entry.kind === 'file') {
+                    files[path] = new Uint8Array(await (await entry.getFile()).arrayBuffer());
+                } else {
+                    await walk(entry, path);
+                }
+            }
+        };
+        await walk(dir, dir.name);
+
+        const bytes = await new Promise((resolve, reject) => {
+            window.fflate.zip(files, { level: 6 }, (err, data) => err ? reject(err) : resolve(data));
+        });
+        return { ok: true, name: dir.name, bytes };
+    }
+
     window.skillsImport = {
         importFromFolder,
         importFromZipPicker,
         importFromZipFile,    // exposed for drag-drop later
         importFromGitHub,
+        exportSkillZip,
     };
 })();

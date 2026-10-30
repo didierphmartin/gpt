@@ -532,8 +532,6 @@
     "mcpServerDescription": "Description (optionnel)",
     "mcpTestConnection": "Tester la Connexion",
     "mcpSaveServer": "Enregistrer le Serveur",
-    "mcpAvailableTools": "Outils Disponibles",
-    "mcpNoTools": "Aucun outil disponible. Ajoutez et activez des serveurs MCP pour voir leurs outils.",
     "mcpRefresh": "Actualiser Serveurs et Outils",
     "tabAccount": "Compte",
     "tabMemory": "Mémoire",
