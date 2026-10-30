@@ -119,6 +119,38 @@
             ${help ? `<span style="color: #64748b; font-size: 12px;">${help}</span>` : ''}</label>`;
     }
 
+    /** The private settings fields (masked secrets, required marks); t returns escaped workflow.package.* text. */
+    function settingsFieldsHtml(t, fields, values) {
+        const v = values || {};
+        return fields.map((f) => fieldRow(esc(f.name), f.required,
+            f.secret ? secretInput(t, `data-value="${esc(f.name)}"`, v[f.name] || '')
+                : `<input type="text" data-value="${esc(f.name)}" value="${esc(v[f.name] || '')}" style="${INPUT}">`,
+            esc(f.label), t('required'))).join('');
+    }
+
+    /** One install / start command with its Copy button (wire with wireCopyButtons). */
+    function commandBlockHtml(t, label, cmd) {
+        return cmd ? `<div style="font-size: 13px; color: #475569;">${label}</div>
+                <div style="display: flex; gap: 6px; align-items: flex-start;"><pre style="flex: 1; margin: 0; padding: 6px 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; white-space: pre-wrap; word-break: break-all; font-size: 12px;">${esc(cmd)}</pre>
+                <button type="button" data-copy="${esc(cmd)}" style="${BTN_PLAIN} padding: 4px 10px;">${t('copy')}</button></div>` : '';
+    }
+
+    /** The show/hide button of a secretInput; t returns plain workflow.package.* text. */
+    function toggleSecret(toggle, t) {
+        const input = toggle.parentElement.querySelector('input');
+        const hidden = input.type === 'password';
+        input.type = hidden ? 'text' : 'password';
+        toggle.textContent = t(hidden ? 'hide' : 'show');
+    }
+
+    function wireCopyButtons(root, t) {
+        root.querySelectorAll('[data-copy]').forEach((b) => {
+            b.onclick = async () => {
+                try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = t('copied'); } catch (_) { b.textContent = t('copyFailed'); }
+            };
+        });
+    }
+
     function cardHtml(editor, state, r, i) {
         const t = (key, params) => esc(editor.t(`workflow.package.${key}`, params));
         const v = state.values[r.name] || {};
@@ -152,10 +184,7 @@
                 parts.push(fieldRow(t('authorization'), false, secretInput(t, 'data-value="authorization"', v.authorization || ''), t('authorizationHelp')));
             }
             if (r.envFields) {
-                const form = r.envFields.map((f) => fieldRow(esc(f.name), f.required,
-                    f.secret ? secretInput(t, `data-value="${esc(f.name)}"`, v[f.name] || '')
-                        : `<input type="text" data-value="${esc(f.name)}" value="${esc(v[f.name] || '')}" style="${INPUT}">`,
-                    esc(f.label), t('required'))).join('');
+                const form = settingsFieldsHtml(t, r.envFields, v);
                 parts.push(`<div style="border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 8px;">
                     <strong style="font-size: 13px;">${t('settingsTitle')}</strong>${form}
                     <label style="font-size: 13px;"><input type="checkbox" data-fill-later ${v.fillLater ? 'checked' : ''}> ${t('fillLater')}</label></div>`);
@@ -203,9 +232,7 @@
         }
         const cmds = result.commands.filter((c) => c.install || c.start);
         if (cmds.length) {
-            const block = (label, cmd) => (cmd ? `<div style="font-size: 13px; color: #475569;">${label}</div>
-                <div style="display: flex; gap: 6px; align-items: flex-start;"><pre style="flex: 1; margin: 0; padding: 6px 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; white-space: pre-wrap; word-break: break-all; font-size: 12px;">${esc(cmd)}</pre>
-                <button type="button" data-copy="${esc(cmd)}" style="${BTN_PLAIN} padding: 4px 10px;">${t('copy')}</button></div>` : '');
+            const block = (label, cmd) => commandBlockHtml(t, label, cmd);
             html += `<div style="${box} display: flex; flex-direction: column; gap: 6px;"><strong>${t('commandsTitle')}</strong>
                 <div style="color: #475569; font-size: 13px;">${t('commandsHelp')}</div>
                 ${cmds.map((c) => {
@@ -262,13 +289,7 @@
 
         list.addEventListener('click', (e) => {
             const toggle = e.target.closest('[data-toggle-secret]');
-            if (toggle) {
-                const input = toggle.parentElement.querySelector('input');
-                const hidden = input.type === 'password';
-                input.type = hidden ? 'text' : 'password';
-                toggle.textContent = t(hidden ? 'hide' : 'show');
-                return;
-            }
+            if (toggle) { toggleSecret(toggle, t); return; }
             const btn = e.target.closest('[data-choice]');
             if (!btn || busy || locked) return;
             const r = state.rows[Number(btn.closest('[data-row]').dataset.row)];
@@ -321,11 +342,7 @@
             const actions = modal.querySelector('[data-import-actions]');
             actions.innerHTML = `<button data-import-close style="${BTN} background: #2563eb; color: #fff; border: 1px solid #1d4ed8;">${esc(t('close'))}</button>`;
             actions.querySelector('[data-import-close]').onclick = () => modal.remove();
-            list.querySelectorAll('[data-copy]').forEach((b) => {
-                b.onclick = async () => {
-                    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = t('copied'); } catch (_) { b.textContent = t('copyFailed'); }
-                };
-            });
+            wireCopyButtons(list, t);
             state.result = result;
         };
         render();
@@ -375,5 +392,8 @@
         return importPackageBytes(editor, new Uint8Array(await file.arrayBuffer()), overrides);
     }
 
-    Object.assign(window.WorkflowPackageUI, { importPackage, importPackageBytes, loadImportHave: loadHave, importIo: defaultIo });
+    Object.assign(window.WorkflowPackageUI, {
+        importPackage, importPackageBytes, loadImportHave: loadHave, importIo: defaultIo,
+        settingsFieldsHtml, commandBlockHtml, toggleSecret, wireCopyButtons,
+    });
 })();

@@ -80,6 +80,17 @@ assert.ok(!inj.split('\n').some((l) => l.startsWith('INJECT=')));
 assert.throws(() => WP.renderEnv({ 'BAD-KEY': '1' }), /invalid setting name: BAD-KEY/);
 assert.deepStrictEqual(WP.selectServerFiles(['.secrets/.env.example', 'cfg/.env.example'], null), ['cfg/.env.example']);
 
+// parseEnv: KEY=value lines; quoted values unquoted; round-trips renderEnv
+assert.deepStrictEqual(WP.parseEnv('A=1\n# comment\n\nexport B = two \nC="x y"\nD=\'s q\'\nnot a pair\nE=\n'),
+    { A: '1', B: 'two', C: 'x y', D: 's q', E: '' });
+assert.deepStrictEqual(WP.parseEnv('A=1\r\nB="q"\r\n'), { A: '1', B: 'q' });
+assert.deepStrictEqual(WP.parseEnv('A=v # note\nB="v # kept"\n'), { A: 'v', B: 'v # kept' });
+assert.deepStrictEqual(WP.parseEnv(''), {});
+assert.deepStrictEqual(WP.parseEnv(undefined), {});
+const rt = { PLAIN: 'abc', SPACES: 'a b  c', QUOTES: 'say "hi" and \'yo\'', BACK: 'C:\\new dir\\', NL: 'line1\nline2\r\nline3', HASH: 'a#b', EMPTY: '', MIX: '\\"\n\\n' };
+const back = WP.parseEnv(WP.renderEnv(rt));
+assert.deepStrictEqual(back, { ...rt, NL: 'line1\nline2\nline3' });
+
 
 // classify
 assert.strictEqual(WP.classify('server', { name: 'Workday', url: 'u' }, [{ name: ' workday ', url: 'u' }]).status, 'present');

@@ -138,6 +138,36 @@
         }).join('\n') + '\n';
     }
 
+    /** KEY=value lines back to { KEY: value } (renderEnv's inverse): "..." unescapes \\ \" \n, '...' is literal,
+     *  an unquoted value ends at " #". Comments, blank and malformed lines are skipped. */
+    function parseEnv(text) {
+        const out = {};
+        for (const raw of String(text || '').split(/\r?\n/)) {
+            const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/.exec(raw);
+            if (!m) continue;
+            const rest = m[2].trim();
+            let v;
+            if (rest[0] === '"') {
+                v = '';
+                for (let i = 1; i < rest.length; i++) {
+                    const c = rest[i];
+                    if (c === '"') break;
+                    if (c === '\\' && i + 1 < rest.length) {
+                        const n = rest[++i];
+                        v += n === 'n' ? '\n' : n === 'r' ? '\r' : n === 't' ? '\t' : n;
+                    } else v += c;
+                }
+            } else if (rest[0] === "'") {
+                const end = rest.indexOf("'", 1);
+                v = end === -1 ? rest.slice(1) : rest.slice(1, end);
+            } else {
+                v = rest.replace(/\s+#.*$/, '').trim();
+            }
+            out[m[1]] = v;
+        }
+        return out;
+    }
+
     /** Names of required fields with no value. */
     function missingRequired(fields, values) {
         return (fields || []).filter((f) => f.required && !String((values || {})[f.name] || '').trim()).map((f) => f.name);
@@ -524,5 +554,5 @@
         return { installed, commands, nodes };
     }
 
-    return { collectDependencies, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, envFields, renderEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest, readPackage, matchComponent, reviewRows, canConfirm, installPackage };
+    return { collectDependencies, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, envFields, renderEnv, parseEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest, readPackage, matchComponent, reviewRows, canConfirm, installPackage };
 });
