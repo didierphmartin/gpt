@@ -259,7 +259,13 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
     // fix round 1: present stays present; unreadable component
     const pkg3 = WP.readPackage({ ...entries, 'mcps/Outlook/synergyai-mcp.json': J({ env: [{ name: 'TENANT_ID', required: true }] }) });
     rows = await WP.reviewRows(pkg3, { servers: [{ name: 'Outlook', url: 'http://localhost:8765/mcp' }], playbooks: [], skills: [], components: [] });
+    // the incoming package server is local + needs_auth + localhost, with a required setting in its synergyai-mcp.json
+    assert.strictEqual(pkg3.servers[0].local, true);
+    assert.strictEqual(pkg3.servers[0].needs_auth, true);
+    assert.ok(pkg3.files['mcps/Outlook/synergyai-mcp.json']);
     assert.strictEqual(row('server', 'Outlook').status, 'present');
+    assert.ok(row('server', 'Outlook').reasons.includes('localhost-url') && row('server', 'Outlook').reasons.includes('needs-key'));
+    assert.ok(!row('server', 'Outlook').reasons.includes('settings-required'));
     assert.ok(!row('server', 'Outlook').envFields);
     assert.strictEqual(WP.canConfirm(rows.filter((r) => r.kind === 'server'), {}), true);
     const pkg4 = WP.readPackage({ ...entries, 'components/Make_PDF.json': enc('{bad') });
