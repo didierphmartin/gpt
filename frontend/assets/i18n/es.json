@@ -893,7 +893,7 @@
     "step2": "Conecta nodos arrastrando de salidas a entradas",
     "step3": "Añade nodos Inicio y Salida para definir el flujo",
     "step4": "Guarda y ejecuta tu workflow",
-    "batchWorkflowSettings": "Configuración del workflow batch",
+    "batchWorkflowSettings": "Configuración del workflow",
     "savedWorkflows": "Workflows Guardados",
     "newWorkflow": "Nuevo",
     "importWorkflow": "Importar",

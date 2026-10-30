@@ -1292,6 +1292,20 @@ class WorkflowEditor {
                 min-width: 280px;
                 max-width: 350px;
             }
+            /* In the top toolbar: the folded pill sits in the row, left of Reset; open, the form drops over the canvas. */
+            #workflow-top-toolbar .workflow-info-box {
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: auto;
+            }
+            #workflow-top-toolbar .workflow-info-box.collapsed {
+                position: static;
+                padding: 5px 12px;
+                border-color: #d1d5db;
+                border-radius: 8px;
+                box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+            }
             .workflow-info-box.collapsed {
                 padding: 6px 12px;
                 min-width: auto;
@@ -1530,7 +1544,7 @@ class WorkflowEditor {
         document.head.appendChild(style);
 
         // Add to container
-        this.container.appendChild(infoBox);
+        this._placeSettingsBox(infoBox);
 
         // Hidden by default — shown only after workflow type is chosen (batch)
         // or when loading an existing batch workflow. Audio workflows have their
@@ -1706,6 +1720,13 @@ class WorkflowEditor {
         }, delayMs);
     }
 
+    /** The settings form folds into the top toolbar, left of Reset (on the canvas when there is no toolbar). */
+    _placeSettingsBox(infoBox) {
+        const toolbar = document.getElementById('workflow-top-toolbar');
+        if (toolbar && this.container.contains(toolbar)) toolbar.prepend(infoBox);
+        else this.container.appendChild(infoBox);
+    }
+
     addAudioWorkflowInfoBox() {
         const infoBox = document.createElement('div');
         infoBox.id = 'audio-workflow-info-box';
@@ -1743,7 +1764,7 @@ class WorkflowEditor {
             </div>
         `;
 
-        this.container.appendChild(infoBox);
+        this._placeSettingsBox(infoBox);
         infoBox.style.display = 'none';
 
         const nameInput = document.getElementById('audio-workflow-name-input');
