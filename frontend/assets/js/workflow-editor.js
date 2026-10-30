@@ -21348,6 +21348,8 @@ Based on the analysis...
         if (Array.isArray(sk) && sk.length) have.skills = sk.map((x) => x.dir_name).filter(Boolean);
         try {
             const { servers, toolServers } = await window.WorkflowPackageUI.loadServers();
+            // Without mcpClient loadServers returns empty lists, which would read as 'no servers exist'
+            // and badge every server use; leave them unknown (null) instead.
             if (window.mcpClient) { have.servers = servers; have.tools = toolServers; }
         } catch (e) { /* unknown: server checks are skipped */ }
         const PC = window.PlaybookCollection;
@@ -21371,7 +21373,13 @@ Based on the analysis...
             const row = document.createElement('div');
             row.className = 'missing-badges';
             row.style.cssText = 'padding:0 8px 4px;display:flex;flex-wrap:wrap;max-width:230px;';
-            row.innerHTML = `<span class="tool-badge" style="background:#fee2e2;color:#b91c1c;" title="${this.escapeHtml(title)}">⚠ ${this.escapeHtml(this.t('workflow.package.missing'))}</span>`;
+            // Built without HTML strings: the title carries names from workflow/package data.
+            const chip = document.createElement('span');
+            chip.className = 'tool-badge';
+            chip.style.cssText = 'background:#fee2e2;color:#b91c1c;';
+            chip.title = title;
+            chip.textContent = `⚠ ${this.t('workflow.package.missing')}`;
+            row.appendChild(chip);
             box.appendChild(row);
         }
     }
