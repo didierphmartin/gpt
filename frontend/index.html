@@ -2601,10 +2601,13 @@
                              gets the bulk of the vertical real estate. -->
                         <div class="flex-shrink-0 px-2 py-2 border-b border-gray-200 bg-gray-200 flex gap-1">
                             <button id="new-workflow-btn" class="flex-1 text-green-700 hover:text-green-800 text-xs font-medium py-1 px-2 bg-green-50 hover:bg-green-100 rounded transition">
-                                ➕ <span data-i18n="workflow.newWorkflow">New Workflow</span>
+                                ➕ <span data-i18n="workflow.newWorkflow">New</span>
                             </button>
-                            <button id="sidebar-import-workflow-btn" class="text-indigo-600 hover:text-indigo-700 text-xs font-medium py-1 px-2 bg-indigo-50 hover:bg-indigo-100 rounded transition" title="Import a workflow from a JSON file">
-                                ⬆️ <span data-i18n="workflow.importWorkflow">Import</span>
+                            <button id="sidebar-export-workflow-btn" class="flex-1 text-indigo-600 hover:text-indigo-700 text-xs font-medium py-1 px-2 bg-indigo-50 hover:bg-indigo-100 rounded transition" title="Export the open workflow with its dependencies, as one .zip">
+                                📤 <span data-i18n="workflow.exportWorkflow">Export</span>
+                            </button>
+                            <button id="sidebar-import-workflow-btn" class="flex-1 text-indigo-600 hover:text-indigo-700 text-xs font-medium py-1 px-2 bg-indigo-50 hover:bg-indigo-100 rounded transition" title="Import a workflow package (.zip) or a workflow JSON file">
+                                📥 <span data-i18n="workflow.importWorkflow">Import</span>
                             </button>
                         </div>
 
@@ -4412,7 +4415,7 @@
     <script src="assets/js/workflow-package.js?v=20261030-final-fixes"></script>
     <script src="assets/js/workflow-package-ui.js?v=20261030-export-wait"></script>
     <script src="assets/js/workflow-package-import.js?v=20261030-final-fixes"></script>
-    <script src="assets/js/workflow-editor.js?v=20261030-one-export"></script>
+    <script src="assets/js/workflow-editor.js?v=20261030-sidebar-export"></script>
     <script src="assets/js/agents-library.js?v=20260903-playbook-agent"></script>
     <script src="assets/js/mcp-tool-tester.js?v=20260904-mcplib"></script>
     <script src="assets/js/mcp-library.js?v=20261005-is-mock"></script>

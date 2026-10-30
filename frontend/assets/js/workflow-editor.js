@@ -628,6 +628,12 @@ class WorkflowEditor {
         // each time → one click fires N file pickers (Cancel reveals the next).
         const sidebarImportBtn = document.getElementById('sidebar-import-workflow-btn');
         if (sidebarImportBtn) sidebarImportBtn.onclick = () => this._handleImportWorkflow();
+        // Sidebar Export -- the form's Export (the .zip package) for the workflow open on the canvas.
+        const sidebarExportBtn = document.getElementById('sidebar-export-workflow-btn');
+        if (sidebarExportBtn) sidebarExportBtn.onclick = () => {
+            if (!this.currentWorkflowId) { this.showNotification(this.t('workflow.messages.openToExport'), 'warning'); return; }
+            window.WorkflowPackageUI?.exportPackage(this);
+        };
 
         // Load existing workflows into left panel
         this.loadWorkflowsList();
