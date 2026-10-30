@@ -1469,6 +1469,32 @@
     "fork": {
       "all": "ALL {{total}}",
       "one": "1 OF {{total}}"
+    },
+    "package": {
+      "export": "Export with dependencies",
+      "exportTitle": "Export the workflow with the skills, MCP servers, code components and playbooks it needs, as one .zip",
+      "summaryTitle": "Export with dependencies",
+      "needs": "This workflow needs:",
+      "countSkills": "{{count}} skill(s), bundled",
+      "countServers": "{{count}} MCP server(s): {{local}} local, bundled as source; {{hosted}} hosted, registration only",
+      "countNeedsKey": "{{count}} server(s) need a key you will enter again on import",
+      "countComponents": "{{count}} code component(s)",
+      "countPlaybooks": "{{count}} playbook(s)",
+      "nothing": "No dependencies: the package holds the workflow only.",
+      "warnings": "Warnings",
+      "runTimePlaybook": "This workflow picks its playbook at run time. Tick the playbooks to bundle:",
+      "noPlaybooks": "You have no playbooks.",
+      "save": "Save…",
+      "cancel": "Cancel",
+      "saved": "Package saved as {{name}}",
+      "failed": "Package export failed: {{error}}",
+      "warnSkillMissing": "Skill \"{{name}}\" is missing here — not exported.",
+      "warnServerMissing": "MCP server \"{{name}}\" is not registered here — not exported.",
+      "warnFolderUnreadable": "The local folder of \"{{name}}\" could not be opened — registration only.",
+      "warnNoInstall": "\"{{name}}\" has no install instructions — see its README.",
+      "warnComponentMissing": "Code component #{{id}} is missing here — not exported.",
+      "warnPlaybookMissing": "Playbook #{{id}} is missing here — not exported.",
+      "warnServersMap": "The list of local MCP servers could not be read — every server is exported as registration only."
     }
   },
   "robot": {

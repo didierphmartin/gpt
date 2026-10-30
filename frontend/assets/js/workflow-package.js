@@ -208,5 +208,57 @@
         return Array.from(d, (b) => b.toString(16).padStart(2, '0')).join('');
     }
 
-    return { collectDependencies, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, envFields, renderEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash };
+    /** A name usable as one file name: runs of other characters become "_". */
+    function safeFileName(name) {
+        return String(name || '').replace(/[^A-Za-z0-9_.-]+/g, '_').replace(/^[_.]+|_+$/g, '') || 'item';
+    }
+
+    const truthy = (v) => v === true || v === 1 || v === '1' || v === 'true';
+
+    /** A server's registration for the package: never a header value, only whether it needs a key. */
+    function serverRegistration(s) {
+        const headers = s.headers && typeof s.headers === 'object' ? s.headers : {};
+        return {
+            name: s.name, url: s.url || '', description: s.description || '', transport: s.transport || 'http',
+            is_mock: truthy(s.is_mock),
+            needs_auth: Object.keys(headers).some((k) => k.toLowerCase() === 'authorization'),
+            old_id: isId(s.id) ? Number(s.id) : null,
+            local: !!s.local,
+        };
+    }
+
+    /** manifest.json: format + one entry per dependency, with where its files sit in the zip. */
+    function buildManifest({ workflowName, deps, servers, components, playbooks, skills, strippedSecrets }) {
+        const unique = (used, base, ext) => {
+            let name = base + ext;
+            for (let k = 2; used.has(name.toLowerCase()); k++) name = `${base}_${k}${ext}`;
+            used.add(name.toLowerCase());
+            return name;
+        };
+        const compFiles = new Set(), pbFiles = new Set();
+        const dependencies = [
+            ...(skills || []).map((dir) => ({ kind: 'skill', name: dir, folder: `skills/${dir}/` })),
+            ...(servers || []).map((s) => ({
+                kind: 'server', ...serverRegistration(s),
+                ...(s.local ? { folder: `mcps/${s.folder}/`, has_install_manifest: !!s.hasManifest } : {}),
+            })),
+            ...(components || []).map((c) => ({
+                kind: 'component', name: c.name, old_id: Number(c.id),
+                file: 'components/' + unique(compFiles, safeFileName(c.name), '.json'),
+            })),
+            ...(playbooks || []).map((p) => ({
+                kind: 'playbook', name: p.title || p.pkey, pkey: p.pkey, old_id: Number(p.id),
+                file: 'playbooks/' + unique(pbFiles, safeFileName(p.pkey), '.md'),
+            })),
+        ];
+        return {
+            format: 'synergyai-workflow-package', version: 1,
+            workflow: { name: workflowName || '' },
+            dependencies,
+            strippedSecrets: strippedSecrets || [],
+            warnings: (deps && deps.warnings) || [],
+        };
+    }
+
+    return { collectDependencies, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, envFields, renderEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest };
 });

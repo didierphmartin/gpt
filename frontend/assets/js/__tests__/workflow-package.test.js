@@ -131,6 +131,46 @@ assert.strictEqual(out[6].config.playbook_id, 19);
 assert.strictEqual(rnodes[6].config.playbook_id, '3');
 assert.deepStrictEqual(out[7], rnodes[7]);
 
+// buildManifest: registrations only, never a header value; needs_auth from an Authorization header
+const man = WP.buildManifest({
+    workflowName: 'Mail to PDF',
+    deps: { warnings: [{ kind: 'tool-missing', node: '9', message: 'x' }] },
+    servers: [
+        { id: 4, name: 'Outlook', url: 'http://localhost:8765/mcp', description: 'mail', transport: 'http', is_mock: 0,
+          headers: { authorization: 'Bearer x' }, local: true, folder: 'outlook_mcp', hasManifest: true },
+        { id: 9, name: 'Hosted', url: 'https://h.example/mcp', description: '', transport: 'http', is_mock: 1,
+          headers: { Authorization: 'Bearer x', 'X-Other': 'y' } },
+        { id: 10, name: 'Open', url: 'https://o.example/mcp', headers: null },
+    ],
+    components: [{ id: 12, name: 'Make PDF', code: 'def run(): pass' }],
+    playbooks: [{ id: 3, pkey: 'triage', title: 'Triage', text: 't' }],
+    skills: ['GEO/geo-compare'],
+    strippedSecrets: [{ node: '5', field: 'api_key' }],
+});
+assert.strictEqual(man.format, 'synergyai-workflow-package');
+assert.strictEqual(man.version, 1);
+assert.deepStrictEqual(man.workflow, { name: 'Mail to PDF' });
+assert.ok(!JSON.stringify(man).includes('Bearer'));
+assert.ok(!JSON.stringify(man).includes('X-Other'));
+const srv = man.dependencies.filter((x) => x.kind === 'server');
+assert.strictEqual(srv.length, 3);
+assert.deepStrictEqual(srv[0], { kind: 'server', name: 'Outlook', url: 'http://localhost:8765/mcp', description: 'mail', transport: 'http',
+    is_mock: false, needs_auth: true, old_id: 4, local: true, folder: 'mcps/outlook_mcp/', has_install_manifest: true });
+assert.strictEqual(srv[1].needs_auth, true);
+assert.strictEqual(srv[1].local, false);
+assert.strictEqual(srv[1].is_mock, true);
+assert.strictEqual(srv[2].needs_auth, false);
+assert.ok(!('folder' in srv[1]));
+assert.deepStrictEqual(man.dependencies.find((x) => x.kind === 'component'), { kind: 'component', name: 'Make PDF', old_id: 12, file: 'components/Make_PDF.json' });
+assert.deepStrictEqual(man.dependencies.find((x) => x.kind === 'playbook'), { kind: 'playbook', name: 'Triage', pkey: 'triage', old_id: 3, file: 'playbooks/triage.md' });
+assert.deepStrictEqual(man.dependencies.find((x) => x.kind === 'skill'), { kind: 'skill', name: 'GEO/geo-compare', folder: 'skills/GEO/geo-compare/' });
+assert.deepStrictEqual(man.strippedSecrets, [{ node: '5', field: 'api_key' }]);
+assert.deepStrictEqual(man.warnings, [{ kind: 'tool-missing', node: '9', message: 'x' }]);
+// mcps/servers.json in the zip: the same registrations
+assert.deepStrictEqual(WP.serverRegistration({ id: 1, name: 'A', url: 'u', headers: { AUTHORIZATION: 'k' } }),
+    { name: 'A', url: 'u', description: '', transport: 'http', is_mock: false, needs_auth: true, old_id: 1, local: false });
+assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
+
 (async () => {
     const enc = (s) => new TextEncoder().encode(s);
     const h1 = await WP.filesHash({ 'a.txt': enc('1'), 'b/c.txt': enc('2') });

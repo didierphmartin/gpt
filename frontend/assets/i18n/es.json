@@ -1469,6 +1469,32 @@
     "fork": {
       "all": "LAS {{total}}",
       "one": "1 DE {{total}}"
+    },
+    "package": {
+      "export": "Exportar con dependencias",
+      "exportTitle": "Exportar el flujo de trabajo con las habilidades, servidores MCP, componentes de código y playbooks que necesita, en un solo .zip",
+      "summaryTitle": "Exportar con dependencias",
+      "needs": "Este flujo de trabajo necesita:",
+      "countSkills": "{{count}} habilidad(es), incluidas",
+      "countServers": "{{count}} servidor(es) MCP: {{local}} local(es), incluidos como código fuente; {{hosted}} alojado(s), solo el registro",
+      "countNeedsKey": "{{count}} servidor(es) necesitan una clave que volverá a introducir al importar",
+      "countComponents": "{{count}} componente(s) de código",
+      "countPlaybooks": "{{count}} playbook(s)",
+      "nothing": "Sin dependencias: el paquete solo contiene el flujo de trabajo.",
+      "warnings": "Advertencias",
+      "runTimePlaybook": "Este flujo de trabajo elige su playbook en tiempo de ejecución. Marque los playbooks que desea incluir:",
+      "noPlaybooks": "No tiene playbooks.",
+      "save": "Guardar…",
+      "cancel": "Cancelar",
+      "saved": "Paquete guardado como {{name}}",
+      "failed": "Error al exportar el paquete: {{error}}",
+      "warnSkillMissing": "La habilidad \"{{name}}\" no está aquí — no se exporta.",
+      "warnServerMissing": "El servidor MCP \"{{name}}\" no está registrado aquí — no se exporta.",
+      "warnFolderUnreadable": "No se pudo abrir la carpeta local de \"{{name}}\" — solo el registro.",
+      "warnNoInstall": "\"{{name}}\" no tiene instrucciones de instalación — consulte su README.",
+      "warnComponentMissing": "El componente de código #{{id}} no está aquí — no se exporta.",
+      "warnPlaybookMissing": "El playbook #{{id}} no está aquí — no se exporta.",
+      "warnServersMap": "No se pudo leer la lista de servidores MCP locales — todos los servidores se exportan solo con su registro."
     }
   },
   "robot": {

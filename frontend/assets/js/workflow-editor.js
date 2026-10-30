@@ -1259,6 +1259,9 @@ class WorkflowEditor {
                 <button id="workflow-export-btn" class="workflow-io-btn" title="Export the current workflow as JSON">
                     📤 Export
                 </button>
+                <button id="workflow-package-export-btn" class="workflow-io-btn" title="${this.escapeHtml(this.t('workflow.package.exportTitle'))}">
+                    📦 ${this.escapeHtml(this.t('workflow.package.export'))}
+                </button>
             </div>
             <div class="workflow-btn-group">
                 <button id="workflow-save-btn" class="workflow-save-btn" title="Save Workflow">
@@ -1631,6 +1634,8 @@ class WorkflowEditor {
         if (importBtn) importBtn.onclick = () => this._handleImportWorkflow();
         const exportBtn = document.getElementById('workflow-export-btn');
         if (exportBtn) exportBtn.onclick = () => this._showWorkflowJson();
+        const packageBtn = document.getElementById('workflow-package-export-btn');
+        if (packageBtn) packageBtn.onclick = () => window.WorkflowPackageUI?.exportPackage(this);
 
         // Delete button handler
         const deleteBtn = document.getElementById('workflow-delete-btn');
@@ -7126,23 +7131,21 @@ class WorkflowEditor {
     }
 
     /**
-     * Show the JSON payload this workflow would POST to /api/v1/workflows on save.
-     * Reuses exportWorkflow() + the same payload assembly as saveWorkflow() so the
-     * preview is byte-for-byte what the backend receives.
+     * The export payload (what Save sends, plus the linked code components), with ingestion
+     * secrets stripped. Used by the JSON export and the package export.
+     * Returns { workflow, payload, stripped, codeComponents }.
      */
-    async _showWorkflowJson() {
-        const existingModal = document.getElementById('workflow-json-modal');
-        if (existingModal) existingModal.remove();
-
+    async _buildWorkflowPayload() {
         const workflow = this.exportWorkflow();
         const codeComponents = await this._bundleCodeComponents(workflow.nodes);
+        const { nodes, stripped } = WorkflowPackage.stripSecrets(workflow.nodes);
         const payload = {
             name: this.currentWorkflowName || 'My Workflow',
             description: this.currentWorkflowDescription || '',
             definition: {
                 runtime_mode: this.runtimeMode || 'batch',
                 llm_provider: this.runtimeMode === 'realtime' ? (this.audioLlmProvider || 'grok') : undefined,
-                nodes: WorkflowPackage.stripSecrets(workflow.nodes).nodes,
+                nodes,
                 edges: workflow.edges
             },
             triggers: { schedule: { enabled: this.scheduleEnabled } },
@@ -7152,6 +7155,19 @@ class WorkflowEditor {
             // The components the nodes link to, so the file imports where they do not exist (another account or install).
             ...(codeComponents.length ? { code_components: codeComponents } : {})
         };
+        return { workflow, payload, stripped, codeComponents };
+    }
+
+    /**
+     * Show the JSON payload this workflow would POST to /api/v1/workflows on save.
+     * Reuses exportWorkflow() + the same payload assembly as saveWorkflow() so the
+     * preview is byte-for-byte what the backend receives.
+     */
+    async _showWorkflowJson() {
+        const existingModal = document.getElementById('workflow-json-modal');
+        if (existingModal) existingModal.remove();
+
+        const { workflow, payload } = await this._buildWorkflowPayload();
         const pretty = JSON.stringify(payload, null, 2);
         const method = this.currentWorkflowId ? 'PUT' : 'POST';
         const path = this.currentWorkflowId

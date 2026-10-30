@@ -1469,6 +1469,32 @@
     "fork": {
       "all": "LES {{total}}",
       "one": "1 SUR {{total}}"
+    },
+    "package": {
+      "export": "Exporter avec les dépendances",
+      "exportTitle": "Exporter le flux de travail avec les compétences, serveurs MCP, composants de code et playbooks dont il a besoin, en un seul .zip",
+      "summaryTitle": "Exporter avec les dépendances",
+      "needs": "Ce flux de travail a besoin de :",
+      "countSkills": "{{count}} compétence(s), incluses",
+      "countServers": "{{count}} serveur(s) MCP : {{local}} local(aux), inclus en code source ; {{hosted}} hébergé(s), enregistrement seulement",
+      "countNeedsKey": "{{count}} serveur(s) demandent une clé que vous saisirez de nouveau à l’import",
+      "countComponents": "{{count}} composant(s) de code",
+      "countPlaybooks": "{{count}} playbook(s)",
+      "nothing": "Aucune dépendance : le paquet ne contient que le flux de travail.",
+      "warnings": "Avertissements",
+      "runTimePlaybook": "Ce flux de travail choisit son playbook à l’exécution. Cochez les playbooks à inclure :",
+      "noPlaybooks": "Vous n’avez aucun playbook.",
+      "save": "Enregistrer…",
+      "cancel": "Annuler",
+      "saved": "Paquet enregistré sous {{name}}",
+      "failed": "Échec de l’export du paquet : {{error}}",
+      "warnSkillMissing": "La compétence « {{name}} » est absente ici — non exportée.",
+      "warnServerMissing": "Le serveur MCP « {{name}} » n’est pas enregistré ici — non exporté.",
+      "warnFolderUnreadable": "Le dossier local de « {{name}} » n’a pas pu être ouvert — enregistrement seulement.",
+      "warnNoInstall": "« {{name}} » n’a pas d’instructions d’installation — voir son README.",
+      "warnComponentMissing": "Le composant de code n°{{id}} est absent ici — non exporté.",
+      "warnPlaybookMissing": "Le playbook n°{{id}} est absent ici — non exporté.",
+      "warnServersMap": "La liste des serveurs MCP locaux n’a pas pu être lue — chaque serveur est exporté en enregistrement seulement."
     }
   },
   "robot": {
