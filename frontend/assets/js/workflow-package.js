@@ -313,7 +313,8 @@
             const dep = deps.find((d) => d.kind === 'server' && d.name === s.name);
             const folder = s.local ? ((dep && dep.folder) ? dep.folder.replace(/\/$/, '') : `mcps/${s.name}`) : null;
             const r = base('server', s.name, folder);
-            if (folder) {
+            const cls = classify('server', s, h.servers).status;
+            if (folder && cls !== 'present') {
                 const mj = files[`${folder}/synergyai-mcp.json`], ex = files[`${folder}/.env.example`];
                 let man = null;
                 try { man = mj ? JSON.parse(dec(mj)) : null; } catch (e) { man = null; }
@@ -323,15 +324,16 @@
             if (isLocalUrl(s.url)) { r.reasons.push('localhost-url'); r.url = s.url; }
             if (s.needs_auth) r.reasons.push('needs-key');
             if (s.global) r.reasons.push('global-server');
-            const cls = classify('server', s, h.servers).status;
-            r.status = cls === 'clash' ? 'clash' : r.reasons.some((x) => x !== 'global-server') ? 'attention' : cls;
+            r.status = cls !== 'install' ? cls : r.reasons.some((x) => x !== 'global-server') ? 'attention' : cls;
             rows.push(r);
         }
 
         for (const dep of deps.filter((d) => d.kind === 'component')) {
             const r = base('component', dep.name, null);
-            const item = files[dep.file] ? JSON.parse(dec(files[dep.file])) : null;
-            if (item) {
+            let item = null;
+            try { item = files[dep.file] ? JSON.parse(dec(files[dep.file])) : null; } catch (e) { item = undefined; }
+            if (item === undefined) { r.status = 'attention'; r.reasons.push('unreadable'); }
+            else if (item) {
                 if (matchComponent(item, h.components)) r.status = 'present';
                 else if ((h.components || []).some((c) => norm(c.name) === norm(item.name || dep.name))) r.reasons.push('renamed');
             }
@@ -354,7 +356,9 @@
         const vals = values || {};
         return (rows || []).every((r) => {
             if (r.choice === 'skip') return true;
+            if (r.status === 'present') return true;
             if (r.status === 'clash' && r.choice === null) return false;
+            if ((r.reasons || []).includes('unreadable')) return false;
             if (r.envFields && r.choice !== 'use-existing') {
                 const v = vals[r.name] || {};
                 if (missingRequired(r.envFields, v).length && !v.fillLater) return false;

@@ -255,5 +255,19 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
     assert.strictEqual(row('component', 'Make PDF').status, 'install');
     assert.strictEqual(WP.matchComponent(comp, [{ ...comp, id: 7, name: ' make pdf ' }]).id, 7);
     assert.strictEqual(WP.matchComponent(comp, [{ ...comp, id: 7, code: 'z' }]), null);
+
+    // fix round 1: present stays present; unreadable component
+    const pkg3 = WP.readPackage({ ...entries, 'mcps/Outlook/synergyai-mcp.json': J({ env: [{ name: 'TENANT_ID', required: true }] }) });
+    rows = await WP.reviewRows(pkg3, { servers: [{ name: 'Outlook', url: 'http://localhost:8765/mcp' }], playbooks: [], skills: [], components: [] });
+    assert.strictEqual(row('server', 'Outlook').status, 'present');
+    assert.ok(!row('server', 'Outlook').envFields);
+    assert.strictEqual(WP.canConfirm(rows.filter((r) => r.kind === 'server'), {}), true);
+    const pkg4 = WP.readPackage({ ...entries, 'components/Make_PDF.json': enc('{bad') });
+    rows = await WP.reviewRows(pkg4, { servers: [], playbooks: [], skills: [], components: [] });
+    assert.strictEqual(row('component', 'Make PDF').status, 'attention');
+    assert.deepStrictEqual(row('component', 'Make PDF').reasons, ['unreadable']);
+    assert.strictEqual(WP.canConfirm(rows, {}), false);
+    row('component', 'Make PDF').choice = 'skip';
+    assert.strictEqual(WP.canConfirm(rows, {}), true);
     console.log('workflow-package: ok');
 })().catch((e) => { console.error(e); process.exit(1); });
