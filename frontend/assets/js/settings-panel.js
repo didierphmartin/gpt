@@ -1598,8 +1598,14 @@ class SettingsPanel {
         return window.i18n && typeof window.i18n.t === 'function' ? window.i18n.t(key, params) : key.split('.').pop();
     }
 
+    /** One folder name under mcps/: the package installer's own rule (WorkflowPackage.isSafeSegment). */
     isValidMCPLocalFolder(folder) {
-        return !!folder && !folder.includes('/') && !folder.includes('\\') && !folder.includes('..') && !folder.startsWith('.');
+        return !!window.WorkflowPackage?.isSafeSegment && window.WorkflowPackage.isSafeSegment(folder);
+    }
+
+    /** map[name] only when it is the map's own entry (server names may be "__proto__", "constructor" ...). */
+    _ownEntry(map, name) {
+        return map && Object.prototype.hasOwnProperty.call(map, name) ? map[name] : undefined;
     }
 
     async _mcpFolderGranted() {
@@ -1619,12 +1625,14 @@ class SettingsPanel {
         await w.close();
     }
 
-    /** { name: folder } from mcps/servers.json; {} when absent. Throws when unreadable. */
+    /** { name: folder } from mcps/servers.json (null-prototype); empty when absent. Throws when unreadable. */
     async _readMCPServerMap() {
+        const out = Object.create(null);
         const text = await this._readLocalText('mcps/servers.json');
-        if (!text) return {};
+        if (!text) return out;
         const map = JSON.parse(text);
-        return map && typeof map === 'object' && !Array.isArray(map) ? map : {};
+        if (map && typeof map === 'object' && !Array.isArray(map)) for (const k of Object.keys(map)) out[k] = map[k];
+        return out;
     }
 
     /** The edit form's Local folder field: enabled only with folder access, prefilled from the map. */
@@ -1638,18 +1646,19 @@ class SettingsPanel {
         if (this.editingServerId !== serverId) return;   // the form moved on meanwhile
         hint?.classList.toggle('hidden', granted);
         if (!granted) return;
-        let map = {};
+        let map = Object.create(null);
         try { map = await this._readMCPServerMap(); } catch (_) { /* unreadable map: start empty */ }
         if (this.editingServerId !== serverId) return;
         input.disabled = false;
-        if (name && typeof map[name] === 'string') input.value = map[name];
+        const folder = name ? this._ownEntry(map, name) : undefined;
+        if (typeof folder === 'string') input.value = folder;
     }
 
     /** Write / move / remove this server's entry in mcps/servers.json after a save. */
     async saveMCPLocalFolder(origName, name, folder) {
         try {
             const map = await this._readMCPServerMap();
-            const had = (origName && origName in map) || name in map;
+            const had = (origName && this._ownEntry(map, origName) !== undefined) || this._ownEntry(map, name) !== undefined;
             if (!folder && !had) return;   // nothing recorded, nothing to record
             if (origName && origName !== name) delete map[origName];
             if (folder) map[name] = folder; else delete map[name];
@@ -1690,8 +1699,9 @@ class SettingsPanel {
         if (!window.localFs || !window.WorkflowPackage || !(await this._mcpFolderGranted())) return;
         let map;
         try { map = await this._readMCPServerMap(); } catch (_) { return; }
-        const local = (servers || []).filter(s => typeof map[s.name] === 'string' && this.isValidMCPLocalFolder(map[s.name]));
-        const infos = await Promise.all(local.map(s => this._readMCPLocalInfo(map[s.name])));
+        const folderOf = (s) => this._ownEntry(map, s.name);
+        const local = (servers || []).filter(s => typeof folderOf(s) === 'string' && this.isValidMCPLocalFolder(folderOf(s)));
+        const infos = await Promise.all(local.map(s => this._readMCPLocalInfo(folderOf(s))));
         if (token !== this._mcpLocalToken) return;   // re-rendered meanwhile
         local.forEach((s, i) => {
             this.mcpLocal.set(Number(s.id), infos[i]);
@@ -1783,20 +1793,23 @@ class SettingsPanel {
         panel.querySelector('[data-local-save]')?.addEventListener('click', () => this.saveMCPLocalSettings(id, panel));
     }
 
-    /** Write the declared settings to the server's folder (only those fields), then refresh its badge. */
+    /** Write the declared settings to the server's folder, keeping every other line already there, then refresh its badge. */
     async saveMCPLocalSettings(id, panel) {
         const info = this.mcpLocal?.get(id);
         if (!info) return;
-        const values = {};
+        const values = Object.create(null);
         for (const f of info.fields) {
             const input = Array.from(panel.querySelectorAll('[data-value]')).find(el => el.dataset.value === f.name);
-            values[f.name] = input ? input.value : (info.values[f.name] ?? f.default);
+            values[f.name] = input ? input.value : (this._ownEntry(info.values, f.name) ?? f.default);
         }
         const btn = panel.querySelector('[data-local-save]');
         if (btn) btn.disabled = true;
         try {
-            await this._writeLocalText(`mcps/${info.folder}/.env`, window.WorkflowPackage.renderEnv(values));
-            info.values = values;
+            // Undeclared keys and comments in the file stay: only the declared keys' lines change.
+            const path = `mcps/${info.folder}/.env`;
+            const current = await this._readLocalText(path).catch(() => null);
+            await this._writeLocalText(path, window.WorkflowPackage.mergeEnv(current || '', values));
+            info.values = Object.assign(Object.create(null), info.values, values);
             info.missing = window.WorkflowPackage.missingRequired(info.fields, values);
             this._decorateMCPLocalRow(id);
             this.showNotification(this.t('settings.mcpLocalSaved'), 'success');
