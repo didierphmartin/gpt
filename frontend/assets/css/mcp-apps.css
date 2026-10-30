@@ -169,6 +169,38 @@
     border-color: var(--primary-color, #007bff);
 }
 
+/* Editing / showing functions: the row wraps and the panel opens full-width inside the rectangle */
+.mcp-server-item.editing,
+.mcp-server-item.showing-functions {
+    flex-wrap: wrap;
+}
+
+.mcp-server-functions {
+    flex-basis: 100%;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color, #e0e0e0);
+}
+
+.mcp-server-functions-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary, #333);
+}
+
+.mcp-server-functions .mcp-tool-item {
+    background: var(--bg-primary, #fff);
+}
+
+.mcp-server-item > .mcp-add-server-form {
+    flex-basis: 100%;
+    margin: 0;
+    padding: 12px 0 0;
+    border: none;
+    border-top: 1px solid var(--border-color, #e0e0e0);
+    border-radius: 0;
+    background: transparent;
+}
+
 .mcp-server-icon {
     width: 40px;
     height: 40px;
@@ -256,6 +288,7 @@
     height: 22px;
     background: var(--bg-tertiary, #ccc);
     border-radius: 11px;
+    flex-shrink: 0;
     cursor: pointer;
     transition: background 0.3s;
 }
@@ -314,9 +347,9 @@
     gap: 12px;
     padding: 15px;
     background: var(--bg-secondary, #f9f9f9);
-    border: 1px dashed var(--border-color, #ccc);
+    border: 1px solid var(--border-color, #ccc);
     border-radius: 8px;
-    margin-top: 15px;
+    margin-bottom: 15px;
 }
 
 .mcp-add-server-form.hidden {
@@ -395,29 +428,6 @@
 
 .mcp-btn-secondary:hover {
     background: var(--bg-hover, #d0d0d0);
-}
-
-.mcp-add-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    width: 100%;
-    padding: 12px;
-    margin-top: 10px;
-    border: 2px dashed var(--border-color, #ccc);
-    border-radius: 8px;
-    background: transparent;
-    color: var(--text-secondary, #666);
-    font-size: 13px;
-    cursor: pointer;
-    transition: all 0.2s;
-}
-
-.mcp-add-btn:hover {
-    border-color: var(--primary-color, #007bff);
-    color: var(--primary-color, #007bff);
-    background: var(--bg-secondary, #f0f7ff);
 }
 
 /* Empty State */

@@ -2806,20 +2806,19 @@
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 8v8m-4-5v5m-4-2v2m-2 4h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
                             </svg>
                             <span data-i18n="settings.usageChart">Usage by Provider</span>
+                            <!-- Refresh button, pushed to the right of the title row -->
+                            <button id="settings-refresh" class="ml-auto settings-btn settings-btn-secondary">
+                                <span class="flex items-center gap-2">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                                    </svg>
+                                    <span data-i18n="settings.refreshUsage">Refresh Usage Data</span>
+                                </span>
+                            </button>
                         </h3>
                         <div class="usage-chart-container">
                             <canvas id="usage-chart"></canvas>
                         </div>
-                    </div>
-
-                    <!-- Refresh button -->
-                    <div class="px-3 pb-4">
-                        <button id="settings-refresh" class="w-full settings-btn settings-btn-secondary flex items-center justify-center gap-2">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
-                            </svg>
-                            <span data-i18n="settings.refreshUsage">Refresh Usage Data</span>
-                        </button>
                     </div>
                 </div>
 
@@ -3030,33 +3029,33 @@
                             Connect to MCP (Model Context Protocol) servers to extend AI capabilities with custom tools and applications.
                         </p>
 
-                        <!-- Master switch: disable all MCP tools for this account -->
-                        <label class="flex items-center justify-between gap-3 p-3 mb-3 border border-gray-200 rounded-lg">
-                            <span class="text-sm text-gray-800">
-                                <strong>Enable all servers</strong>
-                                <span class="block text-xs text-gray-500">Check to turn every MCP server on, uncheck to turn every server off.</span>
-                            </span>
-                            <input type="checkbox" id="mcp-master-toggle" class="w-5 h-5 accent-indigo-600" checked>
-                        </label>
-
-                        <!-- Server List -->
-                        <div id="mcp-server-list" class="mcp-server-list">
-                            <div class="mcp-empty-state">
-                                <svg class="w-12 h-12 mx-auto mb-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"></path>
-                                </svg>
-                                <p data-i18n="settings.mcpNoServers">No MCP servers configured</p>
-                                <small data-i18n="settings.mcpAddFirst">Add a server to get started</small>
-                            </div>
+                        <!-- Add Server + Refresh buttons, then the master switch filling the rest of the row -->
+                        <div class="flex items-center gap-2 mb-3">
+                            <button id="mcp-add-server-btn" class="settings-btn settings-btn-primary flex-shrink-0">
+                                <span class="flex items-center gap-2">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                                    </svg>
+                                    <span data-i18n="settings.mcpAddServer">Add MCP Server</span>
+                                </span>
+                            </button>
+                            <button id="mcp-refresh" class="settings-btn settings-btn-secondary flex-shrink-0">
+                                <span class="flex items-center gap-2">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                                    </svg>
+                                    <span data-i18n="settings.mcpRefresh">Refresh Servers & Tools</span>
+                                </span>
+                            </button>
+                            <!-- Master switch: disable all MCP tools for this account -->
+                            <label class="flex-1 flex items-center justify-between gap-3 p-3 border border-gray-200 rounded-lg">
+                                <span class="text-sm text-gray-800">
+                                    <strong>Enable all servers</strong>
+                                    <span class="block text-xs text-gray-500">Check to turn every MCP server on, uncheck to turn every server off.</span>
+                                </span>
+                                <input type="checkbox" id="mcp-master-toggle" class="w-5 h-5 accent-indigo-600" checked>
+                            </label>
                         </div>
-
-                        <!-- Add Server Button -->
-                        <button id="mcp-add-server-btn" class="mcp-add-btn">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
-                            </svg>
-                            <span data-i18n="settings.mcpAddServer">Add MCP Server</span>
-                        </button>
 
                         <!-- Add Server Form (hidden by default) -->
                         <div id="mcp-add-server-form" class="mcp-add-server-form hidden">
@@ -3090,32 +3089,17 @@
                                 <button id="mcp-save-server" class="mcp-btn mcp-btn-primary" data-i18n="settings.mcpSaveServer">Save Server</button>
                             </div>
                         </div>
-                    </div>
 
-                    <!-- Available Tools Section -->
-                    <div class="settings-section" id="mcp-tools-section">
-                        <h3>
-                            <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
-                            </svg>
-                            <span data-i18n="settings.mcpAvailableTools">Available Tools</span>
-                            <span id="mcp-tool-count" class="text-xs font-normal text-gray-500 ml-2">(0)</span>
-                        </h3>
-                        <div id="mcp-tools-list" class="mcp-tools-list">
-                            <div class="text-center text-gray-400 text-sm py-4" data-i18n="settings.mcpNoTools">
-                                No tools available. Add and enable MCP servers to see their tools.
+                        <!-- Server List -->
+                        <div id="mcp-server-list" class="mcp-server-list">
+                            <div class="mcp-empty-state">
+                                <svg class="w-12 h-12 mx-auto mb-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"></path>
+                                </svg>
+                                <p data-i18n="settings.mcpNoServers">No MCP servers configured</p>
+                                <small data-i18n="settings.mcpAddFirst">Add a server to get started</small>
                             </div>
                         </div>
-                    </div>
-
-                    <!-- Refresh MCP button -->
-                    <div class="px-3 pb-4">
-                        <button id="mcp-refresh" class="w-full settings-btn settings-btn-secondary flex items-center justify-center gap-2">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
-                            </svg>
-                            <span data-i18n="settings.mcpRefresh">Refresh Servers & Tools</span>
-                        </button>
                     </div>
                 </div>
 
@@ -4373,7 +4357,7 @@
     <!-- Local File System bootstrap — exposes window.localFs for skills,
          workflows, artifacts. Must load before settings-panel uses it. -->
     <script src="assets/js/local-fs.js?v=20261029-folder-path"></script>
-    <script src="assets/js/settings-panel.js?v=20261026-voicetoken"></script>
+    <script src="assets/js/settings-panel.js?v=20261030-mcptoggleright"></script>
     <script src="assets/js/agent-teams-panel.js?v=20261005-flush-on-clear"></script>
     <!-- Drawflow workflow editor -->
     <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.js"></script>
@@ -4400,7 +4384,7 @@
     <!-- fflate: tiny WebAssembly-free zip lib for unpacking .skill / .zip
          imports. Loaded from jsDelivr; ~8KB gzipped. -->
     <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
-    <script src="assets/js/skills-import.js?v=20260506-github-install"></script>
+    <script src="assets/js/skills-import.js?v=20261030-skillexport"></script>
     <script src="assets/js/skills-manager.js?v=20260818-fsa-notice"></script>
     <script src="assets/js/skillopt-panel.js?v=20260929-catalog-ids"></script>
     <script src="assets/js/heal-panel.js?v=20260929-catalog-ids"></script>
