@@ -85,7 +85,7 @@
             'folder.shellOther':    'a terminal',
             'folder.pathAsk':      'Python runner installed in this folder. One step left: your browser does not tell us where this folder is on your computer, so enter its full path and we build the command to run.',
             'folder.pathTipWindows': 'In File Explorer, right-click the folder “{name}” and choose “Copy as path” (on Windows 10, hold Shift while you right-click). Paste it here.',
-            'folder.pathTipMac':   'In Finder, right-click the folder “{name}”, hold the Option (⌥) key and choose “Copy “{name}” as Pathname”. Paste it here.',
+            'folder.pathTipMac':   'In Finder, hold the Control key and click the folder “{name}”. Still holding Control, also press the Option (⌥) key: “Copy” changes to “Copy “{name}” as Pathname”. Select it, then paste it here. Or choose “New Terminal at Folder”, type pwd | pbcopy and press Return: the path is copied, paste it here.',
             'folder.pathTipOther': 'Copy the full path of the folder “{name}” from your file manager (or run pwd in a terminal inside it) and paste it here.',
             'folder.pathUse':      'Build command',
             'folder.pathChange':   'Change path',
@@ -148,7 +148,7 @@
             'folder.shellOther':    'un terminal',
             'folder.pathAsk':      'Runner Python installé dans ce dossier. Une étape reste : votre navigateur ne nous dit pas où se trouve ce dossier sur votre ordinateur. Saisissez son chemin complet et nous construisons la commande à exécuter.',
             'folder.pathTipWindows': 'Dans l\'Explorateur de fichiers, faites un clic droit sur le dossier « {name} » et choisissez « Copier en tant que chemin d\'accès » (sous Windows 10, maintenez Maj pendant le clic droit). Collez-le ici.',
-            'folder.pathTipMac':   'Dans le Finder, faites un clic droit sur le dossier « {name} », maintenez la touche Option (⌥) et choisissez « Copier « {name} » en tant que nom de chemin ». Collez-le ici.',
+            'folder.pathTipMac':   'Dans le Finder, maintenez la touche Contrôle et cliquez sur le dossier « {name} ». Sans relâcher Contrôle, appuyez aussi sur la touche Option (⌥) : « Copier » devient « Copier « {name} » en tant que nom de chemin ». Sélectionnez-le, puis collez-le ici. Ou choisissez « Nouveau terminal au dossier », tapez pwd | pbcopy et appuyez sur Retour : le chemin est copié, collez-le ici.',
             'folder.pathTipOther': 'Copiez le chemin complet du dossier « {name} » depuis votre gestionnaire de fichiers (ou lancez pwd dans un terminal ouvert dans ce dossier) et collez-le ici.',
             'folder.pathUse':      'Construire la commande',
             'folder.pathChange':   'Changer le chemin',
@@ -211,7 +211,7 @@
             'folder.shellOther':    'un terminal',
             'folder.pathAsk':      'Runner de Python instalado en esta carpeta. Queda un paso: su navegador no nos dice dónde está esta carpeta en su equipo. Escriba su ruta completa y crearemos el comando a ejecutar.',
             'folder.pathTipWindows': 'En el Explorador de archivos, haga clic derecho en la carpeta “{name}” y elija “Copiar como ruta de acceso” (en Windows 10, mantenga Mayús al hacer clic derecho). Péguela aquí.',
-            'folder.pathTipMac':   'En el Finder, haga clic derecho en la carpeta “{name}”, mantenga la tecla Opción (⌥) y elija “Copiar “{name}” como nombre de ruta”. Péguela aquí.',
+            'folder.pathTipMac':   'En el Finder, mantenga pulsada la tecla Control y haga clic en la carpeta “{name}”. Sin soltar Control, pulse también la tecla Opción (⌥): “Copiar” cambia a “Copiar “{name}” como nombre de ruta”. Selecciónelo y péguela aquí. O elija “Nuevo terminal en la carpeta”, escriba pwd | pbcopy y pulse Retorno: la ruta queda copiada, péguela aquí.',
             'folder.pathTipOther': 'Copie la ruta completa de la carpeta “{name}” desde su gestor de archivos (o ejecute pwd en un terminal dentro de ella) y péguela aquí.',
             'folder.pathUse':      'Crear comando',
             'folder.pathChange':   'Cambiar ruta',
@@ -566,12 +566,12 @@
         if (!r) return '';
         if (r.error || !r.written.length) {
             return `
-                <div class="mt-3 rounded border-l-4 border-yellow-500 bg-yellow-50 p-2 text-xs text-yellow-900">
+                <div class="mt-3 rounded border-l-4 border-yellow-500 bg-yellow-50 p-2 text-base text-yellow-900">
                     ${esc(t('folder.runnerFailed'))}${r.error ? ` (${esc(r.error)})` : ''}
                 </div>`;
         }
         const partial = r.skipped.length
-            ? `<div class="mt-1 text-[11px] text-yellow-800">${esc(t('folder.runnerPartial'))} ${esc(r.skipped.join(', '))}</div>`
+            ? `<div class="mt-1 text-base text-yellow-800">${esc(t('folder.runnerPartial'))} ${esc(r.skipped.join(', '))}</div>`
             : '';
         const sh = window.localFs.runnerShell;
         const name = wizardState.rootName || 'synergyAI';
@@ -583,19 +583,19 @@
             const example = sh.os === 'windows' ? `C:\\Users\\you\\Documents\\${name}`
                           : sh.os === 'mac' ? `/Users/you/Documents/${name}` : `/home/you/${name}`;
             const err = wizardState.pathError
-                ? `<p class="mt-1 text-[11px] text-red-700">${esc(fill(wizardState.pathError === 'name' ? 'folder.pathErrName' : 'folder.pathErrAbsolute',
+                ? `<p class="mt-1 text-base text-red-700">${esc(fill(wizardState.pathError === 'name' ? 'folder.pathErrName' : 'folder.pathErrAbsolute',
                                                                 { start: sh.windows ? 'C:\\' : '/' }))}</p>`
                 : '';
             return `
             <div class="mt-3 rounded border-l-4 border-green-500 bg-green-50 p-2">
-                <p class="text-xs text-green-900">${esc(t('folder.pathAsk'))}</p>
-                <p class="mt-1 text-[11px] text-green-900">${esc(fill(tip))}</p>
+                <p class="text-base text-green-900">${esc(t('folder.pathAsk'))}</p>
+                <p class="mt-1 text-base text-green-900">${esc(fill(tip))}</p>
                 <div class="mt-1 flex items-start gap-2">
                     <input type="text" data-pwa-path value="${esc(wizardState.pathInput ?? saved ?? '')}" placeholder="${esc(example)}"
                         spellcheck="false" autocomplete="off"
-                        class="flex-1 min-w-0 px-2 py-1 text-[11px] font-mono border border-green-500 rounded bg-white">
+                        class="flex-1 min-w-0 px-2 py-1 text-base font-mono text-black placeholder-gray-400 border border-green-500 rounded bg-white">
                     <button type="button" data-pwa-action="set-path"
-                        class="flex-shrink-0 px-2 py-1 text-[11px] font-medium text-white bg-green-700 hover:bg-green-800 rounded transition">
+                        class="flex-shrink-0 px-2 py-1 text-base font-medium text-white bg-green-700 hover:bg-green-800 rounded transition">
                         ${esc(t('folder.pathUse'))}
                     </button>
                 </div>
@@ -606,15 +606,15 @@
         const cmd = venvCommand(name);
         return `
             <div class="mt-3 rounded border-l-4 border-green-500 bg-green-50 p-2">
-                <p class="text-xs text-green-900">${esc(fill('folder.runnerOk', { shell: t(sh.windows ? 'folder.shellWindows' : 'folder.shellOther') }))}</p>
+                <p class="text-base text-green-900">${esc(fill('folder.runnerOk', { shell: t(sh.windows ? 'folder.shellWindows' : 'folder.shellOther') }))}</p>
                 <div class="mt-1 flex items-start gap-2">
-                    <pre class="flex-1 min-w-0 bg-gray-900 text-green-200 text-[11px] rounded p-2 select-all overflow-auto">${esc(cmd)}</pre>
+                    <pre class="flex-1 min-w-0 bg-gray-900 text-green-200 text-base rounded p-2 select-all overflow-auto">${esc(cmd)}</pre>
                     <button type="button" data-pwa-action="copy-cmd" data-cmd="${esc(cmd)}"
-                        class="flex-shrink-0 px-2 py-1 text-[11px] font-medium text-green-900 bg-green-200 hover:bg-green-300 border border-green-500 rounded transition">
+                        class="flex-shrink-0 px-2 py-1 text-base font-medium text-green-900 bg-green-200 hover:bg-green-300 border border-green-500 rounded transition">
                         ${esc(t('folder.runnerCopy'))}
                     </button>
                 </div>
-                <p class="mt-1 text-[11px] text-green-900">${esc(t('folder.runnerVenvNote'))}
+                <p class="mt-1 text-base text-green-900">${esc(t('folder.runnerVenvNote'))}
                     <button type="button" data-pwa-action="change-path" class="ml-1 underline">${esc(t('folder.pathChange'))}</button></p>
                 ${partial}
             </div>`;
