@@ -80,7 +80,17 @@
             'folder.desc':    'All files Synergy creates or reads will live inside this folder.',
             'folder.pick':    'Choose folder…',
             'folder.change':  'Change folder…',
-            'folder.runnerOk':      'Python runner installed in this folder. One step left — run this in a terminal; it works from any directory:',
+            'folder.runnerOk':      'One step left — run this in {shell}:',
+            'folder.shellWindows':  'PowerShell (not WSL)',
+            'folder.shellOther':    'a terminal',
+            'folder.pathAsk':      'Python runner installed in this folder. One step left: your browser does not tell us where this folder is on your computer, so enter its full path and we build the command to run.',
+            'folder.pathTipWindows': 'In File Explorer, right-click the folder “{name}” and choose “Copy as path” (on Windows 10, hold Shift while you right-click). Paste it here.',
+            'folder.pathTipMac':   'In Finder, right-click the folder “{name}”, hold the Option (⌥) key and choose “Copy “{name}” as Pathname”. Paste it here.',
+            'folder.pathTipOther': 'Copy the full path of the folder “{name}” from your file manager (or run pwd in a terminal inside it) and paste it here.',
+            'folder.pathUse':      'Build command',
+            'folder.pathChange':   'Change path',
+            'folder.pathErrAbsolute': 'Enter the full path, starting with {start}',
+            'folder.pathErrName':  'This path does not end with “{name}”, the folder you picked. Copy the path of that folder itself, not of a folder inside it.',
             'folder.runnerVenvNote':'Needed once. It builds the virtual environment; a browser cannot do that part.',
             'folder.runnerCopy':    'Copy',
             'folder.runnerCopied':  'Copied',
@@ -133,7 +143,17 @@
             'folder.desc':    'Tous les fichiers que Synergy crée ou lit se trouveront dans ce dossier.',
             'folder.pick':    'Choisir un dossier…',
             'folder.change':  'Changer de dossier…',
-            'folder.runnerOk':      'Runner Python installé dans ce dossier. Une étape reste — exécutez ceci dans un terminal ; fonctionne depuis n\'importe quel dossier :',
+            'folder.runnerOk':      'Une étape reste — exécutez ceci dans {shell} :',
+            'folder.shellWindows':  'PowerShell (pas WSL)',
+            'folder.shellOther':    'un terminal',
+            'folder.pathAsk':      'Runner Python installé dans ce dossier. Une étape reste : votre navigateur ne nous dit pas où se trouve ce dossier sur votre ordinateur. Saisissez son chemin complet et nous construisons la commande à exécuter.',
+            'folder.pathTipWindows': 'Dans l\'Explorateur de fichiers, faites un clic droit sur le dossier « {name} » et choisissez « Copier en tant que chemin d\'accès » (sous Windows 10, maintenez Maj pendant le clic droit). Collez-le ici.',
+            'folder.pathTipMac':   'Dans le Finder, faites un clic droit sur le dossier « {name} », maintenez la touche Option (⌥) et choisissez « Copier « {name} » en tant que nom de chemin ». Collez-le ici.',
+            'folder.pathTipOther': 'Copiez le chemin complet du dossier « {name} » depuis votre gestionnaire de fichiers (ou lancez pwd dans un terminal ouvert dans ce dossier) et collez-le ici.',
+            'folder.pathUse':      'Construire la commande',
+            'folder.pathChange':   'Changer le chemin',
+            'folder.pathErrAbsolute': 'Saisissez le chemin complet, commençant par {start}',
+            'folder.pathErrName':  'Ce chemin ne se termine pas par « {name} », le dossier choisi. Copiez le chemin de ce dossier lui-même, pas d\'un dossier qu\'il contient.',
             'folder.runnerVenvNote':'Une seule fois. Cela construit l\'environnement virtuel ; un navigateur ne peut pas le faire.',
             'folder.runnerCopy':    'Copier',
             'folder.runnerCopied':  'Copié',
@@ -186,7 +206,17 @@
             'folder.desc':    'Todos los archivos que Synergy cree o lea estarán dentro de esta carpeta.',
             'folder.pick':    'Elegir carpeta…',
             'folder.change':  'Cambiar carpeta…',
-            'folder.runnerOk':      'Runner de Python instalado en esta carpeta. Queda un paso — ejecute esto en un terminal; funciona desde cualquier carpeta:',
+            'folder.runnerOk':      'Queda un paso — ejecute esto en {shell}:',
+            'folder.shellWindows':  'PowerShell (no WSL)',
+            'folder.shellOther':    'un terminal',
+            'folder.pathAsk':      'Runner de Python instalado en esta carpeta. Queda un paso: su navegador no nos dice dónde está esta carpeta en su equipo. Escriba su ruta completa y crearemos el comando a ejecutar.',
+            'folder.pathTipWindows': 'En el Explorador de archivos, haga clic derecho en la carpeta “{name}” y elija “Copiar como ruta de acceso” (en Windows 10, mantenga Mayús al hacer clic derecho). Péguela aquí.',
+            'folder.pathTipMac':   'En el Finder, haga clic derecho en la carpeta “{name}”, mantenga la tecla Opción (⌥) y elija “Copiar “{name}” como nombre de ruta”. Péguela aquí.',
+            'folder.pathTipOther': 'Copie la ruta completa de la carpeta “{name}” desde su gestor de archivos (o ejecute pwd en un terminal dentro de ella) y péguela aquí.',
+            'folder.pathUse':      'Crear comando',
+            'folder.pathChange':   'Cambiar ruta',
+            'folder.pathErrAbsolute': 'Escriba la ruta completa, empezando por {start}',
+            'folder.pathErrName':  'Esta ruta no termina en “{name}”, la carpeta elegida. Copie la ruta de esa carpeta, no de una carpeta dentro de ella.',
             'folder.runnerVenvNote':'Solo una vez. Crea el entorno virtual; un navegador no puede hacerlo.',
             'folder.runnerCopy':    'Copiar',
             'folder.runnerCopied':  'Copiado',
@@ -426,6 +456,12 @@
         abortCtl?.abort();
         abortCtl = new AbortController();
         card.addEventListener('click', handleAction, { signal: abortCtl.signal });
+        card.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && e.target.matches('[data-pwa-path]')) {
+                e.preventDefault();
+                card.querySelector('[data-pwa-action="set-path"]')?.click();
+            }
+        }, { signal: abortCtl.signal });
     }
 
     function header(titleKey) {
@@ -505,11 +541,11 @@
      * so the paste failed with "no such file or directory" and the wizard
      * looked broken when the install had in fact succeeded.
      *
-     * The File System Access API withholds the folder's absolute path, so the
-     * command searches the home folder for it by name; localFs.runnerShell
-     * also picks PowerShell on Windows. Limitation worth knowing: a folder
-     * granted from outside the home folder (an external volume, another
-     * drive) is not found by this search.
+     * The File System Access API withholds the folder's absolute path, and
+     * searching the home folder for it by name missed folders on another
+     * drive or outside home ("cannot find C:\python"). So the wizard asks the
+     * user for the path first (renderRunnerStatus) and the command cds
+     * straight there; localFs.runnerShell also picks PowerShell on Windows.
      */
     function venvCommand(folderName) {
         const sh = window.localFs.runnerShell;
@@ -537,10 +573,40 @@
         const partial = r.skipped.length
             ? `<div class="mt-1 text-[11px] text-yellow-800">${esc(t('folder.runnerPartial'))} ${esc(r.skipped.join(', '))}</div>`
             : '';
-        const cmd = venvCommand(wizardState.rootName);
+        const sh = window.localFs.runnerShell;
+        const name = wizardState.rootName || 'synergyAI';
+        const fill = (key, extra = {}) => Object.entries({ name, ...extra })
+            .reduce((str, [k, v]) => str.split('{' + k + '}').join(v), t(key));
+        const saved = sh.savedPath(name);
+        if (!saved || wizardState.editPath) {
+            const tip = sh.os === 'windows' ? 'folder.pathTipWindows' : sh.os === 'mac' ? 'folder.pathTipMac' : 'folder.pathTipOther';
+            const example = sh.os === 'windows' ? `C:\\Users\\you\\Documents\\${name}`
+                          : sh.os === 'mac' ? `/Users/you/Documents/${name}` : `/home/you/${name}`;
+            const err = wizardState.pathError
+                ? `<p class="mt-1 text-[11px] text-red-700">${esc(fill(wizardState.pathError === 'name' ? 'folder.pathErrName' : 'folder.pathErrAbsolute',
+                                                                { start: sh.windows ? 'C:\\' : '/' }))}</p>`
+                : '';
+            return `
+            <div class="mt-3 rounded border-l-4 border-green-500 bg-green-50 p-2">
+                <p class="text-xs text-green-900">${esc(t('folder.pathAsk'))}</p>
+                <p class="mt-1 text-[11px] text-green-900">${esc(fill(tip))}</p>
+                <div class="mt-1 flex items-start gap-2">
+                    <input type="text" data-pwa-path value="${esc(wizardState.pathInput ?? saved ?? '')}" placeholder="${esc(example)}"
+                        spellcheck="false" autocomplete="off"
+                        class="flex-1 min-w-0 px-2 py-1 text-[11px] font-mono border border-green-500 rounded bg-white">
+                    <button type="button" data-pwa-action="set-path"
+                        class="flex-shrink-0 px-2 py-1 text-[11px] font-medium text-white bg-green-700 hover:bg-green-800 rounded transition">
+                        ${esc(t('folder.pathUse'))}
+                    </button>
+                </div>
+                ${err}
+                ${partial}
+            </div>`;
+        }
+        const cmd = venvCommand(name);
         return `
             <div class="mt-3 rounded border-l-4 border-green-500 bg-green-50 p-2">
-                <p class="text-xs text-green-900">${esc(t('folder.runnerOk'))}</p>
+                <p class="text-xs text-green-900">${esc(fill('folder.runnerOk', { shell: t(sh.windows ? 'folder.shellWindows' : 'folder.shellOther') }))}</p>
                 <div class="mt-1 flex items-start gap-2">
                     <pre class="flex-1 min-w-0 bg-gray-900 text-green-200 text-[11px] rounded p-2 select-all overflow-auto">${esc(cmd)}</pre>
                     <button type="button" data-pwa-action="copy-cmd" data-cmd="${esc(cmd)}"
@@ -548,7 +614,8 @@
                         ${esc(t('folder.runnerCopy'))}
                     </button>
                 </div>
-                <p class="mt-1 text-[11px] text-green-900">${esc(t('folder.runnerVenvNote'))}</p>
+                <p class="mt-1 text-[11px] text-green-900">${esc(t('folder.runnerVenvNote'))}
+                    <button type="button" data-pwa-action="change-path" class="ml-1 underline">${esc(t('folder.pathChange'))}</button></p>
                 ${partial}
             </div>`;
     }
@@ -802,11 +869,36 @@
             }
             return;
         }
+        if (action === 'set-path') {
+            const input = target.closest('[data-pwa-content]')?.querySelector('[data-pwa-path]');
+            const res = window.localFs.runnerShell.checkPath(input?.value, wizardState.rootName);
+            wizardState.pathInput = input?.value ?? '';
+            wizardState.pathError = res.error || null;
+            if (res.path) {
+                window.localFs.runnerShell.savePath(res.path);
+                wizardState.editPath = false;
+                wizardState.pathInput = null;
+            }
+            render();
+            if (res.error) document.querySelector('[data-pwa-path]')?.focus();
+            return;
+        }
+        if (action === 'change-path') {
+            wizardState.editPath = true;
+            wizardState.pathError = null;
+            render();
+            return;
+        }
         if (action === 'pick-folder') {
             try {
                 const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
                 wizardState.rootHandle = handle;
                 wizardState.rootName   = handle.name;
+                // A new folder: its path is asked afresh (a saved one for a
+                // folder of another name no longer applies, see savedPath).
+                wizardState.editPath = false;
+                wizardState.pathError = null;
+                wizardState.pathInput = null;
                 await saveRootHandle(handle);
                 // Auto-create the standard subdirectories the rest of the
                 // app expects: `skills/` (folder-backed Skills) and
