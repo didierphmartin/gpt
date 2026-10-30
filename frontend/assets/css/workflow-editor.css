@@ -67,6 +67,16 @@
 .workflow-agents-panel.collapsed:not(.peek) .workflow-panel-header {
     justify-content: center;
     padding: 12px 0;
+    background: transparent;
+    border-bottom: none;
+}
+/* The folded rail is gray so it stands out against the white canvas, like the dark left sidebar. */
+.workflow-agents-panel.collapsed:not(.peek) {
+    background: #9ca3af;
+    border-left-color: #6b7280;
+}
+.workflow-agents-panel.collapsed:not(.peek) .workflow-panel-toggle {
+    color: #ffffff;
 }
 
 /* Hover peek (hover-peek.js): the collapsed panel opens OVER the canvas while the mouse rests on it. Full width
