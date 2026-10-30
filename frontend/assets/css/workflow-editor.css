@@ -45,8 +45,8 @@
 /* Agents panel (right side) */
 .workflow-agents-panel {
     width: 260px;
-    background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-    border-left: 1px solid #e2e8f0;
+    background: #e5e7eb; /* the left sidebar's gray (bg-gray-200) */
+    border-left: 1px solid #d1d5db;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -70,11 +70,6 @@
     background: transparent;
     border-bottom: none;
 }
-/* The folded rail is the left sidebar's gray, so both rails read the same against the white canvas. */
-.workflow-agents-panel.collapsed:not(.peek) {
-    background: #e5e7eb;
-    border-left-color: #d1d5db;
-}
 .workflow-agents-panel.collapsed:not(.peek) .workflow-panel-toggle {
     color: #374151;
 }
@@ -96,8 +91,8 @@
     align-items: center;
     justify-content: space-between;
     padding: 10px 12px;
-    border-bottom: 1px solid #e2e8f0;
-    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+    border-bottom: 1px solid #d1d5db;
+    background: #e5e7eb;
     flex-shrink: 0;
 }
 .workflow-panel-header .panel-title {
@@ -165,7 +160,7 @@
 }
 
 .workflow-section-header:hover {
-    background-color: #f1f5f9;
+    background-color: rgba(0, 0, 0, 0.05);
 }
 
 .section-toggle {
@@ -429,11 +424,11 @@
 
 .workflow-actions {
     padding: 14px;
-    border-top: 1px solid #e2e8f0;
+    border-top: 1px solid #d1d5db;
     display: flex;
     flex-direction: column;
     gap: 10px;
-    background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+    background: #e5e7eb;
 }
 
 .workflow-btn {
