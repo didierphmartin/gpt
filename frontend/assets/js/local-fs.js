@@ -338,15 +338,31 @@
      * a Windows venv has no bin/ (it is Scripts\), and `python3` usually opens
      * the Microsoft Store; `py` is the launcher the python.org installer adds.
      *
-     * The folder is found by name because the File System Access API withholds
-     * its absolute path. Both searches stop at the first match and go 6 levels
-     * below home; they skip dot-folders (POSIX) or Hidden ones such as AppData
-     * (Windows).
+     * The File System Access API withholds the folder's absolute path, so the
+     * setup wizard asks the user for it (checkPath / savePath) and `cd` goes
+     * straight there. Without a saved path -- installs from before the wizard
+     * asked -- `cd` falls back to finding the folder by name: first match, 6
+     * levels below home, skipping dot-folders (POSIX) or Hidden ones such as
+     * AppData (Windows). That search misses another drive or a folder outside
+     * home, which is why the wizard asks.
      * PowerShell 5.1, the one Windows ships, has no `&&`, hence `if ($?)`.
      */
     const runnerShell = (function () {
         const platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
         const windows = /^win/i.test(platform);
+        const os = windows ? 'windows' : /^mac/i.test(platform) ? 'mac' : 'other';
+        const PATH_KEY = 'synergyai.runnerFolderPath';
+        // Windows and macOS folder names are case-insensitive; Linux's are not.
+        const endsIn = (p, name) => {
+            const last = p.split(/[\\/]/).pop();
+            return os === 'other' ? last === name : last.toLowerCase() === name.toLowerCase();
+        };
+        const savedPath = (name) => {
+            let p = null;
+            try { p = localStorage.getItem(PATH_KEY); } catch (e) { /* storage blocked */ }
+            // A path for a folder other than the one now granted is stale.
+            return p && endsIn(p, name || 'synergyAI') ? p : null;
+        };
         const sq = windows
             ? (s) => "'" + String(s).replace(/'/g, "''") + "'"
             : (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
@@ -356,9 +372,32 @@
             : (up ? '../'.repeat(up) : './') + '.venv/bin/' + tool;
         return {
             windows,
+            os,
+            savedPath,
+            /**
+             * Tidy a typed or pasted path and check it. Explorer's "Copy as
+             * path" wraps it in double quotes; a trailing separator is dropped.
+             * @returns {{path: string}|{error: 'absolute'|'name'}}
+             */
+            checkPath(input, name) {
+                const p = String(input || '').trim().replace(/^(["'])(.*)\1$/, '$2').trim().replace(/[\\/]+$/, '');
+                const absolute = windows ? /^([A-Za-z]:\\|\\\\)/.test(p) : p.startsWith('/');
+                if (!absolute) return { error: 'absolute' };
+                if (!endsIn(p, name || 'synergyAI')) return { error: 'name' };
+                return { path: p };
+            },
+            savePath(path) {
+                try { localStorage.setItem(PATH_KEY, path); } catch (e) { /* storage blocked */ }
+            },
             /** A `cd` into <folder named `name`>/python[/subpath]. */
             cd(name, subpath = '') {
                 const folder = name || 'synergyAI';
+                const known = savedPath(folder);
+                if (known) {
+                    const sep = windows ? '\\' : '/';
+                    const dir = known + sep + 'python' + (subpath ? sep + subpath.replace(/[\\/]/g, sep) : '');
+                    return (windows ? 'Set-Location -LiteralPath ' : 'cd ') + sq(dir);
+                }
                 if (windows) {
                     const tail = subpath ? '\\' + subpath.replace(/\//g, '\\') : '';
                     return 'Set-Location "$((Get-ChildItem $HOME -Directory -Recurse -Depth 5 -Filter ' + sq(folder) +

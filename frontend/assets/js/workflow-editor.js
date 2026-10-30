@@ -6855,7 +6855,8 @@ class WorkflowEditor {
         // the user knows where that is, and nothing here can be wrong on their
         // machine. The CLI route (setup.py --force, from a checkout)
         // remains for anyone installing without the wizard.
-        const cmd = window.localFs.runnerShell.venvSetup();
+        const sh = window.localFs.runnerShell;
+        let cmd = sh.venvSetup();
         const esc = (s) => this.escapeHtml(s);
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
@@ -6866,6 +6867,9 @@ class WorkflowEditor {
         const render = async () => {
             const status = window.localFs?.getStatus ? await window.localFs.getStatus() : { state: 'unsupported' };
             const folder = status.name || 'synergyAI';
+            // With the path the wizard asked for, the command works from any
+            // terminal; without it, the body says to open one in python/.
+            cmd = sh.savedPath(folder) ? sh.then(sh.cd(folder), sh.venvSetup()) : sh.venvSetup();
             let content = '';
             let action = null;  // { label, run } for the fix-it button
             if (status.state === 'unsupported') {
