@@ -1293,6 +1293,12 @@ class WorkflowEditor {
                 max-width: 350px;
             }
             /* In the top toolbar: the folded pill sits in the row, left of Reset; open, the form drops over the canvas. */
+            .workflow-settings-slot {
+                position: relative;
+                align-self: stretch;
+                display: flex;
+                align-items: center;
+            }
             #workflow-top-toolbar .workflow-info-box {
                 position: absolute;
                 top: 0;
@@ -1723,8 +1729,18 @@ class WorkflowEditor {
     /** The settings form folds into the top toolbar, left of Reset (on the canvas when there is no toolbar). */
     _placeSettingsBox(infoBox) {
         const toolbar = document.getElementById('workflow-top-toolbar');
-        if (toolbar && this.container.contains(toolbar)) toolbar.prepend(infoBox);
-        else this.container.appendChild(infoBox);
+        if (!toolbar || !this.container.contains(toolbar)) { this.container.appendChild(infoBox); return; }
+        const slot = document.createElement('div');
+        slot.className = 'workflow-settings-slot';
+        slot.appendChild(infoBox);
+        toolbar.prepend(slot);
+        // Open, the form floats over the canvas: the slot keeps the folded pill's width so the toolbar does not move.
+        // A hidden box (the other mode's) takes no room.
+        new ResizeObserver(() => {
+            const hidden = infoBox.style.display === 'none';
+            slot.style.display = hidden ? 'none' : '';
+            if (!hidden && infoBox.classList.contains('collapsed')) slot.style.width = `${infoBox.offsetWidth}px`;
+        }).observe(infoBox);
     }
 
     addAudioWorkflowInfoBox() {
