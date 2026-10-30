@@ -78,5 +78,66 @@
         return { nodes: out, stripped };
     }
 
-    return { collectDependencies, SECRET_FIELD_RE, stripSecrets };
+    const DEFAULT_EXCLUDES = ['.venv/', 'venv/', 'node_modules/', 'vendor/', '__pycache__/', 'dist/', 'build/', '.git/', 'log/', 'logs/', 'tests/', 'docs/', '.env', '*.sqlite*', '*.log'];
+
+    const globRe = (g) => new RegExp('^' + g.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$');
+
+    // "dir/" = that directory name at any depth; no "/" = basename at any depth; inner "/" = whole path.
+    function matches(path, pattern) {
+        const segs = path.split('/');
+        if (pattern.endsWith('/')) return segs.slice(0, -1).includes(pattern.slice(0, -1));
+        if (pattern.includes('/')) return globRe(pattern).test(path);
+        return globRe(pattern).test(segs[segs.length - 1]);
+    }
+
+    /** Which of `paths` (relative to the server folder) are shipped: include (if any), then exclude + defaults. */
+    function selectServerFiles(paths, manifest) {
+        const include = manifest && Array.isArray(manifest.include) && manifest.include.length ? manifest.include : null;
+        const exclude = DEFAULT_EXCLUDES.concat((manifest && manifest.exclude) || []);
+        return (paths || []).filter((p) => {
+            const segs = p.split('/');
+            if (segs.some((s) => s.startsWith('.')) && segs[segs.length - 1] !== '.env.example') return false;
+            if (exclude.some((x) => matches(p, x))) return false;
+            return !include || include.some((x) => matches(p, x));
+        });
+    }
+
+    const unquote = (v) => (v.length >= 2 && (v[0] === '"' || v[0] === "'") && v[v.length - 1] === v[0] ? v.slice(1, -1) : v);
+
+    /** Private settings a server needs: manifest.env wins, else parsed from its .env.example. */
+    function envFields(manifest, envExampleText) {
+        const norm = (f) => ({
+            name: f.name, label: f.label || '', required: !!f.required,
+            secret: f.secret !== undefined ? !!f.secret : SECRET_FIELD_RE.test(f.name),
+            default: f.default === undefined || f.default === null ? '' : String(f.default),
+        });
+        if (manifest && Array.isArray(manifest.env)) return manifest.env.map((f) => norm({ ...f, secret: f.secret }));
+        const fields = [];
+        let pending = [];
+        for (const raw of String(envExampleText || '').split(/\r?\n/)) {
+            const line = raw.trim();
+            if (!line) { pending = []; continue; }
+            if (line.startsWith('#')) { pending.push(line.replace(/^#+\s*/, '').trim()); continue; }
+            const m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/.exec(line);
+            if (!m) { pending = []; continue; }
+            fields.push(norm({ name: m[1], label: pending.join(' '), default: unquote(m[2].trim()) }));
+            pending = [];
+        }
+        return fields;
+    }
+
+    /** KEY=value lines for the server's .env; values with spaces, # or quotes are double-quoted. */
+    function renderEnv(values) {
+        return Object.entries(values || {}).map(([k, v]) => {
+            const str = String(v === undefined || v === null ? '' : v);
+            return `${k}=${/[\s#"']/.test(str) ? '"' + str.replace(/"/g, '\\"') + '"' : str}`;
+        }).join('\n') + '\n';
+    }
+
+    /** Names of required fields with no value. */
+    function missingRequired(fields, values) {
+        return (fields || []).filter((f) => f.required && !String((values || {})[f.name] || '').trim()).map((f) => f.name);
+    }
+
+    return { collectDependencies, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, envFields, renderEnv, missingRequired };
 });
