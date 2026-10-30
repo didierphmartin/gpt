@@ -1,5 +1,5 @@
 {
-  "name": "Synergy AI Chat",
+  "name": "SynergyAI Studio",
   "short_name": "Synergy",
   "description": "Where LLMs collaborate — chat with Claude, OpenAI, Gemini, Grok, Kimi, DeepSeek; verify, compare, attach docs and images.",
   "start_url": "/gpt/frontend/index.html",
