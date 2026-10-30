@@ -100,12 +100,12 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 2px;
+    gap: 4px;
 }
 .workflow-agents-panel.collapsed:not(.peek) .workflow-agent-card,
 .workflow-agents-panel.collapsed:not(.peek) .workflow-agent-card:hover {
-    width: 34px;
-    height: 34px;
+    width: 40px;  /* the left rail's buttons (.rail-btn) */
+    height: 40px;
     padding: 0;
     margin: 0;
     justify-content: center;
@@ -121,7 +121,7 @@
 .workflow-agents-panel.collapsed:not(.peek) .workflow-agent-card .agent-icon {
     background: transparent !important;
     color: #374151 !important;
-    font-size: 18px;
+    font-size: 22px;
     width: auto;
     height: auto;
 }
