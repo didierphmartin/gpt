@@ -1489,7 +1489,8 @@
     "package": {
       "exportTitle": "Exportar el flujo de trabajo con las habilidades, servidores MCP, componentes de código y playbooks que necesita, en un solo .zip",
       "summaryTitle": "Exportar con dependencias",
-      "needs": "Este flujo de trabajo necesita:",
+      "preparing": "Preparando el paquete: reuniendo los skills, servidores MCP, componentes de código y playbooks que usa este workflow…",
+      "needs": "Dependencias",
       "countSkills": "{{count}} habilidad(es), incluidas",
       "countServers": "{{count}} servidor(es) MCP: {{local}} local(es), incluidos como código fuente; {{hosted}} alojado(s), solo el registro",
       "countNeedsKey": "{{count}} servidor(es) necesitan una clave que volverá a introducir al importar",

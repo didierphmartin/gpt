@@ -1489,7 +1489,8 @@
     "package": {
       "exportTitle": "Export the workflow with the skills, MCP servers, code components and playbooks it needs, as one .zip",
       "summaryTitle": "Export with dependencies",
-      "needs": "This workflow needs:",
+      "preparing": "Preparing the package: collecting the skills, MCP servers, code components and playbooks this workflow uses…",
+      "needs": "Dependencies",
       "countSkills": "{{count}} skill(s), bundled",
       "countServers": "{{count}} MCP server(s): {{local}} local, bundled as source; {{hosted}} hosted, registration only",
       "countNeedsKey": "{{count}} server(s) need a key you will enter again on import",
