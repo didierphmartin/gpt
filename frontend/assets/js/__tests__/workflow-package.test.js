@@ -275,5 +275,133 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
     assert.strictEqual(WP.canConfirm(rows, {}), false);
     row('component', 'Make PDF').choice = 'skip';
     assert.strictEqual(WP.canConfirm(rows, {}), true);
+
+    // ---- Task 8: installer
+    {
+        const srvMan = { install: 'python3 -m venv .venv', start: '.venv/bin/python server.py', env: [{ name: 'TENANT_ID', required: true }, { name: 'PORT', default: '8765' }] };
+        const comp8 = { ...comp, name: 'Make PDF' };
+        const ientries = {
+            'manifest.json': J({ format: 'synergyai-workflow-package', version: 1, workflow: { name: 'W' }, strippedSecrets: [{ node: '5', field: 'api_key' }],
+                dependencies: [
+                    { kind: 'skill', name: 'pdf', folder: 'skills/pdf/' },
+                    { kind: 'server', name: 'Outlook', old_id: 4, local: true, folder: 'mcps/outlook_mcp/' },
+                    { kind: 'server', name: 'Hosted', old_id: 9 },
+                    { kind: 'component', name: 'Make PDF', old_id: 12, file: 'components/Make_PDF.json' },
+                    { kind: 'playbook', name: 'Triage', pkey: 'triage', old_id: 3, file: 'playbooks/triage.md' },
+                ] }),
+            'workflow.json': J({ definition: { nodes: [
+                { id: '1', node_type: 'loader', config: { store: 'mcp:4' } },
+                { id: '2', node_type: 'vectorstore', config: { store: 'mcp:9' } },
+                { id: '3', node_type: 'playbook', config: { playbook_id: 3 } },
+                { id: '4', node_type: 'code', config: { code_component_id: 12 } },
+                { id: '5', node_type: 'vectorstore', config: { store: 'mcp:9', connection: { url: 'u' } } },
+            ] }, code_components: [comp8] }),
+            'mcps/servers.json': J([
+                { name: 'Outlook', url: 'http://localhost:8765/mcp', description: 'mail', transport: 'http', is_mock: false, needs_auth: true, global: false, local: true, old_id: 4 },
+                { name: 'Hosted', url: 'https://x.example/mcp', description: '', transport: 'http', is_mock: false, needs_auth: false, global: true, local: false, old_id: 9 },
+            ]),
+            'mcps/outlook_mcp/server.py': enc('print(1)'),
+            'mcps/outlook_mcp/synergyai-mcp.json': J(srvMan),
+            'mcps/outlook_mcp/.env': enc('LEAK=1'),   // never shipped, but guarded anyway
+            'skills/pdf/SKILL.md': enc('skill'),
+            'skills/pdf/scripts/a.py': enc('a'),
+            'components/Make_PDF.json': J(comp8),
+            'playbooks/triage.md': enc(WP.playbookToMd({ pkey: 'triage', title: 'Triage', text: 'body' })),
+        };
+        const ipkg = WP.readPackage(ientries);
+        const memIo = (opts = {}) => {
+            const fs = { ...(opts.fs || {}) };
+            const calls = [];
+            let nextId = 100;
+            return { fs, calls,
+                ensureDir: async (p) => { calls.push(['ensureDir', p]); },
+                writeFile: async (p, b) => { calls.push(['writeFile', p]); assert.ok(b instanceof Uint8Array); fs[p] = new TextDecoder().decode(b); },
+                readJson: async (p) => (fs[p] === undefined ? undefined : JSON.parse(fs[p])),
+                writeJson: async (p, o) => { calls.push(['writeJson', p]); fs[p] = JSON.stringify(o); },
+                addServer: async (reg) => { calls.push(['addServer', reg]); if (opts.failServer === reg.name) throw new Error('boom'); return { id: nextId++ }; },
+                createPlaybook: async (pb) => { calls.push(['createPlaybook', pb]); return { id: 55 }; },
+                importComponents: async (bundle, nodes) => { calls.push(['importComponents', bundle]);
+                    return nodes.map((n) => (n.node_type === 'code' ? { ...n, config: { ...n.config, code_component_id: 77 } } : n)); },
+            };
+        };
+        const ihave = { servers: [{ id: 31, name: 'Hosted', url: 'https://x.example/mcp' }], playbooks: [], skills: [], components: [] };
+        let irows = await WP.reviewRows(ipkg, ihave);
+        const irow = (k, n) => irows.find((r) => r.kind === k && r.name === n);
+        assert.strictEqual(irow('server', 'Outlook').destination, 'mcps/outlook_mcp');
+        assert.strictEqual(irow('server', 'Hosted').status, 'present');
+        const ivalues = { Outlook: { TENANT_ID: 't 1', PORT: '9000', url: 'http://localhost:9000/mcp', authorization: 'Bearer k' },
+            'workflow keys': { '5.api_key': 'SECRET', '2.api_key': '' } };
+        let io = memIo({ fs: { 'mcps/servers.json': JSON.stringify({ Old: 'old_mcp' }) } });
+        let res = await WP.installPackage(irows, ipkg, ivalues, io, ihave);
+        const writes = io.calls.filter((c) => c[0] === 'writeFile').map((c) => c[1]);
+        assert.deepStrictEqual(io.calls.slice(0, 4).map((c) => c[1]), ['skills', 'mcps', 'components', 'playbooks']);
+        for (const p of ['skills/pdf/SKILL.md', 'skills/pdf/scripts/a.py', 'mcps/outlook_mcp/server.py', 'mcps/outlook_mcp/synergyai-mcp.json',
+            'mcps/outlook_mcp/.env', 'playbooks/triage.md', 'components/Make_PDF.json']) assert.ok(writes.includes(p), p);
+        assert.strictEqual(io.fs['mcps/outlook_mcp/.env'], WP.renderEnv({ TENANT_ID: 't 1', PORT: '9000' }));
+        assert.ok(!io.fs['mcps/outlook_mcp/.env'].includes('LEAK'));
+        assert.strictEqual(writes.filter((p) => p === 'mcps/outlook_mcp/.env').length, 1);
+        assert.deepStrictEqual(JSON.parse(io.fs['mcps/servers.json']), { Old: 'old_mcp', Outlook: 'outlook_mcp' });
+        const adds = io.calls.filter((c) => c[0] === 'addServer');
+        assert.strictEqual(adds.length, 1);
+        assert.deepStrictEqual(adds[0][1], { name: 'Outlook', url: 'http://localhost:9000/mcp', description: 'mail', transport: 'http', is_mock: false,
+            headers: { Authorization: 'Bearer k' } });
+        assert.deepStrictEqual(io.calls.find((c) => c[0] === 'createPlaybook')[1], { pkey: 'triage', title: 'Triage', text: 'body' });
+        assert.deepStrictEqual(io.calls.find((c) => c[0] === 'importComponents')[1], [comp8]);
+        // order: skills -> server files -> servers.json -> register -> playbooks -> components
+        const at = (pred) => io.calls.findIndex(pred);
+        assert.ok(at((c) => c[1] === 'skills/pdf/SKILL.md') < at((c) => c[1] === 'mcps/outlook_mcp/server.py'));
+        assert.ok(at((c) => c[1] === 'mcps/outlook_mcp/.env') < at((c) => c[0] === 'writeJson'));
+        assert.ok(at((c) => c[0] === 'writeJson') < at((c) => c[0] === 'addServer'));
+        assert.ok(at((c) => c[0] === 'addServer') < at((c) => c[0] === 'createPlaybook'));
+        assert.ok(at((c) => c[0] === 'createPlaybook') < at((c) => c[0] === 'importComponents'));
+        assert.deepStrictEqual(res.commands, [{ server: 'Outlook', install: srvMan.install, start: srvMan.start }]);
+        const rn = (id) => res.nodes.find((n) => n.id === id);
+        assert.strictEqual(rn('1').config.store, 'mcp:100');       // installed server id
+        assert.strictEqual(rn('2').config.store, 'mcp:31');        // present server: existing id
+        assert.strictEqual(rn('3').config.playbook_id, 55);
+        assert.strictEqual(rn('4').config.code_component_id, 77);
+        assert.deepStrictEqual(rn('5').config.connection, { url: 'u', api_key: 'SECRET' });
+        assert.strictEqual(rn('2').config.connection, undefined);  // empty key skipped
+        assert.deepStrictEqual(res.installed.map((x) => [x.kind, x.name, x.destination]), [
+            ['skill', 'pdf', 'skills/pdf'], ['server', 'Outlook', 'mcps/outlook_mcp'], ['playbook', 'triage', 'playbooks/triage.md'],
+            ['component', 'Make PDF', 'components/Make_PDF.json']]);
+        assert.strictEqual(JSON.parse(ientries['workflow.json'] && new TextDecoder().decode(ientries['workflow.json'])).definition.nodes[4].config.connection.api_key, undefined);
+
+        // skip rows write nothing; use-existing server id flows into the relink; fillLater writes no settings file
+        const have2 = { servers: [{ id: 31, name: 'Hosted', url: 'https://x.example/mcp' }, { id: 40, name: 'Outlook', url: 'http://other' }],
+            playbooks: [], skills: [], components: [] };
+        irows = await WP.reviewRows(ipkg, have2);
+        assert.strictEqual(irow('server', 'Outlook').status, 'clash');
+        irow('server', 'Outlook').choice = 'use-existing';
+        irow('skill', 'pdf').choice = 'skip';
+        irow('playbook', 'triage').choice = 'skip';
+        irow('component', 'Make PDF').choice = 'skip';
+        io = memIo();
+        res = await WP.installPackage(irows, ipkg, {}, io, have2);
+        assert.deepStrictEqual(io.calls.filter((c) => c[0] !== 'ensureDir' && c[0] !== 'importComponents'), []);
+        assert.deepStrictEqual(io.calls.find((c) => c[0] === 'importComponents')[1], []);
+        assert.strictEqual(res.nodes.find((n) => n.id === '1').config.store, 'mcp:40');
+        assert.strictEqual(res.nodes.find((n) => n.id === '3').config.playbook_id, 3);
+        assert.deepStrictEqual(res.installed, []);
+        assert.deepStrictEqual(res.commands, []);
+
+        irows = await WP.reviewRows(ipkg, ihave);
+        io = memIo();
+        res = await WP.installPackage(irows, ipkg, { Outlook: { fillLater: true } }, io, ihave);
+        assert.ok(io.fs['mcps/outlook_mcp/server.py'] !== undefined);
+        assert.strictEqual(io.fs['mcps/outlook_mcp/.env'], undefined);
+        assert.deepStrictEqual(io.calls.find((c) => c[0] === 'addServer')[1].headers, {});
+        assert.strictEqual(io.calls.find((c) => c[0] === 'addServer')[1].url, 'http://localhost:8765/mcp');
+        assert.deepStrictEqual(JSON.parse(io.fs['mcps/servers.json']), { Outlook: 'outlook_mcp' });
+
+        // a failing registration stops the install, naming the step, with what was installed so far
+        io = memIo({ failServer: 'Outlook' });
+        let err = null;
+        try { await WP.installPackage(irows, ipkg, { Outlook: { fillLater: true } }, io, ihave); } catch (e) { err = e; }
+        assert.ok(err instanceof Error);
+        assert.strictEqual(err.message, 'install failed at "register server Outlook": boom');
+        assert.deepStrictEqual(err.installed.map((x) => x.name), ['pdf']);
+        assert.ok(!io.calls.some((c) => c[0] === 'createPlaybook'));
+    }
     console.log('workflow-package: ok');
 })().catch((e) => { console.error(e); process.exit(1); });

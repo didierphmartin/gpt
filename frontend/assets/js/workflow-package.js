@@ -367,5 +367,144 @@
         });
     }
 
-    return { collectDependencies, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, envFields, renderEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest, readPackage, matchComponent, reviewRows, canConfirm };
+    /**
+     * Install what the review rows say into the user's folder and this account, in the spec's order.
+     * io (paths relative to the user's folder; writeFile creates parent folders):
+     *   ensureDir(path), writeFile(path, Uint8Array), readJson(path) -> obj|undefined, writeJson(path, obj),
+     *   addServer({name,url,description,transport,is_mock,headers}) -> {id}, createPlaybook({pkey,title,text}) -> {id},
+     *   importComponents(bundle, nodes) -> nodes.
+     * Skipped rows do nothing; use-existing / present rows write nothing but lend their existing id
+     * (from `have`) to the re-link. Any io failure rejects with the step and item named; err.installed
+     * lists what was done before it. Returns { installed, commands, nodes }.
+     */
+    async function installPackage(rows, pkg, values, io, have) {
+        const vals = values || {};
+        const h = have || {};
+        const files = pkg.files || {};
+        const deps = (pkg.manifest && pkg.manifest.dependencies) || [];
+        const installed = [], commands = [];
+        const step = async (label, fn) => {
+            try { return await fn(); } catch (e) {
+                const err = new Error(`install failed at "${label}": ${e && e.message ? e.message : e}`);
+                err.installed = installed.slice();
+                err.cause = e;
+                throw err;
+            }
+        };
+        const active = (r) => r.choice !== 'skip';
+        const toInstall = (r) => active(r) && r.choice !== 'use-existing' && r.status !== 'present';
+        const ofKind = (k) => (rows || []).filter((r) => r.kind === k);
+        const isEnvFile = (p) => p.split('/').pop() === '.env';
+        const copyTree = async (prefix, label) => {
+            for (const p of Object.keys(files).filter((x) => x.startsWith(prefix) && !isEnvFile(x)).sort()) {
+                await step(`${label}: ${p}`, () => io.writeFile(p, files[p]));
+            }
+        };
+        const parse = (path) => { try { return files[path] ? JSON.parse(dec(files[path])) : null; } catch (e) { return null; } };
+
+        for (const dir of ['skills', 'mcps', 'components', 'playbooks']) await step(`create folder ${dir}`, () => io.ensureDir(dir));
+
+        for (const r of ofKind('skill').filter(toInstall)) {
+            await copyTree(`${r.destination}/`, `write skill ${r.name}`);
+            installed.push({ kind: 'skill', name: r.name, destination: r.destination });
+        }
+
+        // Local server source + private settings, then the name -> folder map.
+        const servers = ofKind('server').filter(toInstall);
+        const map = {};
+        for (const r of servers.filter((x) => x.destination)) {
+            const folder = r.destination.replace(/^mcps\//, '');
+            await copyTree(`${r.destination}/`, `write server ${r.name}`);
+            const v = vals[r.name] || {};
+            const ex = files[`${r.destination}/.env.example`];
+            const man = parse(`${r.destination}/synergyai-mcp.json`);
+            const fields = envFields(man, ex ? dec(ex) : '');
+            if (!v.fillLater && fields.length) {
+                const env = {};
+                for (const f of fields) env[f.name] = v[f.name] !== undefined && v[f.name] !== null ? v[f.name] : f.default;
+                await step(`write settings for ${r.name}`, () => io.writeFile(`${r.destination}/.env`, new TextEncoder().encode(renderEnv(env))));
+            }
+            map[r.name] = folder;
+            commands.push({ server: r.name, install: (man && man.install) || null, start: (man && man.start) || null });
+        }
+        if (Object.keys(map).length) {
+            await step('update mcps/servers.json', async () => {
+                const cur = await io.readJson('mcps/servers.json');
+                const base = cur && typeof cur === 'object' && !Array.isArray(cur) ? cur : {};
+                await io.writeJson('mcps/servers.json', { ...base, ...map });
+            });
+        }
+
+        // Registrations; existing ids for use-existing / present rows.
+        const serverIdByName = new Map();
+        for (const r of ofKind('server').filter(active)) {
+            const s = (pkg.servers || []).find((x) => x.name === r.name);
+            if (!s) continue;
+            if (!toInstall(r)) {
+                const ex = (h.servers || []).find((e) => norm(e.name) === norm(r.name));
+                if (ex && isId(ex.id)) serverIdByName.set(r.name, Number(ex.id));
+                continue;
+            }
+            const v = vals[r.name] || {};
+            const reg = { name: s.name, url: v.url !== undefined && v.url !== '' ? v.url : s.url, description: s.description || '',
+                transport: s.transport || 'http', is_mock: !!s.is_mock, headers: v.authorization ? { Authorization: v.authorization } : {} };
+            const res = await step(`register server ${r.name}`, () => io.addServer(reg));
+            serverIdByName.set(r.name, Number(res.id));
+            installed.push({ kind: 'server', name: r.name, destination: r.destination });
+        }
+        const serverNameByOldId = new Map((pkg.servers || []).filter((s) => isId(s.old_id)).map((s) => [Number(s.old_id), s.name]));
+
+        const playbookIdByOldId = new Map();
+        for (const r of ofKind('playbook').filter(active)) {
+            const dep = deps.find((d) => d.kind === 'playbook' && (d.pkey || d.name) === r.name);
+            if (!dep) continue;
+            let id;
+            if (!toInstall(r)) {
+                const ex = (h.playbooks || []).find((e) => norm(e.pkey) === norm(r.name));
+                id = ex && isId(ex.id) ? Number(ex.id) : undefined;
+            } else {
+                if (!files[dep.file]) continue;
+                const pb = mdToPlaybook(dec(files[dep.file]));
+                await step(`write playbook ${r.name}`, () => io.writeFile(dep.file, files[dep.file]));
+                const res = await step(`create playbook ${r.name}`, () => io.createPlaybook(pb));
+                id = Number(res.id);
+                installed.push({ kind: 'playbook', name: r.name, destination: dep.file });
+            }
+            if (id !== undefined && isId(dep.old_id)) playbookIdByOldId.set(Number(dep.old_id), id);
+        }
+
+        // Components: a folder copy here; creation / reuse in the library is importComponents' job.
+        const workflow = pkg.workflow || {};
+        const skippedIds = new Set();
+        for (const r of ofKind('component')) {
+            const dep = deps.find((d) => d.kind === 'component' && d.name === r.name);
+            if (!dep) continue;
+            if (!active(r)) { skippedIds.add(Number(dep.old_id)); continue; }
+            if (toInstall(r) && files[dep.file]) {
+                await step(`write component ${r.name}`, () => io.writeFile(dep.file, files[dep.file]));
+                installed.push({ kind: 'component', name: r.name, destination: dep.file });
+            }
+        }
+        const bundle = (workflow.code_components || []).filter((c) => !skippedIds.has(Number(c.id)));
+        let nodes = (workflow.definition && workflow.definition.nodes) || [];
+        nodes = await step('import code components', () => io.importComponents(bundle, nodes));
+        nodes = relinkNodes(nodes, { serverNameByOldId, serverIdByName, playbookIdByOldId });
+
+        // Workflow keys entered in the review go back into each node's connection.
+        const keysRow = ofKind('secrets')[0];
+        if (!keysRow || active(keysRow)) {
+            const keys = vals['workflow keys'] || {};
+            for (const [k, v] of Object.entries(keys)) {
+                const i = k.lastIndexOf('.');
+                if (i < 0 || v === undefined || v === null || String(v) === '') continue;
+                const id = k.slice(0, i), field = k.slice(i + 1);
+                nodes = nodes.map((n) => (String(n.id) !== id ? n : {
+                    ...n, config: { ...(n.config || {}), connection: { ...((n.config && n.config.connection) || {}), [field]: v } },
+                }));
+            }
+        }
+        return { installed, commands, nodes };
+    }
+
+    return { collectDependencies, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, envFields, renderEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest, readPackage, matchComponent, reviewRows, canConfirm, installPackage };
 });

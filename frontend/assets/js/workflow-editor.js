@@ -7364,17 +7364,10 @@ class WorkflowEditor {
         if (!Array.isArray(bundle) || !bundle.length) return nodes;
         const CC = window.CodeComponents;
         await CC.cache.load(CC.api());
-        const content = (c) => JSON.stringify([c.code, c.exits, c.mcp_servers, Number(c.timeout_s),
-            c.args || [], c.provides || [], c.start_trigger || null]);
         const rows = new Map();   // exported id -> this library's row
         const created = [];
         for (const b of bundle) {
-            const want = content(b);
-            let row = CC.cache.get(b.id);
-            if (!row || content(row) !== want) {
-                row = CC.cache.all().find(r => String(r.name).trim().toLowerCase() === String(b.name).trim().toLowerCase()
-                    && content(r) === want) || null;
-            }
+            let row = window.WorkflowPackage.matchComponent(b, CC.cache.all());
             if (!row) {
                 let name = b.name;
                 for (let k = 1; CC.nameClash(name, null); k++) name = `${b.name} (imported${k > 1 ? ' ' + k : ''})`;
