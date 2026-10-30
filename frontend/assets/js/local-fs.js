@@ -328,7 +328,63 @@
         return out;
     }
 
+    /**
+     * Terminal commands for the runner folder, in the user's own shell.
+     *
+     * The browser and the terminal are on the same machine, so the browser's
+     * platform says which shell the user will paste into: PowerShell on
+     * Windows, a POSIX shell everywhere else. The POSIX forms were printed on
+     * Windows too and failed there at once — `$(find ~ …)` is not PowerShell,
+     * a Windows venv has no bin/ (it is Scripts\), and `python3` usually opens
+     * the Microsoft Store; `py` is the launcher the python.org installer adds.
+     *
+     * The folder is found by name because the File System Access API withholds
+     * its absolute path. Both searches stop at the first match and go 6 levels
+     * below home; they skip dot-folders (POSIX) or Hidden ones such as AppData
+     * (Windows).
+     * PowerShell 5.1, the one Windows ships, has no `&&`, hence `if ($?)`.
+     */
+    const runnerShell = (function () {
+        const platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+        const windows = /^win/i.test(platform);
+        const sq = windows
+            ? (s) => "'" + String(s).replace(/'/g, "''") + "'"
+            : (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
+        // `up` is how many folders below python/ the command runs from.
+        const venvBin = (tool, up = 0) => windows
+            ? (up ? '..\\'.repeat(up) : '.\\') + '.venv\\Scripts\\' + tool + '.exe'
+            : (up ? '../'.repeat(up) : './') + '.venv/bin/' + tool;
+        return {
+            windows,
+            /** A `cd` into <folder named `name`>/python[/subpath]. */
+            cd(name, subpath = '') {
+                const folder = name || 'synergyAI';
+                if (windows) {
+                    const tail = subpath ? '\\' + subpath.replace(/\//g, '\\') : '';
+                    return 'Set-Location "$((Get-ChildItem $HOME -Directory -Recurse -Depth 5 -Filter ' + sq(folder) +
+                           ' -ErrorAction SilentlyContinue | Select-Object -First 1).FullName)\\python' + tail + '"';
+                }
+                return 'cd "$(find ~ -maxdepth 6 -type d -name ' + sq(folder) +
+                       " -not -path '*/.*' -print -quit)/python" + (subpath ? '/' + subpath : '') + '"';
+            },
+            /** The venv's python with `args`, run from `up` folders below python/. */
+            python(args, up = 0) { return venvBin('python', up) + ' ' + args; },
+            /** pip in the venv (via python -m pip on Windows: pip.exe cannot upgrade itself). */
+            pip(args) { return windows ? venvBin('python') + ' -m pip ' + args : venvBin('pip') + ' ' + args; },
+            /** Run each command only if the previous one succeeded. */
+            then(...cmds) {
+                if (!windows) return cmds.join(' && ');
+                return cmds.reduceRight((rest, c) => c + '; if ($?) { ' + rest + ' }');
+            },
+            /** The one-time venv build, run from python/. */
+            venvSetup() {
+                return this.then((windows ? 'py -3' : 'python3') + ' -m venv .venv', this.pip('install -r requirements.txt'));
+            },
+        };
+    })();
+
     window.localFs = {
+        runnerShell,
         isSupported,
         getRootHandle,
         getStatus,
