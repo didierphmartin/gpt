@@ -1341,7 +1341,7 @@
       "unsupported": "Compiled workflows run on your computer, which needs a browser that can use local folders. Open SynergyAI in Chrome, Edge or Brave and try again.",
       "retryButton": "Try again",
       "ready": "Close this and select \"Generate\" again in the canvas top menu.",
-      "note": "That builds one shared venv for the LangGraph, ADK and MAF runtimes (a NOOA package lists its own pip command at the top of its generated script). Then, from the same folder, start the runner with ./.venv/bin/python main.py — not bare python3, or the scripts run without their packages. After it finishes, select \"Generate\" again in the canvas top menu."
+      "note": "That builds one shared venv for the LangGraph, ADK and MAF runtimes (a NOOA package lists its own pip command at the top of its generated script). Then, from the same folder, start the runner with {{startCmd}} — not bare python3, or the scripts run without their packages. After it finishes, select \"Generate\" again in the canvas top menu."
     },
     "worker": "worker",
     "mcpServers": "MCP SERVERS",

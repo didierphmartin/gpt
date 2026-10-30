@@ -5072,7 +5072,7 @@ class WorkflowEditor {
      */
     async _showNooaSetupModal() {
         // "mcp<2": nooa 0.0.8 targets the mcp 1.x SDK API (its own pin is unbounded).
-        const cmd = './.venv/bin/pip install "nooa[mcp]" "mcp<2"';
+        const cmd = window.localFs.runnerShell.pip('install "nooa[mcp]" "mcp<2"');
         const folder = (await window.localFs?.getRootHandle?.())?.name || this.localFolderName || 'synergyAI';
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
@@ -5244,14 +5244,9 @@ class WorkflowEditor {
      * The commands in these modals used to hardcode ~/Documents/synergyAI,
      * which is one developer's layout. Anyone who picked a different folder in
      * the setup wizard got a command that fails with "no such file or
-     * directory" at the moment they were told to run it.
-     *
-     * We cannot print an absolute path -- the File System Access API withholds
-     * it and the handle exposes only a name -- so the command locates the
-     * folder by that name, which we do know (localFolderName, set from the
-     * handle and restored with it). The find stops at the first match rather
-     * than walking all of $HOME, and skips dot-directories such as Library
-     * caches.
+     * directory" at the moment they were told to run it. localFs.runnerShell
+     * finds the folder by name (localFolderName, set from the handle and
+     * restored with it), in PowerShell on Windows.
      *
      * @param {string} subpath appended inside the python/ folder, e.g. 'scripts/foo'
      */
@@ -5261,10 +5256,13 @@ class WorkflowEditor {
         const name = (this.localFolderName && this.localFolderName !== 'Selected folder')
             ? this.localFolderName
             : 'synergyAI';
-        const quoted = "'" + String(name).replace(/'/g, "'\\''") + "'";
-        const tail = subpath ? '/' + subpath : '';
-        return 'cd "$(find ~ -maxdepth 6 -type d -name ' + quoted +
-               " -not -path '*/.*' -print -quit)/python" + tail + '"';
+        return window.localFs.runnerShell.cd(name, subpath);
+    }
+
+    /** `cd` into the runner's folder, then start the runner. */
+    _runnerStartCmd() {
+        const sh = window.localFs.runnerShell;
+        return sh.then(this._runnerCd(), sh.python('main.py'));
     }
 
     /**
@@ -5290,8 +5288,8 @@ class WorkflowEditor {
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Requirements</td><td><code class="text-xs">requirements.txt</code> (LangGraph, LangChain, FastAPI, uvicorn, …)</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">First-time setup</td><td><b>Setup</b> in this menu (the runtime's virtual environment, once)</td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Run elsewhere</td><td><b>Export</b>, then follow the <code class="text-xs">README.md</code> in the zip: the packages this workflow needs, how to install them, and how to run it</td></tr>
-                        <tr><td class="py-1 pr-3 font-medium text-gray-700">Start the runner</td><td><code class="text-xs">./.venv/bin/python main.py</code> from the runtime folder (NOT system <code class="text-xs">python3</code> — see note below)</td></tr>
-                        <tr><td class="py-1 pr-3 font-medium text-gray-700">Standalone CLI run</td><td><code class="text-xs">./.venv/bin/python main.py run scripts/&lt;workflow&gt;.py</code></td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">Start the runner</td><td><code class="text-xs">${this.escapeHtml(window.localFs.runnerShell.python('main.py'))}</code> from the runtime folder (NOT system <code class="text-xs">python3</code> — see note below)</td></tr>
+                        <tr><td class="py-1 pr-3 font-medium text-gray-700">Standalone CLI run</td><td><code class="text-xs">${this.escapeHtml(window.localFs.runnerShell.python('main.py run scripts/<workflow>.py'))}</code></td></tr>
                         <tr><td class="py-1 pr-3 font-medium text-gray-700">Live endpoints</td><td><code class="text-xs">POST /api/run</code>, <code class="text-xs">POST /api/run-file</code>, <code class="text-xs">GET /health</code></td></tr>
                     </tbody>
                 </table>
@@ -5300,7 +5298,7 @@ class WorkflowEditor {
                     It only works while the runner is running.
                 </p>
                 <p class="text-xs text-gray-500 mb-4">
-                    <b>Important:</b> start the runner with <code class="text-xs">./.venv/bin/python main.py</code>, not bare <code class="text-xs">python3 main.py</code>.
+                    <b>Important:</b> start the runner with <code class="text-xs">${this.escapeHtml(window.localFs.runnerShell.python('main.py'))}</code>, not bare <code class="text-xs">python3 main.py</code>.
                     The runner spawns each generated script as a subprocess via <code class="text-xs">sys.executable</code>, so whichever interpreter starts <code class="text-xs">main.py</code>
                     is the one that runs every workflow. Only the venv has LangGraph and the per-provider <code class="text-xs">langchain-*</code> packages — system Python doesn't,
                     and you'll see <code class="text-xs">ModuleNotFoundError: No module named 'langchain_openai'</code> if you start the runner with the wrong interpreter.
@@ -5521,7 +5519,7 @@ class WorkflowEditor {
             // and uvicorn does not reload. Say so — a bare "Not Found" here sends
             // people looking for a bug in the workflow instead of restarting.
             throw new Error('the local runner is running an older version (no workflow-server route). '
-                + `Restart it — stop the running runner, then: ${this._runnerCd()} && ./.venv/bin/python main.py`);
+                + `Restart it — stop the running runner, then: ${this._runnerStartCmd()}`);
         }
         if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
         const { url } = await resp.json();
@@ -6521,9 +6519,10 @@ class WorkflowEditor {
      * The direct command is offered second, for a run without the UI.
      */
     _showCompiledRunnerNotRunningModal(root, framework = null) {
-        const startCmd = `${this._runnerCd()} && ./.venv/bin/python main.py`;
+        const sh = window.localFs.runnerShell;
+        const startCmd = this._runnerStartCmd();
         const directCmd = root
-            ? `${this._runnerCd(`scripts/${root}`)} && ../../.venv/bin/python workflow.py`
+            ? sh.then(this._runnerCd(`scripts/${root}`), sh.python('workflow.py', 2))
             : '';
         const t = (k, fallback) => this.escapeHtml(this.t(k) || fallback);
         const backdrop = document.createElement('div');
@@ -6611,7 +6610,7 @@ class WorkflowEditor {
         // as the backend generator) — mirrors the MAF modal fix.
         const lgFile = ((this.currentWorkflowName || 'workflow')
             .replace(/[^a-z0-9_]+/gi, '_').toLowerCase()) + '_langgraph.py';
-        const directCmd = `${this._runnerCd()} && ./.venv/bin/python scripts/${lgFile}`;
+        const directCmd = window.localFs.runnerShell.then(this._runnerCd(), window.localFs.runnerShell.python(`scripts/${lgFile}`));
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
         backdrop.innerHTML = `
@@ -6856,7 +6855,7 @@ class WorkflowEditor {
         // the user knows where that is, and nothing here can be wrong on their
         // machine. The CLI route (setup.py --force, from a checkout)
         // remains for anyone installing without the wizard.
-        const cmd = `python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt`;
+        const cmd = window.localFs.runnerShell.venvSetup();
         const esc = (s) => this.escapeHtml(s);
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
@@ -6892,7 +6891,7 @@ class WorkflowEditor {
                             <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${esc(cmd)}</pre>
                             <button class="cmd-copy-btn absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="${esc(this.t('workflow.runnerSetup.copy') || 'Copy command')}">📋</button>
                         </div>
-                        <p class="text-xs text-gray-500 mb-4">${esc(this.t('workflow.runnerSetup.note'))}</p>`;
+                        <p class="text-xs text-gray-500 mb-4">${esc(this.t('workflow.runnerSetup.note', { startCmd: window.localFs.runnerShell.python('main.py') }))}</p>`;
                 }
             }
             backdrop.innerHTML = `

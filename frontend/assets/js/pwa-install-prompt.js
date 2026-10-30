@@ -498,6 +498,25 @@
     }
 
     /**
+     * The one command the user still has to run, made self-locating.
+     *
+     * It used to be a bare `cd python && …`, which assumes the terminal is
+     * already inside the granted folder. A terminal opens in the home folder,
+     * so the paste failed with "no such file or directory" and the wizard
+     * looked broken when the install had in fact succeeded.
+     *
+     * The File System Access API withholds the folder's absolute path, so the
+     * command searches the home folder for it by name; localFs.runnerShell
+     * also picks PowerShell on Windows. Limitation worth knowing: a folder
+     * granted from outside the home folder (an external volume, another
+     * drive) is not found by this search.
+     */
+    function venvCommand(folderName) {
+        const sh = window.localFs.runnerShell;
+        return sh.then(sh.cd(folderName), sh.venvSetup());
+    }
+
+    /**
      * What happened to the Python runner install, in one line.
      *
      * Reported rather than silent because the remaining step is manual: the
@@ -506,35 +525,6 @@
      * wizard that says nothing here leaves them to discover that at the first
      * failed Run.
      */
-    /** Quote a folder name for use as a single-quoted shell argument. */
-    function shQuote(s) {
-        return "'" + String(s).replace(/'/g, "'\\''") + "'";
-    }
-
-    /**
-     * The one command the user still has to run, made self-locating.
-     *
-     * It used to be a bare `cd python && …`, which assumes the terminal is
-     * already inside the granted folder. A terminal opens in $HOME, so the
-     * paste produced `cd: no such file or directory: python` and the wizard
-     * looked broken when the install had in fact succeeded.
-     *
-     * We cannot print an absolute path: the File System Access API withholds
-     * it on purpose, and the directory handle exposes only a name. So the
-     * command searches for the folder by that name and cds into it, which
-     * makes it correct from any working directory. `-print -quit` stops at the
-     * first match instead of walking all of $HOME, and the `-not -path` filter
-     * skips dot-directories such as Library caches.
-     *
-     * Limitation worth knowing: a folder granted from outside $HOME (an
-     * external volume, say) is not found by this search.
-     */
-    function venvCommand(folderName) {
-        return 'cd "$(find ~ -maxdepth 6 -type d -name ' + shQuote(folderName || 'synergyAI') +
-               " -not -path '*/.*' -print -quit)/python\" && " +
-               'python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt';
-    }
-
     function renderRunnerStatus() {
         const r = wizardState.runner;
         if (!r) return '';

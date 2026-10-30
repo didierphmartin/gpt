@@ -1341,7 +1341,7 @@
       "unsupported": "Les workflows compilés s'exécutent sur votre ordinateur, ce qui demande un navigateur capable d'utiliser des dossiers locaux. Ouvrez SynergyAI dans Chrome, Edge ou Brave et réessayez.",
       "retryButton": "Réessayer",
       "ready": "Fermez ceci et sélectionnez à nouveau « Générer » dans le menu en haut du canevas.",
-      "note": "Cela crée un venv partagé pour les runtimes LangGraph, ADK et MAF (un paquet NOOA indique sa propre commande pip en tête de son script généré). Ensuite, depuis le même dossier, lancez le runner avec ./.venv/bin/python main.py — pas python3 seul, sinon les scripts s'exécutent sans leurs paquets. Une fois terminé, sélectionnez à nouveau « Générer » dans le menu en haut du canevas."
+      "note": "Cela crée un venv partagé pour les runtimes LangGraph, ADK et MAF (un paquet NOOA indique sa propre commande pip en tête de son script généré). Ensuite, depuis le même dossier, lancez le runner avec {{startCmd}} — pas python3 seul, sinon les scripts s'exécutent sans leurs paquets. Une fois terminé, sélectionnez à nouveau « Générer » dans le menu en haut du canevas."
     },
     "worker": "worker",
     "mcpServers": "SERVEURS MCP",
