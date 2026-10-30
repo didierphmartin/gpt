@@ -70,13 +70,13 @@
     background: transparent;
     border-bottom: none;
 }
-/* The folded rail is gray so it stands out against the white canvas, like the dark left sidebar. */
+/* The folded rail is the left sidebar's gray, so both rails read the same against the white canvas. */
 .workflow-agents-panel.collapsed:not(.peek) {
-    background: #9ca3af;
-    border-left-color: #6b7280;
+    background: #e5e7eb;
+    border-left-color: #d1d5db;
 }
 .workflow-agents-panel.collapsed:not(.peek) .workflow-panel-toggle {
-    color: #ffffff;
+    color: #374151;
 }
 
 /* Hover peek (hover-peek.js): the collapsed panel opens OVER the canvas while the mouse rests on it. Full width
