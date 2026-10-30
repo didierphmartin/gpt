@@ -7325,6 +7325,7 @@ class WorkflowEditor {
 
         this.importGraphFromBackend({ nodes, edges });
         this._refreshDecisionBadges().catch(() => {});
+        this._refreshMissingBadges().catch(() => {});
         this.restorePromptFromStartNode(nodes);
         this._applyOrchestrationToCanvas();
 
@@ -13862,6 +13863,7 @@ class WorkflowEditor {
                 if (workflowData.graph.nodes.some(n => (n.type || n.node_type || n.config?.type) === 'playbook')) await this._loadPlaybookCache();
                 this.importGraphFromBackend(workflowData.graph);
                 this._refreshDecisionBadges().catch(() => {});
+                this._refreshMissingBadges().catch(() => {});
 
                 // Restore prompt from start node if saved
                 this.restorePromptFromStartNode(workflowData.graph.nodes);
@@ -21332,6 +21334,46 @@ Based on the analysis...
         st.textContent = tf('decisionKeyMissing', { provider: label });
         st.className = 'text-sm text-amber-700';
         sw?.classList.remove('hidden');
+    }
+
+    /**
+     * One red "missing" chip per node that needs something this install lacks (skill, tool, MCP server,
+     * playbook); the tooltip lists it. Display only. A source that cannot be read is skipped, not badged.
+     */
+    async _refreshMissingBadges() {
+        const WP = window.WorkflowPackage;
+        if (!WP?.missingByNode) return;
+        const have = { skills: null, servers: null, tools: null, playbookIds: null };
+        const sk = window.skillsManager?.skills;
+        if (Array.isArray(sk) && sk.length) have.skills = sk.map((x) => x.dir_name).filter(Boolean);
+        try {
+            const { servers, toolServers } = await window.WorkflowPackageUI.loadServers();
+            if (window.mcpClient) { have.servers = servers; have.tools = toolServers; }
+        } catch (e) { /* unknown: server checks are skipped */ }
+        const PC = window.PlaybookCollection;
+        if (PC) {
+            try {
+                if (!PC.cache.all().length) await PC.cache.load(this._playbookApi());
+                have.playbookIds = PC.cache.all().map((r) => Number(r.id));
+            } catch (e) { /* unknown: playbook checks are skipped */ }
+        }
+        // Read the canvas after the waits: a Save or another load may have replaced it meanwhile.
+        const missing = WP.missingByNode(this.exportWorkflow().nodes, have);
+        this.container?.querySelectorAll('.missing-badges').forEach((el) => el.remove());
+        for (const [id, items] of Object.entries(missing)) {
+            const box = document.querySelector(`#node-${id} .workflow-node`);
+            if (!box) continue;
+            const text = items.map((it) => {
+                const i = it.indexOf(':');
+                return this.t(`workflow.package.missing_${it.slice(0, i)}`, { name: it.slice(i + 1) });
+            }).join('; ');
+            const title = `${this.t('workflow.package.missingPrefix')} ${text}`;
+            const row = document.createElement('div');
+            row.className = 'missing-badges';
+            row.style.cssText = 'padding:0 8px 4px;display:flex;flex-wrap:wrap;max-width:230px;';
+            row.innerHTML = `<span class="tool-badge" style="background:#fee2e2;color:#b91c1c;" title="${this.escapeHtml(title)}">⚠ ${this.escapeHtml(this.t('workflow.package.missing'))}</span>`;
+            box.appendChild(row);
+        }
     }
 
     /** GET /dispatch/providers → {default, providers} or null when it cannot be read. `fresh` skips the per-run cache. */

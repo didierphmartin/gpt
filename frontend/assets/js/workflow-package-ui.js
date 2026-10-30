@@ -304,5 +304,5 @@
         };
     }
 
-    window.WorkflowPackageUI = { buildPackageBytes, exportPackage, askFolderAccess, folderReadable, esc };
+    window.WorkflowPackageUI = { buildPackageBytes, exportPackage, askFolderAccess, folderReadable, loadServers, esc };
 })();

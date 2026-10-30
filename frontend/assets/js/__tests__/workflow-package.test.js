@@ -439,3 +439,31 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
     }
     console.log('workflow-package: ok');
 })().catch((e) => { console.error(e); process.exit(1); });
+
+// missingByNode: what each node needs that this install lacks (null source = unknown, skipped).
+{
+    const have = {
+        skills: ['Other/skill'],
+        servers: [{ id: 1, name: 'outlook' }],
+        tools: new Map([['known_tool', ['outlook']]]),
+        playbookIds: [3],
+    };
+    const ns = [
+        { id: '1', node_type: 'agent', config: { bound_skill: { dir_name: 'GEO/geo-compare' }, tools: ['known_tool', 'ghost_tool'], playbook_id: 9 } },
+        { id: '2', node_type: 'code', config: { mcp_servers: ['Outlook', 'Workday'] } },
+        { id: '3', node_type: 'vectorstore', config: { store: 'mcp:7' } },
+        { id: '4', node_type: 'vectorstore', config: { store: 'mcp:1' } },
+        { id: '5', node_type: 'playbook', config: { playbook_id: 3 } },
+        { id: '6', node_type: 'playbook', config: { playbook_id: 4 } },
+        { id: '7', node_type: 'agent', config: { bound_skill: { dir_name: 'Other/skill' } } },
+    ];
+    const r = WP.missingByNode(ns, have);
+    assert.deepStrictEqual(r['1'], ['skill:GEO/geo-compare', 'tool:ghost_tool', 'playbook:9']);
+    assert.deepStrictEqual(r['2'], ['server:Workday']);
+    assert.deepStrictEqual(r['3'], ['store:7']);
+    assert.deepStrictEqual(r['6'], ['playbook:4']);
+    for (const id of ['4', '5', '7']) assert.strictEqual(r[id], undefined);
+    const none = WP.missingByNode(ns, { skills: null, servers: null, tools: null, playbookIds: null });
+    assert.deepStrictEqual(none, {});
+    console.log('missingByNode: ok');
+}

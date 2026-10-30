@@ -11,6 +11,39 @@
     const isId = (v) => v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v));
 
     /**
+     * What each node needs that this install lacks: { [nodeId]: ['skill:<dir>', 'tool:<name>', 'server:<name>',
+     * 'store:<id>', 'playbook:<id>'] }. `have` lists what exists; a null list is unknown and skips its check.
+     */
+    function missingByNode(nodes, have) {
+        const h = have || {};
+        const skills = h.skills ? new Set(h.skills) : null;
+        const serverNames = h.servers ? new Set(h.servers.map((s) => String(s.name).toLowerCase())) : null;
+        const serverIds = h.servers ? new Set(h.servers.map((s) => Number(s.id))) : null;
+        const playbooks = h.playbookIds ? new Set(h.playbookIds.map(Number)) : null;
+        const out = {};
+        for (const node of nodes || []) {
+            const cfg = node.config || {};
+            const type = node.node_type;
+            const miss = [];
+            if (type === 'agent') {
+                const dir = cfg.bound_skill && cfg.bound_skill.dir_name;
+                if (skills && dir && !skills.has(dir)) miss.push(`skill:${dir}`);
+                if (h.tools) for (const tool of cfg.tools || []) if (!(h.tools.get(tool) || []).length) miss.push(`tool:${tool}`);
+            }
+            if (type === 'code' && serverNames) {
+                for (const name of cfg.mcp_servers || []) if (!serverNames.has(String(name).toLowerCase())) miss.push(`server:${name}`);
+            }
+            if (INGESTION_TYPES.includes(type) && serverIds && typeof cfg.store === 'string') {
+                const m = /^mcp:(\d+)$/.exec(cfg.store);
+                if (m && !serverIds.has(Number(m[1]))) miss.push(`store:${m[1]}`);
+            }
+            if (playbooks && (type === 'playbook' || type === 'agent') && isId(cfg.playbook_id) && !playbooks.has(Number(cfg.playbook_id))) miss.push(`playbook:${Number(cfg.playbook_id)}`);
+            if (miss.length) out[node.id] = miss;
+        }
+        return out;
+    }
+
+    /**
      * What `nodes` (exportWorkflow().nodes) need. ctx.toolServers maps a tool name to the servers
      * offering it; ctx.serverNameById maps a registered server id to its name.
      */
@@ -554,5 +587,5 @@
         return { installed, commands, nodes };
     }
 
-    return { collectDependencies, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, envFields, renderEnv, parseEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest, readPackage, matchComponent, reviewRows, canConfirm, installPackage };
+    return { collectDependencies, missingByNode, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, envFields, renderEnv, parseEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest, readPackage, matchComponent, reviewRows, canConfirm, installPackage };
 });
