@@ -45,8 +45,8 @@
 /* Agents panel (right side) */
 .workflow-agents-panel {
     width: 260px;
-    background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-    border-left: 1px solid #e2e8f0;
+    background: #e5e7eb; /* the left sidebar's gray (bg-gray-200) */
+    border-left: 1px solid #d1d5db;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -57,24 +57,85 @@
 /* Collapsed: shrink to a thin rail, keep only the expand toggle visible.
    The canvas (flex:1) grows to fill the reclaimed space automatically. */
 .workflow-agents-panel.collapsed {
-    width: 40px;
+    width: 52px; /* the left rail's width (#sidebar-rail) */
 }
 .workflow-agents-panel.collapsed:not(.peek) .panel-title,
-.workflow-agents-panel.collapsed:not(.peek) .workflow-agents-list,
 .workflow-agents-panel.collapsed:not(.peek) .workflow-actions {
     display: none;
 }
 .workflow-agents-panel.collapsed:not(.peek) .workflow-panel-header {
     justify-content: center;
     padding: 12px 0;
+    background: transparent;
+    border-bottom: none;
+}
+.workflow-agents-panel.collapsed:not(.peek) .workflow-panel-toggle {
+    color: #374151;
+}
+
+/* Folded, the rail shows each node's icon, like the left rail; they are the panel's own cards, still draggable. */
+.workflow-agents-panel.collapsed:not(.peek) .workflow-agents-list {
+    padding: 4px 0;
+    overflow-x: hidden;
+}
+.workflow-agents-panel.collapsed:not(.peek) .workflow-section-header,
+.workflow-agents-panel.collapsed:not(.peek) .agent-info,
+.workflow-agents-panel.collapsed:not(.peek) .ingestion-order,
+.workflow-agents-panel.collapsed:not(.peek) .agent-edit-btn,
+.workflow-agents-panel.collapsed:not(.peek) .template-badge {
+    display: none;
+}
+.workflow-agents-panel.collapsed:not(.peek) .workflow-section {
+    margin: 0;
+    padding: 4px 0;
+}
+.workflow-agents-panel.collapsed:not(.peek) .workflow-section + .workflow-section {
+    border-top: 1px solid #d1d5db;
+}
+.workflow-agents-panel.collapsed:not(.peek) .workflow-section-content,
+.workflow-agents-panel.collapsed:not(.peek) .workflow-section-content.collapsed {
+    max-height: none;
+    opacity: 1;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+.workflow-agents-panel.collapsed:not(.peek) .workflow-agent-card,
+.workflow-agents-panel.collapsed:not(.peek) .workflow-agent-card:hover {
+    width: 40px;  /* the left rail's buttons (.rail-btn) */
+    height: 40px;
+    padding: 0;
+    margin: 0;
+    justify-content: center;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    box-shadow: none;
+    transform: none;
+}
+.workflow-agents-panel.collapsed:not(.peek) .workflow-agent-card:hover {
+    background: rgba(0, 0, 0, 0.06);
+}
+.workflow-agents-panel.collapsed:not(.peek) .workflow-agent-card .agent-icon {
+    background: transparent !important;
+    color: #374151 !important;
+    font-size: 22px;
+    width: auto;
+    height: auto;
+}
+/* Start's ▶ is green, so it is not mistaken for the rail's ◀ expand toggle. */
+.workflow-agents-panel.collapsed:not(.peek) .workflow-agent-card.start-node .agent-icon {
+    color: #16a34a !important;
 }
 
 /* Hover peek (hover-peek.js): the collapsed panel opens OVER the canvas while the mouse rests on it. Full width
-   plus a negative left margin of the difference keeps its place in the flex row at the rail's 40px, so the canvas
+   plus a negative left margin of the difference keeps its place in the flex row at the rail's 52px, so the canvas
    does not resize or redraw. */
 .workflow-agents-panel.collapsed.peek {
     width: 260px;
-    margin-left: -220px;
+    margin-left: -208px;
     position: relative;
     z-index: 30;
     box-shadow: -8px 0 24px rgba(0, 0, 0, 0.15);
@@ -86,8 +147,8 @@
     align-items: center;
     justify-content: space-between;
     padding: 10px 12px;
-    border-bottom: 1px solid #e2e8f0;
-    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+    border-bottom: 1px solid #d1d5db;
+    background: #e5e7eb;
     flex-shrink: 0;
 }
 .workflow-panel-header .panel-title {
@@ -155,7 +216,7 @@
 }
 
 .workflow-section-header:hover {
-    background-color: #f1f5f9;
+    background-color: rgba(0, 0, 0, 0.05);
 }
 
 .section-toggle {
@@ -419,11 +480,11 @@
 
 .workflow-actions {
     padding: 14px;
-    border-top: 1px solid #e2e8f0;
+    border-top: 1px solid #d1d5db;
     display: flex;
     flex-direction: column;
     gap: 10px;
-    background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+    background: #e5e7eb;
 }
 
 .workflow-btn {

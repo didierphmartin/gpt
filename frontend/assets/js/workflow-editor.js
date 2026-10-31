@@ -628,6 +628,12 @@ class WorkflowEditor {
         // each time → one click fires N file pickers (Cancel reveals the next).
         const sidebarImportBtn = document.getElementById('sidebar-import-workflow-btn');
         if (sidebarImportBtn) sidebarImportBtn.onclick = () => this._handleImportWorkflow();
+        // Sidebar Export -- the form's Export (the .zip package) for the workflow open on the canvas.
+        const sidebarExportBtn = document.getElementById('sidebar-export-workflow-btn');
+        if (sidebarExportBtn) sidebarExportBtn.onclick = () => {
+            if (!this.currentWorkflowId) { this.showNotification(this.t('workflow.messages.openToExport'), 'warning'); return; }
+            window.WorkflowPackageUI?.exportPackage(this);
+        };
 
         // Load existing workflows into left panel
         this.loadWorkflowsList();
@@ -1256,11 +1262,8 @@ class WorkflowEditor {
                 <button id="workflow-import-btn" class="workflow-io-btn" title="Import a workflow from a JSON file">
                     📥 Import
                 </button>
-                <button id="workflow-export-btn" class="workflow-io-btn" title="Export the current workflow as JSON">
+                <button id="workflow-export-btn" class="workflow-io-btn" title="${this.escapeHtml(this.t('workflow.package.exportTitle'))}">
                     📤 Export
-                </button>
-                <button id="workflow-package-export-btn" class="workflow-io-btn" title="${this.escapeHtml(this.t('workflow.package.exportTitle'))}">
-                    📦 ${this.escapeHtml(this.t('workflow.package.export'))}
                 </button>
             </div>
             <div class="workflow-btn-group">
@@ -1288,6 +1291,26 @@ class WorkflowEditor {
                 box-shadow: 0 4px 16px rgba(0,0,0,0.1);
                 min-width: 280px;
                 max-width: 350px;
+            }
+            /* In the top toolbar: the folded pill sits in the row, left of Reset; open, the form drops over the canvas. */
+            .workflow-settings-slot {
+                position: relative;
+                align-self: stretch;
+                display: flex;
+                align-items: center;
+            }
+            #workflow-top-toolbar .workflow-info-box {
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: auto;
+            }
+            #workflow-top-toolbar .workflow-info-box.collapsed {
+                position: static;
+                padding: 5px 12px;
+                border-color: #d1d5db;
+                border-radius: 8px;
+                box-shadow: 0 1px 2px rgba(0,0,0,0.05);
             }
             .workflow-info-box.collapsed {
                 padding: 6px 12px;
@@ -1527,7 +1550,7 @@ class WorkflowEditor {
         document.head.appendChild(style);
 
         // Add to container
-        this.container.appendChild(infoBox);
+        this._placeSettingsBox(infoBox);
 
         // Hidden by default — shown only after workflow type is chosen (batch)
         // or when loading an existing batch workflow. Audio workflows have their
@@ -1625,17 +1648,14 @@ class WorkflowEditor {
             }
         });
 
-        // Import / Export — JSON interchange. Export reuses the existing
-        // _showWorkflowJson() modal (with a Download .json button added);
-        // Import re-hydrates the canvas from a pasted/uploaded JSON file.
+        // Import / Export. Export builds the .zip package (the workflow and what it needs);
+        // Import takes a package or a workflow JSON file.
         // onclick (single slot), not addEventListener — this binding code re-runs
         // on re-init; addEventListener would stack listeners → duplicate pickers.
         const importBtn = document.getElementById('workflow-import-btn');
         if (importBtn) importBtn.onclick = () => this._handleImportWorkflow();
         const exportBtn = document.getElementById('workflow-export-btn');
-        if (exportBtn) exportBtn.onclick = () => this._showWorkflowJson();
-        const packageBtn = document.getElementById('workflow-package-export-btn');
-        if (packageBtn) packageBtn.onclick = () => window.WorkflowPackageUI?.exportPackage(this);
+        if (exportBtn) exportBtn.onclick = () => window.WorkflowPackageUI?.exportPackage(this);
 
         // Delete button handler
         const deleteBtn = document.getElementById('workflow-delete-btn');
@@ -1706,6 +1726,23 @@ class WorkflowEditor {
         }, delayMs);
     }
 
+    /** The settings form folds into the top toolbar, left of Reset (on the canvas when there is no toolbar). */
+    _placeSettingsBox(infoBox) {
+        const toolbar = document.getElementById('workflow-top-toolbar');
+        if (!toolbar || !this.container.contains(toolbar)) { this.container.appendChild(infoBox); return; }
+        const slot = document.createElement('div');
+        slot.className = 'workflow-settings-slot';
+        slot.appendChild(infoBox);
+        toolbar.prepend(slot);
+        // Open, the form floats over the canvas: the slot keeps the folded pill's width so the toolbar does not move.
+        // A hidden box (the other mode's) takes no room.
+        new ResizeObserver(() => {
+            const hidden = infoBox.style.display === 'none';
+            slot.style.display = hidden ? 'none' : '';
+            if (!hidden && infoBox.classList.contains('collapsed')) slot.style.width = `${infoBox.offsetWidth}px`;
+        }).observe(infoBox);
+    }
+
     addAudioWorkflowInfoBox() {
         const infoBox = document.createElement('div');
         infoBox.id = 'audio-workflow-info-box';
@@ -1743,7 +1780,7 @@ class WorkflowEditor {
             </div>
         `;
 
-        this.container.appendChild(infoBox);
+        this._placeSettingsBox(infoBox);
         infoBox.style.display = 'none';
 
         const nameInput = document.getElementById('audio-workflow-name-input');
@@ -7132,7 +7169,7 @@ class WorkflowEditor {
 
     /**
      * The export payload (what Save sends, plus the linked code components), with ingestion
-     * secrets stripped. Used by the JSON export and the package export.
+     * secrets stripped. Used by the JSON view and the package export.
      * Returns { workflow, payload, stripped, codeComponents }.
      */
     async _buildWorkflowPayload() {
@@ -7604,12 +7641,14 @@ class WorkflowEditor {
      * The prompt box, with the schedule fields when `schedule` (Start's "Set Schedule"). How the workflow starts is
      * chosen on the Start node itself (_renderStartNodeOptions); this form holds the prompt and the schedule details.
      */
-    showPromptForm(callback = null, { schedule: withSchedule = false } = {}) {
+    showPromptForm(callback = null, { schedule: withSchedule = false, play = false } = {}) {
         // Remove existing modal if any
         const existingModal = document.getElementById('prompt-form-modal');
         if (existingModal) existingModal.remove();
 
-        const buttonText = callback ? this.t('workflow.promptForm.run') : this.t('workflow.promptForm.save');
+        // play: the Enter Prompt door -- the box starts empty and Play runs what is typed; nothing is saved.
+        const buttonText = play ? `▶ ${this.t('workflow.promptForm.play')}`
+            : callback ? this.t('workflow.promptForm.run') : this.t('workflow.promptForm.save');
         const isRunMode = !!callback;
 
         // Get current schedule data
@@ -7649,7 +7688,7 @@ class WorkflowEditor {
                             id="prompt-form-textarea"
                             style="width: 100%; min-height: 120px; padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; resize: vertical; font-family: inherit; margin-bottom: 16px;"
                             placeholder="${this.t('workflow.promptForm.placeholder')}"
-                        >${this.lastUserPrompt || schedule.input_prompt || ''}</textarea>
+                        >${play ? '' : (this.lastUserPrompt || schedule.input_prompt || '')}</textarea>
 
                         <!-- Schedule Section -->
                         <div id="schedule-section" style="border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin-bottom: 16px; background: #f9fafb; display: ${scheduleEnabled ? 'block' : 'none'};">
@@ -7867,6 +7906,12 @@ class WorkflowEditor {
         // Handle submit
         submitBtn.addEventListener('click', () => {
             const prompt = textarea.value.trim();
+            if (play) {
+                if (!prompt) { textarea.focus(); return; }
+                modal.remove();
+                callback(prompt);
+                return;
+            }
             modal.remove();
             // Always persist the prompt to the start node so it's available
             // for code generation and future sessions.
@@ -10710,7 +10755,9 @@ class WorkflowEditor {
     async _switchStart(key, { open = false } = {}) {
         const CC = window.CodeComponents;
         const t = (k, p) => this.t(`workflow.startOptions.${k}`, p);
+        // Enter Prompt is a run door like ▶: an empty prompt and Play, which sends it to the conversation.
         const openForm = () => (typeof key === 'number' ? this._openStartArgsDialog(key)
+            : key === 'prompt' ? this.showPromptForm((prompt) => this._playPrompt(prompt), { play: true })
             : this.showPromptForm(null, { schedule: key === 'schedule' }));
         this.container.querySelectorAll('.node-start-options input[data-start]').forEach((b) => { b.disabled = true; });
         try {
@@ -17345,6 +17392,18 @@ class WorkflowEditor {
                 + ` on its run server${left.base ? ` (${left.base})` : ''}.`
                 + ` Use "Stop the run server" in that framework's menu to end it.`);
         }
+    }
+
+    /**
+     * Play from the Enter Prompt form: open the conversation and send the prompt through its composer, so
+     * the feed shows the prompt, then the answer -- the same turn as typing it there.
+     */
+    async _playPrompt(prompt) {
+        await this._openBatchSession();
+        const input = document.getElementById('pb-ov-input');
+        if (this._pbSessionMode !== 'batch' || !input) return;   // refused (a locked robot workflow): no conversation
+        input.value = prompt;
+        document.getElementById('pb-ov-send')?.click();
     }
 
     /**

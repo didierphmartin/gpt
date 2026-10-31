@@ -893,10 +893,11 @@
     "step2": "Connectez les nœuds en glissant des sorties vers les entrées",
     "step3": "Ajoutez des nœuds Début et Sortie pour définir le flux",
     "step4": "Enregistrez et exécutez votre workflow",
-    "batchWorkflowSettings": "Paramètres du workflow batch",
+    "batchWorkflowSettings": "Paramètres du workflow",
     "savedWorkflows": "Workflows Enregistrés",
-    "newWorkflow": "Nouveau Workflow",
-    "importWorkflow": "Importer un Workflow",
+    "newWorkflow": "Nouveau",
+    "importWorkflow": "Importer",
+    "exportWorkflow": "Exporter",
     "essentials": "ESSENTIELS",
     "agents": "AGENTS",
     "addAgent": "+ Ajouter un Agent",
@@ -919,7 +920,8 @@
       "title": "Prompt Utilisateur",
       "placeholder": "Entrez votre prompt ici...",
       "save": "Enregistrer",
-      "run": "Exécuter le Workflow"
+      "run": "Exécuter le Workflow",
+      "play": "Lancer"
     },
     "codeAssist": {
       "title": "Assistant",
@@ -1059,6 +1061,7 @@
     },
     "messages": {
       "saveFirst": "Veuillez d'abord enregistrer le workflow",
+      "openToExport": "Ouvrez un workflow pour l’exporter.",
       "saved": "Workflow enregistré avec succès",
       "savedNamed": "Workflow « {{name}} » enregistré",
       "savedAs": "Workflow enregistré sous « {{name}} » avec succès !",
@@ -1486,10 +1489,10 @@
       "one": "1 SUR {{total}}"
     },
     "package": {
-      "export": "Exporter avec les dépendances",
       "exportTitle": "Exporter le flux de travail avec les compétences, serveurs MCP, composants de code et playbooks dont il a besoin, en un seul .zip",
       "summaryTitle": "Exporter avec les dépendances",
-      "needs": "Ce flux de travail a besoin de :",
+      "preparing": "Préparation du paquet : collecte des skills, serveurs MCP, composants de code et playbooks utilisés par ce workflow…",
+      "needs": "Dépendances",
       "countSkills": "{{count}} compétence(s), incluses",
       "countServers": "{{count}} serveur(s) MCP : {{local}} local(aux), inclus en code source ; {{hosted}} hébergé(s), enregistrement seulement",
       "countNeedsKey": "{{count}} serveur(s) demandent une clé que vous saisirez de nouveau à l’import",

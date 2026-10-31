@@ -893,10 +893,11 @@
     "step2": "Connect nodes by dragging from outputs to inputs",
     "step3": "Add Start and Output nodes to define flow",
     "step4": "Save and run your workflow",
-    "batchWorkflowSettings": "Batch Workflow Settings",
+    "batchWorkflowSettings": "Workflow Settings",
     "savedWorkflows": "Saved Workflows",
-    "newWorkflow": "New Workflow",
-    "importWorkflow": "Import Workflow",
+    "newWorkflow": "New",
+    "importWorkflow": "Import",
+    "exportWorkflow": "Export",
     "essentials": "ESSENTIALS",
     "agents": "AGENTS",
     "addAgent": "+ Add Agent",
@@ -919,7 +920,8 @@
       "title": "User Prompt",
       "placeholder": "Enter your prompt here...",
       "save": "Save",
-      "run": "Run Workflow"
+      "run": "Run Workflow",
+      "play": "Play"
     },
     "codeAssist": {
       "title": "Assistant",
@@ -1059,6 +1061,7 @@
     },
     "messages": {
       "saveFirst": "Please save the workflow first",
+      "openToExport": "Open a workflow to export it.",
       "saved": "Workflow saved successfully",
       "savedNamed": "Workflow \"{{name}}\" saved",
       "savedAs": "Workflow saved as \"{{name}}\" successfully!",
@@ -1486,10 +1489,10 @@
       "one": "1 OF {{total}}"
     },
     "package": {
-      "export": "Export with dependencies",
       "exportTitle": "Export the workflow with the skills, MCP servers, code components and playbooks it needs, as one .zip",
       "summaryTitle": "Export with dependencies",
-      "needs": "This workflow needs:",
+      "preparing": "Preparing the package: collecting the skills, MCP servers, code components and playbooks this workflow uses…",
+      "needs": "Dependencies",
       "countSkills": "{{count}} skill(s), bundled",
       "countServers": "{{count}} MCP server(s): {{local}} local, bundled as source; {{hosted}} hosted, registration only",
       "countNeedsKey": "{{count}} server(s) need a key you will enter again on import",

@@ -72,7 +72,7 @@
     <link rel="stylesheet" href="assets/css/mcp-library.css?v=20260904-mcplib">
     <!-- Drawflow workflow editor -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.css">
-    <link rel="stylesheet" href="assets/css/workflow-editor.css?v=20261030-template-solid">
+    <link rel="stylesheet" href="assets/css/workflow-editor.css?v=20261030-rail-icons-22">
     <link rel="stylesheet" href="assets/css/file-storage.css?v=20260610-fileselect3">
     <!-- driver.js (onboarding tour). v1.4.0 to match local source at frontend/driver.js/.
          Swap to local once that copy is built (pnpm install && pnpm build inside that dir). -->
@@ -533,9 +533,9 @@
             align-items: center;
             gap: 4px;
             padding: 8px 0;
-            background: #1f2937;
-            color: #d1d5db;
-            border-right: 1px solid #374151;
+            background: #e5e7eb; /* the sidebar's own gray (bg-gray-200) */
+            color: #374151;
+            border-right: 1px solid #d1d5db;
             flex-shrink: 0;
         }
         #sidebar-rail.show {
@@ -562,12 +562,12 @@
             transition: background 0.15s, color 0.15s;
         }
         .rail-btn:hover {
-            background: rgba(255, 255, 255, 0.08);
-            color: #ffffff;
+            background: rgba(0, 0, 0, 0.06);
+            color: #111827;
         }
         .rail-btn.active {
             background: rgba(96, 165, 250, 0.28);
-            color: #ffffff;
+            color: #111827;
         }
         .rail-btn:focus-visible {
             outline: 2px solid #60a5fa;
@@ -576,7 +576,7 @@
         .rail-divider {
             width: 28px;
             height: 1px;
-            background: #374151;
+            background: #d1d5db;
             margin: 4px 0;
         }
 
@@ -2601,10 +2601,13 @@
                              gets the bulk of the vertical real estate. -->
                         <div class="flex-shrink-0 px-2 py-2 border-b border-gray-200 bg-gray-200 flex gap-1">
                             <button id="new-workflow-btn" class="flex-1 text-green-700 hover:text-green-800 text-xs font-medium py-1 px-2 bg-green-50 hover:bg-green-100 rounded transition">
-                                ➕ <span data-i18n="workflow.newWorkflow">New Workflow</span>
+                                ➕ <span data-i18n="workflow.newWorkflow">New</span>
                             </button>
-                            <button id="sidebar-import-workflow-btn" class="text-indigo-600 hover:text-indigo-700 text-xs font-medium py-1 px-2 bg-indigo-50 hover:bg-indigo-100 rounded transition" title="Import a workflow from a JSON file">
-                                ⬆️ <span data-i18n="workflow.importWorkflow">Import</span>
+                            <button id="sidebar-export-workflow-btn" class="flex-1 text-indigo-600 hover:text-indigo-700 text-xs font-medium py-1 px-2 bg-indigo-50 hover:bg-indigo-100 rounded transition" title="Export the open workflow with its dependencies, as one .zip">
+                                📤 <span data-i18n="workflow.exportWorkflow">Export</span>
+                            </button>
+                            <button id="sidebar-import-workflow-btn" class="flex-1 text-indigo-600 hover:text-indigo-700 text-xs font-medium py-1 px-2 bg-indigo-50 hover:bg-indigo-100 rounded transition" title="Import a workflow package (.zip) or a workflow JSON file">
+                                📥 <span data-i18n="workflow.importWorkflow">Import</span>
                             </button>
                         </div>
 
@@ -3781,7 +3784,7 @@
                              compiled-run scrim (z-[500]): the canvas is dimmed
                              and inert while compiled code runs, but this strip
                              stays operable. -->
-                        <div class="absolute top-3 left-3 z-[600] flex items-center gap-2">
+                        <div id="workflow-top-toolbar" class="absolute top-3 left-3 z-[600] flex items-center gap-2">
                             <button id="workflow-reset-top-btn"
                                     class="px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50 active:translate-y-px active:scale-95 transition flex items-center gap-1"
                                     title="Reset run state — clears node highlights, timers, and last results (keeps your nodes)">
@@ -4410,9 +4413,9 @@
     <script src="assets/js/cron-text.js?v=20261007-cron"></script>
     <script src="assets/js/robot-owner.js?v=20261029-others"></script>
     <script src="assets/js/workflow-package.js?v=20261031-all-servers"></script>
-    <script src="assets/js/workflow-package-ui.js?v=20261031-all-servers"></script>
+    <script src="assets/js/workflow-package-ui.js?v=20261031-merged-main"></script>
     <script src="assets/js/workflow-package-import.js?v=20261030-final-fixes"></script>
-    <script src="assets/js/workflow-editor.js?v=20261030-final-fixes"></script>
+    <script src="assets/js/workflow-editor.js?v=20261030-settings-slot"></script>
     <script src="assets/js/agents-library.js?v=20260903-playbook-agent"></script>
     <script src="assets/js/mcp-tool-tester.js?v=20260904-mcplib"></script>
     <script src="assets/js/mcp-library.js?v=20261005-is-mock"></script>

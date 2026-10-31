@@ -3,7 +3,7 @@
  * playbooks as one .zip (layout: docs/superpowers/specs/2026-10-30-workflow-package-design.md).
  *
  * buildPackageBytes(editor, opts) collects and zips without any dialog (testable from the console);
- * exportPackage(editor) shows the summary, then the system save dialog.
+ * exportPackage(editor) opens its window at once (preparing), then the summary, then the system save dialog.
  *
  * Depends on: window.WorkflowPackage, window.skillsImport.readFolderFiles, window.localFs,
  * window.mcpClient, window.PlaybookCollection, window.fflate.
@@ -264,42 +264,61 @@
         return fileName;
     }
 
-    /** "Export with dependencies": summary first, then the save dialog. */
+    /**
+     * Export: the window opens at once ("Preparing the package…") while the dependencies are collected
+     * -- that takes seconds -- then shows the summary, then the save dialog.
+     */
     async function exportPackage(editor) {
         const t = (key, params) => editor.t(`workflow.package.${key}`, params);
         const notify = (msg, type) => (editor.showNotification ? editor.showNotification(msg, type) : console.log(msg));
         document.getElementById('workflow-package-modal')?.remove();
         await askFolderAccess(editor);
-        let built;
-        try {
-            built = await buildPackageBytes(editor, {});
-        } catch (err) {
-            console.error('[workflow-package] export failed:', err);
-            notify(t('failed', { error: err.message }), 'error');
-            return;
-        }
-        const PC = window.PlaybookCollection;
-        if (built.summary.playbookAtRunTime && PC) await PC.cache.load(editor._playbookApi()).catch(() => {});
-        const choosable = built.summary.playbookAtRunTime && PC ? PC.cache.all() : [];
-
+        const title = esc(editor.currentWorkflowName || '');
         document.body.insertAdjacentHTML('beforeend', `
             <div id="workflow-package-modal" class="workflow-results-overlay">
                 <div class="workflow-results-container" style="max-width: 640px; max-height: 85vh; display: flex; flex-direction: column;">
                     <div class="workflow-results-header">
-                        <h2 style="margin: 0;">📦 ${esc(t('summaryTitle'))} — ${esc(built.summary.name)}</h2>
+                        <h2 style="margin: 0;">📦 ${esc(t('summaryTitle'))}${title ? ` — ${title}` : ''}</h2>
                         <button class="workflow-results-close" data-package-cancel>×</button>
                     </div>
-                    <div class="workflow-results-body" style="padding: 16px; overflow: auto; display: flex; flex-direction: column; gap: 12px;">
-                        ${summaryHtml(editor, built.summary, choosable)}
-                        <div style="display: flex; gap: 8px; justify-content: flex-end; align-items: center;">
-                            <span data-package-status style="color: #dc2626; font-size: 13px; margin-right: auto;"></span>
-                            <button data-package-cancel style="padding: 6px 14px; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer; font-size: 13px;">${esc(t('cancel'))}</button>
-                            <button data-package-save style="padding: 6px 14px; background: #16a34a; color: #fff; border: 1px solid #15803d; border-radius: 6px; cursor: pointer; font-size: 13px;">${esc(t('save'))}</button>
+                    <div class="workflow-results-body" data-package-body style="padding: 16px; overflow: auto; display: flex; flex-direction: column; gap: 12px;">
+                        <div style="display: flex; align-items: center; gap: 10px; color: #475569;">
+                            <span class="spinner" style="width: 16px; height: 16px; border: 2px solid #cbd5e1; border-top-color: #2563eb; border-radius: 50%; display: inline-block; animation: spin-active 0.8s linear infinite;"></span>
+                            ${esc(t('preparing'))}
                         </div>
                     </div>
                 </div>
             </div>`);
         const modal = document.getElementById('workflow-package-modal');
+        // The wait cursor until the summary shows: collecting takes seconds.
+        const waiting = (on) => { document.body.style.cursor = on ? 'wait' : ''; modal.style.cursor = on ? 'wait' : ''; };
+        waiting(true);
+        let cancelled = false;
+        modal.querySelectorAll('[data-package-cancel]').forEach((b) => { b.onclick = () => { cancelled = true; waiting(false); modal.remove(); }; });
+        let built;
+        try {
+            built = await buildPackageBytes(editor, {});
+        } catch (err) {
+            waiting(false);
+            console.error('[workflow-package] export failed:', err);
+            modal.remove();
+            if (!cancelled) notify(t('failed', { error: err.message }), 'error');
+            return;
+        }
+        if (cancelled) return;
+        const PC = window.PlaybookCollection;
+        if (built.summary.playbookAtRunTime && PC) await PC.cache.load(editor._playbookApi()).catch(() => {});
+        waiting(false);
+        if (cancelled) return;
+        const choosable = built.summary.playbookAtRunTime && PC ? PC.cache.all() : [];
+
+        modal.querySelector('[data-package-body]').innerHTML = `
+                        ${summaryHtml(editor, built.summary, choosable)}
+                        <div style="display: flex; gap: 8px; justify-content: flex-end; align-items: center;">
+                            <span data-package-status style="color: #dc2626; font-size: 13px; margin-right: auto;"></span>
+                            <button data-package-cancel style="padding: 6px 14px; background: #fff; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer; font-size: 13px;">${esc(t('cancel'))}</button>
+                            <button data-package-save style="padding: 6px 14px; background: #16a34a; color: #fff; border: 1px solid #15803d; border-radius: 6px; cursor: pointer; font-size: 13px;">${esc(t('save'))}</button>
+                        </div>`;
         const status = modal.querySelector('[data-package-status]');
         modal.querySelectorAll('[data-package-cancel]').forEach((b) => { b.onclick = () => modal.remove(); });
         modal.querySelector('[data-package-save]').onclick = async () => {
