@@ -149,6 +149,10 @@
             const folder = Object.prototype.hasOwnProperty.call(localMap, name) ? localMap[name] : null;
             const source = folder ? await readServerSource(folder) : null;
             if (folder && !source) warn('folder-unreadable', 'warnFolderUnreadable', { name });
+            // Runs on this computer but has no folder in mcps/servers.json: its code can't travel.
+            if (!folder && canRead && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])([:/]|$)/i.test(reg.url || '')) {
+                warn('local-not-in-folder', 'warnLocalNotInFolder', { name });
+            }
             if (source && !source.manifest) warn('no-install', 'warnNoInstall', { name });
             if (source) Object.assign(files, source.files);
             servers.push({ ...reg, local: !!source, folder, hasManifest: !!(source && source.manifest) });

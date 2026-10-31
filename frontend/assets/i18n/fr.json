@@ -1507,6 +1507,7 @@
       "warnServerMissing": "Le serveur MCP « {{name}} » n’est pas enregistré ici — non exporté.",
       "warnFolderUnreadable": "Le dossier local de « {{name}} » n’a pas pu être ouvert — enregistrement seulement.",
       "warnNoInstall": "« {{name}} » n’a pas d’instructions d’installation — voir son README.",
+      "warnLocalNotInFolder": "« {{name}} » tourne sur cet ordinateur mais son code n’est pas dans le dossier mcps — enregistrement seulement.",
       "warnComponentMissing": "Le composant de code n°{{id}} est absent ici — non exporté.",
       "missing": "manquant",
       "missingPrefix": "Manquant :",

@@ -1507,6 +1507,7 @@
       "warnServerMissing": "El servidor MCP \"{{name}}\" no está registrado aquí — no se exporta.",
       "warnFolderUnreadable": "No se pudo abrir la carpeta local de \"{{name}}\" — solo el registro.",
       "warnNoInstall": "\"{{name}}\" no tiene instrucciones de instalación — consulte su README.",
+      "warnLocalNotInFolder": "\"{{name}}\" se ejecuta en este equipo pero su código no está en la carpeta mcps — solo el registro.",
       "warnComponentMissing": "El componente de código #{{id}} no está aquí — no se exporta.",
       "missing": "falta",
       "missingPrefix": "Falta:",

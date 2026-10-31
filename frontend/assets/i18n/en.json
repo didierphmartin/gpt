@@ -1507,6 +1507,7 @@
       "warnServerMissing": "MCP server \"{{name}}\" is not registered here — not exported.",
       "warnFolderUnreadable": "The local folder of \"{{name}}\" could not be opened — registration only.",
       "warnNoInstall": "\"{{name}}\" has no install instructions — see its README.",
+      "warnLocalNotInFolder": "\"{{name}}\" runs on this computer but its code is not in the mcps folder — registration only.",
       "warnComponentMissing": "Code component #{{id}} is missing here — not exported.",
       "missing": "missing",
       "missingPrefix": "Missing:",
