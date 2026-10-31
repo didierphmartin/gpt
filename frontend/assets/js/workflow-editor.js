@@ -10970,6 +10970,8 @@ class WorkflowEditor {
             <div style="display:grid;gap:8px;">${shown.map((r) => (r.missing
                 ? `<div style="font-size:13px;color:#b45309;">⚠ ${esc(t(robot ? 'robotNoServer' : 'noServer', { server: r.name }))}</div>`
                 : `<div data-connect="${esc(r.name)}">${this._connectBoxHtml(r.server.name)}</div>`)).join('')}</div>`;
+        // this modal has no button style of its own for the box's buttons: a solid outline, like Cancel's
+        el.querySelectorAll('.connect-btn').forEach((b) => { b.style.cssText = 'padding:4px 12px;border:1px solid #d1d5db;border-radius:6px;background:#f9fafb;font-size:13px;cursor:pointer;'; });
         for (const r of shown) {
             if (r.missing) continue;
             const box = [...el.querySelectorAll('[data-connect]')].find((b) => b.dataset.connect === r.name);
