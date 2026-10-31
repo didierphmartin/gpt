@@ -70,7 +70,7 @@
     "execCompiledDesc": "Congela el workflow en una instantánea Python; las ediciones posteriores del workflow no se aplican. Este script será utilizado por SKILL.md",
     "execCompiledHint": "La instantánea se ejecuta completamente en el navegador (agentes vía backend, habilidades vía el pool de workers) — no se requiere runner externo. Re-promocione el workflow para refrescar la instantánea."
   },
-  "title": "Asistente IA - Multi-Proveedor",
+  "title": "SynergyAI Studio",
   "header": {
     "title": "SynergyAI Studio",
     "subtitle": "Donde los LLM colaboran",

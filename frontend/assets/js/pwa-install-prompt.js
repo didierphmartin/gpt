@@ -31,7 +31,7 @@
     const HANDLE_KEY   = 'ufs-root-handle';
 
     // Show on every session during the test period.
-    const TEST_MODE = false;
+    const TEST_MODE = true;
 
     // Hosted users rent LLM time; they have no keys to enter. The individual
     // edition ships with no keys by design, so this is where its one user
@@ -120,6 +120,7 @@
             'keys.badEndpoint': 'An endpoint must start with http:// or https://.',
             'back':           'Back',
             'close':          'Close',
+            'cancel':         'Cancel',
             'testBanner':     'Test mode — wizard shown every visit for iteration.'
         },
         fr: {
@@ -183,6 +184,7 @@
             'keys.badEndpoint': 'Un point d\'accès doit commencer par http:// ou https://.',
             'back':           'Retour',
             'close':          'Fermer',
+            'cancel':         'Annuler',
             'testBanner':     "Mode test — l'assistant s'affiche à chaque visite pour itération."
         },
         es: {
@@ -246,6 +248,7 @@
             'keys.badEndpoint': 'Un endpoint debe empezar por http:// o https://.',
             'back':           'Atrás',
             'close':          'Cerrar',
+            'cancel':         'Cancelar',
             'testBanner':     'Modo de prueba: el asistente se muestra en cada visita para iterar.'
         }
     };
@@ -395,13 +398,9 @@
         `;
         document.body.appendChild(overlay);
 
-        // Backdrop click closes (snooze in non-test mode; reopens next load in test mode).
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) {
-                setSnoozed();
-                overlay.remove();
-            }
-        });
+        // No close on a backdrop click: a stray click -- say, while switching
+        // to Finder or Explorer to copy the folder's path -- threw away the
+        // whole setup. Leaving is the Cancel button in the header.
 
         return overlay;
     }
@@ -471,12 +470,17 @@
                 <div class="flex-1 min-w-0">
                     <h2 class="text-lg font-semibold text-gray-100">${esc(t(titleKey))}</h2>
                 </div>
-                <button data-pwa-action="close" aria-label="${esc(t('close'))}"
-                    class="text-gray-400 hover:text-gray-200 flex-shrink-0">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-                </button>
             </div>
         `;
+    }
+
+    // Leaving the wizard: bottom right, beside the step's main button, as in
+    // any dialog. Same effect the header's close (✕) used to have.
+    function cancelBtn() {
+        return `<button data-pwa-action="close"
+                    class="px-4 py-2 text-sm font-medium text-gray-300 bg-zinc-700/60 hover:bg-zinc-700 rounded-md transition">
+                    ${esc(t('cancel'))}
+                </button>`;
     }
 
     function renderLang() {
@@ -496,7 +500,8 @@
         return `
             ${header('lang.title')}
             <div class="space-y-2 mb-5">${buttons}</div>
-            <div class="flex justify-end">
+            <div class="flex justify-end gap-2">
+                ${cancelBtn()}
                 <button data-pwa-action="next" data-from="lang"
                     class="px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-md transition">
                     ${esc(t('lang.continue'))}
@@ -525,10 +530,13 @@
                     class="px-4 py-2 text-sm font-medium text-gray-300 bg-zinc-700/60 hover:bg-zinc-700 rounded-md transition">
                     ${esc(t('back'))}
                 </button>
+                <div class="flex gap-2">
+                ${cancelBtn()}
                 <button data-pwa-action="next" data-from="welcome"
                     class="px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-md transition">
                     ${esc(t('welcome.next'))}
                 </button>
+                </div>
             </div>
         `;
     }
@@ -672,11 +680,14 @@
                     class="px-4 py-2 text-sm font-medium text-gray-300 bg-zinc-700/60 hover:bg-zinc-700 rounded-md transition">
                     ${esc(t('back'))}
                 </button>
+                <div class="flex gap-2">
+                ${cancelBtn()}
                 <button data-pwa-action="next" data-from="folder"
                     class="px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed"
                     ${nextDisabled ? 'disabled' : ''}>
                     ${esc(t('folder.next'))}
                 </button>
+                </div>
             </div>
         `;
     }
@@ -708,6 +719,7 @@
                     ${esc(t('back'))}
                 </button>
                 <div class="flex gap-2">
+                    ${cancelBtn()}
                     <button data-pwa-action="next" data-from="keys"
                         class="px-4 py-2 text-sm font-medium text-gray-300 bg-zinc-700/60 hover:bg-zinc-700 rounded-md transition">
                         ${esc(t('keys.skip'))}
@@ -754,7 +766,10 @@
                     class="px-4 py-2 text-sm font-medium text-gray-300 bg-zinc-700/60 hover:bg-zinc-700 rounded-md transition">
                     ${esc(t('back'))}
                 </button>
-                ${primaryBtn}
+                <div class="flex gap-2">
+                    ${installed ? '' : cancelBtn()}
+                    ${primaryBtn}
+                </div>
             </div>
         `;
     }
