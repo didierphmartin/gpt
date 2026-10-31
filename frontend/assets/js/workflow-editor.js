@@ -10030,7 +10030,7 @@ class WorkflowEditor {
                 <div class="storage-config-header"><h3>⚙️ ${this.escapeHtml(node ? this.t('codeLibrary.nodeTitle') : this.t('codeLibrary.componentTitle'))}</h3><button class="storage-config-close" data-act="close">×</button></div>
                 <div data-f="link" class="text-xs text-gray-600" style="padding:4px 16px;display:none;"></div>
                 <div class="flex border-b border-gray-200" style="padding:0 16px;">
-                    ${tab('settings', 'Settings')}${node ? tab('args', 'Arguments') : ''}${tab('code', 'Code')}${tab('servers', 'MCP Servers')}${tab('tools', 'Tools')}${tab('input', 'Input')}${tab('output', 'Output')}${tab('logs', 'Logs')}
+                    ${tab('settings', 'Settings')}${tab('args', 'Arguments')}${tab('code', 'Code')}${tab('servers', 'MCP Servers')}${tab('tools', 'Tools')}${tab('input', 'Input')}${tab('output', 'Output')}${tab('logs', 'Logs')}
                 </div>
                 <div class="storage-config-body" style="overflow:auto;flex:1;">
                     ${pane('settings', `<div class="storage-config-grid">
@@ -10040,7 +10040,7 @@ class WorkflowEditor {
                         <div class="storage-config-folder"><label>Timeout (seconds)</label><input data-f="timeout" type="number" min="1" max="300"></div>
                         <div data-f="connect" class="storage-config-folder full" style="display:contents;"></div>
                         <div data-f="callargs" class="storage-config-folder full" style="display:none;"></div>
-                        ${node ? '' : '<div data-f="decl-args" class="storage-config-folder full"></div><div data-f="decl-provides" class="storage-config-folder full"></div>'}
+                        ${node ? '' : '<div data-f="decl-provides" class="storage-config-folder full"></div>'}
                     </div>`)}
                     ${pane('code', `<div class="storage-config-grid">
                         <div class="storage-config-folder full"><label>Code — def run(input, call_tool)</label>
@@ -10050,7 +10050,7 @@ class WorkflowEditor {
                     ${pane('servers', `<p class="text-xs text-gray-500" style="margin:0 0 8px;">The code calls a checked server's tools with
                         <code>call_tool("&lt;server&gt;", "&lt;tool&gt;", {...})</code>; the server is written as shown in grey.</p>
                         <div data-f="servers"><p class="text-sm text-gray-400 italic">…</p></div>`)}
-                    ${pane('args', '<div data-f="args"></div>')}
+                    ${pane('args', node ? '<div data-f="args"></div>' : '<div data-f="decl-args"></div>')}
                     ${pane('tools', '<div data-f="tools"></div>')}
                     ${pane('input', pre('input'))}
                     ${pane('output', pre('output'))}
@@ -10325,7 +10325,10 @@ class WorkflowEditor {
             return e;
         }).filter((e) => e.name || e.description || e.default !== undefined);   // `required` alone is still a blank row
         if (!node) {
-            renderDecls('args', Array.isArray(d.args) ? d.args : []);
+            // The same arguments a node and the Start's option form show: the declared ones, else those the code reads.
+            const declared = Array.isArray(d.args) ? d.args : [];
+            renderDecls('args', declared.length ? declared : CN.argFieldsFor({ code: d.code })
+                .map(({ name, default: dflt }) => (dflt === '' ? { name } : { name, default: dflt })));
             renderDecls('provides', Array.isArray(d.provides) ? d.provides : []);
         }
         // The template call's arguments as fields (CodeNode.callTemplate): shown when the code makes that call.
