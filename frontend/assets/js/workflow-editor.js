@@ -1305,6 +1305,14 @@ class WorkflowEditor {
                 left: 0;
                 right: auto;
             }
+            /* Open, the form stands off the canvas: layered shadows and a lit top edge. */
+            .workflow-info-box:not(.collapsed) {
+                border-color: #cbd5e1;
+                box-shadow: inset 0 1px 0 rgba(255,255,255,0.9),
+                    0 1px 2px rgba(15,23,42,0.08),
+                    0 8px 16px rgba(15,23,42,0.12),
+                    0 24px 48px rgba(15,23,42,0.22);
+            }
             #workflow-top-toolbar .workflow-info-box.collapsed {
                 position: static;
                 padding: 5px 12px;
@@ -1728,6 +1736,12 @@ class WorkflowEditor {
 
     /** The settings form folds into the top toolbar, left of Reset (on the canvas when there is no toolbar). */
     _placeSettingsBox(infoBox) {
+        // Open, a press anywhere outside the form folds it; a dialog the form opened (e.g. Owner's confirm) does not.
+        document.addEventListener('pointerdown', (e) => {
+            if (infoBox.classList.contains('collapsed') || infoBox.contains(e.target)) return;
+            if (e.target.closest?.('[class*="overlay"], [class*="modal"]')) return;
+            infoBox.classList.add('collapsed');
+        }, true);
         const toolbar = document.getElementById('workflow-top-toolbar');
         if (!toolbar || !this.container.contains(toolbar)) { this.container.appendChild(infoBox); return; }
         const slot = document.createElement('div');
