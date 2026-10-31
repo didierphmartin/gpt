@@ -51,5 +51,17 @@
       "name": "received",
       "description": "Date and time received, YYYY-MM-DD HHMM"
     }
+  ],
+  "args": [
+    {
+      "name": "folder",
+      "description": "Outlook folder the emails are dragged into",
+      "default": "Drop"
+    },
+    {
+      "name": "done_folder",
+      "description": "Folder the email moves to once a later node has finished with it",
+      "default": "Filed"
+    }
   ]
 }
