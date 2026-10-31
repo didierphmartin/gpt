@@ -119,7 +119,29 @@
         const { payload, stripped, codeComponents, workflow } = await editor._buildWorkflowPayload();
         const { servers: registered, toolServers } = await loadServers();
         const serverNameById = new Map(registered.map((s) => [Number(s.id), s.name]));
-        const deps = WP().collectDependencies(workflow.nodes, { toolServers, serverNameById });
+        // An agent node saved without its own tool list uses its agent's (the editor does the same).
+        const agentById = new Map((editor.agents || []).map((a) => [String(a.id), a]));
+        const nodes = workflow.nodes.map((n) => {
+            const cfg = n.config || {};
+            if (n.node_type !== 'agent' || Array.isArray(cfg.tools)) return n;
+            const tools = agentById.get(String(n.agent_id ?? cfg.agent_id))?.tools;
+            return Array.isArray(tools) ? { ...n, config: { ...cfg, tools } } : n;
+        });
+        const deps = WP().collectDependencies(nodes, { toolServers, serverNameById });
+        // Servers no node field names: a Start option's component, a playbook's "Tools used", the event trigger.
+        const extra = codeComponents.flatMap((c) => c.mcp_servers || []);
+        const PC0 = window.PlaybookCollection;
+        if (PC0) {
+            const pbNodes = nodes.filter((n) => n.node_type === 'playbook' || (n.node_type === 'agent' && (n.config || {}).playbook_id));
+            if (pbNodes.some((n) => PC0.nodeText(n.config || {}) === null)) await PC0.cache.load(editor._playbookApi()).catch(() => {});
+            pbNodes.forEach((n) => extra.push(...(PC0.nodeServerNames(n.config || {}) || [])));
+        }
+        try {
+            const raw = editor.currentSchedule?.event_trigger;
+            const trig = (typeof raw === 'string' ? JSON.parse(raw || '{}') : raw) || {};
+            if (typeof trig.server === 'string' && trig.server) extra.push(trig.server);
+        } catch (_) { /* no event trigger */ }
+        deps.servers = [...new Set([...deps.servers, ...extra])].sort();
         const warnings = [...deps.warnings];
         const warn = (kind, key, params) => warnings.push({ kind, message: t(key, params) });
         const files = { 'workflow.json': encode(payload) };

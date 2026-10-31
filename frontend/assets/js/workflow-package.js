@@ -124,8 +124,11 @@
             if (type === 'agent') {
                 if (cfg.bound_skill && cfg.bound_skill.dir_name) skills.add(cfg.bound_skill.dir_name);
                 for (const tool of cfg.tools || []) {
-                    const owners = toolServers.get(tool) || [];
+                    // Agents store MCP tools as "mcp_<tool name>"; unprefixed names are built-in tools.
+                    const isMcp = typeof tool === 'string' && tool.startsWith('mcp_');
+                    const owners = (isMcp && toolServers.get(tool.slice(4))) || toolServers.get(tool) || [];
                     if (!owners.length) {
+                        if (!isMcp) continue;
                         warnings.push({ kind: 'tool-missing', node: node.id, message: `Tool "${tool}" is offered by no registered server; nothing was bundled for it.` });
                         continue;
                     }
@@ -133,7 +136,8 @@
                     if (owners.length > 1) warnings.push({ kind: 'tool-ambiguous', node: node.id, message: `Tool "${tool}" is offered by several servers (${owners.join(', ')}); all were bundled.` });
                 }
             }
-            if (type === 'code') (cfg.mcp_servers || []).forEach((s) => servers.add(s));
+            // Code nodes declare their servers; playbook (and playbook-agent) nodes keep the ones Validate found.
+            if (Array.isArray(cfg.mcp_servers)) cfg.mcp_servers.forEach((s) => servers.add(s));
             if (INGESTION_TYPES.includes(type) && typeof cfg.store === 'string') {
                 const m = /^mcp:(\d+)$/.exec(cfg.store);
                 const name = m && serverNameById.get(Number(m[1]));

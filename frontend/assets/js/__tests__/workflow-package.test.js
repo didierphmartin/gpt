@@ -22,10 +22,20 @@ const d2 = WP.collectDependencies([{ id: '9', node_type: 'agent', config: { tool
 assert.deepStrictEqual(d2.servers, ['servicenow', 'servicenow-mock']);
 assert.strictEqual(d2.warnings.filter(w => w.kind === 'tool-ambiguous').length, 1);
 
-// unknown tool: warning, nothing bundled
-const d3 = WP.collectDependencies([{ id: '9', node_type: 'agent', config: { tools: ['nope'] } }], ctx);
+// unknown MCP tool: warning, nothing bundled; a built-in (unprefixed) tool needs no server
+const d3 = WP.collectDependencies([{ id: '9', node_type: 'agent', config: { tools: ['mcp_nope', 'web_search'] } }], ctx);
 assert.deepStrictEqual(d3.servers, []);
+assert.strictEqual(d3.warnings.length, 1);
 assert.strictEqual(d3.warnings[0].kind, 'tool-missing');
+
+// agents store MCP tools with the mcp_ prefix
+const d3b = WP.collectDependencies([{ id: '9', node_type: 'agent', config: { tools: ['mcp_get_pto_balance'] } }], ctx);
+assert.deepStrictEqual(d3b.servers, ['Workday']);
+assert.deepStrictEqual(d3b.warnings, []);
+
+// a playbook node's validated servers are bundled
+const d3c = WP.collectDependencies([{ id: '9', node_type: 'playbook', config: { mcp_servers: ['ServiceNow'] } }], ctx);
+assert.deepStrictEqual(d3c.servers, ['ServiceNow']);
 
 // a playbook node pointing at a stored playbook; duplicates collapse; non-mcp stores ignored
 const d4 = WP.collectDependencies([
