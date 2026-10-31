@@ -299,17 +299,7 @@ class PlaybooksLibrary {
         const editor = await this.ensureWorkflowEditor();
         if (!editor?._wireServerConnect) return;
         const CN = window.CodeNode;
-        const io = {
-            call: async (s, tool, args) => {
-                try { return CN.toolJson((await this.api.callRobotServer(s.id, tool, args)).data, s.name); }
-                catch (err) { return { error: 'network_error', message: err.message }; }
-            },
-            saveKey: async (s, header, key) => {
-                try { await this.api.saveRobotKey(s.id, header, key); return { success: true }; }
-                catch (err) { return { success: false, error: err.message }; }
-            },
-            listTools: (s) => editor._mcpProxyListToolEntries({ url: s.url, name: s.name }),
-        };
+        const io = editor._robotConnectIo(this.api);
         await Promise.all(slots.map(async (slot) => {
             const id = Number(slot.closest('[data-robot-server-id]').dataset.robotServerId);
             const server = this.robotServers.find(s => Number(s.id) === id);
