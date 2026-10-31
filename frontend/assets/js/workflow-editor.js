@@ -1305,6 +1305,14 @@ class WorkflowEditor {
                 left: 0;
                 right: auto;
             }
+            /* Open, the form stands off the canvas: layered shadows and a lit top edge. */
+            .workflow-info-box:not(.collapsed) {
+                border-color: #cbd5e1;
+                box-shadow: inset 0 1px 0 rgba(255,255,255,0.9),
+                    0 1px 2px rgba(15,23,42,0.08),
+                    0 8px 16px rgba(15,23,42,0.12),
+                    0 24px 48px rgba(15,23,42,0.22);
+            }
             #workflow-top-toolbar .workflow-info-box.collapsed {
                 position: static;
                 padding: 5px 12px;
@@ -1728,6 +1736,12 @@ class WorkflowEditor {
 
     /** The settings form folds into the top toolbar, left of Reset (on the canvas when there is no toolbar). */
     _placeSettingsBox(infoBox) {
+        // Open, a press anywhere outside the form folds it; a dialog the form opened (e.g. Owner's confirm) does not.
+        document.addEventListener('pointerdown', (e) => {
+            if (infoBox.classList.contains('collapsed') || infoBox.contains(e.target)) return;
+            if (e.target.closest?.('[class*="overlay"], [class*="modal"]')) return;
+            infoBox.classList.add('collapsed');
+        }, true);
         const toolbar = document.getElementById('workflow-top-toolbar');
         if (!toolbar || !this.container.contains(toolbar)) { this.container.appendChild(infoBox); return; }
         const slot = document.createElement('div');
@@ -10874,7 +10888,7 @@ class WorkflowEditor {
         const overlay = document.createElement('div');
         overlay.className = 'storage-config-overlay';
         overlay.innerHTML = `
-            <div class="storage-config-modal" style="width:min(460px,95vw);">
+            <div class="storage-config-modal" style="width:min(560px,95vw);">
                 <div class="storage-config-header"><h3>${esc(comp.start_trigger.label)}</h3>
                     <button class="storage-config-close" data-act="close">×</button></div>
                 <div class="storage-config-body">
@@ -10884,6 +10898,7 @@ class WorkflowEditor {
                         <span style="color:#6b7280;">${esc(t('watchArgs'))}</span>
                         <code style="font-size:12px;overflow-wrap:anywhere;">${esc(JSON.stringify(watchArgs))}</code>
                     </div>
+                    <div data-role="connections" style="display:none;margin:0 0 14px;"></div>
                     <p style="margin:0 0 10px;font-size:13px;color:#6b7280;">${esc(t(fields.length ? 'argsIntro' : 'noArgs'))}</p>
                     <div style="display:${fields.length ? 'grid' : 'none'};grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:14px;">
                         ${fields.map((f) => `<label for="start-arg-${esc(f.name)}">${esc(f.name)}${f.required ? ' <span style="color:#dc2626;">*</span>' : ''}</label>
@@ -10910,6 +10925,7 @@ class WorkflowEditor {
         tag?.addEventListener('input', warn);
         warn();
         inputs[0]?.focus();
+        this._mountStartConnections(overlay.querySelector('[data-role="connections"]'), comp);
         overlay.addEventListener('click', async (ev) => {
             const act = ev.target?.dataset?.act;
             if (act === 'close') { overlay.remove(); return; }
@@ -10932,6 +10948,65 @@ class WorkflowEditor {
                 this.showNotification(err?.message || String(err), 'error');
             }
         });
+    }
+
+    /**
+     * The Start form's Connections: a Connect box per MCP server the workflow uses (the option's and every enabled
+     * code node's) that offers the connect contract (CodeNode.isConnectable). A robot workflow shows the robot's
+     * connections (matched by slug, as its runs resolve them), else the user's own.
+     */
+    async _mountStartConnections(el, comp) {
+        const CN = window.CodeNode;
+        const t = (k, p) => this.t(`workflow.startOptions.${k}`, p);
+        const esc = (v) => this.escapeHtml(String(v ?? ''));
+        const nodes = this.editor.drawflow.drawflow.Home.data;
+        const names = [...new Set([...(comp.mcp_servers || []), ...Object.values(nodes).flatMap((n) =>
+            (n.data?.type === 'code' && !n.data.disabled && Array.isArray(n.data.mcp_servers) ? n.data.mcp_servers : []))])];
+        if (!names.length) return;
+        const robot = !!this.currentWorkflowIsRobot;
+        const api = robot ? this._playbookApi() : null;
+        const io = robot ? this._robotConnectIo(api) : null;
+        const servers = robot
+            ? ((await api.robotServers().catch(() => ({}))).data || []).filter((s) => s.enabled)
+            : (await this._loadMcpServersMeta()).filter((m) => m.effective_on !== false);
+        const find = (name) => (robot ? servers.find((s) => CN.slug(s.name) === CN.slug(name))
+            : servers.find((m) => m.name === name && !m.is_global) || servers.find((m) => m.name === name));
+        const rows = await Promise.all(names.map(async (name) => {
+            const server = find(name);
+            if (!server) return { name, missing: true };
+            const listed = await this._mcpProxyListToolEntries({ id: robot ? undefined : server.id, url: server.url, name: server.name });
+            return CN.isConnectable((listed.tools || []).map((x) => x.name)) ? { name, server } : null;
+        }));
+        const shown = rows.filter(Boolean);
+        if (!el.isConnected || !shown.length) return;
+        el.style.display = '';
+        el.innerHTML = `<div style="font-size:13px;font-weight:600;margin:0 0 6px;">${esc(t(robot ? 'connectionsRobot' : 'connections'))}</div>
+            <div style="display:grid;gap:8px;">${shown.map((r) => (r.missing
+                ? `<div style="font-size:13px;color:#b45309;">⚠ ${esc(t(robot ? 'robotNoServer' : 'noServer', { server: r.name }))}</div>`
+                : `<div data-connect="${esc(r.name)}">${this._connectBoxHtml(r.server.name)}</div>`)).join('')}</div>`;
+        // this modal has no button style of its own for the box's buttons: a solid outline, like Cancel's
+        el.querySelectorAll('.connect-btn').forEach((b) => { b.style.cssText = 'padding:4px 12px;border:1px solid #d1d5db;border-radius:6px;background:#f9fafb;font-size:13px;cursor:pointer;'; });
+        for (const r of shown) {
+            if (r.missing) continue;
+            const box = [...el.querySelectorAll('[data-connect]')].find((b) => b.dataset.connect === r.name);
+            this._wireServerConnect(box, () => (box.isConnected ? r.server : null), io).refresh();
+        }
+    }
+
+    /** The robot's connection routes for _wireServerConnect (call / key on /robot/mcp-servers); tools/list by URL alone. */
+    _robotConnectIo(api) {
+        const CN = window.CodeNode;
+        return {
+            call: async (s, tool, args) => {
+                try { return CN.toolJson((await api.callRobotServer(s.id, tool, args)).data, s.name); }
+                catch (err) { return { error: 'network_error', message: err.message }; }
+            },
+            saveKey: async (s, header, key) => {
+                try { await api.saveRobotKey(s.id, header, key); return { success: true }; }
+                catch (err) { return { success: false, error: err.message }; }
+            },
+            listTools: (s) => this._mcpProxyListToolEntries({ url: s.url, name: s.name }),
+        };
     }
 
     /**
