@@ -706,6 +706,7 @@
       "confirmIntro": "C'est irréversible. « {{name}} » et tout ce qu'il utilise (composants de code, playbooks, agents) appartiendront au robot et seront partagés avec tous les utilisateurs. Ses exécutions utiliseront les connexions du robot.",
       "confirmShared": "Votre workflow « {{name}} » en utilise aussi : il utilisera désormais ceux du robot.",
       "confirmServers": "Le robot n'a pas de connexion à {{name}} : connectez-le avant d'exécuter.",
+      "changing": "Le propriétaire est en cours de changement : activez le workflow une fois terminé.",
       "confirm": "Faire du robot le propriétaire",
       "clash": "Le robot a déjà un {{kind}} nommé « {{name}} » : renommez le vôtre d'abord.",
       "clashPublished": "Le playbook « {{name}} » est publié sur le robot : dépubliez-le d'abord.",

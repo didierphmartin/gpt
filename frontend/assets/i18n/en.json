@@ -706,6 +706,7 @@
       "confirmIntro": "This cannot be undone. \"{{name}}\" and everything it uses (code components, playbooks, agents) will belong to the robot and be shared with every user. Its runs will use the robot's connections.",
       "confirmShared": "Your workflow \"{{name}}\" uses some of them too: it will use the robot's from now on.",
       "confirmServers": "The robot has no connection to {{name}}: connect it before running.",
+      "changing": "The owner is being changed: activate the workflow once that is done.",
       "confirm": "Make the robot the owner",
       "clash": "The robot already has a {{kind}} named \"{{name}}\": rename yours first.",
       "clashPublished": "The playbook \"{{name}}\" is published to the robot: unpublish it first.",

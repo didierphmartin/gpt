@@ -1938,6 +1938,7 @@ class WorkflowEditor {
         const t = (k, p) => this.t(k, p);
         if (this._ownerChanging) return;   // the save and the preview take seconds: one dialog at a time
         this._ownerChanging = true;
+        this._markRunDoors();   // no activation until the owner is settled: the transfer deactivates the old owner's row
         const select = document.getElementById('workflow-owner-select');
         if (select) select.disabled = true;
         try {
@@ -1968,6 +1969,7 @@ class WorkflowEditor {
             this.showNotification(clashes.length ? clashes.join('\n') : (err?.message || String(err)), 'error');
         } finally {
             this._ownerChanging = false;
+            this._markRunDoors();
             this._refreshOwnerField();   // a cancel or a refusal puts the select back (and re-enables it)
         }
     }
@@ -1987,9 +1989,11 @@ class WorkflowEditor {
         if (row && !!row.locked !== on) { row.locked = on; this.renderSavedWorkflowsList(); }
     }
 
-    /** The run doors look disabled while locked (the clicks are refused by _refuseIfLocked); restored on unlock. */
+    /** The run doors look disabled while locked (the clicks are refused by _refuseIfLocked) or while the owner
+     *  changes (refused by _activate); restored on unlock. */
     _markRunDoors() {
         const locked = !!this.currentWorkflowLocked;
+        const busy = !!this._ownerChanging;
         const mark = (btn, off) => {
             if (!btn) return;
             btn.disabled = off;
@@ -2001,7 +2005,7 @@ class WorkflowEditor {
         const view = locked && this.currentWorkflowId ? this._startView() : {};
         const flags = { button: view.button, swarm: this._isSwarm?.(), ingestion: this._isIngestionWorkflow?.() };
         this.container?.querySelectorAll('.workflow-node.start-node .node-play-btn')
-            .forEach((b) => mark(b, window.RobotOwner.runDoorDisabled(locked, flags)));
+            .forEach((b) => mark(b, busy || window.RobotOwner.runDoorDisabled(locked, flags)));
         this.container?.querySelectorAll('.realtime-play-btn')
             .forEach((b) => mark(b, window.RobotOwner.runDoorDisabled(locked, { realtime: true })));
         mark(document.getElementById('workflow-run-btn'), locked);
@@ -3625,6 +3629,10 @@ class WorkflowEditor {
 
     /** @returns {Promise<boolean>} true once activated; false when the replace dialog is cancelled or the server refuses. */
     async _activate() {
+        if (this._ownerChanging) {   // activated now, the row would be the old owner's, and the transfer removes it
+            this.showNotification(this.t('workflow.owner.changing'), 'warning');
+            return false;
+        }
         const cur = this.activeWorkflow;
         if (cur && Number(cur.workflow_id) !== Number(this.currentWorkflowId)) {
             const ok = await this._confirmLinksDialog(this.t('workflow.active.replaceTitle'),

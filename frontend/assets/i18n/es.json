@@ -706,6 +706,7 @@
       "confirmIntro": "No se puede deshacer. «{{name}}» y todo lo que usa (componentes de código, playbooks, agentes) pertenecerán al robot y se compartirán con todos los usuarios. Sus ejecuciones usarán las conexiones del robot.",
       "confirmShared": "Tu workflow «{{name}}» también usa algunos de ellos: a partir de ahora usará los del robot.",
       "confirmServers": "El robot no tiene conexión a {{name}}: conéctalo antes de ejecutar.",
+      "changing": "El propietario se está cambiando: active el workflow cuando termine.",
       "confirm": "Hacer del robot el propietario",
       "clash": "El robot ya tiene un {{kind}} llamado «{{name}}»: cambia el nombre del tuyo primero.",
       "clashPublished": "El playbook «{{name}}» está publicado en el robot: anula su publicación primero.",
