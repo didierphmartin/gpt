@@ -10044,7 +10044,7 @@ class WorkflowEditor {
                         ${node ? '' : '<div data-f="decl-provides" class="storage-config-folder full"></div>'}
                     </div>`)}
                     ${pane('code', `<div class="storage-config-grid">
-                        <div class="storage-config-folder full"><label>Code — def run(input, call_tool)</label>
+                        <div class="storage-config-folder full code-editor-folder"><label>Code — def run(input, call_tool)</label>
                             <textarea data-f="code" rows="16" spellcheck="false" style="font-family:ui-monospace,Menlo,monospace;font-size:12px;width:100%;"></textarea></div>
                         <div data-f="assist" class="storage-config-folder full"></div>
                     </div>`)}

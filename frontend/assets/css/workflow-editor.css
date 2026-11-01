@@ -2922,6 +2922,27 @@ svg.connection.wf-edge-chosen .main-path {
     cursor: move;
     user-select: none;
 }
+/* The Code tab fills the window: the editor takes whatever the Assistant below it leaves. */
+.wf-code-window [data-pane="code"] {
+    height: 100%;
+}
+.wf-code-window [data-pane="code"] > .storage-config-grid {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    height: 100%;
+}
+.wf-code-window .code-editor-folder {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.wf-code-window .code-editor-folder textarea {
+    flex: 1 1 auto;
+    min-height: 240px;
+    resize: none;
+}
 
 /* ============================================
    Node Delete Button (X)
