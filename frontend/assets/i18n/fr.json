@@ -961,7 +961,6 @@
       "noneAvailable": "Rien avant ce nœud ne fournit de marqueurs.",
       "missing": "Arguments obligatoires laissés vides : {{names}}",
       "unknown": "Enregistré, mais rien avant ce nœud ne fournit {{names}} : le nœud échouera à l'exécution.",
-      "argsTitle": "Arguments",
       "argsHint": "Ce que remplit un nœud qui utilise ce composant. La valeur par défaut s'applique si le nœud le laisse vide.",
       "providesTitle": "Fournit",
       "providesHint": "Les noms que la sortie de ce composant donne aux nœuds suivants, utilisés là comme marqueurs {name}.",

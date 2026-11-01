@@ -10305,7 +10305,8 @@ class WorkflowEditor {
         };
         const renderDecls = (kind, entries) => {
             const box = f(`decl-${kind}`);
-            box.innerHTML = `<label>${escA(ta(kind === 'args' ? 'argsTitle' : 'providesTitle'))}</label>
+            // the arguments have their own tab, which names them; Provides sits under Settings and needs a title
+            box.innerHTML = `${kind === 'args' ? '' : `<label>${escA(ta('providesTitle'))}</label>`}
                 <p class="text-xs text-gray-500" style="margin:0 0 8px;">${escA(ta(kind === 'args' ? 'argsHint' : 'providesHint'))}</p>
                 <div data-rows></div>
                 <button type="button" data-add class="text-sm text-blue-600 hover:underline">+ ${escA(ta(kind === 'args' ? 'addArg' : 'addProvides'))}</button>`;
