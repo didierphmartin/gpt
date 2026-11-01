@@ -953,6 +953,7 @@
       "codeChanged": "Le code a changé depuis cette proposition ; vérifiez la comparaison mise à jour, puis cliquez à nouveau sur Accepter."
     },
     "codeArgs": {
+      "watchShared": "Enregistrés avec le composant : chaque workflow sur cette option de départ les utilise.",
       "watchTitle": "Surveillance de l'option de départ \"{{label}}\" : {{call}}",
       "watchPass": "Le Départ d'un workflow remplace {{names}} par sa propre valeur lorsqu'il en définit une.",
       "intro": "Les valeurs que lit le code de ce nœud. Vide : la valeur par défaut (en gris) s'applique. * = obligatoire.",
