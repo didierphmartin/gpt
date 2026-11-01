@@ -10335,14 +10335,17 @@ class WorkflowEditor {
                 .map(({ name, default: dflt }) => (dflt === '' ? { name } : { name, default: dflt })));
             renderDecls('provides', Array.isArray(d.provides) ? d.provides : []);
         }
-        // A Start option's watch arguments (the component's start_trigger), shown under its own: edited in the
-        // Start option dialog, which every workflow on the option shares.
+        // A Start option's watch arguments (the component's start_trigger), under its own: edited here and saved
+        // with the component (every workflow on the option shares them); label, server, tool and exit in the
+        // Start option dialog (Edit).
+        let watchShown = null;   // the args the fields were filled from
         const renderWatch = () => {
             const st = comp?.id ? CC.cache.get(comp.id)?.start_trigger : null;
             const el = f('watchargs');
-            if (!st) { el.style.display = 'none'; el.innerHTML = ''; return; }
+            if (!st) { el.style.display = 'none'; el.innerHTML = ''; watchShown = null; return; }
             const w = st.watch || {};
             const args = w.args && typeof w.args === 'object' && !Array.isArray(w.args) ? w.args : {};
+            watchShown = args;
             const pass = Array.isArray(st.pass_args) ? st.pass_args : [];
             el.style.display = '';
             el.innerHTML = `<div style="border:1px solid #e5e7eb; border-radius:8px; padding:12px;">
@@ -10350,7 +10353,8 @@ class WorkflowEditor {
                     <span style="font-size:13px; font-weight:600;">${escA(ta('watchTitle', { label: st.label, call: `${w.server || ''}.${w.tool || ''}` }))}</span>
                     <button type="button" data-watch-edit style="padding:4px 12px;border:1px solid #d1d5db;border-radius:6px;background:#f9fafb;font-size:13px;cursor:pointer;">${escA(this.t('common.edit'))}</button></div>
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">${Object.keys(args).map((k) =>
-                    `<label>${escA(k)}<input type="text" data-watch="${escA(k)}" disabled></label>`).join('')}</div>
+                    `<label>${escA(k)}<input type="text" data-watch="${escA(k)}"></label>`).join('')}</div>
+                <div style="margin-top:6px; font-size:12px; color:#6b7280;">${escA(ta('watchShared'))}</div>
                 ${pass.length ? `<div style="margin-top:6px; font-size:12px; color:#6b7280;">${escA(ta('watchPass', { names: pass.join(', ') }))}</div>` : ''}
             </div>`;
             // values through the DOM: a value is any JSON, shown as text
@@ -10366,6 +10370,20 @@ class WorkflowEditor {
             });
         };
         renderWatch();
+        // The watch args as edited, or null when unchanged. A field keeps its value's type: a string stays text,
+        // anything else is read back as JSON (text when it is not); an emptied field drops the argument.
+        const readWatch = () => {
+            if (!watchShown) return null;
+            const out = {};
+            f('watchargs').querySelectorAll('[data-watch]').forEach((i) => {
+                const k = i.dataset.watch, v = watchShown[k], text = i.value.trim();
+                if (text === '') return;
+                if (typeof v === 'string') { out[k] = text; return; }
+                if (text === JSON.stringify(v)) { out[k] = v; return; }
+                try { out[k] = JSON.parse(text); } catch (_) { out[k] = text; }
+            });
+            return JSON.stringify(out) === JSON.stringify(watchShown) ? null : out;
+        };
         // The template call's arguments as fields (CodeNode.callTemplate): shown when the code makes that call.
         const callArgs = this._wireCallArgs(f('callargs'), () => f('code').value, (code) => { f('code').value = code; });
         f('code').addEventListener('change', () => { callArgs.refresh(); renderArgs(); });
@@ -10524,6 +10542,14 @@ class WorkflowEditor {
                     row = (await CC.api().update(comp.id, { ...body, confirm_drop_links: true })).data;
                 }
                 CC.cache.put(row);
+                const watchArgs = readWatch();
+                if (watchArgs && row.start_trigger) {
+                    const st = row.start_trigger;
+                    row = (await CC.api().setStartOption(row.id, { label: st.label,
+                        watch: { ...st.watch, args: watchArgs }, work_exit: st.work_exit })).data;
+                    CC.cache.put(row);
+                    this._renderStartNodeOptions();
+                }
                 if (node) {
                     this.editor.updateNodeDataFromId(nodeId, { ...node.data, name: cfg.name, args: cfg.args });
                     this._workflowDirty = true;
