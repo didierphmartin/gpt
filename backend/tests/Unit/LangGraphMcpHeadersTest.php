@@ -82,6 +82,37 @@ final class LangGraphMcpHeadersTest extends TestCase
         }
     }
 
+    /** Review C6: a server that does not answer the handshake gets no tool call, at no URL, and never its headers. */
+    public function testFailedHandshakeNeverCallsTheRegisteredUrl(): void
+    {
+        [$rc, $out] = $this->runPy(<<<'PY'
+class Resp:
+    def __init__(self, text):
+        self.text = text
+    def raise_for_status(self):
+        pass
+class FakeHttp:
+    def __init__(self):
+        self.urls = []
+    def post(self, url, json=None, headers=None, timeout=None):
+        self.urls.append(url)
+        if url.startswith("http://dead"):
+            raise OSError("connection refused")
+        return Resp('{"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text", "text": "hi"}]}}')
+MCP._http = FakeHttp()
+print(json.loads(MCP.call_tool("http://o/mcp", "poll", {}))["error"])
+raw = MCP.call_tool_raw("http://o/mcp", "poll", {})
+print(raw["isError"], raw["transport_error"], raw["content"][0]["text"])
+print(sorted(set(MCP._http.urls)))
+PY, ['MCP_URL_OUTLOOK' => 'http://dead/mcp', 'MCP_HEADERS_OUTLOOK' => '{"X-Outlook-Account": "k-1"}']);
+        self::assertSame(0, $rc, implode("\n", $out));
+        $out = array_values(array_filter($out, fn($l) => !str_starts_with($l, '[warn] ')));
+        self::assertStringStartsWith('MCP server unreachable: http://dead/mcp: ', $out[0]);
+        self::assertStringContainsString('connection refused', $out[0]);
+        self::assertStringStartsWith('True True MCP server unreachable: http://dead/mcp', $out[1]);
+        self::assertSame("['http://dead/mcp']", $out[2]);   // never the compiled-in http://o/mcp
+    }
+
     public function testEveryRequestUsesServerHeaders(): void
     {
         $src = LangGraphRuntime::mcpClientBlock();

@@ -231,6 +231,24 @@ print("ok")
 PY);
     }
 
+    /** Review M5: a run that keeps failing while the trigger says ready backs off 30 s doubling to 300 s; a good run resets it. */
+    public function testFailedRunBacksOff(): void
+    {
+        $this->py(<<<'PY'
+MCP = FakeMcp([ok(status="ready")] * 6 + [ok(status="timeout")])
+c = Clock(); st = LoopState()
+def run_once(state={"n": 0}):
+    state["n"] += 1
+    if state["n"] in (1, 2, 3, 5):
+        raise RuntimeError("SharePoint down")
+    return ""
+WatchLoop(TRIGGER, run_once, drains=False, max_runs=20, sleep=c.sleep, now=c.now, state=st).run(calls=7)
+assert c.slept == [30, 60, 120, 30], c.slept
+assert st.line == "Listening for events", st.line
+print("ok")
+PY);
+    }
+
     public function testReconnectNeededShowsTheServerMessage(): void
     {
         $this->py(<<<'PY'

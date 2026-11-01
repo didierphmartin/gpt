@@ -2176,7 +2176,9 @@ class WatchLoop:
         except Exception:  # noqa: BLE001 -- transport: the server may be down for a while
             self._fail("unreachable", "server unreachable")
             return
-        self.backoff = None
+        if not self.state.last_failed:   # after a failed run, only a good run resets the backoff
+            self.backoff = None
+        failed_now = False
         idle = ("Listening (checks every 15 min)" if (r.get("via") == "fallback" or r.get("events") == "off")
                 else "Listening for events")
         if r["status"] == "ready":
@@ -2186,11 +2188,18 @@ class WatchLoop:
             if drain_shown(line, self.verbosity):
                 self._say(f"ready ({r.get('via') or 'no reason given'}): {line}")
                 self.state.shown = None   # the console moved on: say the idle line again
-            self.state.last_failed = line.startswith(("error", "abandoned"))
+            self.state.last_failed = failed_now = line.startswith(("error", "abandoned"))
+            if not failed_now:
+                self.backoff = None
         if self.state.last_failed:
             self.state.set("Listening — the last run failed", "warn")
         else:
             self.state.set(idle, "ok")
+        if failed_now:
+            # The trigger keeps saying ready while the run fails before the mail is handled: without a
+            # pause that loops ready -> run -> fail (the server engine's EventWorker backs off the same way).
+            self.backoff = self.BACKOFF_START if self.backoff is None else min(self.backoff * 2, self.BACKOFF_MAX)
+            _nap(self.backoff, self.sleep, self.stop)
 
     def _fail(self, kind: str, message: str) -> None:
         self.backoff = self.BACKOFF_START if self.backoff is None else min(self.backoff * 2, self.BACKOFF_MAX)
@@ -2793,6 +2802,7 @@ class McpClient:
 
     def __init__(self):
         self._endpoints: dict[str, str] = {}   # registered server URL -> endpoint that accepted the handshake
+        self._failures: dict[str, str] = {}    # registered server URL -> why its last handshake failed
         # One connection pool for every handshake and call; each request sets its own
         # timeout (30 s for the handshake, 180 s for a tool call).
         # Its cookie jar is shared by every server on the same host (MCP uses headers, not cookies).
@@ -2877,6 +2887,7 @@ class McpClient:
         Tries candidates() of the live URL in order: as given, then with /mcp
         in its path. The endpoint that answers is remembered.
         Returns that endpoint URL, or None when no candidate accepted the handshake.
+        unreachable() then says why; the caller makes no call.
         """
         init_req = {
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -2912,7 +2923,12 @@ class McpClient:
             except Exception as e:
                 last_err = e
         print(f"[warn] MCP init failed for {url}: {last_err}")
+        self._failures[url] = f"MCP server unreachable: {live}: {last_err}"
         return None
+
+    def unreachable(self, url: str) -> str:
+        """Why the server at `url` (registered URL) is not called: its last failed handshake."""
+        return self._failures.get(url) or f"MCP server unreachable: {url}"
 
     def call_tool(self, server_url: str, tool_name: str, arguments: dict) -> str:
         """Call a tool on an MCP server via JSON-RPC 2.0.
@@ -2921,7 +2937,10 @@ class McpClient:
         The MCP response contains a 'content' array; we extract all text items
         and join them. If no text is found, falls back to raw JSON.
         """
-        mcp_url = self._handshake(server_url) or self.candidates(server_url)[-1]
+        # No handshake, no call: never fall back to the compiled-in URL (it would get this server's headers).
+        mcp_url = self._handshake(server_url)
+        if mcp_url is None:
+            return json.dumps({"error": self.unreachable(server_url)})
 
         request = {
             "jsonrpc": "2.0", "id": int(time.time()),
@@ -2948,7 +2967,10 @@ class McpClient:
 
     def call_tool_raw(self, server_url: str, tool_name: str, arguments: dict) -> dict:
         """Call a tool and return the raw MCP result {content, structuredContent?, isError?} (code nodes)."""
-        mcp_url = self._handshake(server_url) or self.candidates(server_url)[-1]
+        mcp_url = self._handshake(server_url)
+        if mcp_url is None:   # marked as transport, so --watch says "unreachable"
+            return {"isError": True, "transport_error": True,
+                    "content": [{"type": "text", "text": self.unreachable(server_url)}]}
         request = {
             "jsonrpc": "2.0", "id": int(time.time()),
             "method": "tools/call",
