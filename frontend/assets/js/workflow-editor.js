@@ -10030,7 +10030,7 @@ class WorkflowEditor {
                 <div class="storage-config-header"><h3>⚙️ ${this.escapeHtml(node ? this.t('codeLibrary.nodeTitle') : this.t('codeLibrary.componentTitle'))}</h3><button class="storage-config-close" data-act="close">×</button></div>
                 <div data-f="link" class="text-xs text-gray-600" style="padding:4px 16px;display:none;"></div>
                 <div class="flex border-b border-gray-200" style="padding:0 16px;">
-                    ${tab('settings', 'Settings')}${node ? tab('args', 'Arguments') : ''}${tab('code', 'Code')}${tab('servers', 'MCP Servers')}${tab('tools', 'Tools')}${tab('input', 'Input')}${tab('output', 'Output')}${tab('logs', 'Logs')}
+                    ${tab('settings', 'Settings')}${tab('args', 'Arguments')}${tab('code', 'Code')}${tab('servers', 'MCP Servers')}${tab('tools', 'Tools')}${tab('input', 'Input')}${tab('output', 'Output')}${tab('logs', 'Logs')}
                 </div>
                 <div class="storage-config-body" style="overflow:auto;flex:1;">
                     ${pane('settings', `<div class="storage-config-grid">
@@ -10038,19 +10038,20 @@ class WorkflowEditor {
                         <div data-f="descwrap" class="storage-config-folder full" style="display:none;"><label>${this.escapeHtml(this.t('codeLibrary.description'))}</label><input data-f="description" type="text"></div>
                         <div class="storage-config-folder"><label>Exits (comma-separated, in connector order)</label><input data-f="exits" type="text" placeholder="None: the output goes to the next node"></div>
                         <div class="storage-config-folder"><label>Timeout (seconds)</label><input data-f="timeout" type="number" min="1" max="300"></div>
-                        <div data-f="connect" class="storage-config-folder full" style="display:contents;"></div>
+                        <div data-f="connect" class="storage-config-folder full" style="display:none;"><label>${this.escapeHtml(this.t('workflow.connect.title'))}</label>
+                            <div data-f="connect-boxes" style="display:grid;gap:8px;"></div></div>
                         <div data-f="callargs" class="storage-config-folder full" style="display:none;"></div>
-                        ${node ? '' : '<div data-f="decl-args" class="storage-config-folder full"></div><div data-f="decl-provides" class="storage-config-folder full"></div>'}
+                        ${node ? '' : '<div data-f="decl-provides" class="storage-config-folder full"></div>'}
                     </div>`)}
                     ${pane('code', `<div class="storage-config-grid">
-                        <div class="storage-config-folder full"><label>Code — def run(input, call_tool)</label>
-                            <textarea data-f="code" rows="16" spellcheck="false" style="font-family:ui-monospace,Menlo,monospace;font-size:12px;width:100%;"></textarea></div>
+                        <div class="storage-config-folder full code-editor-folder"><label>Code — def run(input, call_tool)</label>
+                            <div class="code-editor-wrap"><pre class="code-gutter" aria-hidden="true"></pre><textarea data-f="code" rows="16" wrap="off" spellcheck="false"></textarea></div></div>
                         <div data-f="assist" class="storage-config-folder full"></div>
                     </div>`)}
                     ${pane('servers', `<p class="text-xs text-gray-500" style="margin:0 0 8px;">The code calls a checked server's tools with
                         <code>call_tool("&lt;server&gt;", "&lt;tool&gt;", {...})</code>; the server is written as shown in grey.</p>
                         <div data-f="servers"><p class="text-sm text-gray-400 italic">…</p></div>`)}
-                    ${pane('args', '<div data-f="args"></div>')}
+                    ${pane('args', node ? '<div data-f="args"></div>' : '<div data-f="decl-args"></div>')}
                     ${pane('tools', '<div data-f="tools"></div>')}
                     ${pane('input', pre('input'))}
                     ${pane('output', pre('output'))}
@@ -10089,6 +10090,7 @@ class WorkflowEditor {
         // Values are set through the DOM, never interpolated into attributes: escapeHtml leaves
         // quotes alone, so a name like Poll "prod" would be cut short (or inject an attribute).
         f('name').value = d.name || 'Code';
+        this._numberCodeLines(f('code'));
         f('code').value = d.code || '';
         f('exits').value = CN.exitsText(Array.isArray(d.exits) && d.exits.length ? d.exits : ['next']);
         f('timeout').value = String(Number(d.timeout_s) || 30);
@@ -10211,9 +10213,8 @@ class WorkflowEditor {
                 keep.add(m.name);
                 if (!connectBoxes.has(m.name)) {
                     const el = document.createElement('div');
-                    el.className = 'storage-config-folder full';
                     el.innerHTML = this._connectBoxHtml(m.name);
-                    f('connect').appendChild(el);
+                    f('connect-boxes').appendChild(el);
                     connectBoxes.set(m.name, { el, ...this._wireServerConnect(el, () => (checked.has(m.name) ? m : null)) });
                 }
                 connectBoxes.get(m.name).refresh();
@@ -10221,6 +10222,7 @@ class WorkflowEditor {
             for (const [name, box] of connectBoxes) {
                 if (!keep.has(name)) { box.el.remove(); connectBoxes.delete(name); }
             }
+            f('connect').style.display = connectBoxes.size ? '' : 'none';
         };
         // Arguments: the component's declared arguments, else one field per ARGS key the code reads
         // (CodeNode.argFieldsFor), this node's own values (its args); an empty field is dropped, so the default
@@ -10305,7 +10307,8 @@ class WorkflowEditor {
         };
         const renderDecls = (kind, entries) => {
             const box = f(`decl-${kind}`);
-            box.innerHTML = `<label>${escA(ta(kind === 'args' ? 'argsTitle' : 'providesTitle'))}</label>
+            // the arguments have their own tab, which names them; Provides sits under Settings and needs a title
+            box.innerHTML = `${kind === 'args' ? '' : `<label>${escA(ta('providesTitle'))}</label>`}
                 <p class="text-xs text-gray-500" style="margin:0 0 8px;">${escA(ta(kind === 'args' ? 'argsHint' : 'providesHint'))}</p>
                 <div data-rows></div>
                 <button type="button" data-add class="text-sm text-blue-600 hover:underline">+ ${escA(ta(kind === 'args' ? 'addArg' : 'addProvides'))}</button>`;
@@ -10325,7 +10328,10 @@ class WorkflowEditor {
             return e;
         }).filter((e) => e.name || e.description || e.default !== undefined);   // `required` alone is still a blank row
         if (!node) {
-            renderDecls('args', Array.isArray(d.args) ? d.args : []);
+            // The same arguments a node and the Start's option form show: the declared ones, else those the code reads.
+            const declared = Array.isArray(d.args) ? d.args : [];
+            renderDecls('args', declared.length ? declared : CN.argFieldsFor({ code: d.code })
+                .map(({ name, default: dflt }) => (dflt === '' ? { name } : { name, default: dflt })));
             renderDecls('provides', Array.isArray(d.provides) ? d.provides : []);
         }
         // The template call's arguments as fields (CodeNode.callTemplate): shown when the code makes that call.
@@ -10550,11 +10556,13 @@ class WorkflowEditor {
 
     _connectBoxHtml(serverName) {
         const t = (k) => this.t(`workflow.connect.${k}`);
+        // a solid outline wherever the box is shown: not every form styles storage-config-btn
+        const CONNECT_BTN = 'padding:4px 12px;border:1px solid #d1d5db;border-radius:6px;background:#f9fafb;font-size:13px;cursor:pointer;';
         return `<div class="server-connect" style="border:1px solid #e5e7eb; border-radius:8px; padding:12px;">
             <div style="display:flex; align-items:center; gap:12px;">
                 <strong style="font-size:13px;">${this.escapeHtml(serverName)}</strong>
-                <button type="button" class="storage-config-btn connect-btn">${t('connect')}</button>
-                <button type="button" class="storage-config-btn connect-org-btn" style="display:none;">${this.escapeHtml(this.t('robot.connectOrganization'))}</button>
+                <button type="button" class="storage-config-btn connect-btn" style="${CONNECT_BTN}">${t('connect')}</button>
+                <button type="button" class="storage-config-btn connect-org-btn" style="display:none;${CONNECT_BTN}">${this.escapeHtml(this.t('robot.connectOrganization'))}</button>
                 <div class="connect-status" style="font-size:13px;"></div>
             </div>
             <div class="connect-device" style="display:none; margin-top:8px; font-size:14px;"></div>
@@ -10882,9 +10890,8 @@ class WorkflowEditor {
         const esc = (v) => this.escapeHtml(String(v ?? ''));
         const current = this.editor.getNodeFromId(startId).data?.start_args || {};
         const watch = comp.start_trigger.watch || {};
-        // the watch as this workflow's event row runs it: the Start's tag added (CodeComponentStore::watchWithTag)
-        const watchArgs = { ...(watch.args && !Array.isArray(watch.args) ? watch.args : {}),
-            ...(current.tag ? { tag: current.tag } : {}) };
+        // the watch as this workflow's event row runs it: the Start's tag and pass_args values merged in
+        const watchArgs = SO.watchArgs(watch.args, current, comp.start_trigger.pass_args);
         const overlay = document.createElement('div');
         overlay.className = 'storage-config-overlay';
         overlay.innerHTML = `
@@ -10984,8 +10991,6 @@ class WorkflowEditor {
             <div style="display:grid;gap:8px;">${shown.map((r) => (r.missing
                 ? `<div style="font-size:13px;color:#b45309;">⚠ ${esc(t(robot ? 'robotNoServer' : 'noServer', { server: r.name }))}</div>`
                 : `<div data-connect="${esc(r.name)}">${this._connectBoxHtml(r.server.name)}</div>`)).join('')}</div>`;
-        // this modal has no button style of its own for the box's buttons: a solid outline, like Cancel's
-        el.querySelectorAll('.connect-btn').forEach((b) => { b.style.cssText = 'padding:4px 12px;border:1px solid #d1d5db;border-radius:6px;background:#f9fafb;font-size:13px;cursor:pointer;'; });
         for (const r of shown) {
             if (r.missing) continue;
             const box = [...el.querySelectorAll('[data-connect]')].find((b) => b.dataset.connect === r.name);
@@ -11080,6 +11085,27 @@ class WorkflowEditor {
         // Like an agent node's form: the DB write is flushed by _persistIfDirty() (Run, Compile,
         // loading another workflow, Clear) or by Save Workflow.
         this._workflowDirty = true;
+    }
+
+    /**
+     * Line numbers in the gutter left of a code textarea, so a place in the code can be named by its line. The
+     * textarea does not wrap; every write of its value (typing, the assistant, the call-argument fields) renumbers.
+     */
+    _numberCodeLines(ta) {
+        const gutter = ta.previousElementSibling;
+        let shown = 0;
+        const renumber = () => {
+            const n = ta.value.split('\n').length;
+            if (n !== shown) { shown = n; gutter.textContent = Array.from({ length: n }, (_, i) => i + 1).join('\n'); }
+            gutter.scrollTop = ta.scrollTop;
+        };
+        const proto = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+        Object.defineProperty(ta, 'value', {
+            get() { return proto.get.call(this); },
+            set(v) { proto.set.call(this, v); renumber(); },
+        });
+        ta.addEventListener('input', renumber);
+        ta.addEventListener('scroll', () => { gutter.scrollTop = ta.scrollTop; });
     }
 
     /** A saved component re-applied to every node on this canvas that links to it (its own label kept). */

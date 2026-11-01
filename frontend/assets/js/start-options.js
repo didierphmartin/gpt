@@ -205,11 +205,27 @@
         return out;
     }
 
+    /**
+     * The watch's args as the server runs them (StartTriggerFacts::watchArgs): the Start's tag (a non-empty string)
+     * and each start arg named in pass_args (when non-empty) win over the stored args; the other start args stay
+     * the code's ARGS only.
+     */
+    function watchArgs(watch, start, passArgs) {
+        const out = watch && typeof watch === 'object' && !Array.isArray(watch) ? { ...watch } : {};
+        const s = start && typeof start === 'object' ? start : {};
+        if (typeof s.tag === 'string' && s.tag !== '') out.tag = s.tag;
+        for (const name of Array.isArray(passArgs) ? passArgs : []) {
+            const v = s[name];
+            if (v !== undefined && v !== null && v !== '' && !(Array.isArray(v) && !v.length)) out[name] = v;
+        }
+        return out;
+    }
+
     /** The live overlay's target word: the SynergyAI server runner, or the compiled program on this machine. */
     function liveSourceLabel(kind, t) {
         return t(kind === 'compiled' ? 'workflow.live.compiledTarget' : 'workflow.live.target');
     }
 
     return { isStartDrop, sortWaitTools, guessWorkExit, defaultTrigger, active, startMode, startLinks, warning, startView, stateTone,
-        liveAction, eventSubject, compiledLiveState, liveSourceLabel, argFields, startArgs };
+        liveAction, eventSubject, compiledLiveState, liveSourceLabel, argFields, startArgs, watchArgs };
 });

@@ -2922,6 +2922,61 @@ svg.connection.wf-edge-chosen .main-path {
     cursor: move;
     user-select: none;
 }
+/* The Code tab fills the window: the editor takes whatever the Assistant below it leaves. */
+.wf-code-window [data-pane="code"] {
+    height: 100%;
+}
+.wf-code-window [data-pane="code"] > .storage-config-grid {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    height: 100%;
+}
+.wf-code-window .code-editor-folder {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.wf-code-window .code-editor-wrap {
+    flex: 1 1 auto;
+    min-height: 240px;
+    display: flex;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    overflow: hidden;
+    background: white;
+}
+/* gutter and editor share font, size, line height and top padding, so line N sits beside number N */
+.wf-code-window .code-gutter,
+.wf-code-window .code-editor-wrap textarea {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 12px;
+    line-height: 18px;
+    padding-top: 8px;
+    margin: 0;
+}
+.wf-code-window .code-gutter {
+    flex: 0 0 auto;
+    min-width: 3ch;
+    padding: 8px 8px 40px;
+    text-align: right;
+    color: #9ca3af;
+    background: #f3f4f6;
+    border-right: 1px solid #e5e7eb;
+    overflow: hidden;
+    user-select: none;
+}
+.wf-code-window .code-editor-wrap textarea {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 8px 10px;
+    border: 0;
+    outline: none;
+    resize: none;
+    white-space: pre;
+    overflow: auto;
+}
 
 /* ============================================
    Node Delete Button (X)

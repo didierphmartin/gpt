@@ -224,3 +224,14 @@ console.log('start-options compiled live: ok');
     assert.deepStrictEqual(SO.startArgs([], fields, {}), {});
     console.log('start-options argFields/startArgs: ok');
 }
+
+// watchArgs: the watch as the server runs it (StartTriggerFacts::watchArgs) -- the tag and each pass_args value win
+{
+    const watch = { poll: 'poll_new_mail', mode: 'drop', folder: 'Drop' };
+    assert.deepStrictEqual(SO.watchArgs(watch, { folder: 'To SharePoint', done_folder: 'Filed' }, ['folder']),
+        { poll: 'poll_new_mail', mode: 'drop', folder: 'To SharePoint' });
+    assert.deepStrictEqual(SO.watchArgs(watch, { folder: '' }, ['folder']), watch);            // empty: the stored value
+    assert.deepStrictEqual(SO.watchArgs({}, { tag: 'hr', folder: 'X' }, []), { tag: 'hr' });   // not passed: code only
+    assert.deepStrictEqual(SO.watchArgs([], null, null), {});
+    console.log('start-options watchArgs: ok');
+}
