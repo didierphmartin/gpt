@@ -10038,7 +10038,8 @@ class WorkflowEditor {
                         <div data-f="descwrap" class="storage-config-folder full" style="display:none;"><label>${this.escapeHtml(this.t('codeLibrary.description'))}</label><input data-f="description" type="text"></div>
                         <div class="storage-config-folder"><label>Exits (comma-separated, in connector order)</label><input data-f="exits" type="text" placeholder="None: the output goes to the next node"></div>
                         <div class="storage-config-folder"><label>Timeout (seconds)</label><input data-f="timeout" type="number" min="1" max="300"></div>
-                        <div data-f="connect" class="storage-config-folder full" style="display:contents;"></div>
+                        <div data-f="connect" class="storage-config-folder full" style="display:none;"><label>${this.escapeHtml(this.t('workflow.connect.title'))}</label>
+                            <div data-f="connect-boxes" style="display:grid;gap:8px;"></div></div>
                         <div data-f="callargs" class="storage-config-folder full" style="display:none;"></div>
                         ${node ? '' : '<div data-f="decl-provides" class="storage-config-folder full"></div>'}
                     </div>`)}
@@ -10211,9 +10212,8 @@ class WorkflowEditor {
                 keep.add(m.name);
                 if (!connectBoxes.has(m.name)) {
                     const el = document.createElement('div');
-                    el.className = 'storage-config-folder full';
                     el.innerHTML = this._connectBoxHtml(m.name);
-                    f('connect').appendChild(el);
+                    f('connect-boxes').appendChild(el);
                     connectBoxes.set(m.name, { el, ...this._wireServerConnect(el, () => (checked.has(m.name) ? m : null)) });
                 }
                 connectBoxes.get(m.name).refresh();
@@ -10221,6 +10221,7 @@ class WorkflowEditor {
             for (const [name, box] of connectBoxes) {
                 if (!keep.has(name)) { box.el.remove(); connectBoxes.delete(name); }
             }
+            f('connect').style.display = connectBoxes.size ? '' : 'none';
         };
         // Arguments: the component's declared arguments, else one field per ARGS key the code reads
         // (CodeNode.argFieldsFor), this node's own values (its args); an empty field is dropped, so the default
@@ -10554,11 +10555,13 @@ class WorkflowEditor {
 
     _connectBoxHtml(serverName) {
         const t = (k) => this.t(`workflow.connect.${k}`);
+        // a solid outline wherever the box is shown: not every form styles storage-config-btn
+        const CONNECT_BTN = 'padding:4px 12px;border:1px solid #d1d5db;border-radius:6px;background:#f9fafb;font-size:13px;cursor:pointer;';
         return `<div class="server-connect" style="border:1px solid #e5e7eb; border-radius:8px; padding:12px;">
             <div style="display:flex; align-items:center; gap:12px;">
                 <strong style="font-size:13px;">${this.escapeHtml(serverName)}</strong>
-                <button type="button" class="storage-config-btn connect-btn">${t('connect')}</button>
-                <button type="button" class="storage-config-btn connect-org-btn" style="display:none;">${this.escapeHtml(this.t('robot.connectOrganization'))}</button>
+                <button type="button" class="storage-config-btn connect-btn" style="${CONNECT_BTN}">${t('connect')}</button>
+                <button type="button" class="storage-config-btn connect-org-btn" style="display:none;${CONNECT_BTN}">${this.escapeHtml(this.t('robot.connectOrganization'))}</button>
                 <div class="connect-status" style="font-size:13px;"></div>
             </div>
             <div class="connect-device" style="display:none; margin-top:8px; font-size:14px;"></div>
@@ -10886,9 +10889,8 @@ class WorkflowEditor {
         const esc = (v) => this.escapeHtml(String(v ?? ''));
         const current = this.editor.getNodeFromId(startId).data?.start_args || {};
         const watch = comp.start_trigger.watch || {};
-        // the watch as this workflow's event row runs it: the Start's tag added (CodeComponentStore::watchWithTag)
-        const watchArgs = { ...(watch.args && !Array.isArray(watch.args) ? watch.args : {}),
-            ...(current.tag ? { tag: current.tag } : {}) };
+        // the watch as this workflow's event row runs it: the Start's tag and pass_args values merged in
+        const watchArgs = SO.watchArgs(watch.args, current, comp.start_trigger.pass_args);
         const overlay = document.createElement('div');
         overlay.className = 'storage-config-overlay';
         overlay.innerHTML = `
@@ -10988,8 +10990,6 @@ class WorkflowEditor {
             <div style="display:grid;gap:8px;">${shown.map((r) => (r.missing
                 ? `<div style="font-size:13px;color:#b45309;">⚠ ${esc(t(robot ? 'robotNoServer' : 'noServer', { server: r.name }))}</div>`
                 : `<div data-connect="${esc(r.name)}">${this._connectBoxHtml(r.server.name)}</div>`)).join('')}</div>`;
-        // this modal has no button style of its own for the box's buttons: a solid outline, like Cancel's
-        el.querySelectorAll('.connect-btn').forEach((b) => { b.style.cssText = 'padding:4px 12px;border:1px solid #d1d5db;border-radius:6px;background:#f9fafb;font-size:13px;cursor:pointer;'; });
         for (const r of shown) {
             if (r.missing) continue;
             const box = [...el.querySelectorAll('[data-connect]')].find((b) => b.dataset.connect === r.name);

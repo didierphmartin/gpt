@@ -973,6 +973,7 @@
       "remove": "Remove"
     },
     "connect": {
+      "title": "Connections",
       "connect": "Connect",
       "reconnect": "Reconnect",
       "connected": "● Connected: {{account}}",
