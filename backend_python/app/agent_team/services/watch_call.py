@@ -13,6 +13,7 @@ from app.agent_team.services.code_node_emit import CodeNodeEmit
 from app.support.phpcompat import php_strval
 
 _DATA_LINE = re.compile(r'^data:\s?(.*)$', re.M)
+KNOWN_CODES = ('reconnect_needed', 'not_connected')   # the error codes Start's state line words itself: passed on as codes
 
 
 def _decode(s):
@@ -85,10 +86,16 @@ class WatchCall:
             payload = dict(enumerate(payload))
         if payload.get('error') is not None:
             e = payload['error']   # a string, or {code, message} (the ServiceNow connector)
+            said = None
             if isinstance(e, (dict, list)):
                 e = dict(enumerate(e)) if isinstance(e, list) else e
-                return error(php_strval(e.get('code') if e.get('code') is not None else 'tool_error'))
-            return error(php_strval(e))
+                code, said = php_strval(e.get('code') if e.get('code') is not None else 'tool_error'), e.get('message')
+            else:
+                code = php_strval(e)
+            said = php_strval(said if said is not None else payload.get('message') if payload.get('message') is not None else '')
+            # Start words the codes it knows itself; any other shows what the server said (active_workflows.watch_message
+            # holds 255 characters).
+            return error(code if code in KNOWN_CODES or said == '' else said[:255])
         status = payload.get('status')
         if status != 'ready' and status != 'timeout':
             return error('bad_answer')

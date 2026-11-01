@@ -44,6 +44,9 @@ final class WatchCall
         return [$server['url'], $lines, $body];
     }
 
+    /** The error codes Start's state line words itself (start-options.js startView): passed on as codes. */
+    private const KNOWN_CODES = ['reconnect_needed', 'not_connected'];
+
     public static function answer(string|false $body, int $http, string $curlError): array
     {
         $error = static fn(string $m) => ['status' => 'error', 'message' => $m];
@@ -68,7 +71,11 @@ final class WatchCall
         }
         if (isset($payload['error'])) {
             $e = $payload['error'];   // a string, or {code, message} (the ServiceNow connector)
-            return $error(is_array($e) ? (string) ($e['code'] ?? 'tool_error') : (string) $e);
+            $code = is_array($e) ? (string) ($e['code'] ?? 'tool_error') : (string) $e;
+            $said = (string) ((is_array($e) ? $e['message'] ?? null : null) ?? $payload['message'] ?? '');
+            // Start words the codes it knows itself; any other shows what the server said (active_workflows.watch_message
+            // holds 255 characters).
+            return $error(in_array($code, self::KNOWN_CODES, true) || $said === '' ? $code : mb_substr($said, 0, 255));
         }
         $status = $payload['status'] ?? null;
         if ($status !== 'ready' && $status !== 'timeout') {

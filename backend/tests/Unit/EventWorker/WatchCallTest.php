@@ -88,12 +88,25 @@ final class WatchCallTest extends TestCase
         $this->assertSame(['status' => 'error', 'message' => 'bad_answer'], WatchCall::answer('not json', 200, ''));
     }
 
+    /** A code Start does not interpret shows the server's own message (e.g. an empty organization group); cut to the column. */
+    public function testOtherCodesCarryTheServersMessage(): void
+    {
+        $this->assertSame(['status' => 'error', 'message' => 'the group g-1 has no mailbox'],
+            WatchCall::answer(self::rpc(['error' => 'no_mailboxes', 'message' => 'the group g-1 has no mailbox']), 200, ''));
+        $this->assertSame(['status' => 'error', 'message' => 'not_connected'],
+            WatchCall::answer(self::rpc(['error' => 'not_connected', 'message' => 'connect the mailbox first']), 200, ''));
+        $long = WatchCall::answer(self::rpc(['error' => 'x', 'message' => str_repeat('é', 300)]), 200, '')['message'];
+        $this->assertSame(255, mb_strlen($long));
+    }
+
     public function testErrorObjectFromTheServiceNowConnector(): void
     {
         set_error_handler(static function (int $no, string $str): never { throw new \ErrorException($str, 0, $no); });
         try {
-            $this->assertSame(['status' => 'error', 'message' => 'servicenow_error'],
+            $this->assertSame(['status' => 'error', 'message' => 'down'],
                 WatchCall::answer(self::rpc(['error' => ['code' => 'servicenow_error', 'message' => 'down']]), 200, ''));
+            $this->assertSame(['status' => 'error', 'message' => 'servicenow_error'],
+                WatchCall::answer(self::rpc(['error' => ['code' => 'servicenow_error']]), 200, ''));
         } finally {
             restore_error_handler();
         }
