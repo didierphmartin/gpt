@@ -10040,7 +10040,6 @@ class WorkflowEditor {
                         <div class="storage-config-folder"><label>Timeout (seconds)</label><input data-f="timeout" type="number" min="1" max="300"></div>
                         <div data-f="connect" class="storage-config-folder full" style="display:none;"><label>${this.escapeHtml(this.t('workflow.connect.title'))}</label>
                             <div data-f="connect-boxes" style="display:grid;gap:8px;"></div></div>
-                        <div data-f="callargs" class="storage-config-folder full" style="display:none;"></div>
                         ${node ? '' : '<div data-f="decl-provides" class="storage-config-folder full"></div>'}
                     </div>`)}
                     ${pane('code', `<div class="storage-config-grid">
@@ -10051,7 +10050,9 @@ class WorkflowEditor {
                     ${pane('servers', `<p class="text-xs text-gray-500" style="margin:0 0 8px;">The code calls a checked server's tools with
                         <code>call_tool("&lt;server&gt;", "&lt;tool&gt;", {...})</code>; the server is written as shown in grey.</p>
                         <div data-f="servers"><p class="text-sm text-gray-400 italic">…</p></div>`)}
-                    ${pane('args', node ? '<div data-f="args"></div>' : '<div data-f="decl-args"></div>')}
+                    ${pane('args', `${node ? '<div data-f="args"></div>' : '<div data-f="decl-args"></div>'}
+                        <div data-f="watchargs" style="display:none;margin-top:16px;"></div>
+                        <div data-f="callargs" style="display:none;margin-top:16px;"></div>`)}
                     ${pane('tools', '<div data-f="tools"></div>')}
                     ${pane('input', pre('input'))}
                     ${pane('output', pre('output'))}
@@ -10334,6 +10335,37 @@ class WorkflowEditor {
                 .map(({ name, default: dflt }) => (dflt === '' ? { name } : { name, default: dflt })));
             renderDecls('provides', Array.isArray(d.provides) ? d.provides : []);
         }
+        // A Start option's watch arguments (the component's start_trigger), shown under its own: edited in the
+        // Start option dialog, which every workflow on the option shares.
+        const renderWatch = () => {
+            const st = comp?.id ? CC.cache.get(comp.id)?.start_trigger : null;
+            const el = f('watchargs');
+            if (!st) { el.style.display = 'none'; el.innerHTML = ''; return; }
+            const w = st.watch || {};
+            const args = w.args && typeof w.args === 'object' && !Array.isArray(w.args) ? w.args : {};
+            const pass = Array.isArray(st.pass_args) ? st.pass_args : [];
+            el.style.display = '';
+            el.innerHTML = `<div style="border:1px solid #e5e7eb; border-radius:8px; padding:12px;">
+                <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+                    <span style="font-size:13px; font-weight:600;">${escA(ta('watchTitle', { label: st.label, call: `${w.server || ''}.${w.tool || ''}` }))}</span>
+                    <button type="button" data-watch-edit style="padding:4px 12px;border:1px solid #d1d5db;border-radius:6px;background:#f9fafb;font-size:13px;cursor:pointer;">${escA(this.t('common.edit'))}</button></div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">${Object.keys(args).map((k) =>
+                    `<label>${escA(k)}<input type="text" data-watch="${escA(k)}" disabled></label>`).join('')}</div>
+                ${pass.length ? `<div style="margin-top:6px; font-size:12px; color:#6b7280;">${escA(ta('watchPass', { names: pass.join(', ') }))}</div>` : ''}
+            </div>`;
+            // values through the DOM: a value is any JSON, shown as text
+            el.querySelectorAll('[data-watch]').forEach((i) => {
+                const v = args[i.dataset.watch];
+                i.value = typeof v === 'string' ? v : JSON.stringify(v);
+            });
+            el.querySelector('[data-watch-edit]').addEventListener('click', async () => {
+                const row = await this._showStartOptionDialog(CC.cache.get(comp.id));
+                if (!row) return;
+                renderWatch();
+                window.codeLibrary?.loadTree?.();
+            });
+        };
+        renderWatch();
         // The template call's arguments as fields (CodeNode.callTemplate): shown when the code makes that call.
         const callArgs = this._wireCallArgs(f('callargs'), () => f('code').value, (code) => { f('code').value = code; });
         f('code').addEventListener('change', () => { callArgs.refresh(); renderArgs(); });

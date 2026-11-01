@@ -953,6 +953,8 @@
       "codeChanged": "The code changed since this proposal; review the updated comparison, then Accept again."
     },
     "codeArgs": {
+      "watchTitle": "Watch of the Start option \"{{label}}\": {{call}}",
+      "watchPass": "A workflow's Start replaces {{names}} with its own value when it sets one.",
       "intro": "The values this node's code reads. Empty: the default (shown in grey) applies. * = required.",
       "none": "This code reads no arguments.",
       "available": "Available placeholders",
