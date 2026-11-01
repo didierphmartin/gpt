@@ -10045,7 +10045,7 @@ class WorkflowEditor {
                     </div>`)}
                     ${pane('code', `<div class="storage-config-grid">
                         <div class="storage-config-folder full code-editor-folder"><label>Code — def run(input, call_tool)</label>
-                            <textarea data-f="code" rows="16" spellcheck="false" style="font-family:ui-monospace,Menlo,monospace;font-size:12px;width:100%;"></textarea></div>
+                            <div class="code-editor-wrap"><pre class="code-gutter" aria-hidden="true"></pre><textarea data-f="code" rows="16" wrap="off" spellcheck="false"></textarea></div></div>
                         <div data-f="assist" class="storage-config-folder full"></div>
                     </div>`)}
                     ${pane('servers', `<p class="text-xs text-gray-500" style="margin:0 0 8px;">The code calls a checked server's tools with
@@ -10090,6 +10090,7 @@ class WorkflowEditor {
         // Values are set through the DOM, never interpolated into attributes: escapeHtml leaves
         // quotes alone, so a name like Poll "prod" would be cut short (or inject an attribute).
         f('name').value = d.name || 'Code';
+        this._numberCodeLines(f('code'));
         f('code').value = d.code || '';
         f('exits').value = CN.exitsText(Array.isArray(d.exits) && d.exits.length ? d.exits : ['next']);
         f('timeout').value = String(Number(d.timeout_s) || 30);
@@ -11084,6 +11085,27 @@ class WorkflowEditor {
         // Like an agent node's form: the DB write is flushed by _persistIfDirty() (Run, Compile,
         // loading another workflow, Clear) or by Save Workflow.
         this._workflowDirty = true;
+    }
+
+    /**
+     * Line numbers in the gutter left of a code textarea, so a place in the code can be named by its line. The
+     * textarea does not wrap; every write of its value (typing, the assistant, the call-argument fields) renumbers.
+     */
+    _numberCodeLines(ta) {
+        const gutter = ta.previousElementSibling;
+        let shown = 0;
+        const renumber = () => {
+            const n = ta.value.split('\n').length;
+            if (n !== shown) { shown = n; gutter.textContent = Array.from({ length: n }, (_, i) => i + 1).join('\n'); }
+            gutter.scrollTop = ta.scrollTop;
+        };
+        const proto = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+        Object.defineProperty(ta, 'value', {
+            get() { return proto.get.call(this); },
+            set(v) { proto.set.call(this, v); renumber(); },
+        });
+        ta.addEventListener('input', renumber);
+        ta.addEventListener('scroll', () => { gutter.scrollTop = ta.scrollTop; });
     }
 
     /** A saved component re-applied to every node on this canvas that links to it (its own label kept). */
