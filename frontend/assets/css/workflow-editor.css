@@ -2922,6 +2922,28 @@ svg.connection.wf-edge-chosen .main-path {
     cursor: move;
     user-select: none;
 }
+/* Arguments tab: the watch's and the code call's fields, outside the Settings grid's field styling */
+.wf-code-window [data-f="watchargs"] input[type="text"],
+.wf-code-window [data-f="callargs"] input[type="text"] {
+    display: block;
+    width: 100%;
+    margin-top: 2px;
+    padding: 6px 8px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 13px;
+    background: white;
+}
+.wf-code-window [data-f="watchargs"] input:disabled,
+.wf-code-window [data-f="callargs"] input:disabled {
+    background: #f3f4f6;
+    color: #374151;
+}
+.wf-code-window [data-f="watchargs"] label,
+.wf-code-window [data-f="callargs"] label {
+    font-size: 13px;
+}
+
 /* The Code tab fills the window: the editor takes whatever the Assistant below it leaves. */
 .wf-code-window [data-pane="code"] {
     height: 100%;

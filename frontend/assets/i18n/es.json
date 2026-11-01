@@ -953,6 +953,8 @@
       "codeChanged": "El código cambió desde esta propuesta; revisa la comparación actualizada y vuelve a pulsar Aceptar."
     },
     "codeArgs": {
+      "watchTitle": "Vigilancia de la opción de inicio \"{{label}}\": {{call}}",
+      "watchPass": "El Inicio de un flujo reemplaza {{names}} por su propio valor cuando lo define.",
       "intro": "Los valores que lee el código de este nodo. Vacío: se aplica el valor por defecto (en gris). * = obligatorio.",
       "none": "Este código no lee argumentos.",
       "available": "Marcadores disponibles",
