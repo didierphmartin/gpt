@@ -119,6 +119,29 @@ final class GraphWorkflowRunnerCodeNodeTest extends TestCase
         self::assertFileExists($this->runsDir . '/' . $runId . '.jsonl');
     }
 
+    public function testRunLogRecordsWhatEachNonAgentNodeReceived(): void
+    {
+        // Start(1) -> Code(2) -> Code(4) -> Output(3): a code node's and the Output's input is their parents' output.
+        $edges = [
+            ['from_node_id' => 1, 'to_node_id' => 2, 'from_port' => 'output_1'],
+            ['from_node_id' => 2, 'to_node_id' => 4, 'from_port' => 'output_1'],
+            ['from_node_id' => 4, 'to_node_id' => 3, 'from_port' => 'output_1'],
+        ];
+        $second = ['id' => 4, 'node_type' => 'code', 'config' => ['name' => 'Second', 'exits' => ['next'],
+            'code' => "def run(input, call_tool):\n    return {'route': 'next', 'output': 'job 1 done'}\n", 'mcp_servers' => [], 'timeout_s' => 10]];
+        $out = $this->run_("def run(input, call_tool):\n    return {'route': 'work', 'output': 'job 1'}\n", ['work', 'idle'], [], [], $edges, [$second]);
+        self::assertTrue($out['success'], $out['error'] ?? '');
+        $starts = [];
+        foreach (file($this->runLogs()[0], FILE_IGNORE_NEW_LINES) as $line) {
+            $e = json_decode($line, true);
+            if (($e['type'] ?? '') === 'node_start') {
+                $starts[(int) $e['node_id']] = $e['input'] ?? null;
+            }
+        }
+        self::assertSame('job 1', $starts[4], 'a code node receives its parent code node\'s output');
+        self::assertSame('job 1 done', $starts[3], 'the Output receives its parent\'s output');
+    }
+
     public function testWorkBesideThePollDoesNotDrain(): void
     {
         // Start -> Code(2) and Start -> Output(3) in parallel: the Output runs every tick, the poll found nothing.
