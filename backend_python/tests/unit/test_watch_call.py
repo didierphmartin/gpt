@@ -78,4 +78,14 @@ def test_errors():
 
 def test_error_object_from_the_servicenow_connector():
     assert WatchCall.answer(rpc({'error': {'code': 'servicenow_error', 'message': 'down'}}), 200, '') == \
+        {'status': 'error', 'message': 'down'}
+    assert WatchCall.answer(rpc({'error': {'code': 'servicenow_error'}}), 200, '') == \
         {'status': 'error', 'message': 'servicenow_error'}
+
+
+def test_other_codes_carry_the_servers_message():
+    assert WatchCall.answer(rpc({'error': 'no_mailboxes', 'message': 'the group g-1 has no mailbox'}), 200, '') == \
+        {'status': 'error', 'message': 'the group g-1 has no mailbox'}
+    assert WatchCall.answer(rpc({'error': 'not_connected', 'message': 'connect the mailbox first'}), 200, '') == \
+        {'status': 'error', 'message': 'not_connected'}
+    assert len(WatchCall.answer(rpc({'error': 'x', 'message': 'é' * 300}), 200, '')['message']) == 255

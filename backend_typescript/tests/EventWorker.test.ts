@@ -684,7 +684,11 @@ test('watch call: the server (own row wins, by slug), the request, the answers a
   assert.deepEqual(WatchCall.answer('{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"bad"}}', 200, ''), { status: 'error', message: 'rpc_error' });
   assert.deepEqual(WatchCall.answer(rpc({ status: 'maybe' }), 200, ''), { status: 'error', message: 'bad_answer' });
   assert.deepEqual(WatchCall.answer('not json', 200, ''), { status: 'error', message: 'bad_answer' });
-  assert.deepEqual(WatchCall.answer(rpc({ error: { code: 'servicenow_error', message: 'down' } }), 200, ''), { status: 'error', message: 'servicenow_error' });
+  assert.deepEqual(WatchCall.answer(rpc({ error: { code: 'servicenow_error', message: 'down' } }), 200, ''), { status: 'error', message: 'down' });
+  assert.deepEqual(WatchCall.answer(rpc({ error: { code: 'servicenow_error' } }), 200, ''), { status: 'error', message: 'servicenow_error' });
+  assert.deepEqual(WatchCall.answer(rpc({ error: 'no_mailboxes', message: 'the group g-1 has no mailbox' }), 200, ''), { status: 'error', message: 'the group g-1 has no mailbox' });
+  assert.deepEqual(WatchCall.answer(rpc({ error: 'not_connected', message: 'connect first' }), 200, ''), { status: 'error', message: 'not_connected' });
+  assert.equal(Array.from((WatchCall.answer(rpc({ error: 'x', message: 'é'.repeat(300) }), 200, '') as any).message).length, 255);
 });
 
 // ---- ProcRunSpawner ----

@@ -5,6 +5,9 @@ import { CodeNodeEmit } from './CodeNodeEmit';
 export type WatchServer = { url: string; headers: Record<string, string> };
 export type WatchAnswer = { status: 'ready' | 'timeout'; via: any; events: any } | { status: 'error'; message: string };
 
+/** The error codes Start's state line words itself (start-options.js startView): passed on as codes. */
+const KNOWN_CODES = ['reconnect_needed', 'not_connected'];
+
 /**
  * The event worker's call to a Start option's waiting tool: which server, the JSON-RPC request (the one
  * MCPToolsLoader sends), and what the answer means. A waiting tool answers
@@ -63,7 +66,12 @@ export const WatchCall = {
     if (payload === null || typeof payload !== 'object') return error('bad_answer');
     if (payload.error !== undefined && payload.error !== null) {
       const e = payload.error; // a string, or {code, message} (the ServiceNow connector)
-      return error(e !== null && typeof e === 'object' ? String(e.code ?? 'tool_error') : String(e));
+      const isObj = e !== null && typeof e === 'object';
+      const code = isObj ? String(e.code ?? 'tool_error') : String(e);
+      const said = String((isObj ? e.message : undefined) ?? payload.message ?? '');
+      // Start words the codes it knows itself; any other shows what the server said (active_workflows.watch_message
+      // holds 255 characters).
+      return error(KNOWN_CODES.includes(code) || said === '' ? code : Array.from(said).slice(0, 255).join(''));
     }
     const status = payload.status ?? null;
     if (status !== 'ready' && status !== 'timeout') return error('bad_answer');
