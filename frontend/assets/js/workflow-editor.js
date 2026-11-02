@@ -3584,6 +3584,7 @@ class WorkflowEditor {
     /** One server run event: on the canvas while it follows the runs, in the feed while the live overlay is open. */
     _liveApply(ev) {
         if (!this._monitoring && !this._following) return;
+        this._liveNodeData(ev);
         const a = window.StartOptions.liveAction(ev, this._startNodeId());
         if (!a) return;
         const inFeed = this._pbSessionMode === 'live';
@@ -3614,6 +3615,28 @@ class WorkflowEditor {
             this._pbAppend(`<div style="color:#dc2626;font-size:13px;">${this.escapeHtml(a.error)}</div>`);
         }
         if (feed) feed.scrollTop = feed.scrollHeight;
+    }
+
+    /**
+     * A server run event into the nodes' Input / Output / Logs (nodeExecutionData), as a replayed run log fills them:
+     * a new run starts them afresh and becomes the workflow's last run; the hidden trigger node's events are Start's.
+     */
+    _liveNodeData(ev) {
+        if (!ev || typeof ev !== 'object') return;
+        if (ev.type === 'workflow_start') {
+            this.nodeExecutionData = {};
+            this._hydratedRunId = ev.run_id || null;   // what it holds now is this run's: no replay over it
+            if (ev.run_id) {
+                try { localStorage.setItem('lastRunId:' + this.currentWorkflowId, ev.run_id); } catch (_) { /* storage blocked */ }
+            }
+            return;
+        }
+        const trigger = ev.drawflow_id == null && Number(ev.node_id) >= 1000000000;
+        const start = this._startNodeId();
+        if (trigger && !start) return;
+        this._applyRunEventToNodeData(trigger ? { ...ev, node_id: null, drawflow_id: start } : ev);
+        const df = trigger ? start : (this.dbNodeToDrawflowMap?.[ev.node_id] || ev.drawflow_id);
+        if (df != null) this.updateModalInputOutput(df);
     }
 
     /** The live overlay's footer: Start's state line and the activate / deactivate button. */

@@ -423,6 +423,10 @@ class GraphWorkflowRunner
                     $mergeStrategy = $config['merge_strategy'] ?? 'labeled';
                     $context = $this->buildContextForNode($node['id'], $edges, $executedNodes, $mergeStrategy);
                     $nodeInput = !empty($context) ? "Do your job on the following input:\n\n{$context}" : $userPrompt;
+                } elseif (in_array($node['node_type'], ['code', 'playbook', 'output'], true)) {
+                    // what the node receives: its parents' output, as its run reads it (the form's Input tab)
+                    $parents = CodeNodeStep::parents((int) $node['id'], $edges, $this->graphNodes, $this->nodeOutputs);
+                    $nodeInput = $parents ? implode("\n\n", array_column($parents, 'text')) : $userPrompt;
                 }
 
                 // Emit node_start event with input content
