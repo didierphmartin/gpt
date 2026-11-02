@@ -1,6 +1,10 @@
 import json
+import os
 import sys
+import time
 from pathlib import Path
+
+import pytest
 
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE.parents[2] / "frontend" / "assets" / "py"))
@@ -11,6 +15,20 @@ def _load(name, args):
     ns = {"ARGS": args}
     exec(compile((HERE / f"{name}.py").read_text(), name, "exec"), ns)
     return ns["run"]
+
+
+@pytest.fixture(autouse=True)
+def utc_clock():
+    """The run machine's time zone decides `received`: UTC here unless a test sets another."""
+    old = os.environ.get("TZ")
+    os.environ["TZ"] = "UTC"
+    time.tzset()
+    yield
+    if old is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = old
+    time.tzset()
 
 
 def _mail(**extra):
@@ -42,6 +60,19 @@ def test_mail_drop_provides_meta():
     out = _drop(_mail(mailbox="alice@vip.com", mailbox_name="Alice Martin"))["output"]
     assert out["meta"] == {"mailbox": "alice@vip.com", "mailbox_name": "Alice Martin", "from": "a@x.com",
                            "subject": "Hi", "received_at": "2026-10-26T09:30:00Z", "received": "2026-10-26 0930"}
+
+
+def test_mail_drop_received_is_local_time():
+    os.environ["TZ"] = "America/Toronto"
+    time.tzset()
+    meta = _drop(_mail(received_at="2026-11-02T15:39:13Z"))["output"]["meta"]
+    assert meta["received"] == "2026-11-02 1039"
+    assert meta["received_at"] == "2026-11-02T15:39:13Z"
+
+
+def test_mail_drop_received_unparsable_kept_as_given():
+    meta = _drop(_mail(received_at="2026-11-02 garbled"))["output"]["meta"]
+    assert meta["received"] == "2026-11-02 garbled"[:16].replace("T", " ").replace(":", "")
 
 
 def test_mail_drop_meta_fallbacks():

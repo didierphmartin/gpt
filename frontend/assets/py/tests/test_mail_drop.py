@@ -1,13 +1,31 @@
 """The mail drop workflow's components -- "Mail dropped in a folder" (Start), "Document -> PDF", "SharePoint -- move"
 -- each run through the code node harness with a fake transport, and chained as the workflow chains them."""
 import json
+import os
 import sys
+import time
 import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import code_node_harness as h  # noqa: E402
+
+_TZ = os.environ.get("TZ")
+
+
+def setUpModule():
+    """The run machine's time zone decides mail_drop's `received`: UTC for these expectations."""
+    os.environ["TZ"] = "UTC"
+    time.tzset()
+
+
+def tearDownModule():
+    if _TZ is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = _TZ
+    time.tzset()
 
 COMP = HERE.parents[3] / "backend" / "resources" / "code_components"
 
