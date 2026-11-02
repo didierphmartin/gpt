@@ -757,6 +757,17 @@
       "target": "ejecuciones en el servidor",
       "compiledTarget": "compilado (local)"
     },
+    "robotCompile": {
+      "askTitle": "Las claves de conexión del robot",
+      "askIntro": "Este flujo se ejecuta como el robot. Pegue los encabezados de conexión del robot para cada servidor (un objeto JSON). Se guardan solo en este paquete compilado y nunca se envían.",
+      "askLater": "Más tarde",
+      "askSave": "Guardar",
+      "askNotJson": "{{server}}: se espera un objeto JSON, p. ej. {\"X-Outlook-Account\": \"…\"}",
+      "pasteKeys": "Este flujo se ejecuta como el robot: pegue los encabezados de conexión del robot en {{file}} ({{names}}). Hasta entonces el programa no está conectado.",
+      "stopTitle": "¿Detener la ejecución del robot?",
+      "stopWarn": "«{{name}}» se ejecuta como el robot. Iniciar este programa compilado detiene la ejecución del robot hasta que vuelva a activar el flujo.",
+      "stopOk": "Detener el robot e iniciar"
+    },
     "startOptions": {
       "addTitle": "Añadir como opción de inicio",
       "editTitle": "Editar opción de inicio",

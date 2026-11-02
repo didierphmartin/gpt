@@ -757,6 +757,17 @@
       "target": "exécutions sur le serveur",
       "compiledTarget": "compilé (local)"
     },
+    "robotCompile": {
+      "askTitle": "Les clés de connexion du robot",
+      "askIntro": "Ce workflow s'exécute en tant que robot. Collez les en-têtes de connexion du robot pour chaque serveur (un objet JSON). Ils sont enregistrés dans ce paquet compilé uniquement, jamais envoyés ailleurs.",
+      "askLater": "Plus tard",
+      "askSave": "Enregistrer",
+      "askNotJson": "{{server}} : un objet JSON est attendu, p. ex. {\"X-Outlook-Account\": \"…\"}",
+      "pasteKeys": "Ce workflow s'exécute en tant que robot : collez les en-têtes de connexion du robot dans {{file}} ({{names}}). D'ici là, le programme n'est pas connecté.",
+      "stopTitle": "Arrêter l'exécution du robot ?",
+      "stopWarn": "« {{name}} » s'exécute en tant que robot. Démarrer ce programme compilé arrête l'exécution du robot jusqu'à ce que vous réactiviez le workflow.",
+      "stopOk": "Arrêter le robot et démarrer"
+    },
     "startOptions": {
       "addTitle": "Ajouter comme option de démarrage",
       "editTitle": "Modifier l'option de démarrage",

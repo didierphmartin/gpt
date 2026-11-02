@@ -757,6 +757,17 @@
       "target": "server runs",
       "compiledTarget": "compiled (local)"
     },
+    "robotCompile": {
+      "askTitle": "The robot's connection keys",
+      "askIntro": "This workflow runs as the robot. Paste the robot's connection headers for each server (a JSON object). They are saved in this compiled package only, never sent anywhere.",
+      "askLater": "Later",
+      "askSave": "Save",
+      "askNotJson": "{{server}}: a JSON object is expected, e.g. {\"X-Outlook-Account\": \"…\"}",
+      "pasteKeys": "This workflow runs as the robot: paste the robot's connection headers into {{file}} ({{names}}). Until then the program is not connected.",
+      "stopTitle": "Stop the robot's run?",
+      "stopWarn": "\"{{name}}\" is running as the robot. Starting this compiled program stops the robot's run until you activate the workflow again.",
+      "stopOk": "Stop the robot and start"
+    },
     "startOptions": {
       "addTitle": "Add as a Start option",
       "editTitle": "Edit Start option",
