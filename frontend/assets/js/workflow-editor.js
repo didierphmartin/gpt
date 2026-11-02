@@ -3338,30 +3338,50 @@ class WorkflowEditor {
     }
 
     /**
-     * Monitoring (the toolbar button): on, the canvas follows the server runner's runs of this workflow and the live
-     * overlay opens with their feed; closing the overlay keeps the canvas following. Off: no stream, no colours, no
-     * overlay. It never outlives the open workflow (_refreshMonitoring turns it off on a switch).
+     * Monitoring (the toolbar button): on, the live overlay opens with the feed of the server runner's runs of this
+     * workflow; closing the overlay keeps the canvas following. Off: no overlay. The canvas follows the runs whatever
+     * Monitoring is while the workflow is active (_follow); an inactive one keeps a stream only while monitored.
+     * It never outlives the open workflow (_refreshMonitoring turns it off on a switch).
      */
     _setMonitoring(on) {
-        this._liveStop?.();
-        this._liveStop = null;
         this._monitoring = on ? this.currentWorkflowId : null;
         if (on) {
-            this._liveSource = { kind: 'server' };
-            this._compiledLive = null;
             this._pbOverlayOpen(null, this.currentWorkflowName || 'Workflow', [], null, { session: true, mode: 'live' });
             this._liveTurn = null;
-            this._liveActiveNode = null;
             this._liveHeader();
-            const ctrl = new AbortController();
-            this._liveStop = () => ctrl.abort();
-            // An empty cursor replays a run in progress, so the canvas and the feed catch up on it.
-            this._liveConnect(ctrl.signal, this.currentWorkflowId, this._liveSource).catch(() => {});
+            // the stream the canvas follows, when there is one, already feeds the overlay
+            if (!this._liveStop || this._liveSource?.kind !== 'server') this._startServerStream();
         } else {
-            this._clearRunColours();
             if (this._pbSessionMode === 'live') document.getElementById('pb-ov-hide')?.click();
+            if (!this._isActiveHere()) this._stopStream();
         }
         this._refreshMonitoring();
+    }
+
+    /** The server runner's stream of this workflow's runs (GET /workflows/{id}/live), replacing any other. */
+    _startServerStream() {
+        this._liveStop?.();
+        this._liveSource = { kind: 'server' };
+        this._compiledLive = null;
+        this._liveActiveNode = null;
+        this._following = this.currentWorkflowId;
+        const ctrl = new AbortController();
+        this._liveStop = () => ctrl.abort();
+        // An empty cursor replays a run in progress, so the canvas (and the feed) catch up on it.
+        this._liveConnect(ctrl.signal, this.currentWorkflowId, this._liveSource).catch(() => {});
+    }
+
+    _stopStream() {
+        this._liveStop?.();
+        this._liveStop = null;
+        this._following = null;
+        this._clearRunColours();
+    }
+
+    /** The open workflow is the active one (listening for its events or schedule): its runs show on the canvas. */
+    _isActiveHere() {
+        return !!this.currentWorkflowId && !this._isIngestionWorkflow() && !this._isSwarm()
+            && this._startView().button === 'deactivate';
     }
 
     /**
@@ -3420,23 +3440,43 @@ class WorkflowEditor {
         this._refreshMonitoring();
     }
 
-    /** The Monitoring button: shown for a listening workflow (schedule / option mode), orange while on (blue is Save's). */
+    /**
+     * The Monitoring button: shown only while this tab follows a compiled program of the workflow (its own run
+     * server), orange while on (blue is Save's). Server runs need no button: the canvas follows them while the
+     * workflow is active, and ■ on Start opens their live overlay.
+     */
     _refreshMonitoring() {
+        // the server runs' overlay was closed: nothing is monitored any more (the canvas still follows an active workflow)
+        if (this._monitoring && this._liveSource?.kind !== 'compiled' && this._pbSessionMode !== 'live') this._monitoring = null;
         if (this._monitoring && this._monitoring !== this.currentWorkflowId) {
             this._liveStop?.();
             this._liveStop = null;
             this._monitoring = null;
         }
+        if (this._following && this._following !== this.currentWorkflowId) {
+            this._liveStop?.();
+            this._liveStop = null;
+            this._following = null;
+        }
+        // An active workflow: the canvas follows its runs, Monitoring or not. Deactivated and not monitored: no stream.
+        if (this._isActiveHere()) {
+            if (!this._liveStop) this._startServerStream();
+        } else if (this._following && !this._monitoring) {
+            this._stopStream();
+        }
         const btn = document.getElementById('wf-monitoring');
         if (!btn) return;
         if (!btn.dataset.wired) {
             btn.dataset.wired = '1';
-            btn.addEventListener('click', () => this._setMonitoring(!this._monitoring));
+            btn.addEventListener('click', () => {
+                if (this._monitoring) this._setMonitoring(false);
+                else if (this._liveSource?.kind === 'compiled') this._openCompiledLive(this._liveSource.base);
+            });
         }
         const listening = !!this.currentWorkflowId && !this._isIngestionWorkflow() && !this._isSwarm()
             && this._startView().button !== 'run';
         if (!listening && this._monitoring) this._setMonitoring(false);
-        btn.style.display = listening ? 'flex' : 'none';
+        btn.style.display = listening && this._liveSource?.kind === 'compiled' ? 'flex' : 'none';
         const on = !!this._monitoring;
         btn.classList.toggle('bg-orange-500', on);
         btn.classList.toggle('text-white', on);
@@ -3541,9 +3581,9 @@ class WorkflowEditor {
         }
     }
 
-    /** One server run event: on the canvas while Monitoring is on, in the feed while the live overlay is open. */
+    /** One server run event: on the canvas while it follows the runs, in the feed while the live overlay is open. */
     _liveApply(ev) {
-        if (!this._monitoring) return;
+        if (!this._monitoring && !this._following) return;
         const a = window.StartOptions.liveAction(ev, this._startNodeId());
         if (!a) return;
         const inFeed = this._pbSessionMode === 'live';
@@ -17370,6 +17410,7 @@ class WorkflowEditor {
         // ... nor Monitoring's stream of server runs, which would keep reconnecting.
         this._liveStop?.(); this._liveStop = null;
         this._monitoring = null;
+        this._following = null;
         this._refreshMonitoring();
         this._runTarget = null;
         // Stale-state guard: this teardown already nulls _swarmSession and

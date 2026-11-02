@@ -747,7 +747,7 @@
     },
     "live": {
       "monitoring": "Monitoring",
-      "monitoringTitle": "Follow this workflow's server runs on the canvas",
+      "monitoringTitle": "Show the feed of this workflow's server runs (the canvas follows them while the workflow is active)",
       "stop": "Stop",
       "open": "Open the live view",
       "overlayTitle": "Live",
