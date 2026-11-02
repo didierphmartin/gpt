@@ -747,7 +747,7 @@
     },
     "live": {
       "monitoring": "Monitorización",
-      "monitoringTitle": "Sigue en el lienzo las ejecuciones de este flujo en el servidor",
+      "monitoringTitle": "Mostrar el registro de las ejecuciones en el servidor de este flujo (el lienzo las sigue mientras el flujo está activo)",
       "stop": "Detener",
       "open": "Abrir la vista en vivo",
       "overlayTitle": "En vivo",
