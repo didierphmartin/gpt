@@ -11005,6 +11005,7 @@ class WorkflowEditor {
             i.value = current[i.dataset.arg] ?? '';
             i.placeholder = fld?.default ?? '';
             i.disabled = !editable;
+            if (!editable) Object.assign(i.style, { background: '#f3f4f6', color: '#6b7280', cursor: 'not-allowed' });
         }
         const tag = inputs.find((i) => i.dataset.arg === 'tag');
         const warn = () => { overlay.querySelector('[data-role="no-tag"]').style.display = tag && !tag.value.trim() ? '' : 'none'; };
