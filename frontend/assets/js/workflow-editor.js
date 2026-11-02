@@ -10628,7 +10628,6 @@ class WorkflowEditor {
             <div style="display:flex; align-items:center; gap:12px;">
                 <strong style="font-size:13px;">${this.escapeHtml(serverName)}</strong>
                 <button type="button" class="storage-config-btn connect-btn" style="${CONNECT_BTN}">${t('connect')}</button>
-                <button type="button" class="storage-config-btn connect-org-btn" style="display:none;${CONNECT_BTN}">${this.escapeHtml(this.t('robot.connectOrganization'))}</button>
                 <div class="connect-status" style="font-size:13px;"></div>
             </div>
             <div class="connect-device" style="display:none; margin-top:8px; font-size:14px;"></div>
@@ -10643,33 +10642,33 @@ class WorkflowEditor {
      * io (optional): {call(server, tool, args), saveKey(server, header, key), listTools?(server)} -- the robot's
      * connections pass their own routes; default: the user's proxy (_mcpToolJson / _saveConnectionKey).
      * In the robot's connections (io passed) only, when connect_start's schema offers method "organization",
-     * a second button connects the whole organization at once (CodeNode.connectOrganization).
+     * Connect first asks which: the whole organization at once (CodeNode.connectOrganization) or one account's
+     * sign-in -- every row keeps the same single Connect button.
      */
     _wireServerConnect(el, getServer, io = null) {
         const call = io?.call || ((s, tool, args) => this._mcpToolJson(s, tool, args));
         const saveKey = io?.saveKey || ((s, header, key) => this._saveConnectionKey(s, header, key));
         const listTools = io?.listTools || ((s) => this._mcpProxyListToolEntries(s));
         const q = (c) => el.querySelector(c);
-        const status = q('.connect-status'), device = q('.connect-device'), btn = q('.connect-btn'), orgBtn = q('.connect-org-btn');
+        const status = q('.connect-status'), device = q('.connect-device'), btn = q('.connect-btn');
         const t = (k, p) => this.t(`workflow.connect.${k}`, p);
         const failed = (r) => t('failed', { status: r.message || r.error || r.status || 'error' });
         const sayDevice = (text) => { device.style.display = 'block'; device.textContent = text; };
         // A server-supplied URL in an href: http(s) only, quotes escaped.
         const href = (u) => (/^https?:\/\//i.test(String(u || '')) ? this.escapeHtml(String(u)).replace(/"/g, '&quot;') : '#');
         let connecting = false;   // one sign-in at a time: a refresh mid sign-in must not re-enable Connect
-        let orgFor = null;        // the server id whose tools/list decided the organization button
-        const showOrg = async (server) => {
-            if (!orgBtn || orgFor === server.id) return;
-            orgFor = server.id;
-            const listed = io ? await listTools(server) : null;     // a person's own box: never the organization
-            orgBtn.style.display = window.CodeNode.showsOrganizationButton(listed?.tools, !!io) ? '' : 'none';
+        const orgOffered = new Map();   // server id -> does Connect offer the organization (its tools/list, asked once)
+        const offersOrg = async (server) => {
+            if (!io) return false;                                   // a person's own box: never the organization
+            if (!orgOffered.has(server.id)) {
+                orgOffered.set(server.id, window.CodeNode.showsOrganizationButton((await listTools(server))?.tools, true));
+            }
+            return orgOffered.get(server.id);
         };
         const showWho = async () => {
             const server = getServer();
             btn.disabled = connecting || !server;
-            if (orgBtn) orgBtn.disabled = btn.disabled;
             if (!server) return;
-            showOrg(server);
             const who = await call(server, 'whoami');
             btn.textContent = t(who.error === 'reconnect_needed' ? 'reconnect' : 'connect');
             if (who.account) { status.textContent = t('connected', { account: who.account }); return; }
@@ -10729,27 +10728,37 @@ class WorkflowEditor {
             }
             if (el.isConnected) sayDevice(failed({ status: 'expired' }));
         };
-        // One click at a time across both buttons.
+        // The organization: connected at once, its key saved under the server's header (never shown).
+        const connectOrg = async (server) => {
+            device.style.display = 'none';
+            const r = await window.CodeNode.connectOrganization({ call, saveKey }, server);
+            if (r.error) { sayDevice(failed(r)); return; }
+            await showWho();
+        };
+        // One click at a time.
         const run = async (action) => {
             const server = getServer();
             if (connecting || !server) return;
             connecting = true;
             btn.disabled = true;
-            if (orgBtn) orgBtn.disabled = true;
             try { await action(server); } finally {
                 connecting = false;
                 btn.disabled = !getServer();
-                if (orgBtn) orgBtn.disabled = btn.disabled;
             }
         };
-        btn.addEventListener('click', () => run(connect));
-        // The organization: connected at once, its key saved under the server's header (never shown).
-        orgBtn?.addEventListener('click', () => run(async (server) => {
-            device.style.display = 'none';
-            const r = await window.CodeNode.connectOrganization({ call, saveKey }, server);
-            if (r.error) { sayDevice(failed(r)); return; }
-            await showWho();
-        }));
+        btn.addEventListener('click', async () => {
+            const server = getServer();
+            if (connecting || !server) return;
+            if (!(await offersOrg(server))) { run(connect); return; }
+            // Which connection: shown under the row, in the box's own button style.
+            const style = q('.connect-btn').getAttribute('style');
+            device.style.display = 'block';
+            device.innerHTML = `<div style="display:flex; flex-wrap:wrap; gap:8px;">
+                <button type="button" data-how="organization" style="${style}">${this.escapeHtml(this.t('robot.connectOrganization'))}</button>
+                <button type="button" data-how="device" style="${style}">${this.escapeHtml(t('oneAccount'))}</button></div>`;
+            device.querySelector('[data-how="organization"]').addEventListener('click', () => run(connectOrg));
+            device.querySelector('[data-how="device"]').addEventListener('click', () => run(connect));
+        });
         return { refresh: showWho };
     }
 
@@ -10943,7 +10952,8 @@ class WorkflowEditor {
      * Option `compId` as this workflow uses it: what it watches, and the Start arguments (its component's declared
      * arguments, else the names its code reads from ARGS), saved as the Start node's start_args. The workflow is
      * saved, then the event row again: its watch takes the Start's tag (CodeComponentStore::scheduleBody). An option that reads a tag warns while the tag is
-     * empty; one that reads no arguments says so and only closes.
+     * empty; one that reads no arguments says so and only closes. A locked robot workflow (it runs) shows its
+     * arguments read-only, with no Save: its save would be refused.
      */
     _openStartArgsDialog(compId) {
         const SO = window.StartOptions;
@@ -10955,6 +10965,7 @@ class WorkflowEditor {
         const t = (k, p) => this.t(`workflow.startOptions.${k}`, p);
         const esc = (v) => this.escapeHtml(String(v ?? ''));
         const current = this.editor.getNodeFromId(startId).data?.start_args || {};
+        const editable = fields.length > 0 && !this.currentWorkflowLocked;
         const watch = comp.start_trigger.watch || {};
         // the watch as this workflow's event row runs it: the Start's tag and pass_args values merged in
         const watchArgs = SO.watchArgs(watch.args, current, comp.start_trigger.pass_args);
@@ -10979,9 +10990,10 @@ class WorkflowEditor {
                             ${f.description ? `<span></span><span style="font-size:12px;color:#6b7280;margin-top:-4px;">${esc(f.description)}</span>` : ''}`).join('')}
                     </div>
                     <p data-role="no-tag" style="display:none;margin:10px 0 0;font-size:13px;color:#b45309;">⚠ ${esc(t('noTag'))}</p>
+                    ${fields.length && !editable ? `<p style="margin:10px 0 0;font-size:13px;color:#b45309;">🔒 ${esc(t('argsLocked'))}</p>` : ''}
                     <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
-                        <button data-act="close" class="px-4 py-2 text-sm text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${esc(this.t(fields.length ? 'common.cancel' : 'common.close'))}</button>
-                        ${fields.length ? `<button data-act="ok" class="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded">${esc(t('save'))}</button>` : ''}
+                        <button data-act="close" class="px-4 py-2 text-sm text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${esc(this.t(editable ? 'common.cancel' : 'common.close'))}</button>
+                        ${editable ? `<button data-act="ok" class="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded">${esc(t('save'))}</button>` : ''}
                     </div>
                 </div>
             </div>`;
@@ -10992,18 +11004,20 @@ class WorkflowEditor {
             const fld = fields.find((x) => x.name === i.dataset.arg);
             i.value = current[i.dataset.arg] ?? '';
             i.placeholder = fld?.default ?? '';
+            i.disabled = !editable;
         }
         const tag = inputs.find((i) => i.dataset.arg === 'tag');
         const warn = () => { overlay.querySelector('[data-role="no-tag"]').style.display = tag && !tag.value.trim() ? '' : 'none'; };
         tag?.addEventListener('input', warn);
         warn();
-        inputs[0]?.focus();
+        if (editable) inputs[0]?.focus();
         this._mountStartConnections(overlay.querySelector('[data-role="connections"]'), comp);
         overlay.addEventListener('click', async (ev) => {
             const act = ev.target?.dataset?.act;
             if (act === 'close') { overlay.remove(); return; }
             if (act !== 'ok') return;
             overlay.remove();
+            if (this._refuseIfLocked()) return;   // locked since the dialog opened
             const node = this.editor.getNodeFromId(startId);
             const args = SO.startArgs(node.data?.start_args, fields, Object.fromEntries(inputs.map((i) => [i.dataset.arg, i.value])));
             if (JSON.stringify(args) === JSON.stringify(node.data?.start_args || {})) return;
