@@ -8,9 +8,11 @@ Graph: Start(1) -> Code(2) ; exit 'work' (output_1) -> Output(3).
 from __future__ import annotations
 
 import glob
+import json
 import os
 import re
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -130,6 +132,27 @@ def test_a_poll_that_found_work_runs_the_exit_and_asks_to_drain(env):
     runId = WorkflowRunLog(env['runs']).current(44)
     assert re.match(r'^[a-f0-9]{32}$', str(runId)), 'the workflow points at its run'
     assert os.path.isfile(env['runs'] + '/' + runId + '.jsonl')
+
+
+def test_run_log_records_what_each_non_agent_node_received(env):
+    # Start(1) -> Code(2) -> Code(4) -> Output(3): a code node's and the Output's input is their parents' output.
+    edges = [
+        {'from_node_id': 1, 'to_node_id': 2, 'from_port': 'output_1'},
+        {'from_node_id': 2, 'to_node_id': 4, 'from_port': 'output_1'},
+        {'from_node_id': 4, 'to_node_id': 3, 'from_port': 'output_1'},
+    ]
+    second = {'id': 4, 'node_type': 'code', 'config': {'name': 'Second', 'exits': ['next'], 'mcp_servers': [], 'timeout_s': 10,
+              'code': "def run(input, call_tool):\n    return {'route': 'next', 'output': 'job 1 done'}\n"}}
+    out = _run(env, "def run(input, call_tool):\n    return {'route': 'work', 'output': 'job 1'}\n", ['work', 'idle'],
+               edges=edges, extraNodes=[second])
+    assert out['success'] is True, out.get('error')
+    starts = {}
+    for line in Path(_run_logs(env)[0]).read_text().splitlines():
+        e = json.loads(line)
+        if e.get('type') == 'node_start':
+            starts[int(e['node_id'])] = e.get('input')
+    assert starts[4] == 'job 1', "a code node receives its parent code node's output"
+    assert starts[3] == 'job 1 done', "the Output receives its parent's output"
 
 
 def test_work_beside_the_poll_does_not_drain(env):
