@@ -1777,7 +1777,7 @@ node output, published to session.state like any other node's result.`;
     adk_session = await session_service.create_session(app_name="workflow", user_id="local", state={"user_prompt": prompt})
     _run_reset()
     if START_NODE:
-        _rec_node_start(START_NODE[0], START_NODE[1], "start")
+        _rec_node_start(START_NODE[0], START_NODE[1], "start", input=prompt)
         _rec_node_complete(START_NODE[0], START_NODE[1], "start", output=prompt)
     outputs = {}   # the Output nodes' answers (the workflow's answer, when it has Output nodes)
     final = ""

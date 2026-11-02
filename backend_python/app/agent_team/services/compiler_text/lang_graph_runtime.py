@@ -328,7 +328,7 @@ nodeClassesBlock__code = r'''class CodeNode(Node):
 
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:359
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:360
 nodeClassesBlock__kindHead = r'''class NodeKind(str, Enum):
     """The kinds of node make_node() builds; a node entry's "kind" holds one of these values.
 
@@ -339,7 +339,7 @@ nodeClassesBlock__kindHead = r'''class NodeKind(str, Enum):
     DISPATCHER = "dispatcher"
     PLAYBOOK = "playbook"'''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:370
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:371
 nodeClassesBlock__makeHead = r'''
 
 def make_node(cfg: dict) -> Node:
@@ -352,22 +352,22 @@ def make_node(cfg: dict) -> Node:
             return DispatcherNode(cfg)
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:383
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:384
 nodeClassesBlock__playbookArm = r'''        case NodeKind.PLAYBOOK:
             return PlaybookNode(cfg)
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:388
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:389
 nodeClassesBlock__codeArm = r'''        case NodeKind.CODE:
             return CodeNode(cfg)
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:393
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:394
 nodeClassesBlock__factoryTail = r'''        case _:
             raise ValueError(f"unknown node kind: {cfg['kind']!r}")
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:438
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:439
 decisionHead__ret = r'''@dataclass(frozen=True)
 class DecisionResult:
     """What a decision adapter's route() found for one request: an outcome and the evidence behind it.
@@ -387,7 +387,7 @@ class DecisionResult:
 
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:467
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:468
 adapterBlock__typesafe = r'''# TypeSafe Jev (twin of JevRouter.php). A System One model: it answers a closed
 # question with one of the options supplied -- never a value outside them.
 
@@ -513,7 +513,7 @@ class JevRouter:
 
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:593
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:594
 adapterBlock__openai = r'''# OpenAI Decisions API, GPT-6 Luna (twin of OpenAIDecisionRouter.php). Answers a
 # closed question with one of the values supplied -- never a value outside them.
 
@@ -633,7 +633,7 @@ class OpenAIDecisionRouter:
 
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:728
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:729
 dispatcherClasses__ret = r'''@dataclass(frozen=True)
 class RouteDecision:
     """A dispatcher's answer: the text its child receives, the chosen child's id and the notes.
@@ -804,7 +804,7 @@ class Dispatcher:
 
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:941
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:942
 runRecordBlock__ret = r'''# ==============================================================
 # RUN RECORDS
 # Every run's events, in the format the SynergyAI server writes
@@ -882,9 +882,10 @@ class RunRecorder:
                 print(f"[warn] run listener failed: {e}", flush=True)
         return ev
 
-    def node_start(self, nid: str, name: str, ntype: str) -> None:
-        """A node began."""
-        self.emit("node_start", node_id=nid, node_type=ntype, node_name=name)
+    def node_start(self, nid: str, name: str, ntype: str, *, input: str | None = None) -> None:
+        """A node began; `input`, when given, is what it received (cut to OUTPUT_IN_LOG): the node form's Input."""
+        extra = {"input": str(input)[:OUTPUT_IN_LOG]} if input is not None else {}
+        self.emit("node_start", node_id=nid, node_type=ntype, node_name=name, **extra)
 
     def node_complete(self, nid: str, name: str, ntype: str, *, success: bool = True, output: str = "",
                       exit: str | None = None, route: dict | None = None, error: str | None = None) -> None:
@@ -956,7 +957,7 @@ NODE_OUT = RUN_OUT      # node_print() (the node runtime's [tool] / [run_skill_s
 
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:1103
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:1105
 liveFeedBlock__ret = r'''# ==============================================================
 # LIVE FEED (api.py's GET /live)
 # What a live view has not been sent yet of this program's runs, with the
@@ -1057,7 +1058,7 @@ def _live_finished(events: list[dict]) -> bool:
 
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:1214
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:1216
 consoleBlock__ret = r'''# ==============================================================
 # CONSOLE VIEW
 # One run's progress as lines (the live overlay's texts), printed when
@@ -1141,7 +1142,7 @@ class ConsoleView:
 
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:1306
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:1308
 runContextBlock__ret = r'''import contextvars
 
 # Per run, not per process: WorkflowGraph.run() sets them for the run's own task (and the
@@ -1153,7 +1154,7 @@ runContextBlock__ret = r'''import contextvars
 RUN_GATE_MODE: contextvars.ContextVar = contextvars.ContextVar("RUN_GATE_MODE", default="")
 PLAYBOOK_JOB_TEXT: contextvars.ContextVar = contextvars.ContextVar("PLAYBOOK_JOB_TEXT", default=None)'''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:1330
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:1332
 workflowGraphBlock__ret = r'''# ==============================================================
 # WORKFLOW GRAPH
 # WorkflowGraph builds the LangGraph, wires edges, and executes it.
@@ -1241,7 +1242,7 @@ class WorkflowGraph:
                     )
             RUN_OUT(f"[node] [{nid}] start -- {len(text)} chars")
             self.ran.append(nid)
-            self.recorder.node_start(nid, "Start", "start")
+            self.recorder.node_start(nid, "Start", "start", input=state.get("user_prompt", ""))
             self.recorder.node_complete(nid, "Start", "start", output=text)
             return {"node_outputs": {nid: {"source": "start", "text": text}}}
         return _run
@@ -1281,14 +1282,18 @@ class WorkflowGraph:
         """An agent/playbook node: run it, then turn a dispatcher's choice into the conditional edge's input."""
         async def _run(state):
             ad = self.agents[nid]
-            self.recorder.node_start(nid, ad["display"], self.node_types.get(nid, ""))
             outs = state.get("node_outputs", {})
+            request = self._request_for(nid, state)
+            # the Input a node form shows: a code node's parents' texts (its request is the harness's JSON envelope)
+            shown = ("\n\n".join(outs[p]["text"] for p in self._code_parents(nid) if p in outs)
+                     or state.get("user_prompt", "")) if ad.get("kind") == "code" else request
+            self.recorder.node_start(nid, ad["display"], self.node_types.get(nid, ""), input=shown)
             # The job text is the FIRST parent's (PHP CodeNodeStep::parents[0]): a dispatcher stands
             # for its own parents, and a parent with an empty text is skipped.
             first = next((outs[p]["text"] for p in self._code_parents(nid) if p in outs and outs[p].get("text")), None)
             token = PLAYBOOK_JOB_TEXT.set(first if ad.get("kind") == "playbook" else None)
             try:
-                out = await self.run_node(nid, self._request_for(nid, state))
+                out = await self.run_node(nid, request)
             except Exception as e:
                 self.recorder.node_complete(nid, ad["display"], self.node_types.get(nid, ""), success=False, error=f"{type(e).__name__}: {e}")
                 raise
@@ -1339,7 +1344,7 @@ class WorkflowGraph:
                 final = "\n\n---\n\n".join(blocks)
             RUN_OUT(f"[node] [{nid}] output -- {len(final)} chars")
             self.ran.append(nid)
-            self.recorder.node_start(nid, "Output", "output")
+            self.recorder.node_start(nid, "Output", "output", input="\n\n".join(outs[p]["text"] for p in pids))
             self.recorder.node_complete(nid, "Output", "output", output=final)
             return {"final_output": final}
         return _run
@@ -1420,7 +1425,7 @@ class WorkflowGraph:
 
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:1615
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:1621
 cronBlock__ret = r'''# ==============================================================
 # CRON LOOP (--cron)
 # CronExpression has the server scheduler's rules (CronExpression.php): 5
@@ -1829,7 +1834,7 @@ def run_cron(expr: str, run_once: Callable[[], str], *, drains: bool, max_runs: 
 
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:2040
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:2046
 watchBlock__ret = r'''# ==============================================================
 # WATCH LOOP (--watch)
 # Instead of a timer, an MCP tool decides when to run: the loop calls the
@@ -1967,7 +1972,9 @@ class WatchLoop:
         except Exception:  # noqa: BLE001 -- transport: the server may be down for a while
             self._fail("unreachable", "server unreachable")
             return
-        self.backoff = None
+        if not self.state.last_failed:   # after a failed run, only a good run resets the backoff
+            self.backoff = None
+        failed_now = False
         idle = ("Listening (checks every 15 min)" if (r.get("via") == "fallback" or r.get("events") == "off")
                 else "Listening for events")
         if r["status"] == "ready":
@@ -1977,11 +1984,18 @@ class WatchLoop:
             if drain_shown(line, self.verbosity):
                 self._say(f"ready ({r.get('via') or 'no reason given'}): {line}")
                 self.state.shown = None   # the console moved on: say the idle line again
-            self.state.last_failed = line.startswith(("error", "abandoned"))
+            self.state.last_failed = failed_now = line.startswith(("error", "abandoned"))
+            if not failed_now:
+                self.backoff = None
         if self.state.last_failed:
             self.state.set("Listening — the last run failed", "warn")
         else:
             self.state.set(idle, "ok")
+        if failed_now:
+            # The trigger keeps saying ready while the run fails before the mail is handled: without a
+            # pause that loops ready -> run -> fail (the server engine's EventWorker backs off the same way).
+            self.backoff = self.BACKOFF_START if self.backoff is None else min(self.backoff * 2, self.BACKOFF_MAX)
+            _nap(self.backoff, self.sleep, self.stop)
 
     def _fail(self, kind: str, message: str) -> None:
         self.backoff = self.BACKOFF_START if self.backoff is None else min(self.backoff * 2, self.BACKOFF_MAX)
@@ -2023,7 +2037,7 @@ def run_watch(trigger: WatchTrigger, run_once: Callable[[], str], *, drains: boo
 
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:2246
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:2261
 listenerBlock__ret = r'''# ==============================================================
 # MODE AND LISTENER
 # choose_mode(): one run, --cron or --watch, from the flags and the
@@ -2135,7 +2149,7 @@ class Listener:
 
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:2367
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:2382
 outputBlock__block = r'''# ==============================================================
 # OUTPUT STORAGE + RUN SUMMARY
 # ==============================================================
@@ -2188,7 +2202,7 @@ def print_run_summary(output: str, saved: str | None, started: float | None, dur
 
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:2450
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:2465
 llmFactoryBlock__ret = r'''def _make_llm(provider: str, model: str, temperature: float = 0.7, max_tokens: int = 4096, thinking=None):
     """Build a LangChain chat model for the given provider/model.
 
@@ -2339,7 +2353,7 @@ def _glm(model, temperature, max_tokens):
         model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
     )'''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:2613
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:2628
 documentConverterBlock__ret = r'''class DocumentConverter:
     """Read a file and return its contents as Markdown.
 
@@ -2481,7 +2495,7 @@ documentConverterBlock__ret = r'''class DocumentConverter:
 DOCUMENTS = DocumentConverter()
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:2772
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:2787
 mcpClientBlock__ret = r'''class McpClient:
     """The MCP client: calls a tool on an MCP server and returns its text.
 
@@ -2504,6 +2518,7 @@ mcpClientBlock__ret = r'''class McpClient:
 
     def __init__(self):
         self._endpoints: dict[str, str] = {}   # registered server URL -> endpoint that accepted the handshake
+        self._failures: dict[str, str] = {}    # registered server URL -> why its last handshake failed
         # One connection pool for every handshake and call; each request sets its own
         # timeout (30 s for the handshake, 180 s for a tool call).
         # Its cookie jar is shared by every server on the same host (MCP uses headers, not cookies).
@@ -2588,6 +2603,7 @@ mcpClientBlock__ret = r'''class McpClient:
         Tries candidates() of the live URL in order: as given, then with /mcp
         in its path. The endpoint that answers is remembered.
         Returns that endpoint URL, or None when no candidate accepted the handshake.
+        unreachable() then says why; the caller makes no call.
         """
         init_req = {
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -2623,7 +2639,12 @@ mcpClientBlock__ret = r'''class McpClient:
             except Exception as e:
                 last_err = e
         print(f"[warn] MCP init failed for {url}: {last_err}")
+        self._failures[url] = f"MCP server unreachable: {live}: {last_err}"
         return None
+
+    def unreachable(self, url: str) -> str:
+        """Why the server at `url` (registered URL) is not called: its last failed handshake."""
+        return self._failures.get(url) or f"MCP server unreachable: {url}"
 
     def call_tool(self, server_url: str, tool_name: str, arguments: dict) -> str:
         """Call a tool on an MCP server via JSON-RPC 2.0.
@@ -2632,7 +2653,10 @@ mcpClientBlock__ret = r'''class McpClient:
         The MCP response contains a 'content' array; we extract all text items
         and join them. If no text is found, falls back to raw JSON.
         """
-        mcp_url = self._handshake(server_url) or self.candidates(server_url)[-1]
+        # No handshake, no call: never fall back to the compiled-in URL (it would get this server's headers).
+        mcp_url = self._handshake(server_url)
+        if mcp_url is None:
+            return json.dumps({"error": self.unreachable(server_url)})
 
         request = {
             "jsonrpc": "2.0", "id": int(time.time()),
@@ -2659,7 +2683,10 @@ mcpClientBlock__ret = r'''class McpClient:
 
     def call_tool_raw(self, server_url: str, tool_name: str, arguments: dict) -> dict:
         """Call a tool and return the raw MCP result {content, structuredContent?, isError?} (code nodes)."""
-        mcp_url = self._handshake(server_url) or self.candidates(server_url)[-1]
+        mcp_url = self._handshake(server_url)
+        if mcp_url is None:   # marked as transport, so --watch says "unreachable"
+            return {"isError": True, "transport_error": True,
+                    "content": [{"type": "text", "text": self.unreachable(server_url)}]}
         request = {
             "jsonrpc": "2.0", "id": int(time.time()),
             "method": "tools/call",
@@ -2680,7 +2707,7 @@ mcpClientBlock__ret = r'''class McpClient:
 
 MCP = McpClient()'''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:2984
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:3012
 toolCatalogBlock__ret = r'''class ToolCatalog:
     """The workflow's tools, built once and shared: each node takes its own by name.
 
@@ -2798,7 +2825,7 @@ TOOLS = ToolCatalog(TOOL_CATALOG)
 
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:3117
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:3145
 skillRuntimeBlock__block = (
     '# ---------------------------------------------------------------------------\n'
     '# Local run_skill_script — execute a folder-backed skill\'s Python script as a\n'
@@ -3115,7 +3142,7 @@ skillRuntimeBlock__block = (
     ')\n'
 )
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:3470
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:3498
 runEventsBlock__ret = r'''# ==============================================================
 # EVENT SINK + GATE RENDEZVOUS
 # Inert until a host installs a sink (see api.py). With no sink the
@@ -3201,7 +3228,7 @@ emit_event = EVENTS.emit
 resolve_gate = EVENTS.resolve_gate
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:3575
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:3603
 playbookBlock__ret = r'''# ---------------------------------------------------------------------------
 # PLAYBOOK RUNTIME
 #
@@ -3580,7 +3607,7 @@ class PlaybookToolset:
 SHA256 = {
     'nodeClassesBlock__base': '7322869015b10da4f326f56581e8bf0461225b4eab711197e889faec660ce137',
     'nodeClassesBlock__playbook': '4dd24607041d142b7c933fabb1337efd1f004c1a81c91fcc6fedcd49d38f432d',
-    'nodeClassesBlock__code': 'd683fd3eaf9410e77803d8fee999ca11d3104e03cfdf6309f9278f18ca5e0589',
+    'nodeClassesBlock__code': 'eeb50a2aef8b97778aed8c9ee70d645a1066d10e09360dfe19199007550e077e',
     'nodeClassesBlock__kindHead': '034a871993030807a49db48d6ab68d257edbb5f2b9f323e33948221d067e3d93',
     'nodeClassesBlock__makeHead': '6b940dfec50108d90e1b0c67e2ada830547a29dec2173c46f0b5879ef5eafd69',
     'nodeClassesBlock__playbookArm': 'f964f69ab3792944c7eb94178dcb10fee451f946b070dc47ddad799daead2dad',
@@ -3590,18 +3617,18 @@ SHA256 = {
     'adapterBlock__typesafe': '069e0bccf242c69a280860f2df26dc4366fa1cce965402d1bc2f6cc56facc098',
     'adapterBlock__openai': '6cb660e917a6c8b1af0d0b0acc06255277bf028b6a30a22f3701991acc33109f',
     'dispatcherClasses__ret': '165a94077abee4f947703fb9babaed872f8a732ce322d1b51c30ac20e715ac95',
-    'runRecordBlock__ret': 'd5f4d94e0f27bb8fd485e49bfeced013e0c1e891f149fca992721c7c842d2020',
+    'runRecordBlock__ret': '77c8a83da065e9fc38b0e6ee3830defc49487c866f3c7d5a085d1f4fa55d4378',
     'liveFeedBlock__ret': '81bf61f892170e9be559157db1d3ed86cf2a0c3ae30798d9231af35d28fa3d8d',
     'consoleBlock__ret': '0e12aa6fd8948369ae87d7cbfc2a3e2a280d71965ad5d28c7d6edb5f64ab317a',
     'runContextBlock__ret': '58506519d6f91cf8c1c643f14f06d7e05c81dfc52bd2376199c0f386978e286b',
-    'workflowGraphBlock__ret': 'f6d30faed127ca58b3f9ceb2fc5172e1349ccfaea33c66a4d4cefe4a7297c7b3',
+    'workflowGraphBlock__ret': '1004030d515c80ed7078d37e97787a830c2d4105b94aa40a822458ed847ba753',
     'cronBlock__ret': '3b4c34bbf9865b13632b93b63369e4a52c1ab18e72eed54b0f0f128edae59404',
-    'watchBlock__ret': '82d3893fc429a2b7e6d190525999fbb81e9860c9b1d82d9e2db137f6415d60bc',
+    'watchBlock__ret': 'fe47665d2279f1a6986609e4a1ccdaeeab2c4f7d0dcc8257be22db6f081317e5',
     'listenerBlock__ret': 'e04b8b86d60663fbdab396fcfdff78c3ec8910d7dbf4121c6fbf0c35cc57a1c8',
     'outputBlock__block': '36d827e82ea5c05f093134bac180b24cec69d6cd514b723907a873fd8fbb3d88',
-    'llmFactoryBlock__ret': 'bf843819af03315cb9624ab72d73a965e90aaf1cf0d83c41a44114c1723c25ff',
+    'llmFactoryBlock__ret': 'd41e950ffde63ed53c896e1f1b71ff945becc11ae60495ccce916a4214b439b1',
     'documentConverterBlock__ret': 'db1d5dbeac20fc237d264a26865a34d74a3f80ddf8b49d7f1d363427a6318af9',
-    'mcpClientBlock__ret': '77255f975dc5e02b05da89761cc3a709776a205ee512384d418bbc7422524175',
+    'mcpClientBlock__ret': '6fe885d757dec3ae1d6ff9d79960e74737e69ef53430f5133a6043cac85cc246',
     'toolCatalogBlock__ret': '8111fa0bfa69791243302031580a894a1f6c823562f13919d77ba2fa3d8a9a5a',
     'skillRuntimeBlock__block': '2ed666dd3acca161882f3a5e9adc402b654b0b33a6c73c6207fa1f99fd912b0d',
     'runEventsBlock__ret': '8e3325f9c3930ae61a331d9ea9cea92462d1c0de889857f4230b42b9f5d909c0',

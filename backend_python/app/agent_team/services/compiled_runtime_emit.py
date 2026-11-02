@@ -129,11 +129,16 @@ class CompiledRuntimeEmit:
         metaPy = '{}' if not meta else json_to_python(meta)
         startPy = 'None' if start is None else '[' + py_str(start[0]) + ', ' + py_str(start[1]) + ']'
         outPy = '[' + ', '.join(py_str(o) for o in outputs) + ']'
+        parents = {php_strval(i): [php_strval(p) for p in ((analyzed.get('parents') or {}).get(i)
+                                                          or (analyzed.get('parents') or {}).get(php_strval(i)) or [])]
+                   for i in analyzed.get('order') or []}
+        parentsPy = '{}' if not parents else json_to_python(parents)
         return (f'NODE_META = {metaPy}   # agent name -> [node id, type, canvas name]: the nodes whose runs are recorded\n'
                 + f'START_NODE = {startPy}   # [id, name] of the Start node\n'
                 + 'DISPATCHER_IDS = [' + ', '.join(py_str(php_strval(k)) for k in routed)
                 + ']   # dispatchers record themselves; their choice is work (not a quiet poll)\n'
                 + f"OUTPUT_NODE_KEYS = {outPy}   # the Output nodes: their answers are the workflow's answer\n"
+                + f"NODE_PARENTS = {parentsPy}   # node id -> its parents' ids: what a node received, for its run events\n"
                 + T.recordingBlock__ret
                 + ('\n\n\n' + T.recordingBlock__ret_2 if agentCallbacks else ''))
 

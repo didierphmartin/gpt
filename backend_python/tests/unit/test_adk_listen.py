@@ -88,7 +88,7 @@ def test_recording_covers_nodes_but_not_the_dispatcher_chooser():
 _REC_PROBE = '''
 class Rec:
     def __init__(self): self.ev = []
-    def node_start(self, *a): self.ev.append(["start", *a])
+    def node_start(self, *a, **k): self.ev.append(["start", *a, k])
     def node_complete(self, *a, **k): self.ev.append(["complete", *a, k])
 class Ctx:
     def __init__(self, name, state): self.agent_name, self.state = name, state
@@ -120,11 +120,43 @@ def test_recording_helpers_emit_the_run_events():
     r = subprocess.run([python3(), path], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     ev, ran, routes = json.loads(r.stdout.strip().split('\n')[-1])
-    assert ev[0] == ['start', '10', 'T', 'code']
+    assert ev[0] == ['start', '10', 'T', 'code', {'input': ''}]   # Start did not run here
     assert ev[1] == ['complete', '10', 'T', 'code', {'output': '{"subject": "hi"}', 'exit': 'new_mail'}]
     assert ev[3] == ['complete', '3', 'A', 'code', {'output': '', 'success': False, 'error': 'RuntimeError: boom'}]
     assert ran == ['10', '3']
     assert routes == {'10': 'new_mail'}
+
+
+_INPUT_PROBE = '''
+class Rec:
+    def __init__(self): self.ev = {}
+    def node_start(self, nid, name, ntype, input=None): self.ev[nid] = input
+    def node_complete(self, *a, **k): pass
+GRAPH_RECORDER = Rec()
+_run_reset()
+_rec_node_start("1", "Start", "start", input="GO"); _rec_node_complete("1", "Start", "start", output="GO")
+_rec_node_start("10", "T", "code"); _rec_node_complete("10", "T", "code", output="the email", exit="new_mail")
+_rec_node_start("2", "D", "agent"); _rec_node_complete("2", "D", "agent", output="A")
+_rec_node_start("3", "A", "code"); _rec_node_complete("3", "A", "code", output="filed", exit="next")
+_rec_node_start("5", "Output", "output")
+import json
+print(json.dumps(GRAPH_RECORDER.ev))'''
+
+
+def test_recorded_nodes_carry_what_they_received():
+    """node_start carries what the node received: Start the prompt, a node its parents' outputs on this run,
+    a dispatcher standing for its own parents, a branch that did not run left out."""
+    code = ADKGenerator.emitAdk(wf64_analyzed())
+    assert re.search(r'NODE_PARENTS = \{.*"3": \[\s*"2"\s*\]', code, re.S)
+    start = code.index('NODE_META = ')
+    end = code.index('# =====', start)
+    path = os.path.join(tempfile.gettempdir(), f'adkin_{secrets.token_hex(4)}.py')
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(code[start:end] + _INPUT_PROBE)
+    r = subprocess.run([python3(), path], capture_output=True, text=True)
+    os.unlink(path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert json.loads(r.stdout.strip().split('\n')[-1]) == {'1': 'GO', '10': 'GO', '2': 'the email', '3': 'the email', '5': 'filed'}
 
 
 def listening_package(url: str = 'http://localhost:8770') -> dict:

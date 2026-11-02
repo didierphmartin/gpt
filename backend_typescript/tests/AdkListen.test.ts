@@ -96,7 +96,7 @@ test('testRecordingHelpersEmitTheRunEvents', { skip: PY_SKIP }, () => {
   const py = code.slice(start, end) + `
 class Rec:
     def __init__(self): self.ev = []
-    def node_start(self, *a): self.ev.append(["start", *a])
+    def node_start(self, *a, **k): self.ev.append(["start", *a, k])
     def node_complete(self, *a, **k): self.ev.append(["complete", *a, k])
 class Ctx:
     def __init__(self, name, state): self.agent_name, self.state = name, state
@@ -121,11 +121,40 @@ print(json.dumps([GRAPH_RECORDER.ev, _RUN["ran"], _RUN["routes"]]))`;
   const r = execPy('python3', [f]);
   assert.equal(r.rc, 0, r.text);
   const [ev, ran, routes] = JSON.parse(r.out[r.out.length - 1]);
-  assert.deepEqual(ev[0], ['start', '10', 'T', 'code']);
+  assert.deepEqual(ev[0], ['start', '10', 'T', 'code', { input: '' }]);   // Start did not run here
   assert.deepEqual(ev[1], ['complete', '10', 'T', 'code', { output: '{"subject": "hi"}', exit: 'new_mail' }]);
   assert.deepEqual(ev[3], ['complete', '3', 'A', 'code', { output: '', success: false, error: 'RuntimeError: boom' }]);
   assert.deepEqual(ran, ['10', '3']);
   assert.deepEqual(routes, { 10: 'new_mail' });
+});
+
+/** node_start carries what the node received: Start the prompt, a node its parents' outputs on this run,
+ *  a dispatcher standing for its own parents, a branch that did not run left out. */
+test('testRecordedNodesCarryWhatTheyReceived', { skip: PY_SKIP }, () => {
+  const code = ADKGenerator.emitAdk(wf64Analyzed());
+  assert.match(code, /NODE_PARENTS = \{[\s\S]*"3": \[\s*"2"\s*\]/);
+  const start = code.indexOf('NODE_META = ');
+  const end = code.indexOf('# =====', start);
+  const py = code.slice(start, end) + `
+class Rec:
+    def __init__(self): self.ev = {}
+    def node_start(self, nid, name, ntype, input=None): self.ev[nid] = input
+    def node_complete(self, *a, **k): pass
+GRAPH_RECORDER = Rec()
+_run_reset()
+_rec_node_start("1", "Start", "start", input="GO"); _rec_node_complete("1", "Start", "start", output="GO")
+_rec_node_start("10", "T", "code"); _rec_node_complete("10", "T", "code", output="the email", exit="new_mail")
+_rec_node_start("2", "D", "agent"); _rec_node_complete("2", "D", "agent", output="A")
+_rec_node_start("3", "A", "code"); _rec_node_complete("3", "A", "code", output="filed", exit="next")
+_rec_node_start("5", "Output", "output")
+import json
+print(json.dumps(GRAPH_RECORDER.ev))`;
+  const dir = mkdtempSync(path.join(tmpdir(), 'adkin_'));
+  const f = path.join(dir, 'rec.py');
+  writeFileSync(f, py);
+  const r = execPy('python3', [f]);
+  assert.equal(r.rc, 0, r.text);
+  assert.deepEqual(JSON.parse(r.out[r.out.length - 1]), { 1: 'GO', 10: 'GO', 2: 'the email', 3: 'the email', 5: 'filed' });
 });
 
 /** The wf 64-shaped package as files (no DB): workflow.py, common.py, api.py and ADKPackage's. */

@@ -3,7 +3,7 @@
 # ruff: noqa
 # fmt: off
 
-# backend/src/AgentTeam/Services/NOOAGenerator.php:138
+# backend/src/AgentTeam/Services/NOOAGenerator.php:148
 _class__A2A_RUN_NODE = r'''async def run_node(request_text: str, trace) -> dict:
     """Run this server's node on NOOA: an agent's class on the request (then its skills), a dispatcher's
     choice (its decision model, else the chooser model), a playbook's interpreter."""
@@ -20,7 +20,7 @@ _class__A2A_RUN_NODE = r'''async def run_node(request_text: str, trace) -> dict:
         text = await run_skill(skill, text, request_text, ad)
     return {"text": text, "route": "", "notes": "", "status": "ok"}'''
 
-# backend/src/AgentTeam/Services/NOOAGenerator.php:318
+# backend/src/AgentTeam/Services/NOOAGenerator.php:328
 nooaParts__ret = r'''def _cli_begin(prompt: str) -> None:
     """Before a one-off CLI run (not --quiet): the banner and the liveness heartbeat."""
     Progress.begin(prompt)
@@ -32,7 +32,7 @@ def _cli_end(output: str) -> None:
     Progress.summary(len(output), None)
 '''
 
-# backend/src/AgentTeam/Services/NOOAGenerator.php:373
+# backend/src/AgentTeam/Services/NOOAGenerator.php:383
 dataFlowDoc__ret = r'''NOOA (github.com/NVIDIA-NeMo/labs-OO-Agents) has no graph API -- agents are
 plain Python classes and orchestration is ordinary asyncio code. Every editor
 agent node below is one `class <Node>(Agent, llm=...)`: its class docstring
@@ -60,7 +60,7 @@ round from the running transcript of tool calls, and that transcript IS
 the node output. Its gates are answered by the host, the console, or
 PLAYBOOK_GATE_MODE (see PLAYBOOK RUNTIME).'''
 
-# backend/src/AgentTeam/Services/NOOAGenerator.php:467
+# backend/src/AgentTeam/Services/NOOAGenerator.php:476
 llmFactoryBlock__ret = r'''# provider -> (env var for the API key, base_url or None for the default)
 # <PREFIX>_BASE_URL in .env overrides the base_url (see make_llm);
 # litellm reads ANTHROPIC_BASE_URL for Claude itself.
@@ -128,7 +128,7 @@ def make_llm(provider, model, max_tokens, temperature, thinking=None):
         return get_llm_client(str(model), api_key=os.environ.get(env_key), **kwargs)
     raise RuntimeError(f"Unknown provider {provider!r} for model {model!r}")'''
 
-# backend/src/AgentTeam/Services/NOOAGenerator.php:548
+# backend/src/AgentTeam/Services/NOOAGenerator.php:557
 mcpEndpointFn__ret = r'''def _mcp_endpoint(server_url: str) -> str:
     """The MCP endpoint for a registered server: the first of _mcp_candidates(live URL)
     that answers 'initialize' with JSON-RPC; the last candidate when none does."""
@@ -146,7 +146,7 @@ mcpEndpointFn__ret = r'''def _mcp_endpoint(server_url: str) -> str:
             pass
     return candidates[-1]'''
 
-# backend/src/AgentTeam/Services/NOOAGenerator.php:603
+# backend/src/AgentTeam/Services/NOOAGenerator.php:612
 skillBlock__nooaSpecific = r'''
 
 class SkillStepAgent(Agent):
@@ -226,7 +226,7 @@ async def run_skill(skill, prior, request, ad):
         return prior
     return text'''
 
-# backend/src/AgentTeam/Services/NOOAGenerator.php:693
+# backend/src/AgentTeam/Services/NOOAGenerator.php:702
 progressBlock__ret = r'''class Progress:
     """Console liveness for the whole run (compact ProgressReporter)."""
 
@@ -315,7 +315,7 @@ progressBlock__ret = r'''class Progress:
                   "settings) — the output is printed above.", flush=True)
         print("=" * 74, flush=True)'''
 
-# backend/src/AgentTeam/Services/NOOAGenerator.php:936
+# backend/src/AgentTeam/Services/NOOAGenerator.php:945
 runnerBlock__ret = r'''    for _skill in ad.get("skills", []):
         _sd = _skill.get("dir") or "inline"
         Progress.note(f"{name}: running skill {_sd!r}…")
@@ -324,7 +324,7 @@ runnerBlock__ret = r'''    for _skill in ad.get("skills", []):
         Progress.note(f"{name}: skill {_sd!r} done — {len(text)} chars "
                       f"in {time.monotonic() - _ts0:.1f}s")'''
 
-# backend/src/AgentTeam/Services/NOOAGenerator.php:996
+# backend/src/AgentTeam/Services/NOOAGenerator.php:1005
 dispatcherBlock__ret = (
     'async def run_dispatcher(node_id, parent_texts, request, menu):\n'
     '    """Pick ONE child from `menu` ([(child_id, display_name), ...]).\n'
@@ -386,7 +386,7 @@ dispatcherBlock__ret = (
     '    return chosen[0], task + (f"\\n\\n## Dispatcher notes\\n{notes}" if notes else "")'
 )
 
-# backend/src/AgentTeam/Services/NOOAGenerator.php:1170
+# backend/src/AgentTeam/Services/NOOAGenerator.php:1179
 driverBlock__py = r'''async def _route_dispatcher(nid: str, parent_texts: list, request: str, menu: list):
     """(chosen child id | None, this node's text, not_classified): its decision model (Jev...) when its routing
     names one -- no LLM turn; unclear / low confidence -> the unclear branch when set, else Not classified;
@@ -437,7 +437,7 @@ async def _run_graph(prompt: str) -> str:
     that were reached run together. Returns the Output's merge ('' when nothing reached it)."""
     _run_reset()
     if START_NODE:
-        _rec_node_start(START_NODE[0], START_NODE[1], "start")
+        _rec_node_start(START_NODE[0], START_NODE[1], "start", input=prompt)
         _rec_node_complete(START_NODE[0], START_NODE[1], "start", output=prompt)
     nodes = GRAPH["nodes"]
     out = {GRAPH["start"]: ("Start", prompt)}   # node id -> (name, text): the nodes that ran
@@ -534,7 +534,7 @@ async def _run_graph(prompt: str) -> str:
         _rec_done(GRAPH["output"], merged)
     return merged or _RUN["unrouted"]   # nothing reached the Output: why the dispatcher did not route'''
 
-# backend/src/AgentTeam/Services/NOOAGenerator.php:1339
+# backend/src/AgentTeam/Services/NOOAGenerator.php:1349
 entryBlock__ret = r'''# ============================== CLI ENTRY =================================
 # Run the workflow from the command line. The prompt is taken from the CLI
 # arguments (space-joined) or falls back to DEFAULT_PROMPT baked from the
@@ -581,6 +581,6 @@ SHA256 = {
     'progressBlock__ret': '69b73b72f89167c403abf089a6607c73f5ff82380654424d363b0b6410f9d604',
     'runnerBlock__ret': 'cd2f00e0b6eda5604ad7f258ef9b0b9cb7e4fbc1e48bcde3e78bd605bab8874e',
     'dispatcherBlock__ret': 'c17443150064eacb4aa694b5ada3f6c2f27b20b8e9d0169686d714e87a83f426',
-    'driverBlock__py': '73b9ff2e9679dc87ccf34ed70d92c876919736c8b44e69f425d878adfcd498b8',
+    'driverBlock__py': 'b0f1f3938d08d2c10b7cdc0e3419b505070b8fdef0478ddb4490b6e5ed692d72',
     'entryBlock__ret': 'f2f03137a5633a296e6604a1068a7b4ceeefa43c877fe9e325dd4ebfda9ed386',
 }

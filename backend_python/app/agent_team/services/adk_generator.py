@@ -998,7 +998,7 @@ _MAIN_BODY = (
     '    adk_session = await session_service.create_session(app_name="workflow", user_id="local", state={"user_prompt": prompt})\n'
     '    _run_reset()\n'
     '    if START_NODE:\n'
-    '        _rec_node_start(START_NODE[0], START_NODE[1], "start")\n'
+    '        _rec_node_start(START_NODE[0], START_NODE[1], "start", input=prompt)\n'
     '        _rec_node_complete(START_NODE[0], START_NODE[1], "start", output=prompt)\n'
     '    outputs = {}   # the Output nodes\' answers (the workflow\'s answer, when it has Output nodes)\n'
     '    final = ""\n'

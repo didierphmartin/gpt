@@ -92,7 +92,7 @@ class AdkListenTest extends TestCase
 
 class Rec:
     def __init__(self): self.ev = []
-    def node_start(self, *a): self.ev.append(["start", *a])
+    def node_start(self, *a, **k): self.ev.append(["start", *a, k])
     def node_complete(self, *a, **k): self.ev.append(["complete", *a, k])
 class Ctx:
     def __init__(self, name, state): self.agent_name, self.state = name, state
@@ -117,11 +117,44 @@ PY;
         exec('python3 ' . escapeshellarg($f) . ' 2>&1', $out, $rc);
         self::assertSame(0, $rc, implode("\n", $out));
         [$ev, $ran, $routes] = json_decode(end($out), true);
-        self::assertSame(['start', '10', 'T', 'code'], $ev[0]);
+        self::assertSame(['start', '10', 'T', 'code', ['input' => '']], $ev[0]);   // Start did not run here
         self::assertSame(['complete', '10', 'T', 'code', ['output' => '{"subject": "hi"}', 'exit' => 'new_mail']], $ev[1]);
         self::assertSame(['complete', '3', 'A', 'code', ['output' => '', 'success' => false, 'error' => 'RuntimeError: boom']], $ev[3]);
         self::assertSame(['10', '3'], $ran);
         self::assertSame(['10' => 'new_mail'], $routes);
+    }
+
+    /** node_start carries what the node received: Start the prompt, a node its parents' outputs on this run,
+     *  a dispatcher standing for its own parents, a branch that did not run left out. */
+    public function testRecordedNodesCarryWhatTheyReceived(): void
+    {
+        $code = ADKGenerator::emitAdk(AdkCodeNodeTest::wf64Analyzed());
+        self::assertMatchesRegularExpression('/NODE_PARENTS = \{.*"3": \[\s*"2"\s*\]/s', $code);
+        $start = strpos($code, 'NODE_META = ');
+        $end = strpos($code, '# =====', $start);
+        $py = substr($code, $start, $end - $start) . <<<'PY'
+
+class Rec:
+    def __init__(self): self.ev = {}
+    def node_start(self, nid, name, ntype, input=None): self.ev[nid] = input
+    def node_complete(self, *a, **k): pass
+GRAPH_RECORDER = Rec()
+_run_reset()
+_rec_node_start("1", "Start", "start", input="GO"); _rec_node_complete("1", "Start", "start", output="GO")
+_rec_node_start("10", "T", "code"); _rec_node_complete("10", "T", "code", output="the email", exit="new_mail")
+_rec_node_start("2", "D", "agent"); _rec_node_complete("2", "D", "agent", output="A")
+_rec_node_start("3", "A", "code"); _rec_node_complete("3", "A", "code", output="filed", exit="next")
+_rec_node_start("5", "Output", "output")
+import json
+print(json.dumps(GRAPH_RECORDER.ev))
+PY;
+        $f = sys_get_temp_dir() . '/adkin_' . bin2hex(random_bytes(4)) . '.py';
+        file_put_contents($f, $py);
+        exec('python3 ' . escapeshellarg($f) . ' 2>&1', $out, $rc);
+        @unlink($f);
+        self::assertSame(0, $rc, implode("\n", $out));
+        self::assertSame(['1' => 'GO', '10' => 'GO', '2' => 'the email', '3' => 'the email', '5' => 'filed'],
+            json_decode(end($out), true));
     }
 
     /** The wf 64-shaped package as files (no DB): workflow.py, common.py, api.py and ADKPackage's. */

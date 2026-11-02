@@ -3,7 +3,7 @@
 # ruff: noqa
 # fmt: off
 
-# backend/src/AgentTeam/Services/ADKGenerator.php:314
+# backend/src/AgentTeam/Services/ADKGenerator.php:320
 _class__A2A_RUN_NODE = r'''async def _adk_state(agent, text: str) -> dict:
     """Run one ADK agent on `text` in a session of its own; returns the session state after the run (the
     node's answer is state["node_<id>"])."""
@@ -38,7 +38,7 @@ async def run_node(request_text: str, trace) -> dict:
     state = await _adk_state(getattr(W, f"node_{nid}"), request_text)
     return {"text": str(state.get(f"node_{nid}", "")), "route": "", "notes": "", "status": "ok"}'''
 
-# backend/src/AgentTeam/Services/ADKGenerator.php:533
+# backend/src/AgentTeam/Services/ADKGenerator.php:539
 codeAgentBlock__ret = r'''class _CodeAgent(BaseAgent):
     """A code node: the node's own Python run(input, call_tool) -- deterministic, no model.
 
@@ -85,7 +85,7 @@ codeAgentBlock__ret = r'''class _CodeAgent(BaseAgent):
             turn_complete=True,
         )'''
 
-# backend/src/AgentTeam/Services/ADKGenerator.php:676
+# backend/src/AgentTeam/Services/ADKGenerator.php:685
 gateAgentBlock__ret = r'''class _Gate(BaseAgent):
     """Runs its node only when the workflow reached it: a parent ran (its state key exists) and,
     for a code node with several exits, the exit it took leads here. A node after a choice that
@@ -100,7 +100,7 @@ gateAgentBlock__ret = r'''class _Gate(BaseAgent):
         async for ev in self.sub_agents[0].run_async(ctx):
             yield ev'''
 
-# backend/src/AgentTeam/Services/ADKGenerator.php:708
+# backend/src/AgentTeam/Services/ADKGenerator.php:717
 modelFactoryBlock__ret = r'''def _make_model(provider: str, model: str, thinking: str | None = None):
     """Resolve a (provider, model) pair to an ADK model.
 
@@ -168,7 +168,7 @@ modelFactoryBlock__ret = r'''def _make_model(provider: str, model: str, thinking
             # Fallback: best-effort litellm prefixed spec.
             return LiteLlm(model=model if "/" in model else p + "/" + model)'''
 
-# backend/src/AgentTeam/Services/ADKGenerator.php:812
+# backend/src/AgentTeam/Services/ADKGenerator.php:821
 skillRunnerBlock__py = (
     '# Skills use the same virtual dirs the browser interpreter provides: "/outputs"\n'
     '# (persisted, mounted to the host outputs folder, bucketed per skill group) and\n'
@@ -279,7 +279,7 @@ skillRunnerBlock__py = (
     'RUN_SKILL_SCRIPT_TOOL = FunctionTool(_run_skill_script)'
 )
 
-# backend/src/AgentTeam/Services/ADKGenerator.php:921
+# backend/src/AgentTeam/Services/ADKGenerator.php:930
 skillRunnerBlock__ret = r'''
 
 def _read_skill_md(dir_name: str) -> str:
@@ -352,7 +352,7 @@ class _SkillCaptureAgent(BaseAgent):
             turn_complete=True,
         )'''
 
-# backend/src/AgentTeam/Services/ADKGenerator.php:1032
+# backend/src/AgentTeam/Services/ADKGenerator.php:1041
 dataFlowDoc__ret = r'''HOW THIS FILE IS ORGANISED (top to bottom):
   1. _make_model(provider, model)  -- maps a node's provider+model to an ADK model
                                       (Gemini = native string; every other provider goes
@@ -392,7 +392,7 @@ A PLAYBOOK node is an interpreter, not an agent: the model re-decides each
 round from the running transcript of tool calls, and that transcript IS the
 node output, published to session.state like any other node's result.'''
 
-# backend/src/AgentTeam/Services/ADKGenerator.php:1282
+# backend/src/AgentTeam/Services/ADKGenerator.php:1291
 passThroughAgentBlock__ret = r'''class _PassThroughAgent(BaseAgent):
     """Output (fan-in) node: emit the parent(s) result VERBATIM -- no LLM -- so
     formatting such as HTML is preserved. A single parent is passed through
@@ -416,7 +416,7 @@ passThroughAgentBlock__ret = r'''class _PassThroughAgent(BaseAgent):
             turn_complete=True,
         )'''
 
-# backend/src/AgentTeam/Services/ADKGenerator.php:1319
+# backend/src/AgentTeam/Services/ADKGenerator.php:1328
 playbookAgentBlock__ret = r'''class _PlaybookAgent(BaseAgent):
     """Runs one playbook node and publishes its transcript as the node output."""
     node_id: str = ""
@@ -434,7 +434,7 @@ playbookAgentBlock__ret = r'''class _PlaybookAgent(BaseAgent):
             turn_complete=True,
         )'''
 
-# backend/src/AgentTeam/Services/ADKGenerator.php:1386
+# backend/src/AgentTeam/Services/ADKGenerator.php:1395
 dispatcherAgentBlock__ret = (
     'class _DispatcherAgent(BaseAgent):\n'
     '    """DISPATCHER node: run the chooser, then run ONLY the child it named.\n'
@@ -586,7 +586,7 @@ dispatcherAgentBlock__ret = (
 
 SHA256 = {
     '_class__A2A_RUN_NODE': '1176c0e25d0c26316e19b709fe261c56de2969e5616ba896bbd21c45772e9f83',
-    'codeAgentBlock__ret': 'df8d41e457fe31e96c98fc70a4d4638f44cb387214d053fe4d75e8f54a243c0b',
+    'codeAgentBlock__ret': 'afe29ad56c25a6756f252671806dc5d7b0a734d3a89eaa2271f75770a81ea737',
     'gateAgentBlock__ret': '9a8c4b890236a666a2849499349b17bee6074ebb76b9dfc24462aa874441d162',
     'modelFactoryBlock__ret': 'b2945dd7071d98c427960bcf6a3e0e0f1985292d5e4d4e4211d832d90befe8ad',
     'skillRunnerBlock__py': '4ad3e3b40bc3408cc0dd1ae47948f965b2db83a4f35a2d4082ef9fcce3562929',

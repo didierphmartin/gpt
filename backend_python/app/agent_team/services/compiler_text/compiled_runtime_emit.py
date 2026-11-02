@@ -126,10 +126,11 @@ def _call_mcp_tool(server_url: str, tool_name: str, arguments: dict) -> str:
         return json.dumps({"error": "\n".join(t for t in texts if t) or "tool error"})
     return "\n".join(t for t in texts if t) or json.dumps(res)[:8000]'''
 
-# backend/src/AgentTeam/Services/CompiledRuntimeEmit.php:276
+# backend/src/AgentTeam/Services/CompiledRuntimeEmit.php:282
 recordingBlock__ret = r'''GRAPH_RECORDER = None   # the run's RunRecorder (the package's listener sets it); None: nothing is recorded
-_RUN = {"ran": [], "routes": {}, "open": {}, "unrouted": ""}   # this run: nodes that ran, code exits, nodes
-#   started not completed, and why a dispatcher did not route (the answer when nothing reached the Output)
+_RUN = {"ran": [], "routes": {}, "open": {}, "unrouted": "", "outs": {}}   # this run: nodes that ran, code exits,
+#   nodes started not completed, why a dispatcher did not route (the answer when nothing reached the Output),
+#   and each recorded node's output
 
 
 def _set_recorder(recorder) -> None:
@@ -144,24 +145,39 @@ def _current_recorder():
 
 
 def _run_reset() -> None:
-    _RUN["ran"], _RUN["routes"], _RUN["open"], _RUN["unrouted"] = [], {}, {}, ""
+    _RUN["ran"], _RUN["routes"], _RUN["open"], _RUN["unrouted"], _RUN["outs"] = [], {}, {}, "", {}
 
 
-def _rec_node_start(nid: str, name: str, ntype: str) -> None:
+def _received(nid: str, seen: frozenset = frozenset()) -> str:
+    """What a node received: its parents' outputs on this run, a dispatcher standing for its own parents
+    (GraphWorkflowRunner's CodeNodeStep::parents); a parent that did not run is left out."""
+    texts = []
+    for p in NODE_PARENTS.get(str(nid), []):
+        if p in DISPATCHER_IDS:
+            if p not in seen:
+                texts.append(_received(p, seen | {p}))
+        elif _RUN["outs"].get(p):
+            texts.append(_RUN["outs"][p])
+    return "\n\n".join(t for t in texts if t)
+
+
+def _rec_node_start(nid: str, name: str, ntype: str, input: str | None = None) -> None:
+    """node_start with what the node received (`input`, else its parents' outputs): the editor's Input tab."""
     _RUN["open"][nid] = (name, ntype)
     if GRAPH_RECORDER is not None:
-        GRAPH_RECORDER.node_start(nid, name, ntype)
+        GRAPH_RECORDER.node_start(nid, name, ntype, input=_received(nid) if input is None else input)
 
 
 def _rec_node_complete(nid: str, name: str, ntype: str, output: str = "", **extra) -> None:
     _RUN["open"].pop(nid, None)
     _RUN["ran"].append(nid)
+    _RUN["outs"][str(nid)] = str(output or "")
     if "exit" in extra:
         _RUN["routes"][nid] = extra["exit"]
     if GRAPH_RECORDER is not None:
         GRAPH_RECORDER.node_complete(nid, name, ntype, output=str(output or ""), **extra)'''
 
-# backend/src/AgentTeam/Services/CompiledRuntimeEmit.php:311
+# backend/src/AgentTeam/Services/CompiledRuntimeEmit.php:333
 recordingBlock__ret_2 = r'''def _rec_before(callback_context):
     meta = NODE_META.get(callback_context.agent_name)
     if meta:
@@ -186,7 +202,7 @@ def _attach_recording(agent) -> None:
     for sub in getattr(agent, "sub_agents", None) or []:
         _attach_recording(sub)'''
 
-# backend/src/AgentTeam/Services/CompiledRuntimeEmit.php:346
+# backend/src/AgentTeam/Services/CompiledRuntimeEmit.php:368
 _class__CLI_HOOKS_SILENT = r'''def _cli_begin(prompt: str) -> None:
     """Before a one-off CLI run (not --quiet): run_workflow prints its own banner."""
 
@@ -195,7 +211,7 @@ def _cli_end(output: str) -> None:
     """After a one-off CLI run (not --quiet): run_workflow printed the answer and the RUN SUMMARY."""
 '''
 
-# backend/src/AgentTeam/Services/CompiledRuntimeEmit.php:358
+# backend/src/AgentTeam/Services/CompiledRuntimeEmit.php:380
 packageListenBlock__head = r'''# ==============================================================
 # LISTENER -- the Start's schedule or event trigger
 # The cron / watch / listener code below is the LangGraph package's,
@@ -218,7 +234,7 @@ MCP = _McpShim()
 
 {CLI_HOOKS}'''
 
-# backend/src/AgentTeam/Services/CompiledRuntimeEmit.php:381
+# backend/src/AgentTeam/Services/CompiledRuntimeEmit.php:403
 packageListenBlock__tail = r'''RUNS_DIR = os.environ.get("RUNS_DIR") or os.path.join(PACKAGE_DIR, "runs")
 NODE_TYPES = {meta[0]: meta[1] for meta in NODE_META.values()}   # node id -> type (the quiet rule)
 for _did in DISPATCHER_IDS:
@@ -354,7 +370,7 @@ if __name__ == "__main__":
                  state=LoopState(), lock_path=os.path.join(PACKAGE_DIR, ".run.lock"),
                  verbosity=view.verbosity).run_blocking()'''
 
-# backend/src/AgentTeam/Services/CompiledRuntimeEmit.php:722
+# backend/src/AgentTeam/Services/CompiledRuntimeEmit.php:744
 decisionBlock__ret = r'''def _decision_router(dec: dict, provider: str):
     """The decision adapter for one compiled provider, None when it was not compiled in or has no adapter."""
     c = next((c for c in dec.get("decision", []) if c["provider"] == provider), None)
@@ -373,7 +389,7 @@ def _decision_mode(dec: dict) -> str:
             return c["provider"]
     return "llm"'''
 
-# backend/src/AgentTeam/Services/CompiledRuntimeEmit.php:746
+# backend/src/AgentTeam/Services/CompiledRuntimeEmit.php:768
 idRecordingHelpers__ret = r'''def _rec_start(nid: str) -> None:
     """node_start for a node NODE_META knows (an agent, code, playbook or output node)."""
     meta = NODE_META.get("node_" + str(nid))
@@ -388,8 +404,8 @@ def _rec_done(nid: str, output: str, **extra) -> None:
         _rec_node_complete(meta[0], meta[2], meta[1], output=output, **extra)'''
 
 SHA256 = {
-    'mcpClientBlock__ret': 'b4a70c81f166257299cec38127559640e13b1af5b6b4562f4e3680728bc08df8',
-    'recordingBlock__ret': '631c25a0fc2a401532b26ab9aff120b90e660d6c20d411d5ff78ccfc8bda915d',
+    'mcpClientBlock__ret': '21cb825a262431f791c070fae6994d4b6841741598161b004d7644570ce959d3',
+    'recordingBlock__ret': '89e587bddcad28393ede0db638f3533896ac03a05f3f98a3f5f41a8d0560c198',
     'recordingBlock__ret_2': '6bcc8c579ac1fb6c9a2478d1c796a54c207cca84a676ac499d553d39bfd230cc',
     '_class__CLI_HOOKS_SILENT': '3f4f2b5daedc6a724a7f0d34855774d3c5649599fa9fdd28a54629bfaad666d8',
     'packageListenBlock__head': '3713030435d81bd061ae9fc4a98052d25774b04f348accdc7dc5209ea2fc800f',
