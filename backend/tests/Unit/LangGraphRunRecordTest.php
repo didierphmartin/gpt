@@ -40,7 +40,7 @@ rid = r.begin()
 assert len(rid) == 32 and all(c in "0123456789abcdef" for c in rid)
 r.node_start("1000000017", "Outlook: get new email", "code")
 r.node_complete("1000000017", "Outlook: get new email", "code", output="From: a@b.c\nSubject: Claim", exit="new_mail")
-r.node_start("21", "jev", "agent")
+r.node_start("21", "jev", "agent", input="From: a@b.c\nSubject: Claim")
 r.node_log("21", "jev routed to claims (confidence 0.97)")
 r.node_complete("21", "jev", "agent", output="ok", route={"id": "23", "name": "claims"})
 r.complete(success=True, output="done")
@@ -51,6 +51,7 @@ assert [e["type"] for e in lines] == ["workflow_start", "node_start", "node_comp
 assert lines[0]["run_id"] == rid and lines[0]["workflow_id"] == 44
 assert lines[2]["drawflow_id"] is None and lines[2]["node_id"] == "1000000017" and lines[2]["exit"] == "new_mail"
 assert lines[5]["route"] == {"id": "23", "name": "claims"}
+assert "input" not in lines[1] and lines[3]["input"] == "From: a@b.c\nSubject: Claim", lines   # what the node received, when given
 assert all(isinstance(e["timestamp"], float) for e in lines)
 assert len(seen) == 7
 print("ok")

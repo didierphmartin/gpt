@@ -1227,7 +1227,7 @@ async def _run_graph(prompt: str) -> str:
     that were reached run together. Returns the Output's merge ('' when nothing reached it)."""
     _run_reset()
     if START_NODE:
-        _rec_node_start(START_NODE[0], START_NODE[1], "start")
+        _rec_node_start(START_NODE[0], START_NODE[1], "start", input=prompt)
         _rec_node_complete(START_NODE[0], START_NODE[1], "start", output=prompt)
     nodes = GRAPH["nodes"]
     out = {GRAPH["start"]: ("Start", prompt)}   # node id -> (name, text): the nodes that ran

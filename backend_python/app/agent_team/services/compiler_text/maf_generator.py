@@ -3,7 +3,7 @@
 # ruff: noqa
 # fmt: off
 
-# backend/src/AgentTeam/Services/MAFGenerator.php:117
+# backend/src/AgentTeam/Services/MAFGenerator.php:127
 _class__A2A_RUN_NODE = r'''async def _maf_agent_text(ad: dict, instructions: str, text: str, tools: list) -> str:
     """One MAF Agent turn with this node's provider, model, sampling and tools (as AgentNodeExecutor runs it)."""
     client = ProviderClients.make(ad["provider"], ad["model"])
@@ -46,7 +46,7 @@ async def run_node(request_text: str, trace) -> dict:
                                            ad["max_tokens"], ad["temperature"], ad.get("thinking"))
     return {"text": text, "route": "", "notes": "", "status": "ok"}'''
 
-# backend/src/AgentTeam/Services/MAFGenerator.php:326
+# backend/src/AgentTeam/Services/MAFGenerator.php:336
 mafParts__ret = r'''def _cli_begin(prompt: str) -> None:
     """Before a one-off CLI run (not --quiet): run_workflow prints the banner (ProgressReporter.begin)."""
 
@@ -57,7 +57,7 @@ def _cli_end(output: str) -> None:
     ProgressReporter.summary(None)
 '''
 
-# backend/src/AgentTeam/Services/MAFGenerator.php:529
+# backend/src/AgentTeam/Services/MAFGenerator.php:539
 mcpToolBuilderBlock__out = r'''import contextvars
 
 _CURRENT_NODE = contextvars.ContextVar("current_node", default="?")
@@ -84,7 +84,7 @@ def _reported_mcp_call(server_url, tool_name, args):
 
 '''
 
-# backend/src/AgentTeam/Services/MAFGenerator.php:577
+# backend/src/AgentTeam/Services/MAFGenerator.php:587
 dataFlowDoc__ret = r'''The visual graph is compiled onto Microsoft Agent Framework's GRAPH-BASED
 workflow API (WorkflowBuilder / Executor / add_edge): every editor node
 becomes an Executor instance, every drawn connection one `add_edge(...)`
@@ -128,7 +128,7 @@ FILE MAP (in emission order)
   create_workflow()  -- the canvas, reconstructed 1:1.
   __main__           -- CLI entry.'''
 
-# backend/src/AgentTeam/Services/MAFGenerator.php:691
+# backend/src/AgentTeam/Services/MAFGenerator.php:700
 clientFactoryBlock__ret = r'''class ReasoningRoundTripClient(OpenAIChatCompletionClient):
     """OpenAIChatCompletionClient that round-trips DeepSeek's `reasoning_content`.
 
@@ -292,7 +292,7 @@ class ProviderClients:
             o["extra_body"] = extra
         return o'''
 
-# backend/src/AgentTeam/Services/MAFGenerator.php:876
+# backend/src/AgentTeam/Services/MAFGenerator.php:885
 skillRunnerBlock__mafSpecific = r'''
 
 class SkillRuntime:
@@ -606,7 +606,7 @@ class SkillRuntime:
         print(f"  [skill] deliverable: phase A authored content (script produced no file)", flush=True)
         return doc'''
 
-# backend/src/AgentTeam/Services/MAFGenerator.php:1258
+# backend/src/AgentTeam/Services/MAFGenerator.php:1267
 agentsBlock__runner = (
     'class ProgressReporter:\n'
     '    """Console progress feedback for the whole run.\n'
@@ -1162,7 +1162,7 @@ agentsBlock__runner = (
     '        await ctx.yield_output(merged)   # nothing reached the Output (no work to do): the answer is empty'
 )
 
-# backend/src/AgentTeam/Services/MAFGenerator.php:1995
+# backend/src/AgentTeam/Services/MAFGenerator.php:2005
 runWorkflowBlock__ret = r'''async def run_workflow(prompt: str, session: str | None = None) -> str:
     """Run the workflow once and return its terminal output.
 
@@ -1179,7 +1179,7 @@ runWorkflowBlock__ret = r'''async def run_workflow(prompt: str, session: str | N
     ProgressReporter.begin(prompt)
     _run_reset()
     if START_NODE:
-        _rec_node_start(START_NODE[0], START_NODE[1], "start")
+        _rec_node_start(START_NODE[0], START_NODE[1], "start", input=prompt)
         _rec_node_complete(START_NODE[0], START_NODE[1], "start", output=prompt)
     # Build the graph, then hand the prompt to MAF: it enters at the
     # Start executor and flows along the edges declared in
@@ -1198,7 +1198,7 @@ runWorkflowBlock__ret = r'''async def run_workflow(prompt: str, session: str | N
     _text = _text or _RUN["unrouted"]   # nothing reached the Output: why the dispatcher did not route
     return _text'''
 
-# backend/src/AgentTeam/Services/MAFGenerator.php:2036
+# backend/src/AgentTeam/Services/MAFGenerator.php:2046
 entryBlock__ret = r'''# ============================== CLI ENTRY =================================
 # Run the workflow from the command line. The prompt is taken from the CLI
 # arguments (space-joined) or falls back to DEFAULT_PROMPT baked from the
@@ -1246,7 +1246,7 @@ SHA256 = {
     'dataFlowDoc__ret': '871abbdba05a35a45a43d28eb1631166e8c6ef3a5426b564237e2a1b6e181011',
     'clientFactoryBlock__ret': 'f11f943c8d47ee5187654dc7a20d0be4f59819572e57874725c5b0622095a8cf',
     'skillRunnerBlock__mafSpecific': '5e8973be89240ec0086764cd660ef0692c3abd30010f6a19d1e2e144d6e69e7a',
-    'agentsBlock__runner': 'a0c0d07724ec1eda6d430efafbe4b61f4e7b1c62f02389060ef6d4a35c07fc0c',
-    'runWorkflowBlock__ret': '74b10057f3a51b7ffd804922780724fd635217f368f20d99ed18dbe81ab3c1ef',
+    'agentsBlock__runner': 'b927b3b0db9ea29fa302ec34a071b6314eeefe6b66efd3b6b22952824363d5f9',
+    'runWorkflowBlock__ret': 'b8e6ca3f9eac3e206fc303a00ac18a158333f11dcb7aba14535bdf649bb429a6',
     'entryBlock__ret': 'dce7b7a98adf5248ff1653f74a4128d845d44b3f1cd4aad56ef8a185ddf4440b',
 }

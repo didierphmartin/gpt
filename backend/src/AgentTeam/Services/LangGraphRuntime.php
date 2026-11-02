@@ -1017,9 +1017,10 @@ class RunRecorder:
                 print(f"[warn] run listener failed: {e}", flush=True)
         return ev
 
-    def node_start(self, nid: str, name: str, ntype: str) -> None:
-        """A node began."""
-        self.emit("node_start", node_id=nid, node_type=ntype, node_name=name)
+    def node_start(self, nid: str, name: str, ntype: str, *, input: str | None = None) -> None:
+        """A node began; `input`, when given, is what it received (cut to OUTPUT_IN_LOG): the node form's Input."""
+        extra = {"input": str(input)[:OUTPUT_IN_LOG]} if input is not None else {}
+        self.emit("node_start", node_id=nid, node_type=ntype, node_name=name, **extra)
 
     def node_complete(self, nid: str, name: str, ntype: str, *, success: bool = True, output: str = "",
                       exit: str | None = None, route: dict | None = None, error: str | None = None) -> None:
@@ -1416,7 +1417,7 @@ class WorkflowGraph:
                     )
             RUN_OUT(f"[node] [{nid}] start -- {len(text)} chars")
             self.ran.append(nid)
-            self.recorder.node_start(nid, "Start", "start")
+            self.recorder.node_start(nid, "Start", "start", input=state.get("user_prompt", ""))
             self.recorder.node_complete(nid, "Start", "start", output=text)
             return {"node_outputs": {nid: {"source": "start", "text": text}}}
         return _run
@@ -1456,14 +1457,18 @@ class WorkflowGraph:
         """An agent/playbook node: run it, then turn a dispatcher's choice into the conditional edge's input."""
         async def _run(state):
             ad = self.agents[nid]
-            self.recorder.node_start(nid, ad["display"], self.node_types.get(nid, ""))
             outs = state.get("node_outputs", {})
+            request = self._request_for(nid, state)
+            # the Input a node form shows: a code node's parents' texts (its request is the harness's JSON envelope)
+            shown = ("\n\n".join(outs[p]["text"] for p in self._code_parents(nid) if p in outs)
+                     or state.get("user_prompt", "")) if ad.get("kind") == "code" else request
+            self.recorder.node_start(nid, ad["display"], self.node_types.get(nid, ""), input=shown)
             # The job text is the FIRST parent's (PHP CodeNodeStep::parents[0]): a dispatcher stands
             # for its own parents, and a parent with an empty text is skipped.
             first = next((outs[p]["text"] for p in self._code_parents(nid) if p in outs and outs[p].get("text")), None)
             token = PLAYBOOK_JOB_TEXT.set(first if ad.get("kind") == "playbook" else None)
             try:
-                out = await self.run_node(nid, self._request_for(nid, state))
+                out = await self.run_node(nid, request)
             except Exception as e:
                 self.recorder.node_complete(nid, ad["display"], self.node_types.get(nid, ""), success=False, error=f"{type(e).__name__}: {e}")
                 raise
@@ -1514,7 +1519,7 @@ class WorkflowGraph:
                 final = "\n\n---\n\n".join(blocks)
             RUN_OUT(f"[node] [{nid}] output -- {len(final)} chars")
             self.ran.append(nid)
-            self.recorder.node_start(nid, "Output", "output")
+            self.recorder.node_start(nid, "Output", "output", input="\n\n".join(outs[p]["text"] for p in pids))
             self.recorder.node_complete(nid, "Output", "output", output=final)
             return {"final_output": final}
         return _run

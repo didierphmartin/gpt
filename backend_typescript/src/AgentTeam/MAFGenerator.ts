@@ -2018,7 +2018,7 @@ ${body}
     ProgressReporter.begin(prompt)
     _run_reset()
     if START_NODE:
-        _rec_node_start(START_NODE[0], START_NODE[1], "start")
+        _rec_node_start(START_NODE[0], START_NODE[1], "start", input=prompt)
         _rec_node_complete(START_NODE[0], START_NODE[1], "start", output=prompt)
     # Build the graph, then hand the prompt to MAF: it enters at the
     # Start executor and flows along the edges declared in

@@ -571,9 +571,23 @@ NODE_META = {
 START_NODE = ["1", "Start"]   # [id, name] of the Start node
 DISPATCHER_IDS = []   # dispatchers record themselves; their choice is work (not a quiet poll)
 OUTPUT_NODE_KEYS = ["node_4"]   # the Output nodes: their answers are the workflow's answer
+NODE_PARENTS = {
+    "1": [],
+    "2": [
+        "1"
+    ],
+    "3": [
+        "1"
+    ],
+    "4": [
+        "2",
+        "3"
+    ]
+}   # node id -> its parents' ids: what a node received, for its run events
 GRAPH_RECORDER = None   # the run's RunRecorder (the package's listener sets it); None: nothing is recorded
-_RUN = {"ran": [], "routes": {}, "open": {}, "unrouted": ""}   # this run: nodes that ran, code exits, nodes
-#   started not completed, and why a dispatcher did not route (the answer when nothing reached the Output)
+_RUN = {"ran": [], "routes": {}, "open": {}, "unrouted": "", "outs": {}}   # this run: nodes that ran, code exits,
+#   nodes started not completed, why a dispatcher did not route (the answer when nothing reached the Output),
+#   and each recorded node's output
 
 
 def _set_recorder(recorder) -> None:
@@ -588,18 +602,33 @@ def _current_recorder():
 
 
 def _run_reset() -> None:
-    _RUN["ran"], _RUN["routes"], _RUN["open"], _RUN["unrouted"] = [], {}, {}, ""
+    _RUN["ran"], _RUN["routes"], _RUN["open"], _RUN["unrouted"], _RUN["outs"] = [], {}, {}, "", {}
 
 
-def _rec_node_start(nid: str, name: str, ntype: str) -> None:
+def _received(nid: str, seen: frozenset = frozenset()) -> str:
+    """What a node received: its parents' outputs on this run, a dispatcher standing for its own parents
+    (GraphWorkflowRunner's CodeNodeStep::parents); a parent that did not run is left out."""
+    texts = []
+    for p in NODE_PARENTS.get(str(nid), []):
+        if p in DISPATCHER_IDS:
+            if p not in seen:
+                texts.append(_received(p, seen | {p}))
+        elif _RUN["outs"].get(p):
+            texts.append(_RUN["outs"][p])
+    return "\n\n".join(t for t in texts if t)
+
+
+def _rec_node_start(nid: str, name: str, ntype: str, input: str | None = None) -> None:
+    """node_start with what the node received (`input`, else its parents' outputs): the editor's Input tab."""
     _RUN["open"][nid] = (name, ntype)
     if GRAPH_RECORDER is not None:
-        GRAPH_RECORDER.node_start(nid, name, ntype)
+        GRAPH_RECORDER.node_start(nid, name, ntype, input=_received(nid) if input is None else input)
 
 
 def _rec_node_complete(nid: str, name: str, ntype: str, output: str = "", **extra) -> None:
     _RUN["open"].pop(nid, None)
     _RUN["ran"].append(nid)
+    _RUN["outs"][str(nid)] = str(output or "")
     if "exit" in extra:
         _RUN["routes"][nid] = extra["exit"]
     if GRAPH_RECORDER is not None:
@@ -696,7 +725,7 @@ async def run_workflow(prompt: str, session: str | None = None) -> str:
     adk_session = await session_service.create_session(app_name="workflow", user_id="local", state={"user_prompt": prompt})
     _run_reset()
     if START_NODE:
-        _rec_node_start(START_NODE[0], START_NODE[1], "start")
+        _rec_node_start(START_NODE[0], START_NODE[1], "start", input=prompt)
         _rec_node_complete(START_NODE[0], START_NODE[1], "start", output=prompt)
     outputs = {}   # the Output nodes' answers (the workflow's answer, when it has Output nodes)
     final = ""

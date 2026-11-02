@@ -336,14 +336,21 @@ def _call_mcp_tool(server_url: str, tool_name: str, arguments: dict) -> str:
         const metaPy = isEmptyArr(meta) ? '{}' : PythonEmitHelpers.jsonToPython(meta);
         const startPy = start === null ? 'None' : '[' + PythonEmitHelpers.pyStr(start[0]) + ', ' + PythonEmitHelpers.pyStr(start[1]) + ']';
         const outPy = '[' + outputs.map((o) => PythonEmitHelpers.pyStr(o)).join(', ') + ']';
+        const parents: any = oarr();
+        for (const rawId of values(toArr(analyzed['order'] ?? []))) {
+            parents[strval(rawId)] = values(toArr(dig(analyzed, 'parents', strval(rawId)) ?? [])).map((p: any) => strval(p));
+        }
+        const parentsPy = isEmptyArr(parents) ? '{}' : PythonEmitHelpers.jsonToPython(parents);
         return `NODE_META = ${metaPy}   # agent name -> [node id, type, canvas name]: the nodes whose runs are recorded\n`
             + `START_NODE = ${startPy}   # [id, name] of the Start node\n`
             + 'DISPATCHER_IDS = [' + keysOf(routed).map((k) => PythonEmitHelpers.pyStr(strval(k))).join(', ')
                 + ']   # dispatchers record themselves; their choice is work (not a quiet poll)\n'
             + `OUTPUT_NODE_KEYS = ${outPy}   # the Output nodes: their answers are the workflow's answer\n`
+            + `NODE_PARENTS = ${parentsPy}   # node id -> its parents' ids: what a node received, for its run events\n`
             + `GRAPH_RECORDER = None   # the run's RunRecorder (the package's listener sets it); None: nothing is recorded
-_RUN = {"ran": [], "routes": {}, "open": {}, "unrouted": ""}   # this run: nodes that ran, code exits, nodes
-#   started not completed, and why a dispatcher did not route (the answer when nothing reached the Output)
+_RUN = {"ran": [], "routes": {}, "open": {}, "unrouted": "", "outs": {}}   # this run: nodes that ran, code exits,
+#   nodes started not completed, why a dispatcher did not route (the answer when nothing reached the Output),
+#   and each recorded node's output
 
 
 def _set_recorder(recorder) -> None:
@@ -358,18 +365,33 @@ def _current_recorder():
 
 
 def _run_reset() -> None:
-    _RUN["ran"], _RUN["routes"], _RUN["open"], _RUN["unrouted"] = [], {}, {}, ""
+    _RUN["ran"], _RUN["routes"], _RUN["open"], _RUN["unrouted"], _RUN["outs"] = [], {}, {}, "", {}
 
 
-def _rec_node_start(nid: str, name: str, ntype: str) -> None:
+def _received(nid: str, seen: frozenset = frozenset()) -> str:
+    """What a node received: its parents' outputs on this run, a dispatcher standing for its own parents
+    (GraphWorkflowRunner's CodeNodeStep::parents); a parent that did not run is left out."""
+    texts = []
+    for p in NODE_PARENTS.get(str(nid), []):
+        if p in DISPATCHER_IDS:
+            if p not in seen:
+                texts.append(_received(p, seen | {p}))
+        elif _RUN["outs"].get(p):
+            texts.append(_RUN["outs"][p])
+    return "\\n\\n".join(t for t in texts if t)
+
+
+def _rec_node_start(nid: str, name: str, ntype: str, input: str | None = None) -> None:
+    """node_start with what the node received (\`input\`, else its parents' outputs): the editor's Input tab."""
     _RUN["open"][nid] = (name, ntype)
     if GRAPH_RECORDER is not None:
-        GRAPH_RECORDER.node_start(nid, name, ntype)
+        GRAPH_RECORDER.node_start(nid, name, ntype, input=_received(nid) if input is None else input)
 
 
 def _rec_node_complete(nid: str, name: str, ntype: str, output: str = "", **extra) -> None:
     _RUN["open"].pop(nid, None)
     _RUN["ran"].append(nid)
+    _RUN["outs"][str(nid)] = str(output or "")
     if "exit" in extra:
         _RUN["routes"][nid] = extra["exit"]
     if GRAPH_RECORDER is not None:
