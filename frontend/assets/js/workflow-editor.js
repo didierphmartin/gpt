@@ -6068,6 +6068,102 @@ class WorkflowEditor {
         return data;
     }
 
+    /**
+     * A robot workflow's package runs as the robot, never with the compiling person's own connections: its own .env
+     * (read before python/.env, never overridden) names each MCP server's headers variable, empty until the robot's
+     * key is pasted -- an empty value blocks python/.env's, and the program reports it is not connected. A value
+     * already there (a pasted key) is kept. The robot's keys never leave the server.
+     */
+    async _robotPackageEnv(data) {
+        if (!this.currentWorkflowIsRobot) return;
+        const example = data.files.find((f) => f.path === '.env.example')?.code || '';
+        const names = [...new Set([...example.matchAll(/^#?\s*(MCP_HEADERS_[A-Z0-9_]+)=/gm)].map((m) => m[1]))];
+        if (!names.length) return;
+        const dir = await window.localFs.resolvePath(`python/scripts/${data.root}`, { create: false });
+        if (!dir) return;
+        let lines = [];
+        try { lines = (await (await (await dir.getFileHandle('.env')).getFile()).text()).split('\n'); } catch (_) { /* no .env yet */ }
+        const keyed = new Map(lines.map((l) => l.match(/^(MCP_HEADERS_[A-Z0-9_]+)=(.*)$/)).filter(Boolean).map((m) => [m[1], m[2].trim()]));
+        const add = names.filter((n) => !keyed.has(n));
+        // Missing keys: asked for now (the person compiling has them); what they paste goes to this file only.
+        const given = await this._askRobotKeys(names.filter((n) => !keyed.get(n)));
+        if (add.length || Object.keys(given).length) {
+            lines = lines.map((l) => { const m = l.match(/^(MCP_HEADERS_[A-Z0-9_]+)=/); return m && given[m[1]] ? `${m[1]}=${given[m[1]]}` : l; });
+            while (lines.length && lines[lines.length - 1] === '') lines.pop();
+            if (add.length) {
+                lines.push('# Runs as the robot: the robot\'s connection headers for each server (a JSON object, e.g.',
+                    '# {"X-Outlook-Account": "<key>"}). Left empty, the program is not connected; it never uses python/.env\'s.',
+                    ...add.map((n) => `${n}=${given[n] || ''}`));
+            }
+            lines.push('');
+            const w = await (await dir.getFileHandle('.env', { create: true })).createWritable();
+            await w.write(lines.join('\n'));
+            await w.close();
+        }
+        const missing = names.filter((n) => !keyed.get(n) && !given[n]);
+        if (missing.length) {
+            this.showNotification(this.t('workflow.robotCompile.pasteKeys',
+                { file: `python/scripts/${data.root}/.env`, names: missing.join(', ') }), 'warning');
+        }
+    }
+
+    /**
+     * Asks for the robot's connection headers of each named variable (MCP_HEADERS_<SLUG>), masked, each a JSON object
+     * (e.g. {"X-Outlook-Account": "..."}). Returns {name: json} for those given; {} when cancelled. Nothing is sent anywhere.
+     */
+    _askRobotKeys(names) {
+        if (!names.length) return Promise.resolve({});
+        const t = (k, p) => this.t(`workflow.robotCompile.${k}`, p);
+        const esc = (v) => this.escapeHtml(String(v ?? ''));
+        return new Promise((resolve) => {
+            const overlay = document.createElement('div');
+            overlay.className = 'storage-config-overlay';
+            overlay.innerHTML = `
+                <div class="storage-config-modal" style="width:min(560px,95vw);">
+                    <div class="storage-config-header"><h3>${esc(t('askTitle'))}</h3>
+                        <button class="storage-config-close" data-act="close">×</button></div>
+                    <div class="storage-config-body">
+                        <p style="margin:0 0 10px;font-size:13px;color:#6b7280;">${esc(t('askIntro'))}</p>
+                        <div style="display:grid;grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:14px;">
+                            ${names.map((n) => `<label>${esc(n.replace(/^MCP_HEADERS_/, ''))}</label>
+                                <input type="password" autocomplete="off" data-name="${esc(n)}" placeholder='{"X-Outlook-Account": "…"}'
+                                    style="padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-family:monospace;">`).join('')}
+                        </div>
+                        <p data-role="err" style="display:none;margin:10px 0 0;font-size:13px;color:#dc2626;"></p>
+                        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
+                            <button data-act="close" class="px-4 py-2 text-sm text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${esc(t('askLater'))}</button>
+                            <button data-act="ok" class="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded">${esc(t('askSave'))}</button>
+                        </div>
+                    </div>
+                </div>`;
+            document.body.appendChild(overlay);
+            const inputs = [...overlay.querySelectorAll('[data-name]')];
+            inputs[0]?.focus();
+            overlay.addEventListener('click', (ev) => {
+                const act = ev.target?.dataset?.act;
+                if (act === 'close') { overlay.remove(); resolve({}); return; }
+                if (act !== 'ok') return;
+                const out = {};
+                for (const i of inputs) {
+                    const v = i.value.trim();
+                    if (!v) continue;
+                    let obj = null;
+                    try { obj = JSON.parse(v); } catch (_) { /* not JSON */ }
+                    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+                        const err = overlay.querySelector('[data-role="err"]');
+                        err.textContent = t('askNotJson', { server: i.dataset.name.replace(/^MCP_HEADERS_/, '') });
+                        err.style.display = '';
+                        i.focus();
+                        return;
+                    }
+                    out[i.dataset.name] = JSON.stringify(obj);
+                }
+                overlay.remove();
+                resolve(out);
+            });
+        });
+    }
+
     /** What Display Code shows for a manifest file: its text, or "(binary file)" for a base64 entry. */
     _manifestFileText(f) {
         return f?.encoding === 'base64' ? '(binary file)' : (f?.code || '');
@@ -6105,6 +6201,7 @@ class WorkflowEditor {
             await w.close();
         }
         await this._syncRunnerEnv();
+        await this._robotPackageEnv(data);
         console.log(`[WorkflowEditor] Saved ${data.files.length} ${mode} files under python/scripts/${data.root}/`);
         return data;
     }
@@ -6459,6 +6556,15 @@ class WorkflowEditor {
             // One engine reads the events: an active workflow's event worker stops while the compiled program listens,
             // and so does this workflow's program compiled for another target.
             if (this.activeWorkflow && Number(this.activeWorkflow.workflow_id) === Number(this.currentWorkflowId)) {
+                // The robot's own run stops while this program listens: say so first (devs test on a live robot workflow).
+                if (this.currentWorkflowIsRobot) {
+                    this._hideCompiledScrim();
+                    const ok = await this._confirmLinksDialog(this.t('workflow.robotCompile.stopTitle'),
+                        this.t('workflow.robotCompile.stopWarn', { name: this.currentWorkflowName || `#${this.currentWorkflowId}` }), [],
+                        this.t('workflow.robotCompile.stopOk'));
+                    if (!ok) return;
+                    this._showCompiledScrim(label, 'preparing');
+                }
                 await this._deactivate();
             }
             await this._stopCompiledEngine(root);
