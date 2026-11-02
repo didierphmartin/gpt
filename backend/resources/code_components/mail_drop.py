@@ -11,14 +11,23 @@
 # from); they are copied into document.meta and source under the same names, and absent otherwise.
 # It also provides `meta` (handed on to the next nodes, whose arguments may use these as {placeholders}):
 #   mailbox, mailbox_name (only when the mail has them), from ("unknown sender" when empty), subject (first 60
-#   characters, "(no subject)" when empty), received_at (as given), received ("YYYY-MM-DD HHMM"; omitted when
-#   the mail has no received_at).
+#   characters, "(no subject)" when empty), received_at (as given), received ("YYYY-MM-DD HHMM" in the run
+#   machine's local time; omitted when the mail has no received_at).
 # File content is never in the package: each part says how to fetch it, so run records stay small.
+from datetime import datetime
 
 def _attachment(mail_id, att):
     return {"name": att.get("name") or "attachment", "content_type": att.get("content_type") or "",
             "size": att.get("size"), "from": {"server": "outlook", "tool": "get_attachment",
                                               "args": {"mail_id": mail_id, "attachment_id": att["id"], "raw": True}}}
+
+
+def _local(received_at):
+    """ISO time (Graph gives UTC, "...Z") as YYYY-MM-DD HHMM in local time; unparsable: its first 16 characters."""
+    try:
+        return datetime.fromisoformat(received_at.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d %H%M")
+    except ValueError:
+        return received_at[:16].replace("T", " ").replace(":", "")
 
 
 def run(input, call_tool):
@@ -57,6 +66,6 @@ def run(input, call_tool):
     received_at = mail.get("received_at") or ""
     if received_at:
         meta["received_at"] = received_at
-        meta["received"] = received_at[:16].replace("T", " ").replace(":", "")
+        meta["received"] = _local(received_at)
     return {"route": "dropped_mail", "output": {"document": document, "attachments": attachments,
                                        "not_fetched": cloud, "source": source, "meta": meta}}
