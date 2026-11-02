@@ -461,6 +461,10 @@ export class GraphWorkflowRunner {
           const mergeStrategy = config.merge_strategy ?? 'labeled';
           const context = this.buildContextForNode(node.id, edges, executedNodes, mergeStrategy);
           nodeInput = !phpEmpty(context) ? `Do your job on the following input:\n\n${context}` : userPrompt;
+        } else if (['code', 'playbook', 'output'].includes(node.node_type)) {
+          // what the node receives: its parents' output, as its run reads it (the form's Input tab)
+          const parents = CodeNodeStep.parents(phpIntval(node.id), edges, this.graphNodes, this.nodeOutputs);
+          nodeInput = parents.length ? parents.map((p) => p.text).join('\n\n') : userPrompt;
         }
 
         this.emitNodeEvent('node_start', node, { input: nodeInput });

@@ -514,6 +514,10 @@ class GraphWorkflowRunner:
                     mergeStrategy = _coalesce(cfg.get('merge_strategy'), 'labeled')
                     context = self._buildContextForNode(node['id'], edges, executedNodes, mergeStrategy)
                     nodeInput = f"Do your job on the following input:\n\n{context}" if not php_empty(context) else userPrompt
+                elif node.get('node_type') in ('code', 'playbook', 'output'):
+                    # what the node receives: its parents' output, as its run reads it (the form's Input tab)
+                    parents = CodeNodeStep.parents(php_intval(node.get('id')), edges, self.graphNodes, self.nodeOutputs)
+                    nodeInput = '\n\n'.join(str(p['text']) for p in parents) if parents else userPrompt
 
                 self._emitNodeEvent('node_start', node, {'input': nodeInput})
 

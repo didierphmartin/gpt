@@ -70,6 +70,26 @@ test('a poll that found work runs the exit and asks to drain', async () => {
   assert.ok(runLogExists);
 });
 
+test('the run log records what each non-agent node received', async () => {
+  // Start(1) -> Code(2) -> Code(4) -> Output(3): a code node's and the Output's input is their parents' output.
+  const edges = [
+    { from_node_id: 1, to_node_id: 2, from_port: 'output_1' },
+    { from_node_id: 2, to_node_id: 4, from_port: 'output_1' },
+    { from_node_id: 4, to_node_id: 3, from_port: 'output_1' },
+  ];
+  const second = { id: 4, node_type: 'code', config: { name: 'Second', exits: ['next'], mcp_servers: [], timeout_s: 10,
+    code: "def run(input, call_tool):\n    return {'route': 'next', 'output': 'job 1 done'}\n" } };
+  const { out, logs } = await run("def run(input, call_tool):\n    return {'route': 'work', 'output': 'job 1'}\n", ['work', 'idle'], { edges, extraNodes: [second] });
+  assert.equal(out.success, true, out.error);
+  const starts: Record<number, any> = {};
+  for (const line of logs[0].split('\n').filter(Boolean)) {
+    const e = JSON.parse(line);
+    if (e.type === 'node_start') starts[Number(e.node_id)] = e.input ?? null;
+  }
+  assert.equal(starts[4], 'job 1', "a code node receives its parent code node's output");
+  assert.equal(starts[3], 'job 1 done', "the Output receives its parent's output");
+});
+
 test('work beside the poll does not drain', async () => {
   // Start -> Code(2) and Start -> Output(3) in parallel: the Output runs every tick, the poll found nothing.
   const edges = [
