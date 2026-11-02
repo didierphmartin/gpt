@@ -352,6 +352,11 @@ PY);
             self::assertSame('work', $code[0]['exit'], $label);
             self::assertSame('Check', $code[0]['node_name'], $label);
             self::assertSame(['workflow_start', 'node_start', 'node_complete'], array_column(array_slice($events, 0, 3), 'type'), $label);
+            // what each node received (its form's Input): the prompt, then each node's parents' text
+            $inputs = array_column(array_filter($events, fn($e) => $e['type'] === 'node_start'), 'input', 'node_id');
+            self::assertSame('WORKNOW', $inputs['1'] ?? null, "$label start");
+            self::assertSame('WORKNOW', $inputs['2'] ?? null, "$label code: its parent's text, not the harness envelope");
+            self::assertSame('mail for you', $inputs['3'] ?? null, "$label output");
             $last = end($events);
             self::assertSame('workflow_complete', $last['type'], $label);
             self::assertTrue($last['success'], $label);
