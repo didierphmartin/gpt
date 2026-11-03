@@ -89,6 +89,15 @@
             if (CC) await CC.cache.load(CC.api());
             have.components = CC ? CC.cache.all() : [];
         }
+        if (!have.serverFolders) {
+            have.serverFolders = [];
+            // Local servers' folders already in the user's folder: reviewRows offers to keep them.
+            const deps = (pkg.manifest && pkg.manifest.dependencies) || [];
+            for (const s of (pkg.servers || []).filter((x) => x.local)) {
+                const f = WP().serverFolder(s, deps.find((d) => d.kind === 'server' && d.name === s.name));
+                if (f && window.localFs && await window.localFs.resolvePath(`mcps/${f}`, { kind: 'directory' })) have.serverFolders.push(f);
+            }
+        }
         if (!have.skills) {
             have.skills = [];
             // The same skill folders reviewRows sees: the manifest's skill entries with a safe folder name.
@@ -105,7 +114,7 @@
     const STATUS_ICON = { present: '✓', install: '➕', clash: '⚠', attention: '⚠' };
     const REASON_KEY = {
         'settings-required': 'reasonSettings', 'localhost-url': 'reasonLocalhost', 'needs-key': 'reasonNeedsKey',
-        'global-server': 'reasonGlobal', renamed: 'reasonRenamed', unreadable: 'reasonUnreadable', 'unsafe-path': 'reasonUnsafePath',
+        'global-server': 'reasonGlobal', 'folder-exists': 'reasonFolderExists', renamed: 'reasonRenamed', unreadable: 'reasonUnreadable', 'unsafe-path': 'reasonUnsafePath',
     };
     const KIND_KEY = { skill: 'kindSkill', server: 'kindServer', component: 'kindComponent', playbook: 'kindPlaybook', secrets: 'kindKeys' };
 
@@ -160,12 +169,13 @@
         const v = own(state.values, r.name) || {};
         const skipped = r.choice === 'skip';
         const live = !skipped && r.choice !== 'use-existing' && r.status !== 'present';   // will be installed
+        const registers = live || (!!r.folderExists && r.choice === 'use-existing');      // kept folder: registered only
         const warn = r.status === 'clash' || r.status === 'attention';
         let status;
         if (skipped) status = t('statusSkipped');
         else if (r.choice === 'use-existing') status = t('statusUseExisting');
         else if (r.status === 'present') status = t('statusPresent');
-        else if (r.status === 'clash') status = t('statusClash', { name: r.name });
+        else if (r.status === 'clash') status = r.folderExists ? t('statusFolderExists', { destination: r.destination }) : t('statusClash', { name: r.name });
         else if (r.kind === 'secrets') status = t('statusKeys');
         else status = r.destination ? t('statusInstallTo', { destination: r.destination }) : t('statusInstall');
         const reasons = (r.reasons || []).filter((x) => REASON_KEY[x]);
@@ -180,14 +190,14 @@
         } else if ((r.reasons || []).some((x) => x === 'unreadable' || x === 'unsafe-path')) {
             parts.push(`<div><button type="button" data-choice="skip" style="${skipped ? BTN_ON : BTN_PLAIN}">${t('skipIt')}</button></div>`);
         }
-        if (live && r.kind === 'server') {
+        if (registers && r.kind === 'server') {
             if (r.url !== undefined) {
                 parts.push(fieldRow(t('serverUrl'), false, `<input type="text" data-value="url" value="${esc(v.url !== undefined ? v.url : r.url)}" style="${INPUT}">`, t('serverUrlHelp')));
             }
             if ((r.reasons || []).includes('needs-key')) {
                 parts.push(fieldRow(t('authorization'), false, secretInput(t, 'data-value="authorization"', v.authorization || ''), t('authorizationHelp')));
             }
-            if (r.envFields) {
+            if (live && r.envFields) {
                 const form = settingsFieldsHtml(t, r.envFields, v);
                 parts.push(`<div style="border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 8px;">
                     <strong style="font-size: 13px;">${t('settingsTitle')}</strong>${form}

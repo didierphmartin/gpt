@@ -467,6 +467,30 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
         await assert.rejects(WP.installPackage(irows, ipkg, { Outlook: { fillLater: true } }, io, ihave),
             { message: 'install refused: would overwrite mcps/outlook_mcp, playbooks/triage.md' });
         noWrites(io);
+        // a local server not registered here whose folder is already there: clash; use-existing registers it, writes nothing in it
+        {
+            const fhave = { ...ihave, serverFolders: ['outlook_mcp'] };
+            const frows = await WP.reviewRows(ipkg, fhave);
+            const fr = frows.find((r) => r.kind === 'server' && r.name === 'Outlook');
+            assert.strictEqual(fr.status, 'clash');
+            assert.ok(fr.reasons.includes('folder-exists'));
+            assert.strictEqual(WP.canConfirm(frows, {}), false);
+            fr.choice = 'use-existing';
+            for (const r of frows) if (r !== fr && r.kind !== 'server') r.choice = 'skip';
+            assert.strictEqual(WP.canConfirm(frows, {}), true);
+            const fio = memIo({ fs: { 'mcps/outlook_mcp/server.py': 'mine', 'mcps/outlook_mcp/.env': 'MINE=1' } });
+            const fres = await WP.installPackage(frows, ipkg, { Outlook: { url: 'http://localhost:9000/mcp' } }, fio, fhave);
+            assert.strictEqual(fio.fs['mcps/outlook_mcp/server.py'], 'mine');
+            assert.strictEqual(fio.fs['mcps/outlook_mcp/.env'], 'MINE=1');
+            assert.ok(!fio.calls.some((c) => c[0] === 'writeFile'));
+            const fadds = fio.calls.filter((c) => c[0] === 'addServer');
+            assert.deepStrictEqual(fadds.map((c) => [c[1].name, c[1].url]), [['Outlook', 'http://localhost:9000/mcp']]);
+            assert.deepStrictEqual(JSON.parse(fio.fs['mcps/servers.json']), { Outlook: 'outlook_mcp' });
+            assert.strictEqual(fres.nodes.find((n) => n.id === '1').config.store, 'mcp:100');
+            assert.deepStrictEqual(fres.installed.map((x) => [x.kind, x.name, x.destination]), [['server', 'Outlook', 'mcps/outlook_mcp']]);
+            assert.deepStrictEqual(fres.commands, [{ server: 'Outlook', install: srvMan.install, start: srvMan.start }]);
+        }
+
         // a component folder copy takes the next free name
         io = memIo({ fs: { 'components/Make_PDF.json': 'mine' } });
         res = await WP.installPackage(irows, ipkg, { Outlook: { fillLater: true } }, io, ihave);

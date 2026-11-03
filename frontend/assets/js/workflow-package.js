@@ -487,6 +487,11 @@
             }
             const folder = r.destination;
             const cls = classify('server', s, h.servers).status;
+            // Not registered here, but its folder is already in the user's folder (e.g. another install shares it).
+            if (folder && cls === 'install' && (h.serverFolders || []).includes(folder.slice('mcps/'.length))) {
+                r.folderExists = true;
+                r.reasons.push('folder-exists');
+            }
             if (folder && cls !== 'present') {
                 const mj = files[`${folder}/synergyai-mcp.json`], ex = files[`${folder}/.env.example`];
                 let man = null;
@@ -497,7 +502,7 @@
             if (isLocalUrl(s.url)) { r.reasons.push('localhost-url'); r.url = s.url; }
             if (s.needs_auth) r.reasons.push('needs-key');
             if (s.global) r.reasons.push('global-server');
-            r.status = cls !== 'install' ? cls : r.reasons.some((x) => x !== 'global-server') ? 'attention' : cls;
+            r.status = r.folderExists ? 'clash' : cls !== 'install' ? cls : r.reasons.some((x) => x !== 'global-server') ? 'attention' : cls;
             rows.push(r);
         }
 
@@ -580,6 +585,8 @@
         };
         const active = (r) => r.choice !== 'skip';
         const toInstall = (r) => active(r) && r.choice !== 'use-existing' && r.status !== 'present';
+        // A server whose folder is already there, kept as it is: registered, nothing written.
+        const keepsFolder = (r) => !!r.folderExists && r.choice === 'use-existing';
         const ofKind = (k) => (rows || []).filter((r) => r.kind === k);
         const rowValues = (r) => pick(vals, r.name) || {};
         const parse = (path) => { try { return own(files, path) ? JSON.parse(dec(files[path])) : null; } catch (e) { return null; } };
@@ -654,6 +661,12 @@
             map[r.name] = folder;
             commands.push({ server: r.name, install: (man && man.install) || null, start: (man && man.start) || null });
         }
+        for (const r of ofKind('server').filter(keepsFolder)) {
+            const folder = r.destination.slice('mcps/'.length);
+            const man = parse(`${r.destination}/synergyai-mcp.json`);
+            map[r.name] = folder;
+            commands.push({ server: r.name, install: (man && man.install) || null, start: (man && man.start) || null });
+        }
         if (Object.keys(map).length) {
             await step('update mcps/servers.json', async () => {
                 const cur = await io.readJson('mcps/servers.json');
@@ -669,7 +682,7 @@
         for (const r of ofKind('server').filter(active)) {
             const s = serverOf(r);
             if (!s) continue;
-            if (!toInstall(r)) {
+            if (!toInstall(r) && !keepsFolder(r)) {
                 const ex = (h.servers || []).find((e) => norm(e.name) === norm(r.name));
                 if (ex && isId(ex.id)) serverIdByName.set(r.name, Number(ex.id));
                 continue;
@@ -680,7 +693,7 @@
                 transport: s.transport || 'http', is_mock: !!s.is_mock, headers: auth ? { Authorization: auth } : {} };
             const res = await step(`register server ${r.name}`, () => io.addServer(reg));
             serverIdByName.set(r.name, Number(res.id));
-            installed.push({ kind: 'server', name: r.name, destination: plan.servers.find((x) => x.r === r)?.dest || null });
+            installed.push({ kind: 'server', name: r.name, destination: plan.servers.find((x) => x.r === r)?.dest || (keepsFolder(r) ? r.destination : null) });
         }
         const serverNameByOldId = new Map((pkg.servers || []).filter((s) => isId(s.old_id)).map((s) => [Number(s.old_id), s.name]));
 
@@ -753,5 +766,5 @@
         return { installed, commands, nodes };
     }
 
-    return { WORKFLOW_KEYS, isSafeSegment, isSafeWritePath, packageSkills, mergeEnv, collectDependencies, missingByNode, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, envFields, renderEnv, parseEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest, readPackage, matchComponent, reviewRows, canConfirm, installPackage };
+    return { WORKFLOW_KEYS, isSafeSegment, isSafeWritePath, packageSkills, mergeEnv, collectDependencies, missingByNode, serverFolder, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, envFields, renderEnv, parseEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest, readPackage, matchComponent, reviewRows, canConfirm, installPackage };
 });
