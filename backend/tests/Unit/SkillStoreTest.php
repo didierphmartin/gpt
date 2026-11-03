@@ -124,7 +124,7 @@ final class SkillStoreTest extends TestCase
         $this->assertSame(['status' => 'installed'], $s->import(2, 'x/pdf', $this->skill('pdf')));
         // B's own private skill blocks B.
         $this->expectException(SkillClashException::class);
-        $s->import(2, 'y/pdf', $this->skill('pdf'));
+        $s->import(2, 'y/pdf', $this->skill('pdf', 'other'));
     }
 
     public function test_clash_with_other_private_never_reveals(): void
