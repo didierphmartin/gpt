@@ -1081,8 +1081,7 @@
       "nextRun": "Próxima ejecución",
       "saveSchedule": "Guardar Programación",
       "deleteSchedule": "Eliminar Programación",
-      "scheduleCreated": "Programación creada exitosamente",
-      "scheduleUpdated": "Programación actualizada exitosamente",
+      "saved": "Operación exitosa",
       "scheduleDeleted": "Programación eliminada exitosamente",
       "scheduleFailed": "Error al guardar la programación"
     },

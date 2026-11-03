@@ -31,7 +31,7 @@ function findById(el, id) {
  * Evaluate the module against a fresh fake browser.
  * `fetchImpl` stands in for the network; `calls` records what it was asked for.
  */
-function load({ kind = 'python', base = 'http://localhost:3002/api/v1', language = null, fetchImpl } = {}) {
+function load({ kind = 'python', base = 'http://localhost:3002/api/v1', language = null, fetchImpl, edition } = {}) {
   const calls = [];
   const body = makeEl('body');
   const impl = fetchImpl || (() => Promise.reject(new TypeError('Failed to fetch')));
@@ -40,7 +40,7 @@ function load({ kind = 'python', base = 'http://localhost:3002/api/v1', language
 
   const store = language === null ? {} : { chatbot_language: language };
   const window = {
-    APP_CONFIG: { BACKEND_KIND: kind, API_BASE_URL: base },
+    APP_CONFIG: { BACKEND_KIND: kind, API_BASE_URL: base, ...(edition ? { GPT_EDITION: edition } : {}) },
     fetch: fetchStub,
     setBackendKind: (k) => { window.switchedTo = k; },
   };
@@ -156,4 +156,15 @@ test('an unknown language falls back to English rather than a raw key', async ()
   const { banner } = load({ kind: 'python', language: 'de' });
   await tick();
   assert.match(textOf(banner()), /is not running/);
+});
+
+test('in the Docker app the PHP banner says the app may be restarting, not XAMPP', async () => {
+  const { window, banner } = load({ kind: 'php', base: '/gpt/backend/api/v1', edition: 'individual' });
+  await assert.rejects(() => window.fetch('/gpt/backend/api/v1/auth'), TypeError);
+  const text = textOf(banner());
+  assert.match(text, /restarting/);
+  assert.ok(!/XAMPP|Apache/.test(text));
+  const fr = load({ kind: 'php', base: '/gpt/backend/api/v1', edition: 'corporate', language: 'fr' });
+  await assert.rejects(() => fr.window.fetch('/gpt/backend/api/v1/auth'), TypeError);
+  assert.match(textOf(fr.banner()), /redémarre/);
 });

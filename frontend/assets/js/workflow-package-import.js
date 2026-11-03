@@ -6,7 +6,7 @@
  *   0. the user's folder (explain + picker; cancel stops before anything is written),
  *   1. read the package and what this install already has,
  *   2. the review dialog (one card per dependency),
- *   3. Confirm -> WorkflowPackage.installPackage, then the workflow goes on the canvas (unsaved),
+ *   3. Confirm -> WorkflowPackage.installPackage, then the workflow goes on the canvas and is saved,
  *   4. the result panel (what was installed, where, and each local server's install / start commands).
  * overrides (console tests): { io: {...partial io}, have: {...partial have}, skipFolder: true }.
  * Resolves once the review dialog is shown, with { pkg, rows, values, have } (or undefined when stopped).

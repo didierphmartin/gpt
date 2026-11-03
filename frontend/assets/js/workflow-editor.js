@@ -7506,8 +7506,9 @@ class WorkflowEditor {
     }
 
     /**
-     * Apply a parsed workflow JSON payload to the editor. Mirrors the
-     * re-hydration done by loadWorkflow() but without hitting the backend.
+     * Apply a parsed workflow JSON payload to the editor (re-hydrated as
+     * loadWorkflow() does), then save it as a new workflow so it shows in
+     * the list: an import is expected to be kept.
      */
     async _applyImportedWorkflow(payload) {
         const def = payload?.definition || {};
@@ -7564,6 +7565,7 @@ class WorkflowEditor {
         this.updateWorkflowInfoBox();
         this.renderSavedWorkflowsList();
         this.hideHelpOverlay();
+        await this.saveWorkflow();
     }
 
     /**
@@ -23329,11 +23331,8 @@ Based on the analysis...
             // Update Start node indicator
             this.updateStartNodeScheduleIndicator(true);
 
-            // Show success message
-            this.showNotification(
-                isUpdate ? this.t('workflow.schedule.scheduleUpdated') : this.t('workflow.schedule.scheduleCreated'),
-                'success'
-            );
+            // One wording for a schedule and an event option alike (both are stored as this row).
+            this.showNotification(this.t('workflow.schedule.saved'), 'success');
 
             return true;
         } catch (error) {

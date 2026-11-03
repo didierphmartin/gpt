@@ -1081,8 +1081,7 @@
       "nextRun": "Prochaine exécution",
       "saveSchedule": "Enregistrer la Planification",
       "deleteSchedule": "Supprimer la Planification",
-      "scheduleCreated": "Planification créée avec succès",
-      "scheduleUpdated": "Planification mise à jour avec succès",
+      "saved": "Opération réussie",
       "scheduleDeleted": "Planification supprimée avec succès",
       "scheduleFailed": "Échec de l'enregistrement de la planification"
     },

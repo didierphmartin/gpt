@@ -42,6 +42,7 @@
       refused: 'refused the connection.',
       start:  'Start it from the project root:',
       php:    'Check that Apache and MySQL are started in the XAMPP control panel.',
+      docker: 'The app may be restarting: reload the page in a moment. If this persists, check in Docker Desktop that the app\u2019s containers are running.',
       button: 'Switch to the PHP backend',
       close:  'Dismiss',
     },
@@ -50,6 +51,7 @@
       refused: 'a refusé la connexion.',
       start:  'Démarrez-le depuis la racine du projet :',
       php:    'Vérifiez qu’Apache et MySQL sont démarrés dans le panneau XAMPP.',
+      docker: 'L’application redémarre peut-être : rechargez la page dans un instant. Si cela persiste, vérifiez dans Docker Desktop que ses conteneurs tournent.',
       button: 'Basculer vers le backend PHP',
       close:  'Fermer',
     },
@@ -58,6 +60,7 @@
       refused: 'rechazó la conexión.',
       start:  'Inícialo desde la raíz del proyecto:',
       php:    'Comprueba que Apache y MySQL estén iniciados en el panel de XAMPP.',
+      docker: 'Puede que la aplicación se esté reiniciando: recarga la página en un momento. Si persiste, comprueba en Docker Desktop que sus contenedores están en marcha.',
       button: 'Cambiar al backend PHP',
       close:  'Cerrar',
     },
@@ -94,7 +97,9 @@
 
     var detail = document.createElement('div');
     detail.style.cssText = 'opacity:.9';
-    detail.textContent = base + ' ' + t.refused + ' ' + (b.cmd ? t.start : t.php);
+    // The Docker app (config.js names its edition) has no XAMPP: there a refusal is usually a container restart.
+    var docker = !!(window.APP_CONFIG && window.APP_CONFIG.GPT_EDITION);
+    detail.textContent = base + ' ' + t.refused + ' ' + (b.cmd ? t.start : docker ? t.docker : t.php);
 
     el.appendChild(head);
     el.appendChild(detail);

@@ -1081,8 +1081,7 @@
       "nextRun": "Next run",
       "saveSchedule": "Save Schedule",
       "deleteSchedule": "Delete Schedule",
-      "scheduleCreated": "Schedule created successfully",
-      "scheduleUpdated": "Schedule updated successfully",
+      "saved": "Operation successful",
       "scheduleDeleted": "Schedule deleted successfully",
       "scheduleFailed": "Failed to save schedule"
     },
