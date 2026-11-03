@@ -179,3 +179,13 @@ test('no migration offer and no flag without a current user id', async () => {
   mgr.markMigrationDone();
   assert.deepEqual(Object.keys(store), []);
 });
+
+test('folder-permission notice only in folder mode (an empty Docker store is not a folder problem)', async () => {
+  for (const [mode, expected] of [['volume', false], ['folder', true]]) {
+    const { mgr, window } = load({ fs: { mode: async () => mode } });
+    window.localFs = { getStatus: async () => ({ state: 'prompt' }) };
+    mgr.treeContainer = { innerHTML: '' };
+    assert.equal(await mgr.renderFsAccessNotice(), expected, mode);
+    assert.equal(mgr.treeContainer.innerHTML.includes('skills.fsaPrompt'), expected, mode);
+  }
+});

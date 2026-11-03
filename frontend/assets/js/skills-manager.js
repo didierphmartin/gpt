@@ -130,6 +130,9 @@ class SkillsManager {
      */
     async renderFsAccessNotice() {
         if (!this.treeContainer || !window.localFs?.getStatus) return false;
+        // In the Docker app the list comes from the skill store, not the folder: an empty
+        // store is "no skills yet", never a folder-permission problem.
+        if (window.skillsFs?.mode && await window.skillsFs.mode() !== 'folder') return false;
         let status;
         try { status = await window.localFs.getStatus(); } catch (e) { return false; }
         if (!status || status.state === 'granted') return false;
