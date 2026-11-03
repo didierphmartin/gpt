@@ -28,6 +28,34 @@ final class McpEndpoint
      */
     public static function candidates(string $serverUrl, string $transport = 'http'): array
     {
+        return array_map([self::class, 'internal'], self::rawCandidates($serverUrl, $transport));
+    }
+
+    /**
+     * The address this backend can reach for a registered URL. In the Docker
+     * app servers are registered as the public gateway (http://localhost:8790/...)
+     * but the web container reaches the supervisor as MCPS_GATEWAY (http://mcps:8790).
+     * Both env values must be set; otherwise the URL is returned unchanged.
+     */
+    public static function internal(string $url): string
+    {
+        $gateway = (string) ($_ENV['MCPS_GATEWAY'] ?? '');
+        $public = rtrim((string) ($_ENV['MCPS_PUBLIC_GATEWAY'] ?? ''), '/');
+        if ($gateway === '' || $public === '') {
+            return $url;
+        }
+        $prefixes = [$public . '/', str_replace('//localhost', '//127.0.0.1', $public) . '/'];
+        foreach ($prefixes as $prefix) {
+            if (str_starts_with($url, $prefix)) {
+                return rtrim($gateway, '/') . '/' . substr($url, strlen($prefix));
+            }
+        }
+        return $url;
+    }
+
+    /** @return list<string> */
+    private static function rawCandidates(string $serverUrl, string $transport): array
+    {
         [$path, $rest] = self::splitPath($serverUrl);
         $trimmed = rtrim($path, '/');
 

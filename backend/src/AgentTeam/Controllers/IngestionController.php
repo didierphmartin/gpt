@@ -10,6 +10,7 @@ use AgentTeam\Services\IngestionSplitter;
 use AgentTeam\Services\VectorMcpStore;
 use AgentTeam\Services\WorkflowRepository;
 use Quantis\AIPortfolioAssistant\Services\MCPToolsLoader;
+use Quantis\AIPortfolioAssistant\Services\McpEndpoint;
 use PDO;
 
 /**
@@ -1076,7 +1077,7 @@ final class IngestionController
      */
     private function mcpPost(string $url, array $headers, array $payload, ?string &$session): array
     {
-        $ch = curl_init($url);
+        $ch = curl_init(McpEndpoint::internal($url));
         curl_setopt_array($ch, [
             CURLOPT_POST           => true,
             CURLOPT_POSTFIELDS     => json_encode($payload),

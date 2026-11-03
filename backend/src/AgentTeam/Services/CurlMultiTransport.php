@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 namespace AgentTeam\Services;
 
+use Quantis\AIPortfolioAssistant\Services\McpEndpoint;
+
 /** WatchTransport over one curl_multi: every active workflow's long-poll in this one process (spec 2026-10-14 event-worker §3). */
 final class CurlMultiTransport implements WatchTransport
 {
@@ -21,7 +23,7 @@ final class CurlMultiTransport implements WatchTransport
     public function start(string $key, string $url, array $headers, string $body): void
     {
         $this->cancel($key);
-        $ch = curl_init($url);
+        $ch = curl_init(McpEndpoint::internal($url));
         curl_setopt_array($ch, [
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => $body,

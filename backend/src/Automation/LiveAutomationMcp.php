@@ -5,6 +5,7 @@ namespace Quantis\AIPortfolioAssistant\Automation;
 use PDO;
 use Quantis\AIPortfolioAssistant\Playbook\Adapters\LoaderMcpExecutor;
 use Quantis\AIPortfolioAssistant\Services\MCPToolsLoader;
+use Quantis\AIPortfolioAssistant\Services\McpEndpoint;
 
 /** Production AutomationMcp: describe through the loader (like CodeNodeController), install by one JSON-RPC POST. */
 final class LiveAutomationMcp implements AutomationMcp
@@ -23,7 +24,7 @@ final class LiveAutomationMcp implements AutomationMcp
     {
         $body = json_encode(['jsonrpc' => '2.0', 'id' => time(), 'method' => 'tools/call',
             'params' => ['name' => 'install_app', 'arguments' => $args]], JSON_UNESCAPED_SLASHES);
-        $ch = curl_init($url);
+        $ch = curl_init(McpEndpoint::internal($url));
         curl_setopt_array($ch, [
             CURLOPT_POST => true, CURLOPT_POSTFIELDS => $body, CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HTTPHEADER => array_merge(['Content-Type: application/json', 'Accept: application/json, text/event-stream'], $headerLines),
