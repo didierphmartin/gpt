@@ -97,9 +97,9 @@ PY;
     public function testSkillFsSyncBlockUnchanged(): void
     {
         $block = PythonEmitHelpers::skillFsSyncBlock();
-        $this->assertSame(6017, strlen($block), 'skillFsSyncBlock byte length changed');
+        $this->assertSame(6119, strlen($block), 'skillFsSyncBlock byte length changed');
         $this->assertSame(
-            '7b9543f387e0a7fce98aa2ed74c5304e452ddc9d6c06588ecf93d7adf4d03f50',
+            '1b166aa4ca19b7b1aeb9e47c09cd6f6ad030208a2dbeedc2787a39d397b9490b',
             hash('sha256', $block),
             'skillFsSyncBlock content changed — this alters generated Python for both generators'
         );
