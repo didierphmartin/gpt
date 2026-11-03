@@ -577,6 +577,52 @@ PY;
         $this->generator($this->graph(), fn(string $d): ?string => null)->generate(44, '3', ['modular' => true]);
     }
 
+    private const CREATE_PY = "SKILLS_ROOT = os.environ.get('SYNERGYAI_SKILLS_DIR')\n"
+        . "flow = load_script('servicenow-flow-author', 'create.py')\npb = load_script(\"playbook-author\", 'create.py')\n"
+        . "cat = '/skill/playbook-author/references/mcp-catalog.md'\nwf = load_script('workflow-compile', 'compile.py')\nfmt = 'html'\n";
+
+    public function testRequiredSkillsDetection(): void
+    {
+        $installed = ['servicenow-automation-author', 'servicenow-flow-author', 'playbook-author', 'workflow-compile', 'GEO/geo-report'];
+        $files = ['SKILL.md' => "---\nname: a\n---\n'docx'", 'scripts/create.py' => self::CREATE_PY,
+            'scripts/__pycache__/x.pyc' => "'GEO/geo-report'", 'references/r.md' => "'geo-report'"];
+        self::assertSame(['requires' => ['playbook-author', 'servicenow-flow-author', 'workflow-compile'], 'missing' => []],
+            LangGraphPackage::requiredSkills('servicenow-automation-author', $files, $installed));
+        $decl = ['SKILL.md' => "---\nrequires-skills: [geo-report, ghost]\n---\n", 'scripts/a.py' => "x = 'servicenow-automation-author'"];
+        self::assertSame(['requires' => ['GEO/geo-report'], 'missing' => ['ghost']],
+            LangGraphPackage::requiredSkills('servicenow-automation-author', $decl, $installed));
+        self::assertSame(['docx'], LangGraphPackage::declaredSkills("---\nrequires-skills: docx\n---\n"));
+        self::assertSame('GEO/x', LangGraphPackage::resolveSkillName('x', ['SEO/x', 'GEO/x'], 'GEO/me'));
+    }
+
+    /** A compiled package of a skill that loads other skills carries them (closure, cycle-safe), wheels included. */
+    public function testRequiredSkillsAreCopiedIntoThePackage(): void
+    {
+        $root = $this->skillsRoot();
+        foreach (['auto' => self::CREATE_PY, 'servicenow-flow-author' => "x = 'playbook-author'\n", 'playbook-author' => "y = 'auto'\n",
+                  'workflow-compile' => "print(1)\n", 'unused' => "print(2)\n"] as $d => $py) {
+            mkdir("$root/$d/scripts", 0777, true);
+            file_put_contents("$root/$d/SKILL.md", "---\nname: $d\n---\n");
+            file_put_contents("$root/$d/scripts/create.py", $py);
+        }
+        mkdir("$root/workflow-compile/.wheels/native", 0777, true);
+        file_put_contents("$root/workflow-compile/.wheels/native/w-1-py3-none-any.whl", "PK");
+        $paths = fn($r) => DispatcherDemoFixture::skillPaths($this->generator($this->graph('auto'), $r)->generate(44, '3', ['modular' => true])['files']);
+        $got = $paths($root);
+        foreach (['skills/auto/scripts/create.py', 'skills/servicenow-flow-author/scripts/create.py', 'skills/playbook-author/scripts/create.py',
+                  'skills/workflow-compile/scripts/create.py', 'skills/workflow-compile/.wheels/native/w-1-py3-none-any.whl'] as $p) {
+            self::assertContains($p, $got);
+        }
+        self::assertNotContains('skills/unused/SKILL.md', $got);
+        self::assertNotContains('skills/pdf-report/SKILL.md', $got);
+        // The store resolver: the same skills, found by probing the names the scripts use.
+        self::assertSame($got, $paths(fn(string $d): ?string => is_dir("$root/$d") ? "$root/$d" : null));
+        // A declared required skill the server does not have stops the compile, naming both.
+        file_put_contents("$root/auto/SKILL.md", "---\nname: auto\nrequires-skills: [ghost]\n---\n");
+        $this->expectExceptionMessage('Skill "auto" needs skill "ghost", which is not available on this server');
+        $paths($root);
+    }
+
     public function testTheProgramInstallsFromTheSkillsOwnWheels(): void
     {
         $files = $this->generator($this->graph(), DispatcherDemoFixture::wheelSkillsRoot())->generate(44, '3', ['modular' => true])['files'];
