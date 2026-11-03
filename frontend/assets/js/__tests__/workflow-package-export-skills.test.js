@@ -3,12 +3,13 @@ const assert = require('assert');
 const enc = (s) => new TextEncoder().encode(s);
 const WP = require('../workflow-package.js');
 const calls = { gather: [], build: [] };
-let store = {}, gatherError = null;
+let store = {}, gatherError = null, requiresOf = {};
 global.window = {
     WorkflowPackage: WP,
     skillsFs: { mode: async () => 'volume', readSkillFiles: async (d) => store[d] || {} },
     skillsImport: {
         filterSkillFiles: (f) => f,
+        readRequires: async (d) => (requiresOf[d] || []).map((x) => ({ dir: x, name: x, files: store[x] })),
         wheelsError: (e) => (e.code === 'native-missing' ? `No wheel for ${e.library} on ${e.platform}` : `gather: ${e.message}`),
     },
     SkillZip: {
@@ -50,6 +51,16 @@ const run = (dirs, readable = true, files = {}) => bundleSkills({ dirs, nodes, r
     assert.strictEqual(calls.sessions[0], calls.sessions[1]);
     await run(['pdf'], true, {});
     assert.notStrictEqual(calls.sessions[2], calls.sessions[0]);
+    // a bound skill's required skills go into its zip, each with its own wheels
+    store = { pdf: { 'SKILL.md': enc('---\nname: pdf\n---\n') }, flow: { 'SKILL.md': enc('---\ndependencies: [numpy]\n---\n') } };
+    requiresOf = { pdf: ['flow'] };
+    calls.build.length = 0; calls.gather.length = 0;
+    await run(['pdf'], true, {});
+    assert.deepStrictEqual(calls.build[0].requires.map((r) => r.dir), ['flow']);
+    assert.deepStrictEqual(Object.keys(calls.build[0].requires[0].pyodideWheels), ['a.whl']);
+    assert.deepStrictEqual(calls.gather, [['numpy']]);
+    requiresOf = {};
+    store = { pdf: store.flow };
     // 422: library and platform surface
     gatherError = Object.assign(new Error('x'), { code: 'native-missing', library: 'lxml', platform: 'win-arm64' });
     await assert.rejects(run(['pdf']), /No wheel for lxml on win-arm64/);

@@ -93,6 +93,7 @@
             },
             writeFile,
             importSkill: (read, o) => window.skillsFs.importSkill(read, o),
+            checkSkill: (read) => window.skillsFs.importPlan(read),
             async readJson(path) {
                 const fh = await fileHandle(path, false);
                 if (!fh) return undefined;
@@ -159,6 +160,16 @@
                 // Bare relative paths with the skill export's filter: the same convention reviewRows hashes.
                 const files = window.skillsImport.filterSkillFiles(window.skillsFs ? await window.skillsFs.readSkillFiles(dir) : {});
                 if (Object.keys(files).length) have.skills.push({ dir, hash: await WP().filesHash(files) });
+            }
+            // ... and the skills each one requires (carried inside its zip), so a clash shows on the review row.
+            for (const dir of dirs) {
+                let read;
+                try { read = WP().readPackageSkill(pkg, dir); } catch (e) { continue; }
+                for (const x of read.requires || []) {
+                    if (have.skills.some((h) => h.dir === x.dir)) continue;
+                    const files = window.skillsImport.filterSkillFiles(window.skillsFs ? await window.skillsFs.readSkillFiles(x.dir) : {});
+                    if (Object.keys(files).length) have.skills.push({ dir: x.dir, hash: await WP().filesHash(files) });
+                }
             }
         }
         return have;
@@ -237,11 +248,17 @@
         if (reasons.length && !skipped) {
             parts.push(`<ul style="margin: 0 0 0 18px; color: #92400e; font-size: 13px;">${reasons.map((x) => `<li>${t(REASON_KEY[x])}</li>`).join('')}</ul>`);
         }
+        if (r.kind === 'skill' && (r.requiredClash || []).length && !skipped) {
+            parts.push(`<div style="color: #92400e; font-size: 13px;">${t('reasonRequiredClash', { names: r.requiredClash.join(', ') })}</div>`);
+        }
+        if (r.kind === 'skill' && live && (r.requires || []).length) {
+            parts.push(`<div style="color: #475569; font-size: 13px;">${t('alsoInstalls', { list: r.requires.join(', ') })}</div>`);
+        }
         if (r.status === 'clash') {
             parts.push(`<div style="display: flex; gap: 8px;">
                 <button type="button" data-choice="use-existing" style="${r.choice === 'use-existing' ? BTN_ON : BTN_PLAIN}">${t('useExisting')}</button>
                 <button type="button" data-choice="skip" style="${skipped ? BTN_ON : BTN_PLAIN}">${t('skipIt')}</button></div>`);
-        } else if ((r.reasons || []).some((x) => x === 'unreadable' || x === 'unsafe-path')) {
+        } else if ((r.reasons || []).some((x) => x === 'unreadable' || x === 'unsafe-path' || x === 'required-clash')) {
             parts.push(`<div><button type="button" data-choice="skip" style="${skipped ? BTN_ON : BTN_PLAIN}">${t('skipIt')}</button></div>`);
         }
         if (registers && r.kind === 'server') {

@@ -3343,6 +3343,7 @@ class SkillRuntime:
         env = dict(
             os.environ,
             SYNERGYAI_OUTPUT_DIR=out_dir,
+            SYNERGYAI_SKILLS_DIR=os.path.abspath(self.skills_dir),   # absolute (it may be ./skills): a skill that loads another skill's scripts finds it here
             SYNERGYAI_SCRATCH_DIR=self.scratch_dir,
             SYNERGYAI_SKILL_DIR_NAME=dir_name,
             SYNERGYAI_SKILL_GROUP=(dir_name.split("/")[0] if "/" in dir_name else ""),

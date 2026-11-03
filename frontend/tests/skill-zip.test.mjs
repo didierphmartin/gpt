@@ -65,3 +65,46 @@ test('toStoreFiles omits .wheels/wheels.json when there are no wheels', () => {
     const out = SkillZip.toStoreFiles({ files: { 'SKILL.md': enc.encode('x') }, pyodideWheels: {}, nativeWheels: {} });
     assert.deepEqual(Object.keys(out), ['SKILL.md']);
 });
+
+test('required skills travel in the zip (skills/<dir>/, skill-wheels/<dir>/) and read back as read.requires', async () => {
+    const files = { 'SKILL.md': md(''), 'scripts/create.py': enc.encode("load_script('flow', 'create.py')") };
+    const requires = [
+        { dir: 'flow', name: 'flow', files: { 'SKILL.md': md('dependencies: fpdf2\n'), 'scripts/create.py': enc.encode('F') }, pyodideWheels: { 'fpdf2.whl': enc.encode('P') }, nativeWheels: { 'fpdf2-n.whl': enc.encode('N') } },
+        { dir: 'GEO/geo-report', name: 'geo-report', files: { 'SKILL.md': md('') } },
+    ];
+    const z = await SkillZip.build({ dir: 'auto', name: 'auto', files, requires }, o);
+    const entries = Object.keys(fflate.unzipSync(z)).sort();
+    assert.ok(entries.includes('skills/flow/scripts/create.py'));
+    assert.ok(entries.includes('skill-wheels/flow/pyodide/fpdf2.whl'));
+    assert.ok(entries.includes('skill-wheels/flow/native/fpdf2-n.whl'));
+    assert.ok(entries.includes('skills/GEO/geo-report/SKILL.md'));
+    const r = SkillZip.read(z, o);
+    assert.deepEqual(r.manifest.requires, ['flow', 'GEO/geo-report']);
+    assert.deepEqual(Object.keys(r.files).sort(), ['SKILL.md', 'scripts/create.py']);
+    assert.equal(r.requires.length, 2);
+    const [flow, geo] = r.requires;
+    assert.equal(flow.dir, 'flow');
+    assert.equal(flow.legacy, false);
+    assert.deepEqual(Object.keys(flow.files).sort(), ['SKILL.md', 'scripts/create.py']);
+    assert.equal(dec(flow.pyodideWheels['fpdf2.whl']), 'P');
+    assert.equal(dec(flow.nativeWheels['fpdf2-n.whl']), 'N');
+    assert.deepEqual(flow.manifest.dependencies, ['fpdf2']);
+    assert.equal(geo.dir, 'GEO/geo-report');
+    assert.equal(geo.name, 'geo-report');
+    assert.deepEqual(Object.keys(geo.files), ['SKILL.md']);
+    assert.deepEqual(geo.requires, []);
+});
+
+test('a zip without requires reads as before (requires: []); a listed required skill with no files is an error', async () => {
+    const z = await SkillZip.build({ dir: 'pdf', name: 'pdf', files: { 'SKILL.md': md('') } }, o);
+    const r = SkillZip.read(z, o);
+    assert.equal(r.manifest.requires, undefined);
+    assert.deepEqual(r.requires, []);
+    const legacy = SkillZip.read(fflate.zipSync({ 'top/SKILL.md': enc.encode('x') }), o);
+    assert.deepEqual(legacy.requires, []);
+    const bad = fflate.zipSync({ 'manifest.json': enc.encode('{"format":1,"dir":"a","requires":["b"]}'), 'skill/a/SKILL.md': enc.encode('x') });
+    assert.throws(() => SkillZip.read(bad, o), /required skill b/);
+    const unsafe = fflate.zipSync({ 'manifest.json': enc.encode('{"format":1,"dir":"a","requires":["../b"]}'), 'skill/a/SKILL.md': enc.encode('x') });
+    assert.throws(() => SkillZip.read(unsafe, o), /Unsafe/);
+    await assert.rejects(SkillZip.build({ dir: 'a', name: 'a', files: {}, requires: [{ dir: 'a', files: {} }] }, o), /itself/);
+});

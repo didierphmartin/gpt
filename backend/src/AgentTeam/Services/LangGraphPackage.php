@@ -147,7 +147,8 @@ final class LangGraphPackage
     /**
      * Every file of every used skill folder (skipping __pycache__, .DS_Store, *.pyc, .env*, dot-directories), sorted,
      * plus the skill's native wheels (.wheels/native/: the program installs its libraries from there, offline);
-     * never the browser's (.wheels/pyodide/).
+     * never the browser's (.wheels/pyodide/). Each used skill brings the skills it requires (requiredSkills(),
+     * transitively): they are copied the same way, after the bound ones, at skills/<leaf>/ (a grouped one too).
      *
      * $skillsRoot: the folder holding the skills, or (the Docker app's skill store) a resolver
      * (string $dir): ?string giving each skill's own folder, null when the owner cannot see it.
@@ -158,35 +159,223 @@ final class LangGraphPackage
     {
         $out = [];
         $root = is_string($skillsRoot) ? realpath($skillsRoot) : null;
-        foreach (self::skillDirs($facts) as $d) {
-            // dir_name comes from the client-saved node config: plain segments ("GEO/geo-report" for a grouped
-            // skill; none empty, "." or "..", none starting with "." (.git, .superpowers), no "\"), resolved
-            // inside the root.
-            $segments = StartDocumentStore::safeSegments($d);
-            $safe = $segments !== null && array_filter($segments, fn(string $seg) => str_starts_with($seg, '.')) === [];
-            if (!$safe) {
-                $base = false;
-            } elseif ($root === null) {
-                $dir = $skillsRoot($d);
-                $base = $dir === null ? false : realpath($dir);
-            } else {
-                $base = $root !== false ? realpath($root . DIRECTORY_SEPARATOR . $d) : false;
-                $base = $base !== false && str_starts_with($base, $root . DIRECTORY_SEPARATOR) ? $base : false;
+        // [skill, who needs it, where it goes]: a bound skill at its own path; a required one at skills/<leaf>/, where
+        // the scripts that need it look (SKILLS_ROOT/<leaf>/...).
+        $queue = array_map(fn(string $d) => [$d, null, $d], self::skillDirs($facts));
+        $done = [];
+        $installed = null;   // the skill paths a folder root holds (read once, when a skill needs it)
+        while ($queue !== []) {
+            [$d, $by, $as] = array_shift($queue);
+            if (isset($done[$as])) {
+                if ($done[$as] !== $d) {   // two different skills would land in one folder
+                    throw new RuntimeException("Skills \"{$done[$as]}\" and \"{$d}\" both need to be available as '{$as}'; rename one.");
+                }
+                continue;
             }
-            if ($base === false || !is_dir($base)) {
-                throw new RuntimeException("Skill folder \"{$d}\" is not available on this server, so it can't be packaged.");
+            $done[$as] = $d;
+            $base = self::skillBase($d, $skillsRoot, $root, $by);
+            if ($base === false) {
+                throw new RuntimeException($by === null
+                    ? "Skill folder \"{$d}\" is not available on this server, so it can't be packaged."
+                    : "Skill \"{$by}\" needs skill \"{$d}\", which is not available on this server, so it can't be packaged.");
             }
             $found = self::folderFiles($base, $base);
+            $own = [];
+            foreach ($found as $rel) {
+                if ($rel === 'SKILL.md' || str_starts_with($rel, 'scripts/')) {
+                    $own[$rel] = (string) file_get_contents("{$base}/{$rel}");
+                }
+            }
             if (is_dir("{$base}/.wheels/native")) {
                 array_push($found, ...self::folderFiles($base, "{$base}/.wheels/native"));
             }
             sort($found, SORT_STRING);
             foreach ($found as $rel) {
                 $bytes = (string) file_get_contents("{$base}/{$rel}");
-                $out[] = ['dir' => $d, 'rel' => $rel, 'bytes' => $bytes, 'entry' => self::entry("skills/{$d}/{$rel}", $bytes)];
+                $out[] = ['dir' => $as, 'rel' => $rel, 'bytes' => $bytes, 'entry' => self::entry("skills/{$as}/{$rel}", $bytes)];
+            }
+            $names = $root !== null
+                ? ($installed ??= ($root === false ? [] : self::installedSkills($root)))
+                : self::probedSkills($d, $own, $skillsRoot);
+            $req = self::requiredSkills($d, $own, $names);
+            foreach ($req['missing'] as $m) {
+                throw new RuntimeException("Skill \"{$d}\" needs skill \"{$m}\", which is not available on this server, so it can't be packaged.");
+            }
+            foreach ($req['requires'] as $q) {
+                $queue[] = [$q, $d, basename($q)];
             }
         }
         return $out;
+    }
+
+    /** The real folder of skill $d (inside the root, or from the store resolver), false when unsafe or absent. */
+    private static function skillBase(string $d, string|\Closure $skillsRoot, string|false|null $root, ?string $from = null): string|false
+    {
+        // dir_name comes from the client-saved node config: plain segments ("GEO/geo-report" for a grouped
+        // skill; none empty, "." or "..", none starting with "." (.git, .superpowers), no "\"), resolved
+        // inside the root.
+        $segments = StartDocumentStore::safeSegments($d);
+        $safe = $segments !== null && array_filter($segments, fn(string $seg) => str_starts_with($seg, '.')) === [];
+        if (!$safe) {
+            return false;
+        }
+        if ($root === null) {
+            $dir = $skillsRoot($d, $from);   // $from: the skill that needs it (a store resolver prefers its group)
+            $base = $dir === null ? false : realpath($dir);
+        } else {
+            $base = $root !== false ? realpath($root . DIRECTORY_SEPARATOR . $d) : false;
+            $base = $base !== false && str_starts_with($base, $root . DIRECTORY_SEPARATOR) ? $base : false;
+        }
+        return $base !== false && is_dir($base) ? $base : false;
+    }
+
+    /** The skill paths under a skills root: folders (one or two levels, no dot-folder) holding a SKILL.md. */
+    private static function installedSkills(string $root): array
+    {
+        $out = [];
+        foreach (scandir($root) ?: [] as $a) {
+            if ($a === '.' || $a === '..' || str_starts_with($a, '.') || !is_dir("{$root}/{$a}")) {
+                continue;
+            }
+            if (is_file("{$root}/{$a}/SKILL.md")) {
+                $out[] = $a;
+                continue;
+            }
+            foreach (scandir("{$root}/{$a}") ?: [] as $b) {
+                if (!str_starts_with($b, '.') && is_file("{$root}/{$a}/{$b}/SKILL.md")) {
+                    $out[] = "{$a}/{$b}";
+                }
+            }
+        }
+        sort($out, SORT_STRING);
+        return $out;
+    }
+
+    /**
+     * The store has no listing here, only the resolver: every name the skill could mean (its requires-skills, else each
+     * exact quoted literal and each /segment/ of its scripts) that resolves to a skill the owner sees (the resolver
+     * also finds a grouped skill by its leaf).
+     */
+    private static function probedSkills(string $self, array $files, \Closure $resolve): array
+    {
+        $cands = self::declaredSkills($files['SKILL.md'] ?? '');
+        if ($cands === []) {
+            foreach (self::quotedLiterals($files) as $lit) {
+                $cands[] = $lit;                                  // an exact literal
+                $segs = explode('/', $lit);
+                for ($i = 1; $i < count($segs) - 1; $i++) {       // a /segment/ with a slash on both sides
+                    $cands[] = $segs[$i];
+                }
+            }
+        }
+        $out = [];
+        foreach (array_unique($cands) as $c) {
+            if ($c === $self || !preg_match('#^[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)?$#', $c)) {
+                continue;
+            }
+            $dir = $resolve($c, $self);
+            if ($dir !== null && is_file($dir . '/SKILL.md')) {
+                $out[] = $c;
+            }
+        }
+        sort($out, SORT_STRING);
+        return $out;
+    }
+
+    /** The quoted string literals ('…' / "…", one line) of a skill's scripts/** text files. */
+    private static function quotedLiterals(array $files): array
+    {
+        $lits = [];
+        foreach ($files as $rel => $bytes) {
+            $rel = (string) $rel;
+            if (!str_starts_with($rel, 'scripts/') || in_array('__pycache__', explode('/', $rel), true)
+                || str_ends_with($rel, '.pyc') || !mb_check_encoding((string) $bytes, 'UTF-8')) {
+                continue;
+            }
+            preg_match_all('/\'([^\'\n\\\\]*)\'|"([^"\n\\\\]*)"/', (string) $bytes, $m, PREG_SET_ORDER);
+            foreach ($m as $x) {
+                $lits[] = ($x[2] ?? '') !== '' ? $x[2] : $x[1];
+            }
+        }
+        return $lits;
+    }
+
+    /** `requires-skills:` of a SKILL.md frontmatter (list or single form, parsed as `dependencies:`). */
+    public static function declaredSkills(string $skillMd): array
+    {
+        return self::frontmatterList($skillMd, 'requires-skills:');
+    }
+
+    /** The installed skill a name means: the exact path, else by leaf (same group as $from, then top level, then the first). */
+    public static function resolveSkillName(string $name, array $installed, string $from): ?string
+    {
+        if (in_array($name, $installed, true)) {
+            return $name;
+        }
+        $leaf = basename($name);
+        $hits = array_values(array_filter($installed, fn(string $p) => basename($p) === $leaf));
+        if ($hits === []) {
+            return null;
+        }
+        $group = str_contains($from, '/') ? explode('/', $from)[0] : '';
+        foreach ($hits as $p) {
+            if ((str_contains($p, '/') ? explode('/', $p)[0] : '') === $group) {
+                return $p;
+            }
+        }
+        foreach ($hits as $p) {
+            if (!str_contains($p, '/')) {
+                return $p;
+            }
+        }
+        sort($hits, SORT_STRING);
+        return $hits[0];
+    }
+
+    /**
+     * The skills skill $path requires (one level; twin of SkillRequires.direct in frontend/assets/js/skill-requires.js):
+     * its `requires-skills:` when declared (replaces scanning), else every OTHER installed skill whose leaf folder name
+     * is an exact quoted string of its scripts/** text files or a /leaf/ segment (slash on both sides) inside one.
+     * Unknown declared names are missing.
+     *
+     * @param array<string,string> $files rel => bytes of that skill
+     * @param list<string> $installed skill paths
+     * @return array{requires: list<string>, missing: list<string>}
+     */
+    public static function requiredSkills(string $path, array $files, array $installed): array
+    {
+        $list = array_values(array_filter($installed, fn(string $p) => $p !== $path));
+        $out = [];
+        $missing = [];
+        $declared = self::declaredSkills((string) ($files['SKILL.md'] ?? ''));
+        if ($declared !== []) {   // a declared list replaces scanning
+            foreach ($declared as $name) {
+                $hit = self::resolveSkillName($name, $list, $path);
+                if ($hit === null) {
+                    $missing[] = $name;
+                } else {
+                    $out[$hit] = true;
+                }
+            }
+        } else {
+            $lits = self::quotedLiterals($files);
+            $exact = array_flip($lits);
+            foreach (array_unique(array_map('basename', $list)) as $leaf) {
+                $hit = isset($exact[$leaf]);
+                foreach ($hit ? [] : $lits as $l) {
+                    if (str_contains($l, "/$leaf/")) {
+                        $hit = true;
+                        break;
+                    }
+                }
+                if ($hit) {
+                    $out[self::resolveSkillName($leaf, $list, $path)] = true;
+                }
+            }
+        }
+        $req = array_map('strval', array_keys($out));
+        sort($req, SORT_STRING);
+        return ['requires' => $req, 'missing' => $missing];
     }
 
     /** The files under $from (paths relative to the skill folder $base), skipping junk, .env* and dot-directories. */
@@ -235,6 +424,12 @@ final class LangGraphPackage
     /** `dependencies:` of a SKILL.md's frontmatter, parsed as SkillRuntime.ensure_deps parses it. */
     public static function skillDependencies(string $skillMd): array
     {
+        return self::frontmatterList($skillMd, 'dependencies:');
+    }
+
+    /** A frontmatter list field ($key with its colon): `key: a, b` or `key: [a, "b"]`; [] when absent. */
+    private static function frontmatterList(string $skillMd, string $key): array
+    {
         $lines = preg_split('/\r\n|\r|\n/', $skillMd);
         if (!$lines || trim($lines[0]) !== '---') {
             return [];
@@ -244,7 +439,7 @@ final class LangGraphPackage
             if ($s === '---') {
                 break;
             }
-            if (str_starts_with(strtolower($s), 'dependencies:')) {
+            if (str_starts_with(strtolower($s), $key)) {
                 $val = trim(trim(explode(':', $s, 2)[1]), '[]');
                 $deps = [];
                 foreach (explode(',', $val) as $d) {

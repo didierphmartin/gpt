@@ -939,7 +939,9 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
                 showStatus(result.error || 'Import failed.', 'error');
                 return;
             }
-            showStatus(`Imported "${result.name}" (${result.fileCount} file${result.fileCount === 1 ? '' : 's'}).`, 'ok');
+            const also = (result.requires || []).filter((r) => r.status === 'installed').map((r) => r.name || r.dir);
+            showStatus(`Imported "${result.name}" (${result.fileCount} file${result.fileCount === 1 ? '' : 's'}).`
+                + (also.length ? ' ' + this.t('skills.import.alsoInstalled', { list: also.join(', ') }) : ''), 'ok');
             // Refresh the tree so the new skill appears.
             this.loadTree();
             // Auto-close after a short read time.
@@ -1052,6 +1054,18 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         const destination = mode === 'folder'
             ? t('skills.import.destFolder', { dir: read.dir })
             : t('skills.import.destStore');
+        // The skills it requires come with it (skill zip): each marked when it is already installed.
+        let alsoInstalls = '';
+        if ((read.requires || []).length) {
+            let plan = [];
+            try { plan = window.skillsFs?.importPlan ? await window.skillsFs.importPlan(read) : []; } catch (e) { console.warn('[skillsImport] import plan failed:', e); }
+            const statusOf = (dir) => (plan.find((x) => x.dir === dir) || {}).status;
+            alsoInstalls = read.requires.map((r) => {
+                const st = statusOf(r.dir);
+                const note = st === 'identical' ? ` (${t('skills.import.alreadyInstalled')})` : st === 'clash' ? ` (${t('skills.import.requiredClash')})` : '';
+                return esc(r.name || r.dir) + esc(note);
+            }).join(', ');
+        }
 
         // The choices and any "Opening folder picker…" line belong to the step that is now over.
         modal.querySelector('#skills-import-choose')?.classList.add('hidden');
@@ -1071,6 +1085,7 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
                 ${row(t('skills.import.contents'), `${esc(t('skills.zip.files', { count: summary.total }))}, ${esc(sizeText(summary.bytes))}
                     <ul class="mt-1 space-y-0.5">${summary.groups.map((g) => `<li>${esc(groupText(g))}</li>`).join('')}</ul>`)}
                 ${row(t('skills.import.libraries'), esc(libraries))}
+                ${alsoInstalls ? row(t('skills.import.alsoInstalls'), alsoInstalls) : ''}
                 ${row(t('skills.import.destination'), esc(destination))}
                 ${edition === 'corporate' ? row(t('skills.import.visibility'), `
                     <span class="flex gap-4">
@@ -1087,7 +1102,26 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         box.querySelector('[data-review="install"]').addEventListener('click', async () => {
             const visibility = box.querySelector('input[name="skills-zip-visibility"]:checked')?.value || 'private';
             box.querySelectorAll('button').forEach((b) => { b.disabled = true; });
-            const result = await window.skillsImport.installRead(read, { visibility });
+            // Public: my own private skills it needs go public too (a public skill never needs a private one) — confirmed first.
+            let confirmed = null;
+            if (visibility === 'public' && window.skillsFs?.importPlan) {
+                try {
+                    const plan = await window.skillsFs.importPlan(read, { visibility });
+                    confirmed = Object.fromEntries(plan.map((x) => [x.dir, x.madePublic || []]));
+                    const extra = [...new Set(plan.flatMap((x) => x.madePublic || []))];
+                    if (extra.length && window.SkillVisibilityCard?.confirmPublic
+                        && !(await window.SkillVisibilityCard.confirmPublic({ name: read.name, list: extra, t }))) {
+                        box.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+                        return;
+                    }
+                } catch (e) {
+                    box.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+                    const d = e?.data?.data;
+                    showStatus(d && d.reason && window.skillsFs.requiredByMessage ? window.skillsFs.requiredByMessage(d, t) : t('skills.zip.failed', { message: e?.message || e }), 'error');
+                    return;
+                }
+            }
+            const result = await window.skillsImport.installRead(read, { visibility, ...(confirmed ? { confirmed } : {}) });
             box.querySelectorAll('button').forEach((b) => { b.disabled = false; });
             if (result.ok && result.status === 'identical') {
                 showStatus(t('skills.zip.identical', { name: read.name }), 'ok');
@@ -1238,6 +1272,8 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         }
         const res = await window.skillsFs.deleteSkill(skill.dir_name);
         if (!res.ok) {
+            // A skill other skills need: the refusal says why and what to do.
+            if (res.requiredBy) { this.notify(res.error); return; }
             alert('Could not delete the skill folder: ' + (res.error || 'unknown error'));
             return;
         }
@@ -1257,6 +1293,7 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         }
         const res = await window.skillsFs.renameSkill(skill.dir_name, newName);
         if (!res.ok) {
+            if (res.requiredBy) { this.notify(res.error); return; }
             alert('Could not rename the skill folder: ' + (res.error || 'unknown error'));
             return;
         }
@@ -1271,15 +1308,25 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
     async toggleVisibility(skill) {
         const to = skill.visibility === 'public' ? 'private' : 'public';
         try {
-            await window.skillsFs.setVisibility(skill.dir_name, to);
+            if (to === 'public' && window.SkillVisibilityCard?.makePublic) {
+                // The skills it needs go public along (confirmed first); Cancel changes nothing.
+                const r = await window.SkillVisibilityCard.makePublic(skill.dir_name, { t: this.t });
+                if (!r.done) return;
+            } else {
+                await window.skillsFs.setVisibility(skill.dir_name, to);
+            }
         } catch (e) {
-            // skillsFs.api() puts the whole body on e.data: {success, data:{message, robot_workflows | clash}, error}.
+            // skillsFs.api() puts the whole body on e.data: {success, data:{message, robot_workflows | clash | required_by}, error}.
             const d = e.data?.data ?? e.data ?? {};
             const robots = Array.isArray(d.robot_workflows) && d.robot_workflows.length ? d.robot_workflows : null;
-            if (robots) {
+            if (d.reason && Array.isArray(d.required_by) && window.skillsFs?.requiredByMessage) {
+                this.notify(window.skillsFs.requiredByMessage(d, this.t));
+            } else if (robots) {
                 this.notify(this.t('skills.visibility.robotBlocked', { names: robots.map(r => r.name ?? r.id ?? r).join(', ') }));
             } else if (d.clash) {
-                this.notify(this.t('skills.visibility.clash', { name: skill.name }));
+                // Making it public may move a skill it needs too: the server names the one that clashes.
+                const clashing = (/'([^']+)'/.exec(String(d.message || '')) || [])[1];
+                this.notify(this.t('skills.visibility.clash', { name: clashing || skill.name }));
             } else {
                 this.notify(this.t('skills.visibility.failed', { message: e.message }));
             }

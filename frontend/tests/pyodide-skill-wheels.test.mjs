@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
+import { createRequire } from 'node:module';
+const SkillRequires = createRequire(import.meta.url)('../assets/js/skill-requires.js');
 
 const SRC = readFileSync(fileURLToPath(new URL('../assets/js/pyodide-runner.js', import.meta.url)), 'utf8');
 
@@ -51,7 +53,7 @@ const localFs = { ensureStandardSubdirs: async () => {}, resolvePath: async () =
 
 function load({ skillsFs, i18n } = {}) {
   const py = fakePyodide();
-  const window = { skillsFs, localFs, loadPyodide: async () => py, i18n };
+  const window = { skillsFs, localFs, loadPyodide: async () => py, i18n, SkillRequires };
   const ctx = vm.createContext({ window, document: { baseURI: 'http://x/gpt/' }, console, URL, TextEncoder, TextDecoder, Uint8Array, performance });
   vm.runInContext(SRC, ctx);
   return { runner: window.pyodideRunner, py };
@@ -299,6 +301,95 @@ test('savePoolChanges never throws: a failed save after a pool run is a warning 
   assert.equal(await runner.savePoolChanges('mine', { 'a.txt': enc('1') }), true);
 });
 
+test('store: /skills-root holds my skills plus the skills the running one requires (a public one of someone else), never written back', async () => {
+  const fs = storeFs({
+    auto: { files: { 'SKILL.md': enc('---\nname: auto\n---\n'), 'scripts/a.py': enc("ROOT = '/skills-root'; load_script('flow', 'c.py')") }, mine: true },
+    flow: { files: { 'SKILL.md': enc('---\nname: flow\n---\n'), 'scripts/c.py': enc('F') }, public: true },
+    other: { files: { 'SKILL.md': enc('x') }, public: true },
+  });
+  fs.skillsRootFiles = async () => ({ 'auto/SKILL.md': enc('---\nname: auto\n---\n'), 'auto/scripts/a.py': enc("ROOT = '/skills-root'; load_script('flow', 'c.py')") });
+  const saved = [];
+  fs.writeSkillsRoot = async (changed) => { saved.push(Object.keys(changed).sort()); return { ok: true }; };
+  const { runner, py } = load({ skillsFs: fs });
+  py.script = (FS) => {
+    assert.equal(new TextDecoder().decode(FS.readFile('/skills-root/flow/scripts/c.py')), 'F');
+    assert.throws(() => FS.readFile('/skills-root/other/SKILL.md'));
+    FS.writeFile('/skills-root/flow/scripts/c.py', enc('changed'));
+    FS.writeFile('/skills-root/auto/new.txt', enc('n'));
+  };
+  const r = await runner.runSkillScript({ dirName: 'auto', script: 'scripts/a.py' });
+  assert.equal(r.exitCode, 0, r.stderr);
+  assert.deepEqual(saved, [['auto/new.txt']]);   // someone else's skill is never saved back
+});
+
+test('robot run (store): a read-only /skills-root with the robot-visible required skills; a write fails the run, nothing is saved', async () => {
+  const script = enc("ROOT = '/skills-root'; load_script('flow', 'c.py'); load_script('priv', 'c.py')");
+  const fs = storeFs({
+    auto: { files: { 'SKILL.md': enc('---\nname: auto\n---\n'), 'scripts/a.py': script }, public: true },
+    flow: { files: { 'SKILL.md': enc('x'), 'scripts/c.py': enc('F') }, public: true },
+    priv: { files: { 'SKILL.md': enc('x'), 'scripts/c.py': enc('P') }, mine: true },
+  });
+  let rootAsked = false, saved = false;
+  fs.skillsRootFiles = async () => { rootAsked = true; return {}; };
+  fs.writeSkillsRoot = async () => { saved = true; return { ok: true }; };
+  const { runner, py } = load({ skillsFs: fs });
+  let seen;
+  py.script = (FS) => { seen = { flow: !!FS.stat('/skills-root/flow/scripts/c.py'), self: !!FS.stat('/skills-root/auto/scripts/a.py') }; assert.throws(() => FS.stat('/skills-root/priv/SKILL.md')); };
+  const ok = await runner.runSkillScript({ dirName: 'auto', script: 'scripts/a.py', asRobot: true });
+  assert.equal(ok.exitCode, 0, ok.stderr);
+  assert.deepEqual(seen, { flow: true, self: true });
+  assert.equal(rootAsked, false);   // the person's own skills are never handed to a robot run
+  py.script = (FS) => FS.writeFile('/skills-root/flow/scripts/c.py', enc('changed'));
+  const bad = await runner.runSkillScript({ dirName: 'auto', script: 'scripts/a.py', asRobot: true });
+  assert.equal(bad.exitCode, 1);
+  assert.match(bad.stderr, /read-only on a robot run/);
+  assert.equal(saved, false);
+  assert.deepEqual(fs.writes, []);
+});
+
+test('poolSkillPayload: a script that names /skills-root gets the skill and the skills it requires as skillsRoot', async () => {
+  const fs = storeFs({
+    auto: { files: { 'SKILL.md': enc('x'), 'scripts/a.py': enc("'/skills-root' 'flow'"), 'scripts/b.py': enc('print(1)') }, mine: true },
+    flow: { files: { 'SKILL.md': enc('x') }, public: true },
+  });
+  const { runner } = load({ skillsFs: fs });
+  const p = await runner.poolSkillPayload('auto', { script: 'scripts/a.py' });
+  assert.deepEqual(Object.keys(p.skillsRoot).sort(), ['auto/SKILL.md', 'auto/scripts/a.py', 'auto/scripts/b.py', 'flow/SKILL.md']);
+  assert.equal((await runner.poolSkillPayload('auto', { script: 'scripts/b.py' })).skillsRoot, undefined);
+});
+
+test('store: a grouped required skill sits at its leaf in /skills-root; its libraries and wheels are installed too', async () => {
+  const fs = storeFs({
+    auto: { files: { 'SKILL.md': enc('---\nname: auto\n---\n'), 'scripts/a.py': enc("ROOT = '/skills-root'; load_script('geo', 'c.py')") }, mine: true },
+    'GEO/geo': { files: { 'SKILL.md': enc('---\nname: geo\ndependencies: fpdf2\n---\n'), 'scripts/c.py': enc('G'), '.wheels/pyodide/fpdf2-2.8-py3-none-any.whl': enc('W') }, public: true },
+  });
+  fs.parseFrontmatter = (t) => ({ meta: { dependencies: (/dependencies: (.*)/.exec(t) || [])[1] } });
+  fs.skillsRootFiles = async () => ({});
+  const { runner, py } = load({ skillsFs: fs });
+  let seen;
+  py.script = (FS) => { seen = new TextDecoder().decode(FS.readFile('/skills-root/geo/scripts/c.py')); };
+  const r = await runner.runSkillScript({ dirName: 'auto', script: 'scripts/a.py' });
+  assert.equal(r.exitCode, 0, r.stderr);
+  assert.equal(seen, 'G');
+  assert.ok(py.files.has('/tmp/skill-wheels/fpdf2-2.8-py3-none-any.whl'), 'the required skill\'s bundled wheel is installed');
+  // The pool payload carries the same: leaf placement, dependencies and wheels.
+  const p = await runner.poolSkillPayload('auto', { script: 'scripts/a.py' });
+  assert.ok(Object.keys(p.skillsRoot).includes('geo/scripts/c.py'));
+  assert.deepEqual([...p.dependencies], ['fpdf2']);
+  assert.deepEqual(Object.keys(p.wheels), ['fpdf2-2.8-py3-none-any.whl']);
+});
+
+test('store: two required skills with one leaf cannot share /skills-root/<leaf>: the run says so', async () => {
+  const fs = storeFs({
+    auto: { files: { 'SKILL.md': enc('---\nname: auto\nrequires-skills: [A/x, B/x]\n---\n'), 'scripts/a.py': enc("'/skills-root'") }, mine: true },
+    'A/x': { files: { 'SKILL.md': enc('x') }, public: true },
+    'B/x': { files: { 'SKILL.md': enc('x') }, public: true },
+  });
+  const { runner } = load({ skillsFs: fs });
+  await assert.rejects(runner.runSkillScript({ dirName: 'auto', script: 'scripts/a.py' }), /Skills A\/x and B\/x both need to be available as 'x'; rename one\./);
+  await assert.rejects(runner.poolSkillPayload('auto', { script: 'scripts/a.py' }), /both need to be available as 'x'/);
+});
+
 const WORKER = readFileSync(fileURLToPath(new URL('../assets/js/pyodide.worker.js', import.meta.url)), 'utf8');
 
 /** Run the pool worker in a vm: returns call(payload) → the worker's reply for verb runSkillScript. */
@@ -336,6 +427,22 @@ test('worker (store): clears the previous copy, returns the skill changes, fails
   py.script = (FS) => { FS.writeFile('/skill/s/scripts/__pycache__/a.cpython-312.pyc', enc('b')); FS.writeFile('/skill/s/m.pyc', enc('c')); };
   const pyc = await call({ ...base, skillFiles: { 'scripts/a.py': enc('1') } });
   assert.deepEqual(Object.keys(pyc.result.skillChanges), []);
+});
+
+test('worker: payload.skillsRoot is a read-only /skills-root (read works, a write fails the run)', async () => {
+  const { py, call } = loadWorker();
+  const base = { dirName: 's', script: 'scripts/a.py', argv: [], outputsHandle: okHandle, persist: false, skillFiles: { 'scripts/a.py': enc('1') }, skillsRoot: { 'flow/c.py': enc('F') } };
+  let read;
+  py.script = (FS) => { read = new TextDecoder().decode(FS.readFile('/skills-root/flow/c.py')); };
+  const ok = await call(base);
+  assert.equal(ok.result.exitCode, 0);
+  assert.equal(read, 'F');
+  py.script = (FS) => FS.writeFile('/skills-root/flow/c.py', enc('changed'));
+  const bad = await call(base);
+  assert.equal(bad.result.exitCode, 1);
+  assert.match(bad.result.stderr, /This skill wrote to the skills folder, which is not available for it here\./);
+  py.script = null;
+  assert.equal((await call({ ...base, skillsRoot: undefined })).result.exitCode, 0);
 });
 
 test('worker (bundle): scipy-like bundle loads distro packages by name, the rest from bytes, unknown files fail', async () => {

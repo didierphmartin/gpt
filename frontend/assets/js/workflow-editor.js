@@ -15142,7 +15142,7 @@ class WorkflowEditor {
         return new window.PyodideWorkerPool({
             workerFactory: () => {
                 const wid = ++workerN;
-                const w = new Worker('assets/js/pyodide.worker.js?v=20261103-finalfix');
+                const w = new Worker('assets/js/pyodide.worker.js?v=20261103-skilldeps');
                 console.log(`[wf-pool] spawned worker w${wid} (each worker loads its own Pyodide — first use is a cold start)`);
                 let seq = 0;
                 const pending = new Map();
@@ -15185,7 +15185,7 @@ class WorkflowEditor {
             return this._poolHandleCache.get(path);
         };
         // The skill side (folder handle or the store's files, deps, bundled wheels) reads through skillsFs.
-        const skill = await window.pyodideRunner.poolSkillPayload(req.dirName, { asRobot: !!req.asRobot });
+        const skill = await window.pyodideRunner.poolSkillPayload(req.dirName, { asRobot: !!req.asRobot, script: req.script });
         const outputsHandle = await resolveCached('outputs', { create: true });
         if (!outputsHandle) throw new Error('could not resolve outputs handle for pool path');
         if ((await outputsHandle.queryPermission({ mode: 'readwrite' })) !== 'granted') {
@@ -15954,7 +15954,7 @@ class WorkflowEditor {
     _codeWorkerJob(verb, payload, limitMs, timeoutMsg) {
         const runOne = () => {
             const cold = !this._codeWorker || !this._codeWorkerWarm;
-            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261103-finalfix');
+            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261103-skilldeps');
             const w = this._codeWorker;
             const id = (this._codeSeq = (this._codeSeq || 0) + 1);
             const limit = limitMs + (cold ? 90000 : 0);

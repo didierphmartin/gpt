@@ -104,13 +104,7 @@ class WorkflowController
         $st->execute([$workflowId]);
         $owner = (int) $st->fetchColumn();
         $asRobot = $owner === RobotAccount::id($this->db);
-        return function (string $dir) use ($store, $owner, $asRobot): ?string {
-            try {
-                return $store->absolutePath($owner, $dir, $asRobot);
-            } catch (\Quantis\AIPortfolioAssistant\Services\SkillPathInvalid) {
-                return null;   // reported as any skill the owner cannot see
-            }
-        };
+        return $store->compileResolver($owner, $asRobot);
     }
 
     /** The private skills a robot-owned workflow binds (the robot can only use public ones), else []. */

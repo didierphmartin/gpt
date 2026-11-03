@@ -82,6 +82,29 @@ final class SkillStoreControllerTest extends TestCase
         self::assertSame(['one' => 'Ada Lovelace', 'three' => '', 'two' => 'z@x.io'], $by);
     }
 
+    public function test_import_dry_run_writes_nothing(): void
+    {
+        $c = $this->ctl();
+        $dry = $c->import($this->req([], ['path' => 'g/demo', 'visibility' => 'private', 'dry_run' => true,
+            'files' => ['SKILL.md' => base64_encode("---\nname: demo\n---\n")]]));
+        self::assertSame('new', $dry['data']['status']);
+        self::assertSame([], $c->list($this->req())['data']);
+    }
+
+    public function test_a_required_skill_refuses_delete_with_required_by(): void
+    {
+        $c = $this->ctl();
+        $c->import($this->req([], ['path' => 'flow', 'files' => ['SKILL.md' => base64_encode("---\nname: flow\n---\n")]]));
+        $c->import($this->req([], ['path' => 'auto', 'files' => ['SKILL.md' => base64_encode("---\nname: auto\n---\n"),
+            'scripts/a.py' => base64_encode("load_script('flow', 'c.py')\n")]]));
+        $r = $c->delete($this->req(['path' => 'flow']));
+        self::assertSame(409, $r['status_code']);
+        self::assertSame(['auto'], $r['data']['required_by']);
+        self::assertSame('delete', $r['data']['reason']);
+        $v = $c->visibility($this->req([], ['path' => 'auto', 'visibility' => 'private']));
+        self::assertSame([], $v['data']['made_public']);
+    }
+
     public function test_import_list_files_file_roundtrip(): void
     {
         $c = $this->ctl();

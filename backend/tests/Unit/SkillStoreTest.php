@@ -9,6 +9,7 @@ use Quantis\AIPortfolioAssistant\Services\SkillClashException;
 use Quantis\AIPortfolioAssistant\Services\SkillForbidden;
 use Quantis\AIPortfolioAssistant\Services\SkillNotFound;
 use Quantis\AIPortfolioAssistant\Services\SkillPathInvalid;
+use Quantis\AIPortfolioAssistant\Services\SkillRequiredBy;
 use Quantis\AIPortfolioAssistant\Services\SkillStore;
 
 final class SkillStoreTest extends TestCase
@@ -120,6 +121,18 @@ final class SkillStoreTest extends TestCase
         $s = $this->store();
         $s->import(1, 'docx', $this->skill());
         $this->assertSame(['status' => 'identical'], $s->import(1, 'docx', $this->skill()));
+    }
+
+    public function test_dry_run_import_reports_without_writing(): void
+    {
+        $s = $this->store();
+        $this->assertSame(['status' => 'new'], $s->import(1, 'docx', $this->skill(), 'private', true));
+        $this->assertSame([], $s->list(1));
+        $this->assertFileDoesNotExist($this->root . '/users/1/docx/SKILL.md');
+        $s->import(1, 'docx', $this->skill());
+        $this->assertSame(['status' => 'identical'], $s->import(1, 'docx', $this->skill(), 'private', true));
+        $this->expectException(SkillClashException::class);
+        $s->import(1, 'docx', $this->skill('docx', 'changed'), 'private', true);
     }
 
     public function test_different_reimport_throws_clash(): void
@@ -314,5 +327,222 @@ final class SkillStoreTest extends TestCase
         file_put_contents($this->root . '/users/1/docx/stale.txt', 'old');
         $s->import(1, 'docx', $this->skill());
         $this->assertArrayNotHasKey('stale.txt', $s->files(1, 'docx'));
+    }
+
+    /** A skill whose script loads $needs (load_script-style quoted name). */
+    private function loader(string $name, string ...$needs): array
+    {
+        return ['SKILL.md' => "---\nname: $name\n---\n", 'scripts/create.py' => implode("\n", array_map(fn($n) => "load_script('$n', 'create.py')", $needs)) . "\n"];
+    }
+
+    private function refused(callable $fn): SkillRequiredBy
+    {
+        try {
+            $fn();
+        } catch (SkillRequiredBy $e) {
+            return $e;
+        }
+        $this->fail('expected SkillRequiredBy');
+    }
+
+    public function test_delete_and_rename_refused_while_another_skill_requires_it_regroup_allowed(): void
+    {
+        $s = $this->store();
+        $s->import(1, 'flow', $this->loader('flow'));
+        $s->import(1, 'auto', $this->loader('auto', 'flow'));
+        $e = $this->refused(fn() => $s->delete(1, 'flow'));
+        $this->assertSame(409, $e->statusCode());
+        $this->assertSame(['auto'], $e->data()['required_by']);
+        $this->assertSame('"flow" can\'t be deleted: auto need(s) it to run (listed in its required skills). Delete auto first, or remove "flow" from its required skills.', $e->getMessage());
+        $e = $this->refused(fn() => $s->move(1, 'flow', 'flow2'));
+        $this->assertSame('"flow" can\'t be renamed: auto need(s) it to run (listed in its required skills).', $e->getMessage());
+        $s->move(1, 'flow', 'grp/flow');   // regrouping keeps the leaf: still found
+        $this->assertSame(['auto', 'grp/flow'], array_column($s->list(1), 'path'));
+        $s->delete(1, 'auto');
+        $s->delete(1, 'grp/flow');
+        $this->assertSame([], $s->list(1));
+    }
+
+    public function test_another_users_private_dependent_never_blocks_or_shows(): void
+    {
+        $s = $this->store();
+        $s->import(1, 'flow', $this->loader('flow'));
+        $s->setVisibility(1, 'flow', 'public');
+        $s->import(2, 'auto', $this->loader('auto', 'flow'));   // user 2's private skill needs it
+        $s->delete(1, 'flow');
+        $this->assertSame([], $s->list(1));
+    }
+
+    public function test_make_public_takes_own_private_required_skills_along_atomically(): void
+    {
+        $s = $this->store();
+        $s->import(1, 'pb', $this->loader('pb'));
+        $s->import(1, 'flow', $this->loader('flow', 'pb'));
+        $s->import(1, 'auto', $this->loader('auto', 'flow'));
+        $this->assertSame(['made_public' => ['flow', 'pb']], $s->setVisibility(1, 'auto', 'public', true));
+        $this->assertSame(['private', 'private', 'private'], array_column($s->list(1), 'visibility'));   // dry run: nothing changed
+        $this->assertSame(['made_public' => ['flow', 'pb']], $s->setVisibility(1, 'auto', 'public'));
+        $this->assertSame(['public', 'public', 'public'], array_column($s->list(1), 'visibility'));
+        $this->assertCount(3, $s->list(2));
+        // Private again is refused while a public skill needs it.
+        $e = $this->refused(fn() => $s->setVisibility(1, 'flow', 'private'));
+        $this->assertSame('"flow" can\'t be made private: the public skill(s) auto need it to run.', $e->getMessage());
+        $this->assertSame(['auto'], $e->data()['required_by']);
+        $s->setVisibility(1, 'auto', 'private');
+        $this->assertSame(['made_public' => []], $s->setVisibility(1, 'auto', 'public'));
+    }
+
+    public function test_make_public_clash_rolls_back(): void
+    {
+        $s = $this->store();
+        $s->import(1, 'pb', $this->loader('pb'));
+        $s->import(1, 'auto', $this->loader('auto', 'pb'));
+        $s->import(2, 'g/pb', $this->loader('pb', 'zzz'));   // user 2's private pb (does not block user 1 yet)
+        $s->setVisibility(2, 'g/pb', 'public');               // a public pb now exists: user 1's pb can no longer go public
+        try {
+            $s->setVisibility(1, 'auto', 'public');
+            $this->fail('expected clash');
+        } catch (SkillClashException $e) {
+            $this->assertStringContainsString("'pb'", $e->getMessage());
+        }
+        $this->assertSame(['private', 'private'], array_column(array_filter($s->list(1), fn($r) => $r['mine']), 'visibility'));
+    }
+
+    public function test_make_public_refused_when_a_required_skill_cannot_be_made_public(): void
+    {
+        $s = $this->store();
+        $s->import(1, 'auto', ['SKILL.md' => "---\nname: auto\nrequires-skills: [secret]\n---\n"]);
+        $s->import(2, 'secret', $this->loader('secret'));   // user 2's private skill: invisible to user 1
+        $e = $this->refused(fn() => $s->setVisibility(1, 'auto', 'public'));
+        $this->assertSame('"auto" needs "secret", which you can\'t make public.', $e->getMessage());
+        $this->assertSame('private', $s->list(1)[0]['visibility']);
+    }
+
+    public function test_public_import_takes_an_identical_own_private_required_skill_public(): void
+    {
+        $s = $this->store();
+        $s->import(1, 'flow', $this->loader('flow'));                                  // my private copy
+        $this->assertSame(['status' => 'identical'], $s->import(1, 'flow', $this->loader('flow'), 'public', true));
+        $auto = $this->loader('auto', 'flow');
+        $this->assertSame(['status' => 'new', 'made_public' => ['flow']], $s->import(1, 'auto', $auto, 'public', true));
+        $this->assertSame('private', $s->list(1)[0]['visibility']);                     // dry run changed nothing
+        $e = $this->refused(fn() => $s->import(1, 'auto', $auto, 'public', false, []));  // confirmed list differs
+        $this->assertSame('changed', $e->data()['reason']);
+        $this->assertSame(['status' => 'installed', 'made_public' => ['flow']], $s->import(1, 'auto', $auto, 'public', false, ['flow']));
+        $this->assertSame(['public', 'public'], array_column($s->list(1), 'visibility'));
+    }
+
+    public function test_make_public_with_a_changed_confirmed_list_is_refused(): void
+    {
+        $s = $this->store();
+        $s->import(1, 'pb', $this->loader('pb'));
+        $s->import(1, 'auto', $this->loader('auto', 'pb'));
+        $e = $this->refused(fn() => $s->setVisibility(1, 'auto', 'public', false, []));
+        $this->assertSame(409, $e->statusCode());
+        $this->assertSame(['pb'], $e->data()['required_by']);
+        $this->assertSame(['made_public' => ['pb']], $s->setVisibility(1, 'auto', 'public', false, ['pb']));
+    }
+
+    public function test_make_public_relocate_failure_rolls_back_every_move(): void
+    {
+        $s = $this->store();
+        $s->import(1, 'a1', $this->loader('a1'));
+        $s->import(1, 'b2', $this->loader('b2'));
+        $s->import(1, 'auto', $this->loader('auto', 'a1', 'b2'));
+        mkdir($this->root . '/public', 0777, true);
+        file_put_contents($this->root . '/public/b2', 'not a folder');   // the second move cannot land
+        try {
+            $s->setVisibility(1, 'auto', 'public');
+            $this->fail('expected a failure');
+        } catch (\RuntimeException $e) {
+            $this->assertNotInstanceOf(SkillRequiredBy::class, $e);
+        }
+        $this->assertDirectoryExists($this->root . '/users/1/auto');
+        $this->assertDirectoryExists($this->root . '/users/1/a1');
+        $this->assertDirectoryDoesNotExist($this->root . '/public/auto');
+        $this->assertSame(['private', 'private', 'private'], array_column($s->list(1), 'visibility'));
+    }
+
+    public function test_another_users_public_skill_never_blocks_deleting_my_private_skill(): void
+    {
+        $s = $this->store();
+        $s->import(3, 'y', $this->loader('y'));                      // my private y
+        $s->import(4, 'g/needs-y', $this->loader('needs-y', 'y'));   // user 4 names 'y' but has none of their own
+        $s->setVisibility(4, 'g/needs-y', 'public');                 // public; from user 4's view it needs nothing
+        $this->assertContains('g/needs-y', array_column($s->list(3), 'path'));   // I see it ...
+        $s->delete(3, 'y');                                          // ... but it does not resolve to my y
+        $this->assertSame(['g/needs-y'], array_column($s->list(3), 'path'));
+    }
+
+    public function test_two_paths_same_leaf_private_mine_and_public_theirs(): void
+    {
+        $s = $this->store();
+        $s->import(1, 'x', $this->loader('x', 'v1'));                // A's private x
+        $s->import(2, 'x', $this->loader('x', 'v2'));                // B's x, made public (leaf free in public)
+        $s->import(2, 'uses-x', $this->loader('uses-x', 'x'));
+        $s->setVisibility(2, 'uses-x', 'public', false, ['x']);      // B's x goes public along
+        // A sees B's public uses-x, but it resolves to B's (public) x, not A's private x: A may delete hers.
+        $s->delete(1, 'x');
+        // B cannot delete their public x while their public uses-x needs it.
+        $e = $this->refused(fn() => $s->delete(2, 'x'));
+        $this->assertSame(['uses-x'], $e->data()['required_by']);
+    }
+
+    public function test_group_delete_dry_run_and_with(): void
+    {
+        $s = $this->store();
+        $s->import(1, 'g/flow', $this->loader('flow'));
+        $s->import(1, 'g/auto', $this->loader('auto', 'flow'));
+        $s->import(1, 'other', $this->loader('other'));
+        $s->delete(1, 'g/flow', true, ['g/auto']);                    // the group goes together: allowed
+        $this->assertCount(3, $s->list(1));                           // dry run
+        $s->import(1, 'outside', $this->loader('outside', 'flow'));
+        $e = $this->refused(fn() => $s->delete(1, 'g/flow', true, ['g/auto']));
+        $this->assertSame(['outside'], $e->data()['required_by']);
+    }
+
+    public function test_public_import_of_a_zip_whose_skills_declare_each_other(): void
+    {
+        $s = $this->store();
+        $decl = fn(string $n, string $req) => ['SKILL.md' => "---\nname: $n\nrequires-skills: [$req]\n---\n"];
+        // Dry run of every skill of the zip before any is written: the batch's own names resolve.
+        $batch = ['pb', 'flow', 'auto'];
+        $this->assertSame(['status' => 'new', 'made_public' => []], $s->import(1, 'pb', $this->loader('pb'), 'public', true, null, $batch));
+        $this->assertSame(['status' => 'new', 'made_public' => []], $s->import(1, 'flow', $decl('flow', 'pb'), 'public', true, null, $batch));   // req → req
+        $this->assertSame(['status' => 'new', 'made_public' => []], $s->import(1, 'auto', $decl('auto', 'flow'), 'public', true, null, $batch)); // main → req
+        // Then the real imports, required first.
+        $s->import(1, 'pb', $this->loader('pb'), 'public', false, [], $batch);
+        $s->import(1, 'flow', $decl('flow', 'pb'), 'public', false, [], $batch);
+        $s->import(1, 'auto', $decl('auto', 'flow'), 'public', false, [], $batch);
+        $this->assertSame(['public', 'public', 'public'], array_column($s->list(1), 'visibility'));
+        // A declared name neither installed nor in the batch still refuses.
+        $e = $this->refused(fn() => $s->import(1, 'lone', $decl('lone', 'ghost'), 'public', true, null, ['lone']));
+        $this->assertSame('"lone" needs "ghost", which you can\'t make public.', $e->getMessage());
+    }
+
+    public function test_group_delete_except_compares_area_and_path(): void
+    {
+        $s = $this->store();
+        $s->import(1, 'g/flow', $this->loader('flow'));
+        $s->setVisibility(1, 'g/flow', 'public');
+        $s->import(2, 'g/auto', $this->loader('auto', 'flow'));    // user 2's skill at a path user 1 also deletes "with"
+        $s->setVisibility(2, 'g/auto', 'public');
+        // User 1 has no g/auto of their own: naming it in "with" does not hide user 2's public dependent.
+        $e = $this->refused(fn() => $s->delete(1, 'g/flow', true, ['g/auto']));
+        $this->assertSame(['g/auto'], $e->data()['required_by']);
+    }
+
+    public function test_compile_resolver_prefers_the_dependents_group_then_own_then_public(): void
+    {
+        // Individual edition (no public area) can't hold two y's for one user; corporate: my private B/y + 2's public A/y
+        // can coexist only when mine came first (the make-public leaf check is public-only).
+        $s = $this->store();
+        $s->import(1, 'B/y', $this->loader('y', '2'));                // mine, private
+        $s->import(2, 'A/y', $this->loader('y', '1'));
+        $s->setVisibility(2, 'A/y', 'public');                       // public y of someone else
+        $r = $s->compileResolver(1, false);
+        $this->assertSame(realpath($this->root . '/users/1/B/y'), realpath((string) $r('y', 'me')));       // own before public
+        $this->assertSame(realpath($this->root . '/public/A/y'), realpath((string) $r('y', 'A/needs')));   // dependent's group first
+        $this->assertSame(realpath($this->root . '/public/A/y'), realpath((string) $s->compileResolver(3, false)('y')));   // only public
     }
 }

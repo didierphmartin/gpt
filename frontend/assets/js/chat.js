@@ -3407,7 +3407,7 @@ class ChatApp {
         return new window.PyodideWorkerPool({
             workerFactory: () => {
                 const wid = ++workerN;
-                const w = new Worker('assets/js/pyodide.worker.js?v=20261103-finalfix');
+                const w = new Worker('assets/js/pyodide.worker.js?v=20261103-skilldeps');
                 console.log(`[pool] spawned worker w${wid} (each worker loads its own Pyodide — first use is a cold start)`);
                 let seq = 0;
                 const pending = new Map();
@@ -3462,7 +3462,7 @@ class ChatApp {
             }
             return this._poolHandleCache.get(path);
         };
-        const skill = await window.pyodideRunner.poolSkillPayload(req.dirName, { asRobot: !!req.asRobot });
+        const skill = await window.pyodideRunner.poolSkillPayload(req.dirName, { asRobot: !!req.asRobot, script: req.script });
         const outputsHandle = await resolveCached('outputs', { create: true });
         if (!outputsHandle) throw new Error('could not resolve outputs handle for pool path');
         // Permission must be granted on the main thread (a worker can't prompt).

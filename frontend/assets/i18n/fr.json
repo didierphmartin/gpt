@@ -423,7 +423,9 @@
         "pack": "Écriture du zip..."
       },
       "noFile": "Aucun fichier sélectionné — réessayez.",
-      "unreadable": "le fichier n’a pas pu être lu comme une compétence."
+      "unreadable": "le fichier n’a pas pu être lu comme une compétence.",
+      "requiresMissing": "{{by}} a besoin de la compétence {{name}}, qui n’est pas installée.",
+      "leafCollision": "Les compétences {{a}} et {{b}} doivent toutes deux être disponibles sous '{{leaf}}' ; renommez-en une."
     },
     "section": {
       "public": "Publiques",
@@ -437,7 +439,9 @@
       "robotBlocked": "Impossible de la rendre privée : ces workflows robot l'utilisent : {{names}}.",
       "clash": "Une autre compétence publique nommée {{name}} existe déjà.",
       "failed": "Impossible de changer la visibilité : {{message}}",
-      "by": "par {{name}}"
+      "by": "par {{name}}",
+      "confirmAlso": "Rendre « {{name}} » publique rendra aussi publiques les compétences dont elle a besoin : {{list}}.",
+      "confirmTitle": "Rendre publique"
     },
     "migrate": {
       "title": "Importer mes compétences existantes",
@@ -467,7 +471,8 @@
     },
     "run": {
       "skillsRootUnavailable": "Cette compétence a écrit dans le dossier des compétences, qui n’est pas disponible pour elle ici.",
-      "robotRefusal": "La compétence « {{name}} » n’est pas disponible pour le robot : un flux de travail robot n’utilise que des compétences publiques."
+      "robotRefusal": "La compétence « {{name}} » n’est pas disponible pour le robot : un flux de travail robot n’utilise que des compétences publiques.",
+      "skillsRootReadOnly": "Cette compétence a modifié le dossier des compétences, en lecture seule lors d’une exécution du robot : les modifications n’ont pas été enregistrées."
     },
     "bundle": {
       "unknownFiles": "Cette compétence contient des fichiers qui ne sont pas des paquets Python pour ce Pyodide ({{version}}) : {{files}}. Exportez à nouveau la compétence."
@@ -487,7 +492,18 @@
       "destination": "Installée dans",
       "destFolder": "votre dossier de compétences (skills/{{dir}})",
       "destStore": "le stockage de compétences de l'application, parmi vos compétences",
-      "visibility": "Visibilité"
+      "visibility": "Visibilité",
+      "alsoInstalls": "Installe aussi",
+      "alreadyInstalled": "déjà installée",
+      "requiredClash": "une autre compétence de ce nom est installée",
+      "alsoInstalled": "Également installé : {{list}}."
+    },
+    "requiredBy": {
+      "delete": "Impossible de supprimer « {{name}} » : {{dependents}} en a/ont besoin pour fonctionner (elle figure dans ses compétences requises). Supprimez d’abord {{dependents}}, ou retirez « {{name}} » de ses compétences requises.",
+      "rename": "Impossible de renommer « {{name}} » : {{dependents}} en a/ont besoin pour fonctionner (elle figure dans ses compétences requises).",
+      "private": "Impossible de rendre « {{name}} » privée : la/les compétence(s) publique(s) {{dependents}} en a/ont besoin pour fonctionner.",
+      "public": "« {{name}} » a besoin de « {{dep}} », que vous ne pouvez pas rendre publique.",
+      "changed": "Les compétences rendues publiques avec « {{name}} » ont changé : {{dependents}}. Réessayez."
     }
   },
   "fileStorage": {
@@ -1723,7 +1739,9 @@
       "copied": "Copié",
       "copyFailed": "Échec de la copie",
       "importFailed": "Échec de l'import du paquet : {{error}}",
-      "importStopped": "Import arrêté : aucun dossier SynergyAI sélectionné."
+      "importStopped": "Import arrêté : aucun dossier SynergyAI sélectionné.",
+      "alsoInstalls": "Installe aussi les compétences nécessaires : {{list}}",
+      "reasonRequiredClash": "Une autre compétence est déjà installée sous le nom d’une compétence dont celle-ci a besoin : {{names}}. Renommez-la ou supprimez-la d’abord, ou ignorez cette compétence."
     }
   },
   "robot": {

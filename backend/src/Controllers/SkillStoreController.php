@@ -7,6 +7,7 @@ use Quantis\AIPortfolioAssistant\Services\SkillClashException;
 use Quantis\AIPortfolioAssistant\Services\RobotSkillPolicy;
 use Quantis\AIPortfolioAssistant\Services\SkillForbidden;
 use Quantis\AIPortfolioAssistant\Services\SkillInUse;
+use Quantis\AIPortfolioAssistant\Services\SkillRequiredBy;
 use Quantis\AIPortfolioAssistant\Services\SkillNotFound;
 use Quantis\AIPortfolioAssistant\Services\SkillPathInvalid;
 use Quantis\AIPortfolioAssistant\Services\SkillStore;
@@ -110,7 +111,9 @@ final class SkillStoreController
             foreach ($in as $rel => $content) {
                 $files[(string) $rel] = self::decode($content);
             }
-            return $s->import(self::uid($request), (string) ($b['path'] ?? ''), $files, (string) ($b['visibility'] ?? 'private'));
+            return $s->import(self::uid($request), (string) ($b['path'] ?? ''), $files, (string) ($b['visibility'] ?? 'private'), ($b['dry_run'] ?? false) === true,
+                is_array($b['expect_public'] ?? null) ? array_values(array_map('strval', $b['expect_public'])) : null,
+                is_array($b['incoming'] ?? null) ? array_values(array_map('strval', $b['incoming'])) : []);
         });
     }
 
@@ -118,8 +121,8 @@ final class SkillStoreController
     {
         return $this->run(function (SkillStore $s) use ($request) {
             $b = self::body($request);
-            $s->setVisibility(self::uid($request), (string) ($b['path'] ?? ''), (string) ($b['visibility'] ?? ''));
-            return [];
+            return $s->setVisibility(self::uid($request), (string) ($b['path'] ?? ''), (string) ($b['visibility'] ?? ''), ($b['dry_run'] ?? false) === true,
+                is_array($b['expect_public'] ?? null) ? array_values(array_map('strval', $b['expect_public'])) : null);
         });
     }
 
@@ -135,7 +138,9 @@ final class SkillStoreController
     public function delete(array $request): array
     {
         return $this->run(function (SkillStore $s) use ($request) {
-            $s->delete(self::uid($request), self::q($request, 'path'));
+            // dry_run=1: only check; with=a,b: skills deleted together with it (a group) do not count as needing it.
+            $with = array_values(array_filter(explode(',', self::q($request, 'with')), fn($x) => $x !== ''));
+            $s->delete(self::uid($request), self::q($request, 'path'), self::q($request, 'dry_run') === '1', $with);
             return [];
         });
     }
@@ -164,6 +169,8 @@ final class SkillStoreController
         }
         try {
             return ['success' => true, 'data' => $fn($s), 'status_code' => 200];
+        } catch (SkillRequiredBy $e) {
+            return ['success' => false, 'data' => $e->data(), 'error' => $e->getMessage(), 'status_code' => $e->statusCode()];
         } catch (SkillInUse $e) {
             return ['success' => false, 'data' => ['message' => $e->getMessage(), 'robot_workflows' => $e->workflows()], 'error' => $e->getMessage(), 'status_code' => $e->statusCode()];
         } catch (SkillClashException $e) {

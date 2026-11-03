@@ -656,8 +656,52 @@
         return listUnder(dirName, 'references', '.md', asRobot);
     }
 
-    // The backend's own message (e.g. which path a rename/move clashes with) beats "HTTP 409: clash".
-    const failure = (e) => ({ ok: false, error: e?.data?.data?.message || e?.message || String(e) });
+    const tr = (key, params, fallback) => {
+        const v = window.i18n && window.i18n.t ? window.i18n.t(key, params || {}) : key;
+        return v === key && fallback ? fallback : v;
+    };
+    const leafOf = (p) => String(p || '').split('/').pop();
+
+    /**
+     * The refusal text for a skill other skills need ({ reason, skill, required_by, needs } from SkillRequiredBy, or
+     * the folder check): delete | rename | private | public. t: the caller's translator (default window.i18n).
+     */
+    function requiredByMessage(d, t) {
+        const tt = t || ((k, p) => tr(k, p));
+        const params = { name: leafOf(d.skill), dependents: (d.required_by || []).join(', '), dep: d.needs || '' };
+        return tt(`skills.requiredBy.${d.reason}`, params);
+    }
+
+    // The backend's own message (e.g. which path a rename/move clashes with) beats "HTTP 409: clash";
+    // a skill other skills need is explained in the user's language.
+    const failure = (e) => {
+        const d = e?.data?.data;
+        if (d && Array.isArray(d.required_by) && d.reason) return { ok: false, error: requiredByMessage(d), requiredBy: d.required_by };
+        return { ok: false, error: d?.message || e?.message || String(e) };
+    };
+
+    /**
+     * Folder mode: the skills of the folder that require `path` (skill-requires.js over SKILL.md + scripts/**).
+     * The store checks this itself (SkillStore, only the skills the caller sees).
+     */
+    async function folderDependents(path) {
+        if (!window.SkillRequires) return [];
+        const all = (await folderListSkills()).map((x) => x.dirName);
+        const out = [];
+        for (const p of all) {
+            if (p === path) continue;
+            const files = await readSkillFiles(p, { under: 'scripts' });
+            const md = await folder_getSkillFile(p, 'SKILL.md');
+            if (md !== null && md !== undefined) files['SKILL.md'] = enc.encode(md);
+            if (window.SkillRequires.direct(p, files, all).requires.includes(path)) out.push(p);
+        }
+        return out.sort();
+    }
+
+    async function folderRefusal(path, reason) {
+        const deps = await folderDependents(path);
+        return deps.length ? { ok: false, error: requiredByMessage({ reason, skill: path, required_by: deps }), requiredBy: deps } : null;
+    }
 
     // Groups exist implicitly in the store (a group is the first segment of a skill path).
     async function createFolder(name) {
@@ -665,12 +709,21 @@
         const safe = sanitizeFolderName(name);
         return safe ? { ok: true, name: safe } : { ok: false, error: 'Please enter a valid folder name.' };
     }
+    /** A group goes with all its skills: none may be needed by a skill outside it (checked for every one first). */
     async function deleteFolder(name) {
-        if (await mode() !== 'volume') return folder_deleteFolder(name);
-        try {
-            for (const s of await listSkills()) {
-                if (s.group === name && s.mine) await api('DELETE', `/skills?path=${enqPath(s.path)}`);
+        if (await mode() !== 'volume') {
+            const members = (await folderListSkills()).filter((x) => x.group === name).map((x) => x.dirName);
+            for (const p of members) {
+                const deps = (await folderDependents(p)).filter((d) => !members.includes(d));
+                if (deps.length) return { ok: false, error: requiredByMessage({ reason: 'delete', skill: p, required_by: deps }), requiredBy: deps };
             }
+            return folder_deleteFolder(name);
+        }
+        try {
+            const mine = (await listSkills()).filter((x) => x.group === name && x.mine).map((x) => x.path);
+            const del = (p, dry) => api('DELETE', `/skills?path=${enqPath(p)}&with=${enqPath(mine.filter((x) => x !== p).join(','))}${dry ? '&dry_run=1' : ''}`);
+            for (const p of mine) await del(p, true);    // every skill checked before any is deleted
+            for (const p of mine) await del(p, false);
             return { ok: true };
         } catch (e) { return failure(e); }
     }
@@ -700,14 +753,17 @@
         return volumeMove(skillPath, targetGroup ? `${targetGroup}/${leaf}` : leaf);
     }
     async function deleteSkill(skillPath) {
-        if (await mode() !== 'volume') return folder_deleteSkill(skillPath);
+        if (await mode() !== 'volume') return (await folderRefusal(skillPath, 'delete')) || folder_deleteSkill(skillPath);
         try {
             await api('DELETE', `/skills?path=${enqPath(skillPath)}`);
             return { ok: true };
         } catch (e) { return failure(e); }
     }
     async function renameSkill(skillPath, newLeafName) {
-        if (await mode() !== 'volume') return folder_renameSkill(skillPath, newLeafName);
+        if (await mode() !== 'volume') {
+            const same = sanitizeFolderName(newLeafName) === leafOf(skillPath);
+            return (!same && (await folderRefusal(skillPath, 'rename'))) || folder_renameSkill(skillPath, newLeafName);
+        }
         const safe = sanitizeFolderName(newLeafName);
         if (!safe) return { ok: false, error: 'Please enter a valid name.' };
         const slash = skillPath.lastIndexOf('/');
@@ -823,42 +879,107 @@
         return { ok: true };
     }
 
-    /** Install a SkillZip.read() result. Throws an Error with .code = 'clash' when a different skill is there. */
-    async function importSkill(read, { visibility = 'private' } = {}) {
+    const clashError = (read) => Object.assign(new Error(`A different skill named "${read.name || read.dir}" already exists.`), { code: 'clash', skill: read.name || read.dir });
+    const sameBytes = (a, b) => a && a.length === b.length && a.every((v, i) => v === b[i]);
+
+    /**
+     * What installing this one skill would do, writing nothing: 'new' | 'identical' | 'clash', plus (store, public)
+     * madePublic: my own private skills it requires that would go public with it.
+     */
+    async function skillPlan(read, { visibility = 'private', batch = [] } = {}) {
+        const all = window.SkillZip.toStoreFiles(read);
+        if (await mode() === 'volume') {
+            const files = {};
+            for (const [rel, b] of Object.entries(all)) if (!rel.startsWith('.wheels/')) files[rel] = toB64(asBytes(b));
+            try {
+                // batch: the other skills of the same zip (installed with it): a requirement naming one resolves to it.
+                const r = await api('POST', '/skills/import', { path: read.dir, visibility, files, dry_run: true, ...(batch.length ? { incoming: batch } : {}) });
+                return { status: r && r.status === 'identical' ? 'identical' : 'new', madePublic: (r && r.made_public) || [] };
+            } catch (e) {
+                if (e.status === 409 && e.data?.data?.reason) throw e;   // a required skill it cannot take public along
+                if (e.status === 409) return { status: 'clash', madePublic: [] };
+                throw e;
+            }
+        }
+        const existing = await readSkillFiles(read.dir);
+        if (!Object.keys(existing).length) return { status: 'new', madePublic: [] };
+        const incoming = Object.keys(all).filter((r) => !r.startsWith('.wheels/'));
+        const same = incoming.length === Object.keys(existing).length && incoming.every((r) => sameBytes(existing[r], asBytes(all[r])));
+        return { status: same ? 'identical' : 'clash', madePublic: [] };
+    }
+
+    /** Install one skill (no required skills). Throws .code 'clash' when a different skill is there. */
+    async function importOne(read, { visibility = 'private', expectPublic = null, batch = [] } = {}) {
         const all = window.SkillZip.toStoreFiles(read);
         if (await mode() === 'volume') {
             const files = {};
             for (const [rel, b] of Object.entries(all)) files[rel] = toB64(asBytes(b));
             try {
-                return await api('POST', '/skills/import', { path: read.dir, visibility, files });
+                return await api('POST', '/skills/import', { path: read.dir, visibility, files, ...(expectPublic ? { expect_public: expectPublic } : {}), ...(batch.length ? { incoming: batch } : {}) });
             } catch (e) {
-                if (e.status === 409) {
-                    const err = new Error('A different skill with this name already exists.');
-                    err.code = 'clash';
-                    throw err;
-                }
+                if (e.status === 409) throw clashError(read);
                 throw e;
             }
         }
-        const existing = await readSkillFiles(read.dir);
-        if (Object.keys(existing).length) {
-            const incoming = Object.keys(all).filter((r) => !r.startsWith('.wheels/'));
-            const same = incoming.length === Object.keys(existing).length && incoming.every((r) => {
-                const a = existing[r], b = asBytes(all[r]);
-                return a && a.length === b.length && a.every((v, i) => v === b[i]);
-            });
-            if (same) return { status: 'identical' };
-            const err = new Error('A different skill with this name already exists.');
-            err.code = 'clash';
-            throw err;
-        }
+        const st = (await skillPlan(read)).status;
+        if (st === 'identical') return { status: 'identical' };
+        if (st === 'clash') throw clashError(read);
         for (const [rel, b] of Object.entries(all)) await writeLocalFile(`${read.dir}/${rel}`, b);
         return { status: 'installed' };
     }
 
-    async function setVisibility(path, visibility) {
-        if (await mode() !== 'volume') return { ok: true };   // a folder is always private
-        return api('PUT', '/skills/visibility', { path, visibility });
+    /**
+     * What importing a read (and the skills it requires, read.requires) would do, writing nothing:
+     * [{ dir, name, status: 'new'|'identical'|'clash', madePublic: [path] }], required skills first, the read itself last.
+     * madePublic (store, visibility public): my own private skills that go public with that one.
+     */
+    const batchOf = (read) => [...(read.requires || []), read].map((r) => r.dir);
+
+    async function importPlan(read, opts = {}) {
+        const out = [];
+        const batch = batchOf(read);
+        for (const r of [...(read.requires || []), read]) {
+            const p = await skillPlan(r, { ...opts, batch: batch.filter((d) => d !== r.dir) });
+            out.push({ dir: r.dir, name: r.name || r.dir.split('/').pop(), status: p.status, madePublic: p.madePublic });
+        }
+        return out;
+    }
+
+    /**
+     * Install a SkillZip.read() result and the skills it requires (read.requires), all with the same visibility.
+     * Every skill is checked before anything is written: a clash in any of them throws (.code 'clash', .skill)
+     * and writes nothing. Required skills install first; an identical one is already installed.
+     * A public import also takes my own private required skills public (the server, all or nothing); opts.confirmed
+     * ({ dir: [path] }, from importPlan's madePublic the user confirmed) is checked by the server for each skill.
+     * Returns { status, requires: [{ dir, name, status }] } ('installed' | 'identical').
+     */
+    async function importSkill(read, opts = {}) {
+        const reqs = read.requires || [];
+        const batch = batchOf(read);
+        const one = (r) => importOne(r, { ...opts, batch: reqs.length ? batch.filter((d) => d !== r.dir) : [],
+            expectPublic: opts.confirmed ? (opts.confirmed[r.dir] || []) : null });
+        if (!reqs.length) return one(read);
+        const plan = await importPlan(read, opts);
+        const clash = plan.find((x) => x.status === 'clash');
+        if (clash) throw clashError(clash);
+        const requires = [];
+        for (let i = 0; i < reqs.length; i++) {
+            const res = plan[i].status === 'identical' ? { status: 'identical' } : await one(reqs[i]);
+            requires.push({ dir: reqs[i].dir, name: plan[i].name, status: (res && res.status) || 'installed' });
+        }
+        const main = await one(read);
+        return { ...main, requires };
+    }
+
+    /**
+     * Public takes along the skills it requires that are still my own private ones (the server does it all or
+     * nothing); dryRun: only ask which (made_public). Returns { made_public: [path] }.
+     */
+    async function setVisibility(path, visibility, { dryRun = false, expectPublic = null } = {}) {
+        if (await mode() !== 'volume') return { ok: true, made_public: [] };   // a folder is always private
+        // expectPublic: what the user confirmed goes along; the server refuses (reason 'changed') when that is no longer so.
+        const r = await api('PUT', '/skills/visibility', { path, visibility, ...(dryRun ? { dry_run: true } : {}), ...(expectPublic ? { expect_public: expectPublic } : {}) });
+        return { made_public: [], ...(r || {}) };
     }
 
     /** The caller's own skills, flat: { '<path>/<rel>': Uint8Array } (what skill-creator edits). */
@@ -945,9 +1066,11 @@
         folderHandle,
         listSkillFolders,
         importSkill,
+        importPlan,
         setVisibility,
         skillsRootFiles,
         writeSkillsRoot,
+        requiredByMessage,
         parseFrontmatter,    // exported for testing
     };
 })();

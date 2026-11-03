@@ -895,6 +895,7 @@ async def _run_skill_script(dir_name: str, script: str, argv: list[str] | None =
     env = dict(
         os.environ,
         SYNERGYAI_OUTPUT_DIR=out_dir,
+        SYNERGYAI_SKILLS_DIR=os.path.abspath(SKILLS_DIR),   # absolute (it may be ./skills): a skill that loads another skill's scripts finds it here
         SYNERGYAI_SCRATCH_DIR=SKILL_SCRATCH_DIR,
         SYNERGYAI_SKILL_DIR_NAME=dir_name,
         SYNERGYAI_SKILL_GROUP=group,

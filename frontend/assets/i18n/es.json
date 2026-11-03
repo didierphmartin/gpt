@@ -423,7 +423,9 @@
         "pack": "Escribiendo el zip..."
       },
       "noFile": "No se seleccionó ningún archivo; inténtelo de nuevo.",
-      "unreadable": "el archivo no se pudo leer como una habilidad."
+      "unreadable": "el archivo no se pudo leer como una habilidad.",
+      "requiresMissing": "{{by}} necesita la habilidad {{name}}, que no está instalada.",
+      "leafCollision": "Las habilidades {{a}} y {{b}} deben estar disponibles ambas como '{{leaf}}'; renombra una."
     },
     "section": {
       "public": "Públicas",
@@ -437,7 +439,9 @@
       "robotBlocked": "No se puede hacer privada: la usan estos flujos de robot: {{names}}.",
       "clash": "Ya existe otra habilidad pública llamada {{name}}.",
       "failed": "No se pudo cambiar la visibilidad: {{message}}",
-      "by": "de {{name}}"
+      "by": "de {{name}}",
+      "confirmAlso": "Al hacer pública \"{{name}}\" también se harán públicas las habilidades que necesita: {{list}}.",
+      "confirmTitle": "Hacer pública"
     },
     "migrate": {
       "title": "Importar mis habilidades existentes",
@@ -467,7 +471,8 @@
     },
     "run": {
       "skillsRootUnavailable": "Esta habilidad escribió en la carpeta de habilidades, que no está disponible para ella aquí.",
-      "robotRefusal": "La habilidad \"{{name}}\" no está disponible para el robot: un flujo de trabajo de robot solo usa habilidades públicas."
+      "robotRefusal": "La habilidad \"{{name}}\" no está disponible para el robot: un flujo de trabajo de robot solo usa habilidades públicas.",
+      "skillsRootReadOnly": "Esta habilidad modificó la carpeta de habilidades, que es de solo lectura en una ejecución del robot: los cambios no se guardaron."
     },
     "bundle": {
       "unknownFiles": "Esta habilidad incluye archivos que no son paquetes de Python para este Pyodide ({{version}}): {{files}}. Exporte la habilidad de nuevo."
@@ -487,7 +492,18 @@
       "destination": "Se instala en",
       "destFolder": "tu carpeta de habilidades (skills/{{dir}})",
       "destStore": "el almacenamiento de habilidades de la aplicación, como una de tus habilidades",
-      "visibility": "Visibilidad"
+      "visibility": "Visibilidad",
+      "alsoInstalls": "También instala",
+      "alreadyInstalled": "ya instalada",
+      "requiredClash": "hay instalada otra habilidad con este nombre",
+      "alsoInstalled": "También se instaló: {{list}}."
+    },
+    "requiredBy": {
+      "delete": "No se puede eliminar \"{{name}}\": {{dependents}} la necesita(n) para ejecutarse (figura en sus habilidades requeridas). Elimina primero {{dependents}}, o quita \"{{name}}\" de sus habilidades requeridas.",
+      "rename": "No se puede renombrar \"{{name}}\": {{dependents}} la necesita(n) para ejecutarse (figura en sus habilidades requeridas).",
+      "private": "No se puede hacer privada \"{{name}}\": la(s) habilidad(es) pública(s) {{dependents}} la necesita(n) para ejecutarse.",
+      "public": "\"{{name}}\" necesita \"{{dep}}\", que no puedes hacer pública.",
+      "changed": "Cambiaron las habilidades que se hacen públicas con \"{{name}}\": {{dependents}}. Inténtalo de nuevo."
     }
   },
   "fileStorage": {
@@ -1723,7 +1739,9 @@
       "copied": "Copiado",
       "copyFailed": "Error al copiar",
       "importFailed": "Error al importar el paquete: {{error}}",
-      "importStopped": "Importación detenida: no se seleccionó ninguna carpeta SynergyAI."
+      "importStopped": "Importación detenida: no se seleccionó ninguna carpeta SynergyAI.",
+      "alsoInstalls": "También instala las habilidades que necesita: {{list}}",
+      "reasonRequiredClash": "Ya hay instalada otra habilidad con el nombre de una que esta necesita: {{names}}. Renómbrala o elimínala primero, u omite esta habilidad."
     }
   },
   "robot": {

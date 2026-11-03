@@ -9,6 +9,10 @@ const get = (o, key) => key.split('.').reduce((a, k) => (a && typeof a === 'obje
 const KEYS = [
   'skills.zip.noFile', 'skills.zip.unreadable', 'skills.zip.failed', 'skills.startup.label', 'skills.startup.desc',
   'skills.run.skillsRootUnavailable', 'skills.run.robotRefusal', 'skills.bundle.unknownFiles',
+  'skills.import.alsoInstalls', 'skills.import.alreadyInstalled', 'skills.import.requiredClash', 'skills.import.alsoInstalled',
+  'skills.zip.requiresMissing', 'skills.run.skillsRootReadOnly', 'workflow.package.alsoInstalls',
+  'skills.requiredBy.delete', 'skills.requiredBy.rename', 'skills.requiredBy.private', 'skills.requiredBy.public',
+  'skills.visibility.confirmAlso', 'skills.visibility.confirmTitle', 'skills.requiredBy.changed', 'workflow.package.reasonRequiredClash', 'skills.zip.leafCollision',
 ];
 
 test('skill-store i18n keys exist in en, es and fr with the same placeholders', () => {
