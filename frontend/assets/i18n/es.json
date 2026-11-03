@@ -1596,6 +1596,7 @@
       "reasonFolderExists": "\"Usar el que ya está aquí\" registra el servidor con esa carpeta tal cual: no se reemplaza nada y su configuración se mantiene.",
       "hostUnreachable": "El host de servidores no es accesible",
       "hostRunning": "instalado y en marcha",
+      "hostStarted": "instalado e iniciado",
       "hostInstallFailed": "instalado pero se detuvo al iniciar; su registro está abajo",
       "hostState": "instalado, estado: {{state}}",
       "statusVolumeFolderExists": "Ya hay una carpeta de servidor {{destination}} instalada en el host de servidores, pero el servidor no está registrado aquí. Elija qué hacer:",

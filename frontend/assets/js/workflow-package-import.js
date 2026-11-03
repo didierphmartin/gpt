@@ -292,8 +292,10 @@
         const hosted = result.installed.filter((x) => x.kind === 'server' && x.state !== undefined);
         if (hosted.length) {
             html += `<div style="${box} display: flex; flex-direction: column; gap: 6px;">${hosted.map((x) => {
-                const ok = x.state === 'running';
-                return `<div><strong style="font-size: 13px;">${esc(x.name)}</strong>: ${ok ? t('hostRunning') : x.state === 'crashed' ? t('hostInstallFailed') : t('hostState', { state: x.state })}`
+                const ok = x.state === 'running' || x.state === 'starting';   // starting: launched, not yet confirmed up
+                const status = x.state === 'running' ? t('hostRunning') : x.state === 'starting' ? t('hostStarted')
+                    : x.state === 'crashed' ? t('hostInstallFailed') : t('hostState', { state: x.state });
+                return `<div><strong style="font-size: 13px;">${esc(x.name)}</strong>: ${status}`
                     + (!ok && x.log && x.log.length ? `<pre style="margin: 4px 0 0; font-size: 12px; white-space: pre-wrap;">${esc(x.log.slice(0, 20).join('\n'))}</pre>` : '') + '</div>';
             }).join('')}</div>`;
         }
@@ -465,7 +467,7 @@
     }
 
     Object.assign(window.WorkflowPackageUI, {
-        importPackage, importPackageBytes, loadImportHave: loadHave, importIo: defaultIo,
+        importPackage, importPackageBytes, loadImportHave: loadHave, importIo: defaultIo, importResultHtml: resultHtml,
         settingsFieldsHtml, commandBlockHtml, toggleSecret, wireCopyButtons,
     });
 })();
