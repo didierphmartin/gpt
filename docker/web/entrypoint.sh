@@ -114,6 +114,9 @@ set_env MCPS_URL "${MCPS_URL:-}"
 set_env MCPS_GATEWAY "${MCPS_GATEWAY:-}"
 set_env MCPS_PUBLIC_GATEWAY "${MCPS_PUBLIC_GATEWAY:-}"
 set_env MCPS_TOKEN "$MCPS_TOKEN"
+set_env SKILLS_DIR "${SKILLS_DIR:-}"
+# The skills volume is created root-owned; PHP (www-data) writes to it.
+[ -d /skills ] && chown www-data:www-data /skills
 # Rewritten every boot, so it can never drift from secrets.env. Group 1000 is
 # the mcps container's user; read-only for it, nobody else needs it.
 mkdir -p /run/mcps-token

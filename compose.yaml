@@ -62,6 +62,8 @@ services:
       MCPS_URL: http://mcps:9000
       MCPS_GATEWAY: http://mcps:8790
       MCPS_PUBLIC_GATEWAY: http://localhost:${MCPS_PORT:-8790}
+      # Skills imported in the Docker app live in the gpt-skills volume.
+      SKILLS_DIR: /skills
     ports:
       # GPT_BIND defaults to 0.0.0.0 (every interface) to match prior
       # behaviour. Set GPT_BIND=127.0.0.1 in .env to restrict this to
@@ -73,6 +75,7 @@ services:
       - gpt-secrets:/run/gpt
       # Just the MCP host's token, for the mcps container (see there).
       - gpt-mcps-token:/run/mcps-token
+      - gpt-skills:/skills
 
   # Hosts the MCP servers imported in the Docker app. They live in the gpt-mcps
   # volume and start by themselves. Its control API (9000) stays on the compose
@@ -186,3 +189,4 @@ volumes:
   gpt-secrets:
   gpt-mcps:
   gpt-mcps-token:
+  gpt-skills:
