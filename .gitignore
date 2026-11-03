@@ -99,3 +99,4 @@ mobile/
 
 # Anything checked out under an XAMPP path by accident.
 xampp/
+frontend/vendor/pyodide/

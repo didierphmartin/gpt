@@ -34,7 +34,8 @@
     'use strict';
 
     const PYODIDE_VERSION = '0.27.7';
-    const PYODIDE_INDEX_URL = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+    // Served from this app (scripts/vendor-pyodide.sh), never from a CDN.
+    const PYODIDE_INDEX_URL = new URL('vendor/pyodide/v0.27.7/', document.baseURI).href;
     const PYODIDE_SCRIPT_URL = `${PYODIDE_INDEX_URL}pyodide.js`;
 
     // Pre-built (compiled-to-WASM) Pyodide packages. Anything not in this set
@@ -73,7 +74,7 @@
             tag.src = PYODIDE_SCRIPT_URL;
             tag.async = true;
             tag.onload = () => resolve(window.loadPyodide);
-            tag.onerror = () => reject(new Error('Failed to load pyodide.js'));
+            tag.onerror = () => reject(new Error('Pyodide is not installed on this server (run scripts/vendor-pyodide.sh).'));
             document.head.appendChild(tag);
         });
     }

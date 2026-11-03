@@ -5,8 +5,13 @@
 // MUST match pyodide-runner.js PYODIDE_VERSION so the worker behaves identically
 // to the main-thread runner (event-loop/asyncio semantics differ across versions)
 // and reuses the same cached Pyodide assets.
-const PYODIDE_INDEX_URL = 'https://cdn.jsdelivr.net/pyodide/v0.27.7/full/';
-importScripts(`${PYODIDE_INDEX_URL}pyodide.js`);
+// Served from this app (scripts/vendor-pyodide.sh), never from a CDN.
+const PYODIDE_INDEX_URL = new URL('../../vendor/pyodide/v0.27.7/', self.location).href;
+try {
+  importScripts(`${PYODIDE_INDEX_URL}pyodide.js`);
+} catch (e) {
+  throw new Error('Pyodide is not installed on this server (run scripts/vendor-pyodide.sh).');
+}
 
 let pyodide = null;
 const mountedSkills = new Map();   // dirName -> mountPath
