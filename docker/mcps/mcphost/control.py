@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 
 from . import envfile
 from .paths import is_safe_rel_path, is_safe_segment
-from .procs import LOG_NAME
+from .procs import LOG_NAME, overridden
 from .registry import NoFreePortError, RegistryError
 
 MAX_BODY = 50 * 1024 * 1024
@@ -251,7 +251,9 @@ class Control:
             if not f["secret"]:
                 item["value"] = current.get(f["name"], "")
             out.append(item)
-        return 200, {"fields": out}
+        # the settings the supervisor sets itself (host, port): the panel hides them
+        over = [n for n in overridden(_manifest(d), [f["name"] for f in out]) if isinstance(n, str)]
+        return 200, {"fields": out, "overridden": over}
 
     def put_settings(self, folder: str, body: dict):
         d = self._known(folder)
@@ -272,7 +274,8 @@ class Control:
         if self.registry.get(folder).get("enabled", True):
             self.manager.restart(folder)
         current = envfile.parse(text)
-        return 200, {"missing": [f["name"] for f in fields if f["required"] and not current.get(f["name"])]}
+        over = overridden(_manifest(d), [f["name"] for f in fields])
+        return 200, {"missing": [f["name"] for f in fields if f["required"] and not current.get(f["name"]) and f["name"] not in over]}
 
     def source(self, folder: str):
         d = self._known(folder)

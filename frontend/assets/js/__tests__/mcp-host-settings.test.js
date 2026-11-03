@@ -229,5 +229,19 @@ const makeStub = (over = {}) => {
         assert.strictEqual(stub.saved, null);
         assert.deepStrictEqual(calls.notes.at(-1), ['info', 'settings.mcpHostNothingChanged']);
     }
+    // the host and port the supervisor sets are hidden (named by the host, else the first *_HOST / *_PORT)
+    for (const [over, shown, warn] of [[['BIND'], 'A_HOST,X_PORT,K', false], [undefined, 'BIND,K', true]]) {
+        const stub = makeStub({ hostSettings: async () => ({ ...(over ? { overridden: over } : {}), fields: [
+            { name: 'BIND', required: true, filled: false }, { name: 'A_HOST', filled: true, value: 'h' },
+            { name: 'X_PORT', filled: true, value: '1' }, { name: 'K', filled: true, value: 'k' },
+        ] }) });
+        const { panel, calls, item } = makeEnv(stub);
+        panel.myMcpServers = [server];
+        await panel.refreshMCPLocal([server]);
+        panel.showMCPLocalPanel(7);
+        const names = item._panel.querySelectorAll('[data-value]').map((i) => i.dataset.value).join(',');
+        assert.strictEqual(names, shown);
+        assert.strictEqual(calls.nameHtml.join('').includes('⚠'), warn);   // a hidden required setting is not missing
+    }
     console.log('mcp-host-settings: ok');
 })().catch((e) => { console.error(e); process.exit(1); });

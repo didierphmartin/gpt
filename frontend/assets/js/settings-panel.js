@@ -1743,7 +1743,11 @@ class SettingsPanel {
             state: host?.state || '', enabled: host ? host.enabled !== false : true, error: false };
         try {
             const data = await window.mcpClient.hostSettings(folder);
-            info.fields = data?.fields || [];
+            const all = data?.fields || [];
+            // The host and port the supervisor sets itself are hidden: a value saved for them does nothing.
+            const over = Array.isArray(data?.overridden) ? data.overridden
+                : ['_HOST', '_PORT'].map(sfx => all.find(f => f.name?.endsWith(sfx))?.name).filter(Boolean);
+            info.fields = all.filter(f => !over.includes(f.name));
             // Secrets show empty (their placeholder says they are set); the rest show value or default.
             info.shown = Object.fromEntries(info.fields.map(f => [f.name, f.secret ? '' : (f.filled ? (f.value ?? '') : (f.default ?? ''))]));   // default shows while unset (display only)
             info.missing = info.fields.filter(f => f.required && !f.filled).map(f => f.name);

@@ -143,6 +143,16 @@ class ControlTest(unittest.TestCase):
         self.assertEqual((r.status, r.json()), (200, {"missing": []}))
         self.assertEqual(envfile.parse((self.root / "ok_server/.env").read_text()), {"FAKE_TOKEN": "s3cret", "FAKE_DB_PATH": "m"})
 
+    def test_settings_name_what_the_supervisor_overrides(self):
+        self.install("ok_server")
+        self.assertEqual(self.get("/servers/ok_server/settings").json()["overridden"], ["FAKE_HOST", "FAKE_PORT"])
+        m = {"name": "m", "start": "./run.sh", "host_env": "BIND", "env": [
+            {"name": "BIND", "required": True}, {"name": "A_HOST"}, {"name": "LISTEN", "required": True}]}
+        self.install("named", files={"synergyai-mcp.json": b64(json.dumps(m)), "run.sh": b64("#!/bin/sh\nsleep 30\n")})
+        self.assertEqual(self.get("/servers/named/settings").json()["overridden"], ["BIND"])
+        r = self.put("/servers/named/settings", {"values": {"A_HOST": "x"}})
+        self.assertEqual(r.json(), {"missing": ["LISTEN"]})   # BIND is set by the supervisor
+
     def test_missing_required_reported(self):
         m = {"name": "r", "start": "./run.sh", "env": [{"name": "NEED", "required": True}]}
         self.install("req", files={"synergyai-mcp.json": b64(json.dumps(m)), "run.sh": b64("#!/bin/sh\nsleep 30\n")})

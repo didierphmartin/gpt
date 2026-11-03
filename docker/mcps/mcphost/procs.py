@@ -48,6 +48,14 @@ class _Log:
                 f.write(data)
 
 
+def overridden(manifest: dict, field_names: list) -> tuple:
+    """(host setting, port setting) the supervisor sets itself: the manifest's host_env / port_env, else the
+    first *_HOST / *_PORT setting; either may be None. A value saved for them has no effect."""
+    host = manifest.get("host_env") or next((n for n in field_names if n.endswith("_HOST")), None)
+    port = manifest.get("port_env") or next((n for n in field_names if n.endswith("_PORT")), None)
+    return host, port
+
+
 class Manager:
     def __init__(self, root: Path, registry, clock=time.monotonic):
         self.root = Path(root)
@@ -152,8 +160,7 @@ class Manager:
         from_env = envfile.parse(_read(d / ".env"))
         env = dict(os.environ)
         env.update(from_env)
-        host = manifest.get("host_env") or next((n for n in flds if n.endswith("_HOST")), None)
-        port = manifest.get("port_env") or next((n for n in flds if n.endswith("_PORT")), None)
+        host, port = overridden(manifest, flds)
         if host:
             env[host] = HOST
         if port:
