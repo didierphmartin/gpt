@@ -555,6 +555,8 @@
     "mcpHostState_stopped": "detenido",
     "mcpHostState_crashed": "caído",
     "mcpHostState_installing": "instalando",
+    "mcpHostState_unknown": "desconocido",
+    "mcpHostNothingChanged": "Nada ha cambiado",
     "mcpHostRestart": "Reiniciar",
     "mcpHostRestarted": "Servidor reiniciado",
     "mcpHostRestartFailed": "No se pudo reiniciar el servidor: {{error}}",

@@ -555,6 +555,8 @@
     "mcpHostState_stopped": "stopped",
     "mcpHostState_crashed": "crashed",
     "mcpHostState_installing": "installing",
+    "mcpHostState_unknown": "unknown",
+    "mcpHostNothingChanged": "Nothing changed",
     "mcpHostRestart": "Restart",
     "mcpHostRestarted": "Server restarted",
     "mcpHostRestartFailed": "The server could not be restarted: {{error}}",

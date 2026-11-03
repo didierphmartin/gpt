@@ -407,6 +407,9 @@
     flex-direction: column;
     gap: 5px;
 }
+.mcp-form-row.hidden {
+    display: none;
+}
 
 .mcp-form-row label {
     font-size: 12px;

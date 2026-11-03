@@ -1745,7 +1745,7 @@ class SettingsPanel {
             const data = await window.mcpClient.hostSettings(folder);
             info.fields = data?.fields || [];
             // Secrets show empty (their placeholder says they are set); the rest show value or default.
-            info.shown = Object.fromEntries(info.fields.map(f => [f.name, f.secret ? '' : (f.value ?? f.default ?? '')]));
+            info.shown = Object.fromEntries(info.fields.map(f => [f.name, f.secret ? '' : (f.value ?? f.default ?? '')]));   // default shows while unset
             info.missing = info.fields.filter(f => f.required && !f.filled).map(f => f.name);
         } catch (e) {
             console.warn('[settings:mcp] host settings unreadable:', e.message);
@@ -1756,13 +1756,13 @@ class SettingsPanel {
 
     /** Volume servers among the registered ones; a host that cannot be asked is treated as no host. */
     async _refreshMCPHost(servers, token) {
-        this._mcpHostGateway = null;
         let status;
         try { status = await window.mcpClient?.hostStatus(); } catch (e) {
             console.warn('[settings:mcp] server host status failed:', e.message);
+            this._mcpHostGateway = null;
             return;
         }
-        if (!status?.available || !status.gateway) return;
+        if (!status?.available || !status.gateway) { this._mcpHostGateway = null; return; }
         this._mcpHostGateway = String(status.gateway).replace(/\/+$/, '');
         const vol = (servers || []).map(s => ({ s, folder: this._hostFolder(s.url) })).filter(x => x.folder);
         if (!vol.length) return;
@@ -1780,7 +1780,7 @@ class SettingsPanel {
     _hostPanelBody(info, UI, tp) {
         const esc = (x) => this._escAttr(x);
         const known = ['running', 'starting', 'stopped', 'crashed', 'installing'];
-        const state = known.includes(info.state) ? this._tp(`settings.mcpHostState_${info.state}`) : info.state;
+        const state = known.includes(info.state) ? this._tp(`settings.mcpHostState_${info.state}`) : (info.state || this._tp('settings.mcpHostState_unknown'));
         const stateLine = `<div class="text-sm" data-host-state>${esc(this._tp('settings.mcpHostState', { state }))}
             ${info.enabled ? `<button type="button" class="mcp-btn" data-host-restart>${esc(this.t('settings.mcpHostRestart'))}</button>` : ''}</div>`;
         if (info.error) return stateLine + `<div class="text-sm text-gray-500">${esc(this.t('settings.mcpLocalUnreadable'))}</div>`;
@@ -1792,7 +1792,8 @@ class SettingsPanel {
             ${stateLine}<strong class="mcp-local-subtitle">${tp('settingsTitle')}</strong>${form}`;
     }
 
-    async _restartMCPHost(id, info) {
+    async _restartMCPHost(id, info, btn) {
+        if (btn) btn.disabled = true;
         try {
             await window.mcpClient.hostRestart(info.folder);
             this.showNotification(this.t('settings.mcpHostRestarted'), 'success');
@@ -1820,7 +1821,10 @@ class SettingsPanel {
             const input = Array.from(panel.querySelectorAll('[data-value]')).find(el => el.dataset.value === f.name);
             if (input && input.value !== (info.shown[f.name] ?? '')) values[f.name] = input.value;
         }
-        if (!Object.keys(values).length) return;
+        if (!Object.keys(values).length) {
+            this.showNotification(this.t('settings.mcpHostNothingChanged'), 'info');
+            return;
+        }
         const btn = panel.querySelector('[data-local-save]');
         if (btn) btn.disabled = true;
         try {
@@ -1920,7 +1924,8 @@ class SettingsPanel {
             panel.querySelectorAll('[data-value]').forEach(el => {
                 if (filled.has(el.dataset.value)) el.placeholder = this.t('settings.mcpHostSecretSet');
             });
-            panel.querySelector('[data-host-restart]')?.addEventListener('click', () => this._restartMCPHost(id, info));
+            const restart = panel.querySelector('[data-host-restart]');
+            restart?.addEventListener('click', () => this._restartMCPHost(id, info, restart));
         }
         panel.querySelector('[data-local-save]')?.addEventListener('click', () => this.saveMCPLocalSettings(id, panel));
     }
@@ -1992,8 +1997,7 @@ class SettingsPanel {
             result = await window.mcpClient?.toggleServer(id, newOn);
         }
 
-        if (!result?.success) {
-            // Revert the optimistic change.
+        const revert = () => {
             if (eff) this.myMcpEffective.set(id, eff); else this.myMcpEffective.delete(id);
             if (listEntry) listEntry.effective_on = currentlyOn;
             if (!isGlobal && server) server.enabled = currentlyOn;
@@ -2001,26 +2005,36 @@ class SettingsPanel {
                 toggleEl.classList.toggle('active', currentlyOn);
                 toggleEl.title = currentlyOn ? 'Disable for me' : 'Enable for me';
             }
+        };
+        if (!result?.success) {
+            revert();
             this.showNotification(result?.error || 'Failed to toggle server', 'error');
         } else {
-            await this._syncMCPHostEnabled(id, listEntry?.url || server?.url, newOn);
+            // Only the owner's switch drives a volume server's process; a shared row's per-user switch must not stop it.
+            const owner = listEntry?.user_id ?? server?.user_id;
+            const owned = !isGlobal && owner != null && String(owner) === String(window.mcpClient?.getUserId?.());
+            if (owned && !(await this._syncMCPHostEnabled(id, listEntry?.url || server?.url, newOn))) {
+                revert();
+                try { await window.mcpClient.toggleServer(id, currentlyOn); } catch (_) { /* the host error is already shown */ }
+            }
         }
         this._refreshMcpMaster(); // keep the select-all master checkbox tri-state in sync
     }
 
-    /** A volume server follows its switch: the supervisor starts or stops it. */
+    /** A volume server follows its switch: the supervisor starts or stops it. True when nothing failed. */
     async _syncMCPHostEnabled(id, url, on) {
         const folder = this._hostFolder(url);
-        if (!folder) return;
+        if (!folder) return true;
         try {
             await window.mcpClient.hostSetEnabled(folder, on);
         } catch (e) {
             console.warn('[settings:mcp] host enable failed:', e.message);
             this.showNotification(this._tp('settings.mcpHostEnableFailed', { error: e.message }), 'error');
-            return;
+            return false;
         }
         const info = this.mcpLocal?.get(id);
         if (info?.host) await this._reloadMCPHostInfo(id, { ...info, enabled: on });
+        return true;
     }
 
     /**
@@ -2082,15 +2096,19 @@ class SettingsPanel {
             return;
         }
 
+        if (hostFolder) {
+            // Uninstall first: on failure the registration stays, so the row is still there to retry.
+            try { await window.mcpClient.hostDelete(hostFolder); } catch (e) {
+                if (e.status !== 404) {   // 404 = already gone
+                    console.warn('[settings:mcp] host delete failed:', e.message);
+                    this.showNotification(this._tp('settings.mcpHostDeleteFailed', { error: e.message }), 'error');
+                    return;
+                }
+            }
+        }
         const result = await window.mcpClient?.deleteServer(serverId);
 
         if (result?.success) {
-            if (hostFolder) {
-                try { await window.mcpClient.hostDelete(hostFolder); } catch (e) {
-                    console.warn('[settings:mcp] host delete failed:', e.message);
-                    this.showNotification(this._tp('settings.mcpHostDeleteFailed', { error: e.message }), 'warning');
-                }
-            }
             this.showNotification('Server deleted', 'success');
             // If the add/edit form was open for the server we just deleted, close
             // it — otherwise the user is stranded in a stale form with no

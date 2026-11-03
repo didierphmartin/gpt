@@ -69,7 +69,7 @@ function makeEnv(stub) {
     return { panel, calls, item, ctx };
 }
 
-const server = { id: 7, name: 'Outlook', url: 'http://localhost:8790/outlook_mcp/mcp', effective_on: true };
+const server = { id: 7, name: 'Outlook', url: 'http://localhost:8790/outlook_mcp/mcp', effective_on: true, user_id: 1 };
 const makeStub = (over = {}) => {
     const stub = {
         saved: null, enabled: null, restarted: null, deleted: null, serverDeleted: null,
@@ -84,7 +84,9 @@ const makeStub = (over = {}) => {
         hostSetEnabled: async (f, e) => { stub.enabled = [f, e]; return {}; },
         hostRestart: async (f) => { stub.restarted = f; return {}; },
         hostDelete: async (f) => { stub.deleted = f; return {}; },
-        toggleServer: async () => ({ success: true }),
+        getUserId: () => 1,
+        toggles: [],
+        toggleServer: async (i, on) => { stub.toggles.push(on); return { success: true }; },
         deleteServer: async () => { stub.serverDeleted = true; return { success: true }; },
         ...over,
     };
@@ -159,6 +161,60 @@ const makeStub = (over = {}) => {
         await panel.refreshMCPLocal([server]);
         panel.showMCPLocalPanel(7);
         assert.doesNotMatch(item._panel.innerHTML, /data-host-restart/);
+    }
+    // delete: uninstall first; failure aborts and keeps the registration, 404 counts as gone
+    {
+        const stub = makeStub({ hostDelete: async () => { throw Object.assign(new Error('HTTP 500: x'), { status: 500 }); } });
+        const { panel, calls } = makeEnv(stub);
+        panel.myMcpServers = [server];
+        await panel.refreshMCPLocal([server]);
+        await panel.deleteMCPServer(7);
+        assert.strictEqual(stub.serverDeleted, null, 'registration kept');
+        assert.strictEqual(calls.notes.at(-1)[0], 'error');
+        const stub2 = makeStub({ hostDelete: async () => { throw Object.assign(new Error('HTTP 404: x'), { status: 404 }); } });
+        const env2 = makeEnv(stub2);
+        env2.panel.myMcpServers = [server];
+        await env2.panel.refreshMCPLocal([server]);
+        await env2.panel.deleteMCPServer(7);
+        assert.strictEqual(stub2.serverDeleted, true);
+    }
+    // toggle: a failing host call reverts the switch and the registration
+    {
+        const stub = makeStub({ hostSetEnabled: async () => { throw new Error('HTTP 409: x'); } });
+        const { panel, calls } = makeEnv(stub);
+        panel.myMcpServers = [{ ...server }];
+        await panel.refreshMCPLocal(panel.myMcpServers);
+        await panel.toggleMCPServer(7);
+        assert.strictEqual(JSON.stringify(stub.toggles), '[false,true]');
+        assert.strictEqual(panel.myMcpServers[0].effective_on, true);
+        assert.strictEqual(calls.notes.at(-1)[0], 'error');
+    }
+    // toggle: a server row someone else owns never reaches the supervisor
+    {
+        const stub = makeStub();
+        const { panel } = makeEnv(stub);
+        panel.myMcpServers = [{ ...server, user_id: 2 }];
+        await panel.refreshMCPLocal(panel.myMcpServers);
+        await panel.toggleMCPServer(7);
+        assert.strictEqual(stub.enabled, null);
+        const g = makeStub();
+        const env = makeEnv(g);
+        env.panel.myMcpServers = [{ ...server, user_id: null, is_global: true }];
+        await env.panel.refreshMCPLocal(env.panel.myMcpServers);
+        env.ctx.window.mcpClient.disableMyMcpServer = async () => ({ success: true });
+        await env.panel.toggleMCPServer(7);
+        assert.strictEqual(g.enabled, null);
+    }
+    // saving with nothing changed says so
+    {
+        const stub = makeStub();
+        const { panel, calls, item } = makeEnv(stub);
+        panel.myMcpServers = [server];
+        await panel.refreshMCPLocal([server]);
+        panel.showMCPLocalPanel(7);
+        await panel.saveMCPLocalSettings(7, item._panel);
+        assert.strictEqual(stub.saved, null);
+        assert.deepStrictEqual(calls.notes.at(-1), ['info', 'settings.mcpHostNothingChanged']);
     }
     console.log('mcp-host-settings: ok');
 })().catch((e) => { console.error(e); process.exit(1); });
