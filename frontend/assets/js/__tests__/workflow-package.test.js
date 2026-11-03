@@ -761,5 +761,7 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
   assert.strictEqual(Buffer.from(r.files['mcps/outlook_mcp/server.py']).toString(), 'print(1)');
   assert.deepStrictEqual(r.manifest, { exclude: ['x'] });
   assert.strictEqual(WP.hostSourceFiles('f', { files: {} }).manifest, null);
+  const e = WP.hostSourceFiles('f', { files: { '.env.example': b64('A=1'), '.env': b64('S=1'), 'd/.env': b64('S'), '.hidden/x': b64('x') } });
+  assert.deepStrictEqual(Object.keys(e.files), ['mcps/f/.env.example']);
   console.log('hostSourceFiles: ok');
 }

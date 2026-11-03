@@ -205,8 +205,11 @@
     function hostSourceFiles(folder, answer) {
         const files = {};
         let manifest = null;
+        if (!isSafeSegment(folder)) return { files, manifest };
         for (const [rel, b64] of Object.entries((answer && answer.files) || {})) {
-            if (!isSafeSegment(folder) || rel.split('/').some((seg) => !isSafeSegment(seg))) continue;
+            const segs = rel.split('/');
+            // a final .env.example travels (import derives the settings form from it); .env and other dotfiles don't
+            if (!segs.every((seg, i) => isSafeSegment(seg) || (i === segs.length - 1 && seg === '.env.example'))) continue;
             const bin = atob(String(b64));
             const bytes = new Uint8Array(bin.length);
             for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
