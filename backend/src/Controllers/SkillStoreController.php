@@ -45,7 +45,32 @@ final class SkillStoreController
 
     public function list(array $request): array
     {
-        return $this->run(fn(SkillStore $s) => $s->list(self::uid($request), self::robot($request)));
+        return $this->run(function (SkillStore $s) use ($request) {
+            $rows = $s->list(self::uid($request), self::robot($request));
+            $names = $this->ownerNames(array_map(fn($r) => (int) $r['owner_id'], array_filter($rows, fn($r) => empty($r['mine']))));
+            return array_map(fn($r) => $r + ['owner_name' => $names[(int) $r['owner_id']] ?? ''], $rows);
+        });
+    }
+
+    /** @param list<int> $ids @return array<int,string> display name (else email) per user id, one query; unknown ids absent */
+    private function ownerNames(array $ids): array
+    {
+        $ids = array_values(array_unique($ids));
+        if ($ids === []) {
+            return [];
+        }
+        try {
+            $st = $this->db->prepare('SELECT id, email, first_name, last_name FROM users WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')');
+            $st->execute($ids);
+            $out = [];
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $u) {
+                $name = trim(trim((string) $u['first_name']) . ' ' . trim((string) $u['last_name']));
+                $out[(int) $u['id']] = $name !== '' ? $name : (string) $u['email'];
+            }
+            return $out;
+        } catch (\PDOException) {
+            return [];
+        }
     }
 
     public function files(array $request): array

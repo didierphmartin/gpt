@@ -434,7 +434,8 @@
       "makePrivate": "Hacer privada (solo yo)",
       "robotBlocked": "No se puede hacer privada: la usan estos flujos de robot: {{names}}.",
       "clash": "Ya existe otra habilidad pública llamada {{name}}.",
-      "failed": "No se pudo cambiar la visibilidad: {{message}}"
+      "failed": "No se pudo cambiar la visibilidad: {{message}}",
+      "by": "de {{name}}"
     },
     "migrate": {
       "title": "Importar mis habilidades existentes",

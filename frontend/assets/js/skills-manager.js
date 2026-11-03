@@ -261,6 +261,7 @@ class SkillsManager {
                     visibility: s.visibility || 'private',
                     mine: s.mine !== false,           // false: another user's public skill (read-only here)
                     owner_id: s.ownerId ?? null,
+                    owner_name: s.ownerName || '',
                     dir_name: s.dirName,               // path relative to skills/ (may include a group prefix)
                     scripts,                           // skill-relative paths to executable scripts (e.g. ['scripts/transform.py'])
                     references,                         // skill-relative paths to Markdown reference docs (e.g. ['references/second.md'])
@@ -637,6 +638,9 @@ class SkillsManager {
                 specBadge = `<span class="bg-emerald-100 text-emerald-700 text-[10px] px-1 rounded" title="SKILL.md frontmatter is spec-compliant (agentskills.io / Anthropic).">✓ spec</span>`;
             }
         }
+        const owner = (this.edition === 'corporate' && skill.mine === false && skill.owner_name)
+            ? `<span class="text-[10px] text-gray-400 flex-shrink-0">${this.escapeHtml(this.t('skills.visibility.by', { name: skill.owner_name }))}</span>`
+            : '';
         // Corporate edition: the owner flips a skill between Public and Private.
         const toggle = (this.edition === 'corporate' && skill.mine !== false)
             ? `<button type="button" class="skills-item-visibility px-1 text-[10px] text-gray-500 hover:text-indigo-700 hover:bg-gray-100 rounded transition flex-shrink-0"
@@ -645,10 +649,11 @@ class SkillsManager {
             : '';
         return `
             <div class="skills-item flex items-center gap-1 px-2 py-1.5 text-xs text-gray-700 cursor-pointer hover:bg-blue-50 rounded select-none"
-                 draggable="true"
+                 draggable="${skill.mine === false ? 'false' : 'true'}"
                  data-skill-id="${skill.id}" title="${this.escapeHtml(skill.description || '')}">
                 <span>${icon}</span>
                 <span class="flex-1 truncate">${this.escapeHtml(skill.name)}</span>
+                ${owner}
                 ${tags}
                 ${specBadge}
                 ${badge}
@@ -732,6 +737,7 @@ class SkillsManager {
                     dir_name: skill.dir_name || null,
                     scripts: Array.isArray(skill.scripts) ? skill.scripts : [],
                     source: skill.source || null,
+                    mine: skill.mine !== false,
                 };
                 e.dataTransfer.setData('application/x-skill', JSON.stringify(payload));
                 // copy → dropping onto the chat input; move → onto a folder.
@@ -802,7 +808,7 @@ class SkillsManager {
         } catch {
             return;
         }
-        if (!payload || payload.source !== 'local' || !payload.dir_name) return;
+        if (!payload || payload.source !== 'local' || !payload.dir_name || payload.mine === false) return;
 
         const slash = payload.dir_name.indexOf('/');
         const currentGroup = slash === -1 ? null : payload.dir_name.slice(0, slash);
@@ -1215,19 +1221,24 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
 
     // ===================== One-time import of the user's own folder skills =====================
 
-    migrationKey() {
+    currentUserId() {
         const u = window.authManager?.user;
-        return `skills_migrate_done_${u?.id ?? u?.uid ?? 'anon'}`;
+        return u?.id ?? u?.uid ?? null;
+    }
+
+    migrationKey() {
+        return `skills_migrate_done_${this.currentUserId()}`;
     }
 
     markMigrationDone() {
+        if (!this.currentUserId()) return;
         try { localStorage.setItem(this.migrationKey(), '1'); } catch (e) { /* storage unavailable */ }
     }
 
     /** The folder skills to offer for import, or null when the offer does not apply. */
     async migrationOffer() {
         const fs = window.skillsFs;
-        if (!fs || localStorage.getItem(this.migrationKey())) return null;
+        if (!fs || !this.currentUserId() || localStorage.getItem(this.migrationKey())) return null;
         if (await fs.mode() !== 'volume') return null;
         if ((await fs.listSkills()).some(s => s.mine)) return null;
         let list = [];

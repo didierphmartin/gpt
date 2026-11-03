@@ -64,6 +64,24 @@ final class SkillStoreControllerTest extends TestCase
         }
     }
 
+    public function test_list_names_the_owner_of_skills_that_are_not_mine(): void
+    {
+        $db = new PDO('sqlite::memory:');
+        $db->exec('CREATE TABLE users (id INTEGER, email TEXT, first_name TEXT, last_name TEXT)');
+        $db->exec("INSERT INTO users VALUES (7, 'a@x.io', 'Ada', 'Lovelace'), (9, 'z@x.io', '', '')");
+        $store = new SkillStore($this->root, 'corporate');
+        $c = new SkillStoreController($db, ['edition' => 'corporate'], fn() => $store);
+        $c->import($this->req([], ['path' => 'one', 'visibility' => 'public', 'files' => ['SKILL.md' => base64_encode("---\nname: one\ndescription: d\n---\n")]], 7));
+        $c->import($this->req([], ['path' => 'two', 'visibility' => 'public', 'files' => ['SKILL.md' => base64_encode("---\nname: two\ndescription: d\n---\n")]], 9));
+        $c->import($this->req([], ['path' => 'three', 'visibility' => 'public', 'files' => ['SKILL.md' => base64_encode("---\nname: three\ndescription: d\n---\n")]], 55));
+        $by = [];
+        foreach ($c->list($this->req([], [], 8))['data'] as $r) {
+            $by[$r['path']] = $r['owner_name'];
+        }
+        ksort($by);
+        self::assertSame(['one' => 'Ada Lovelace', 'three' => '', 'two' => 'z@x.io'], $by);
+    }
+
     public function test_import_list_files_file_roundtrip(): void
     {
         $c = $this->ctl();

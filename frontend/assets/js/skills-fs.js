@@ -598,6 +598,7 @@
                 visibility: r.visibility,
                 mine: !!r.mine,
                 ownerId: r.owner_id ?? null,
+                ownerName: r.owner_name || '',
                 dependencies: r.dependencies || [],
                 source: 'store',
             };

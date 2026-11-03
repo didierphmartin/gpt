@@ -138,3 +138,33 @@ test('declining the offer is remembered per user', () => {
   mgr.markMigrationDone();
   assert.equal(store.skills_migrate_done_7, '1');
 });
+
+test('others\' public skills show their owner and are not draggable; mine are draggable', () => {
+  const { mgr } = load();
+  mgr.edition = 'corporate';
+  const theirs = mgr.renderSkillItem({ ...SKILLS[2], owner_name: 'Ada' });
+  assert.match(theirs, /skills\.visibility\.by\{"name":"Ada"\}/);
+  assert.match(theirs, /draggable="false"/);
+  const mine = mgr.renderSkillItem({ ...SKILLS[1], owner_name: 'Ada' });
+  assert.doesNotMatch(mine, /skills\.visibility\.by/);
+  assert.match(mine, /draggable="true"/);
+});
+
+test('dropping a skill that is not mine on a folder moves nothing', async () => {
+  const moved = [];
+  const { mgr } = load({ fs: { moveSkill: async (...a) => { moved.push(a); return { ok: true }; } } });
+  mgr.loadTree = async () => {};
+  const drop = (p) => ({ dataTransfer: { getData: () => JSON.stringify(p) } });
+  await mgr.handleSkillDropOnFolder(drop({ source: 'local', dir_name: 'x', mine: false }), 'g');
+  assert.equal(moved.length, 0);
+  await mgr.handleSkillDropOnFolder(drop({ source: 'local', dir_name: 'x', mine: true }), 'g');
+  assert.equal(moved.length, 1);
+});
+
+test('no migration offer and no flag without a current user id', async () => {
+  const { mgr, window, store } = load({ fs: offerFs() });
+  window.authManager = { user: null };
+  assert.equal(await mgr.migrationOffer(), null);
+  mgr.markMigrationDone();
+  assert.deepEqual(Object.keys(store), []);
+});

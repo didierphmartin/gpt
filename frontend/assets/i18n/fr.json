@@ -434,7 +434,8 @@
       "makePrivate": "Rendre privée (moi seul)",
       "robotBlocked": "Impossible de la rendre privée : ces workflows robot l'utilisent : {{names}}.",
       "clash": "Une autre compétence publique nommée {{name}} existe déjà.",
-      "failed": "Impossible de changer la visibilité : {{message}}"
+      "failed": "Impossible de changer la visibilité : {{message}}",
+      "by": "par {{name}}"
     },
     "migrate": {
       "title": "Importer mes compétences existantes",

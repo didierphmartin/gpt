@@ -434,7 +434,8 @@
       "makePrivate": "Make private (only me)",
       "robotBlocked": "Cannot make it private: these robot workflows use it: {{names}}.",
       "clash": "A different public skill named {{name}} already exists.",
-      "failed": "Could not change the visibility: {{message}}"
+      "failed": "Could not change the visibility: {{message}}",
+      "by": "by {{name}}"
     },
     "migrate": {
       "title": "Import my existing skills",
