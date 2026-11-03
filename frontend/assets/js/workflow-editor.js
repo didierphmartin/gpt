@@ -6070,9 +6070,10 @@ class WorkflowEditor {
 
     /**
      * A robot workflow's package runs as the robot, never with the compiling person's own connections: its own .env
-     * (read before python/.env, never overridden) names each MCP server's headers variable, empty until the robot's
-     * key is pasted -- an empty value blocks python/.env's, and the program reports it is not connected. A value
-     * already there (a pasted key) is kept. The robot's keys never leave the server.
+     * (read before python/.env, never overridden) gets each MCP server's headers from the robot's rows (GET
+     * /robot/mcp-servers/compile-env: what the interpreter sends), replacing an older value. A server the robot holds
+     * no headers for is asked for (a value already there is kept); left empty, it blocks python/.env's and the
+     * program reports it is not connected.
      */
     async _robotPackageEnv(data) {
         if (!this.currentWorkflowIsRobot) return;
@@ -6085,8 +6086,11 @@ class WorkflowEditor {
         try { lines = (await (await (await dir.getFileHandle('.env')).getFile()).text()).split('\n'); } catch (_) { /* no .env yet */ }
         const keyed = new Map(lines.map((l) => l.match(/^(MCP_HEADERS_[A-Z0-9_]+)=(.*)$/)).filter(Boolean).map((m) => [m[1], m[2].trim()]));
         const add = names.filter((n) => !keyed.has(n));
-        // Missing keys: asked for now (the person compiling has them); what they paste goes to this file only.
-        const given = await this._askRobotKeys(names.filter((n) => !keyed.get(n)));
+        let fromDb = {};
+        try { fromDb = (await this._playbookApi().robotCompileEnv())?.data?.vars || {}; } catch (_) { /* asked below */ }
+        // The robot's keys first; any still missing are asked for (the person compiling may have them).
+        const given = { ...await this._askRobotKeys(names.filter((n) => !fromDb[n] && !keyed.get(n))) };
+        for (const n of names) if (fromDb[n]) given[n] = fromDb[n];
         if (add.length || Object.keys(given).length) {
             lines = lines.map((l) => { const m = l.match(/^(MCP_HEADERS_[A-Z0-9_]+)=/); return m && given[m[1]] ? `${m[1]}=${given[m[1]]}` : l; });
             while (lines.length && lines[lines.length - 1] === '') lines.pop();

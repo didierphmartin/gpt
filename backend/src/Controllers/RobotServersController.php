@@ -2,6 +2,7 @@
 declare(strict_types=1);
 namespace Quantis\AIPortfolioAssistant\Controllers;
 
+use AgentTeam\Services\CodeNodeEmit;
 use PDO;
 use Quantis\AIPortfolioAssistant\Services\RobotAccount;
 use Quantis\AIPortfolioAssistant\Services\RobotPolicy;
@@ -9,7 +10,8 @@ use Quantis\AIPortfolioAssistant\Services\RobotPolicy;
 /**
  * /api/v1/robot/mcp-servers — the robot account's own MCP server rows (e.g. an "Outlook" row holding an
  * organization connection key). Every route needs use_robot and acts only on rows owned by the robot.
- * Header values are secrets: responses carry header NAMES only.
+ * Header values are secrets: responses carry header NAMES only -- except compile-env, which hands them to a compiled
+ * robot workflow's .env (the person compiling may use the robot; decided 2026-11-02).
  */
 final class RobotServersController
 {
@@ -34,6 +36,27 @@ final class RobotServersController
                     'enabled' => (bool) $r['enabled'], 'header_names' => array_map('strval', array_keys($this->headers($r['headers'])))];
             }
             return ['success' => true, 'data' => $out];
+        });
+    }
+
+    /**
+     * GET /robot/mcp-servers/compile-env — {vars: {MCP_HEADERS_<SLUG>: headers JSON}} of the robot's enabled servers that
+     * hold headers: what the interpreter sends when the robot runs, for the package .env of a compiled robot workflow.
+     * The values are never logged.
+     */
+    public function compileEnv(array $request): array
+    {
+        return $this->guard($request, function (int $robot) {
+            $st = $this->db->prepare('SELECT name, headers FROM mcp_servers WHERE user_id = ? AND enabled = 1 ORDER BY name');
+            $st->execute([(string) $robot]);
+            $vars = [];
+            foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                $h = $this->headers($r['headers']);
+                if ($h !== []) {
+                    $vars['MCP_HEADERS_' . strtoupper(CodeNodeEmit::slug((string) $r['name']))] = json_encode($h, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                }
+            }
+            return ['success' => true, 'data' => ['vars' => $vars]];
         });
     }
 

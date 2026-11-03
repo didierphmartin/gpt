@@ -437,6 +437,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->get('/api/v1/robot/playbooks', ['RobotController', 'playbooks']);
         $r->delete('/api/v1/robot/playbooks/{id:\d+}', ['RobotController', 'unpublish']);
         $r->get('/api/v1/robot/mcp-servers', ['RobotServersController', 'index']);
+        $r->get('/api/v1/robot/mcp-servers/compile-env', ['RobotServersController', 'compileEnv']);
         $r->post('/api/v1/robot/mcp-servers', ['RobotServersController', 'create']);
         $r->post('/api/v1/robot/mcp-servers/{id:\d+}', ['RobotServersController', 'update']);
         $r->delete('/api/v1/robot/mcp-servers/{id:\d+}', ['RobotServersController', 'destroy']);
