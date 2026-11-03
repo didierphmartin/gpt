@@ -487,8 +487,14 @@
             }
             const folder = r.destination;
             const cls = classify('server', s, h.servers).status;
+            // Not registered here, but a folder was picked for it in this browser earlier: that one is kept.
+            const picked = pick(h.pickedFolders, s.name);
+            if (folder && cls === 'install' && typeof picked === 'string') {
+                r.folderExists = true;
+                r.pickedFolder = picked;
+                r.reasons.push('folder-exists');
             // Not registered here, but its folder is already in the user's folder (e.g. another install shares it).
-            if (folder && cls === 'install' && (h.serverFolders || []).includes(folder.slice('mcps/'.length))) {
+            } else if (folder && cls === 'install' && (h.serverFolders || []).includes(folder.slice('mcps/'.length))) {
                 r.folderExists = true;
                 r.reasons.push('folder-exists');
             }
@@ -559,7 +565,9 @@
      * io (paths relative to the user's folder; writeFile creates parent folders):
      *   exists(path) -> boolean, ensureDir(path), writeFile(path, Uint8Array), readJson(path) -> obj|undefined, writeJson(path, obj),
      *   addServer({name,url,description,transport,is_mock,headers}) -> {id}, createPlaybook({pkey,title,text}) -> {id},
-     *   importComponents(bundle, nodes) -> nodes.
+     *   importComponents(bundle, nodes) -> nodes;
+     *   for a server whose card picked a folder (values[name].pickedFolder): pickedEmpty(name) -> boolean,
+     *   writePicked(name, pathInFolder, Uint8Array), rememberPicked(name).
      * Skipped rows do nothing; use-existing / present rows write nothing but lend their existing id
      * (from `have`) to the re-link. Refuses (writing nothing) while a review item is unresolved or when a
      * skill folder, server folder or playbook file to install already exists, or when a path to write would leave its
@@ -616,7 +624,9 @@
             if (!s || !s.local) continue;
             const f = serverFolder(s, serverDep(r));
             const dest = f ? `mcps/${f}` : null;
-            plan.servers.push({ r, folder: f, dest, paths: dest ? treeOf(`${dest}/`) : [] });
+            // A folder picked on the card (anywhere on disk): written through io.writePicked, not under mcps/.
+            const picked = pick(rowValues(r), 'pickedFolder');
+            plan.servers.push({ r, folder: f, dest, picked: typeof picked === 'string' && picked ? picked : null, paths: dest ? treeOf(`${dest}/`) : [] });
         }
         for (const r of ofKind('playbook').filter(toInstall)) {
             const d = playbookDep(r);
@@ -632,9 +642,10 @@
         if (unsafePaths.length) throw new Error('install refused: unsafe path ' + unsafePaths.join(', '));
 
         // Never overwrite: every destination of an item to install must be free before anything is written.
-        const targets = [...plan.skills.map((x) => x.dest), ...plan.servers.map((x) => x.dest), ...plan.playbooks.map((x) => x.dest)];
+        const targets = [...plan.skills.map((x) => x.dest), ...plan.servers.filter((x) => !x.picked).map((x) => x.dest), ...plan.playbooks.map((x) => x.dest)];
         const taken = [];
         for (const t of targets) if (await step(`check ${t}`, () => io.exists(t))) taken.push(t);
+        for (const x of plan.servers.filter((y) => y.picked)) if (!(await step(`check ${x.picked}`, () => io.pickedEmpty(x.r.name)))) taken.push(x.picked);
         if (taken.length) throw new Error('install refused: would overwrite ' + taken.join(', '));
 
         for (const dir of WRITE_ROOTS) await step(`create folder ${dir}`, () => io.ensureDir(guard(dir, dir)));
@@ -646,9 +657,13 @@
 
         // Local server source + private settings, then the name -> folder map.
         const map = Object.create(null);
-        for (const { r, folder, dest, paths } of plan.servers) {
-            for (const p of paths) await step(`write server ${r.name}: ${p}`, () => writeFile(p, 'mcps', files[p]));
-            installed.push({ kind: 'server-files', name: r.name, destination: dest });
+        for (const { r, folder, dest, picked, paths } of plan.servers) {
+            // Picked folder: the same files at the same place relative to the server's folder.
+            const put = (p, bytes, allowEnv) => (picked ? io.writePicked(r.name, guard(p, 'mcps', allowEnv).slice(dest.length + 1), bytes)
+                : writeFile(p, 'mcps', bytes, allowEnv));
+            for (const p of paths) await step(`write server ${r.name}: ${p}`, () => put(p, files[p]));
+            if (picked) await step(`remember the folder of ${r.name}`, () => io.rememberPicked(r.name));
+            installed.push({ kind: 'server-files', name: r.name, destination: picked || dest });
             const v = rowValues(r);
             const ex = pick(files, `${dest}/.env.example`);
             const man = parse(`${dest}/synergyai-mcp.json`);
@@ -656,15 +671,15 @@
             if (!pick(v, 'fillLater') && fields.length) {
                 const env = Object.create(null);
                 for (const f of fields) { const x = pick(v, f.name); env[f.name] = x !== undefined && x !== null ? x : f.default; }
-                await step(`write settings for ${r.name}`, () => writeFile(`${dest}/.env`, 'mcps', new TextEncoder().encode(renderEnv(env)), true));
+                await step(`write settings for ${r.name}`, () => put(`${dest}/.env`, new TextEncoder().encode(renderEnv(env)), true));
             }
-            map[r.name] = folder;
+            if (!picked) map[r.name] = folder;
             commands.push({ server: r.name, install: (man && man.install) || null, start: (man && man.start) || null });
         }
         for (const r of ofKind('server').filter(keepsFolder)) {
             const folder = r.destination.slice('mcps/'.length);
             const man = parse(`${r.destination}/synergyai-mcp.json`);
-            map[r.name] = folder;
+            if (!r.pickedFolder) map[r.name] = folder;   // a picked folder is remembered by the browser, not in servers.json
             commands.push({ server: r.name, install: (man && man.install) || null, start: (man && man.start) || null });
         }
         if (Object.keys(map).length) {
@@ -693,7 +708,8 @@
                 transport: s.transport || 'http', is_mock: !!s.is_mock, headers: auth ? { Authorization: auth } : {} };
             const res = await step(`register server ${r.name}`, () => io.addServer(reg));
             serverIdByName.set(r.name, Number(res.id));
-            installed.push({ kind: 'server', name: r.name, destination: plan.servers.find((x) => x.r === r)?.dest || (keepsFolder(r) ? r.destination : null) });
+            const planned = plan.servers.find((x) => x.r === r);
+            installed.push({ kind: 'server', name: r.name, destination: planned ? planned.picked || planned.dest : keepsFolder(r) ? r.pickedFolder || r.destination : null });
         }
         const serverNameByOldId = new Map((pkg.servers || []).filter((s) => isId(s.old_id)).map((s) => [Number(s.old_id), s.name]));
 

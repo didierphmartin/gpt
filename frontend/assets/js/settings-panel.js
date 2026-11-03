@@ -1669,15 +1669,27 @@ class SettingsPanel {
         }
     }
 
-    /** One local server's manifest, declared settings and current values. */
-    async _readMCPLocalInfo(folder) {
-        const base = `mcps/${folder}`;
-        const info = { folder, fields: [], values: {}, manifest: null, missing: [], error: false };
+    async _readTextIn(dir, path) {
+        const fh = await window.localFs.resolveIn(dir, path, { kind: 'file' });
+        return fh ? (await fh.getFile()).text() : null;
+    }
+
+    async _writeTextIn(dir, path, text) {
+        const fh = await window.localFs.resolveIn(dir, path, { create: true, kind: 'file' });
+        if (!fh) throw new Error('cannot write');
+        const w = await fh.createWritable();
+        await w.write(text);
+        await w.close();
+    }
+
+    /** One local server's manifest, declared settings and current values; dir is its folder, label what to call it. */
+    async _readMCPLocalInfo(dir, label) {
+        const info = { folder: label, dir, fields: [], values: {}, manifest: null, missing: [], error: false };
         try {
             const [manText, exText, envText] = await Promise.all([
-                this._readLocalText(`${base}/synergyai-mcp.json`).catch(() => null),
-                this._readLocalText(`${base}/.env.example`).catch(() => null),
-                this._readLocalText(`${base}/.env`).catch(() => null),
+                this._readTextIn(dir, 'synergyai-mcp.json').catch(() => null),
+                this._readTextIn(dir, '.env.example').catch(() => null),
+                this._readTextIn(dir, '.env').catch(() => null),
             ]);
             info.manifest = manText ? JSON.parse(manText) : null;
             info.fields = window.WorkflowPackage.envFields(info.manifest, exText || '');
@@ -1696,14 +1708,24 @@ class SettingsPanel {
     async refreshMCPLocal(servers) {
         const token = this._mcpLocalToken = (this._mcpLocalToken || 0) + 1;
         this.mcpLocal = new Map();
-        if (!window.localFs || !window.WorkflowPackage || !(await this._mcpFolderGranted())) return;
-        let map;
-        try { map = await this._readMCPServerMap(); } catch (_) { return; }
-        const folderOf = (s) => this._ownEntry(map, s.name);
-        const local = (servers || []).filter(s => typeof folderOf(s) === 'string' && this.isValidMCPLocalFolder(folderOf(s)));
-        const infos = await Promise.all(local.map(s => this._readMCPLocalInfo(folderOf(s))));
+        if (!window.localFs || !window.WorkflowPackage) return;
+        let map = Object.create(null);
+        if (await this._mcpFolderGranted()) {
+            try { map = await this._readMCPServerMap(); } catch (_) { /* unreadable map: picked folders only */ }
+        }
+        // A folder picked for the server (import's "Choose a folder…") wins over mcps/<folder> in servers.json.
+        const found = await Promise.all((servers || []).map(async (s) => {
+            const picked = await window.localFs.getServerFolder(s.name).catch(() => null);
+            if (picked) return picked.state === 'granted' ? { s, dir: picked.handle, label: picked.name } : null;
+            const folder = this._ownEntry(map, s.name);
+            if (typeof folder !== 'string' || !this.isValidMCPLocalFolder(folder)) return null;
+            const dir = await window.localFs.resolvePath(`mcps/${folder}`);
+            return dir ? { s, dir, label: folder } : null;
+        }));
+        const local = found.filter(Boolean);
+        const infos = await Promise.all(local.map(x => this._readMCPLocalInfo(x.dir, x.label)));
         if (token !== this._mcpLocalToken) return;   // re-rendered meanwhile
-        local.forEach((s, i) => {
+        local.forEach(({ s }, i) => {
             this.mcpLocal.set(Number(s.id), infos[i]);
             this._decorateMCPLocalRow(Number(s.id));
         });
@@ -1806,9 +1828,8 @@ class SettingsPanel {
         if (btn) btn.disabled = true;
         try {
             // Undeclared keys and comments in the file stay: only the declared keys' lines change.
-            const path = `mcps/${info.folder}/.env`;
-            const current = await this._readLocalText(path).catch(() => null);
-            await this._writeLocalText(path, window.WorkflowPackage.mergeEnv(current || '', values));
+            const current = await this._readTextIn(info.dir, '.env').catch(() => null);
+            await this._writeTextIn(info.dir, '.env', window.WorkflowPackage.mergeEnv(current || '', values));
             info.values = Object.assign(Object.create(null), info.values, values);
             info.missing = window.WorkflowPackage.missingRequired(info.fields, values);
             this._decorateMCPLocalRow(id);

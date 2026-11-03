@@ -42,7 +42,19 @@
             await w.write(bytes);
             await w.close();
         };
+        // Folders picked on the server cards: { [server name]: directory handle }.
+        const picked = Object.create(null);
         return {
+            picked,
+            pickedEmpty: async (name) => window.localFs.isEmptyDir(picked[name]),
+            async writePicked(name, path, bytes) {
+                const fh = await window.localFs.resolveIn(picked[name], path, { create: true, kind: 'file' });
+                if (!fh) throw new Error(`cannot write ${path} in ${picked[name].name}`);
+                const w = await fh.createWritable();
+                await w.write(bytes);
+                await w.close();
+            },
+            rememberPicked: (name) => window.localFs.setServerFolder(name, picked[name]),
             async exists(path) {
                 return !!(await fileHandle(path, false)) || !!(await fs().resolvePath(path, { kind: 'directory' }));
             },
@@ -88,6 +100,14 @@
             const CC = window.CodeComponents;
             if (CC) await CC.cache.load(CC.api());
             have.components = CC ? CC.cache.all() : [];
+        }
+        if (!have.pickedFolders) {
+            have.pickedFolders = Object.create(null);
+            // Folders picked for these servers in this browser earlier (any place on disk).
+            for (const s of (pkg.servers || []).filter((x) => x.local)) {
+                const f = window.localFs && window.localFs.getServerFolder && await window.localFs.getServerFolder(s.name);
+                if (f) have.pickedFolders[s.name] = f.name;
+            }
         }
         if (!have.serverFolders) {
             have.serverFolders = [];
@@ -175,9 +195,9 @@
         if (skipped) status = t('statusSkipped');
         else if (r.choice === 'use-existing') status = t('statusUseExisting');
         else if (r.status === 'present') status = t('statusPresent');
-        else if (r.status === 'clash') status = r.folderExists ? t('statusFolderExists', { destination: r.destination }) : t('statusClash', { name: r.name });
+        else if (r.status === 'clash') status = r.folderExists ? t('statusFolderExists', { destination: r.pickedFolder || r.destination }) : t('statusClash', { name: r.name });
         else if (r.kind === 'secrets') status = t('statusKeys');
-        else status = r.destination ? t('statusInstallTo', { destination: r.destination }) : t('statusInstall');
+        else status = r.destination ? t('statusInstallTo', { destination: v.pickedFolder || r.destination }) : t('statusInstall');
         const reasons = (r.reasons || []).filter((x) => REASON_KEY[x]);
         const parts = [];
         if (reasons.length && !skipped) {
@@ -189,6 +209,14 @@
                 <button type="button" data-choice="skip" style="${skipped ? BTN_ON : BTN_PLAIN}">${t('skipIt')}</button></div>`);
         } else if ((r.reasons || []).some((x) => x === 'unreadable' || x === 'unsafe-path')) {
             parts.push(`<div><button type="button" data-choice="skip" style="${skipped ? BTN_ON : BTN_PLAIN}">${t('skipIt')}</button></div>`);
+        }
+        if (live && r.kind === 'server' && r.destination) {
+            // Where the server's files go: <SynergyAI>/mcps/<folder> unless another folder is picked here.
+            const where = v.pickedFolder ? `📁 ${esc(v.pickedFolder)}` : `<code>${esc(r.destination)}</code>`;
+            parts.push(`<div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px;">
+                <span>${t('storeIn')} ${where}</span>
+                <button type="button" data-pick-folder style="${BTN_PLAIN} padding: 4px 10px;">${t('pickServerFolder')}</button>
+                ${v.pickedFolder ? `<button type="button" data-unpick-folder style="${BTN_PLAIN} padding: 4px 10px;">${t('useDefaultFolder', { destination: r.destination })}</button>` : ''}</div>`);
         }
         if (registers && r.kind === 'server') {
             if (r.url !== undefined) {
@@ -251,7 +279,8 @@
                 <div style="color: #475569; font-size: 13px;">${t('commandsHelp')}</div>
                 ${cmds.map((c) => {
                     const row = state.rows.find((r) => r.kind === 'server' && r.name === c.server);
-                    return `<div style="display: flex; flex-direction: column; gap: 4px; margin-top: 6px;"><strong style="font-size: 13px;">${esc(c.server)}${row && row.destination ? ` — <code>${esc(row.destination)}</code>` : ''}</strong>
+                    const where = row && ((own(state.values, row.name) || {}).pickedFolder || row.pickedFolder || row.destination);
+                    return `<div style="display: flex; flex-direction: column; gap: 4px; margin-top: 6px;"><strong style="font-size: 13px;">${esc(c.server)}${where ? ` — <code>${esc(where)}</code>` : ''}</strong>
                         ${block(t('installCommand'), c.install)}${block(t('startCommand'), c.start)}</div>`;
                 }).join('')}</div>`;
         }
@@ -304,6 +333,26 @@
         list.addEventListener('click', (e) => {
             const toggle = e.target.closest('[data-toggle-secret]');
             if (toggle) { toggleSecret(toggle, t); return; }
+            const card = e.target.closest('[data-row]');
+            if (card && !busy && !locked && e.target.closest('[data-unpick-folder]')) {
+                const r = state.rows[Number(card.dataset.row)];
+                delete io.picked[r.name];
+                delete rowValues(state.values, r.name).pickedFolder;
+                render();
+                return;
+            }
+            if (card && !busy && !locked && e.target.closest('[data-pick-folder]')) {
+                const r = state.rows[Number(card.dataset.row)];
+                window.localFs.pickServerFolder().then(async (res) => {
+                    if (!res.ok) { if (!res.cancelled) notify(t('pickFolderFailed', { error: res.error || '' }), 'error'); return; }
+                    // Never overwrite: the picked folder must be empty (the install checks it again).
+                    if (!(await window.localFs.isEmptyDir(res.handle))) { notify(t('pickFolderNotEmpty', { folder: res.name }), 'warning'); return; }
+                    io.picked[r.name] = res.handle;
+                    rowValues(state.values, r.name).pickedFolder = res.name;
+                    render();
+                });
+                return;
+            }
             const btn = e.target.closest('[data-choice]');
             if (!btn || busy || locked) return;
             const r = state.rows[Number(btn.closest('[data-row]').dataset.row)];

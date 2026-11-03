@@ -219,9 +219,13 @@
      * directory or file handle. Returns null if any segment is missing.
      * Convenience wrapper used by Skills / Workflows / Artifacts later.
      */
-    async function resolvePath(path, { create = false, kind = 'directory' } = {}) {
+    async function resolvePath(path, opts = {}) {
         const root = await getRootHandle();
-        if (!root) return null;
+        return root ? resolveIn(root, path, opts) : null;
+    }
+
+    /** resolvePath under any directory handle (e.g. a server folder picked outside the root). */
+    async function resolveIn(root, path, { create = false, kind = 'directory' } = {}) {
         const parts = path.split('/').filter(Boolean);
         let cur = root;
         for (let i = 0; i < parts.length; i++) {
@@ -422,7 +426,58 @@
         };
     })();
 
+    // ---- A local MCP server's own folder, picked anywhere on disk (default: <root>/mcps/<folder>) ----
+    // The handle is remembered per server name in this browser (this app's origin only), beside the root's.
+    const serverKey = (name) => 'mcp-folder:' + name;
+
+    /** { handle, state: 'granted' | 'prompt' | 'denied', name } for the folder picked for this server, or null. */
+    async function getServerFolder(name) {
+        if (!isSupported()) return null;
+        let handle;
+        try { handle = await idbGet(serverKey(name)); } catch { return null; }
+        if (!handle) return null;
+        const state = await handle.queryPermission({ mode: 'readwrite' });
+        return { handle, state, name: handle.name };
+    }
+
+    /** The directory picker (call from a click); nothing is remembered until setServerFolder. */
+    async function pickServerFolder() {
+        if (!isSupported()) return { ok: false, error: 'unsupported' };
+        let handle;
+        try {
+            handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+        } catch (e) {
+            if (e?.name === 'AbortError') return { ok: false, cancelled: true };
+            return { ok: false, error: e?.message || String(e) };
+        }
+        if ((await handle.queryPermission({ mode: 'readwrite' })) !== 'granted'
+            && (await handle.requestPermission({ mode: 'readwrite' })) !== 'granted') return { ok: false, error: 'Permission denied.' };
+        return { ok: true, handle, name: handle.name };
+    }
+
+    const setServerFolder = (name, handle) => idbSet(serverKey(name), handle);
+
+    /** True when the directory holds nothing yet. */
+    async function isEmptyDir(handle) {
+        // eslint-disable-next-line no-unused-vars
+        for await (const _ of handle.keys()) return false;
+        return true;
+    }
+
+    /** The folder a local server lives in: its picked folder when granted, else <root>/mcps/<folder>, else null. */
+    async function serverDir(name, folder) {
+        const picked = await getServerFolder(name);
+        if (picked) return picked.state === 'granted' ? picked.handle : null;
+        return folder ? resolvePath(`mcps/${folder}`) : null;
+    }
+
     window.localFs = {
+        getServerFolder,
+        pickServerFolder,
+        setServerFolder,
+        isEmptyDir,
+        serverDir,
+        resolveIn,
         runnerShell,
         isSupported,
         getRootHandle,

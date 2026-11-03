@@ -42,12 +42,14 @@
         return JSON.parse(await (await fh.getFile()).text());
     }
 
-    /** A local server's filtered source as { "mcps/<folder>/<path>": bytes } and its install manifest. */
-    async function readServerSource(folder) {
-        const dir = window.localFs && await window.localFs.resolvePath(`mcps/${folder}`);
+    /** A local server's filtered source as { "mcps/<folder>/<path>": bytes } and its install manifest; dir is its folder. */
+    async function readServerSource(dir, folder) {
         if (!dir) return null;
         let manifest = null;
-        try { manifest = (await readJsonFile(`mcps/${folder}/synergyai-mcp.json`)) || null; } catch (_) { manifest = null; }
+        try {
+            const fh = await window.localFs.resolveIn(dir, 'synergyai-mcp.json', { kind: 'file' });
+            manifest = fh ? JSON.parse(await (await fh.getFile()).text()) : null;
+        } catch (_) { manifest = null; }
         const dirExclude = { exclude: (manifest && manifest.exclude) || [] };
         const keep = (entry, path) => (entry.kind === 'directory'
             // a folder is entered unless the default / manifest excludes rule out everything in it
@@ -168,8 +170,13 @@
             const regs = registered.filter((s) => s.name === name);
             const reg = regs.find((s) => String(s.user_id) === uid) || regs[0];
             if (!reg) { warn('server-missing', 'warnServerMissing', { name }); continue; }
-            const folder = Object.prototype.hasOwnProperty.call(localMap, name) ? localMap[name] : null;
-            const source = folder ? await readServerSource(folder) : null;
+            // A folder picked for the server in this browser wins; in the package it sits at mcps/<its name>.
+            const picked = window.localFs && window.localFs.getServerFolder ? await window.localFs.getServerFolder(name).catch(() => null) : null;
+            const mapped = Object.prototype.hasOwnProperty.call(localMap, name) ? localMap[name] : null;
+            const folder = picked ? (WP().isSafeSegment(picked.name) ? picked.name : WP().safeFileName(name)) : mapped;
+            const dir = picked ? (picked.state === 'granted' ? picked.handle : null)
+                : mapped && window.localFs ? await window.localFs.resolvePath(`mcps/${mapped}`) : null;
+            const source = folder ? await readServerSource(dir, folder) : null;
             if (folder && !source) warn('folder-unreadable', 'warnFolderUnreadable', { name });
             // Runs on this computer but has no folder in mcps/servers.json: its code can't travel.
             if (!folder && canRead && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])([:/]|$)/i.test(reg.url || '')) {
