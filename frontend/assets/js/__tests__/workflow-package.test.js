@@ -747,3 +747,19 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
     assert.deepStrictEqual(none, {});
     console.log('missingByNode: ok');
 }
+
+{
+  const b64 = (s) => Buffer.from(s).toString('base64');
+  assert.strictEqual(WP.hostFolderOf('http://localhost:8790/outlook_mcp/mcp', 'http://localhost:8790/'), 'outlook_mcp');
+  assert.strictEqual(WP.hostFolderOf('http://localhost:9000/x/mcp', 'http://localhost:8790'), null);
+  assert.strictEqual(WP.hostFolderOf('http://localhost:8790/.git/mcp', 'http://localhost:8790'), null);
+  assert.strictEqual(WP.hostFolderOf('http://localhost:8790/a/mcp', ''), null);
+  const r = WP.hostSourceFiles('outlook_mcp', { files: {
+    'server.py': b64('print(1)'), 'sub/a.txt': b64('x'), 'synergyai-mcp.json': b64('{"exclude":["x"]}'), '../evil': b64('no') } });
+  assert.deepStrictEqual(Object.keys(r.files).sort(),
+    ['mcps/outlook_mcp/server.py', 'mcps/outlook_mcp/sub/a.txt', 'mcps/outlook_mcp/synergyai-mcp.json']);
+  assert.strictEqual(Buffer.from(r.files['mcps/outlook_mcp/server.py']).toString(), 'print(1)');
+  assert.deepStrictEqual(r.manifest, { exclude: ['x'] });
+  assert.strictEqual(WP.hostSourceFiles('f', { files: {} }).manifest, null);
+  console.log('hostSourceFiles: ok');
+}

@@ -163,13 +163,22 @@
         let localMap = {};
         if (canRead) try { localMap = (await readJsonFile('mcps/servers.json')) || {}; } catch (_) { warn('servers-map', 'warnServersMap'); }
         const uid = String(window.mcpClient?.getUserId?.() ?? '');
+        // Volume servers (Docker app): the gateway their URLs start with; no answer = export as without a host.
+        let gateway = '';
+        try { const st = await window.mcpClient?.hostStatus(); if (st && st.available) gateway = st.gateway || ''; }
+        catch (e) { console.warn('[package] server host status unavailable:', e.message); }
         const servers = [];
         for (const name of deps.servers) {
             const regs = registered.filter((s) => s.name === name);
             const reg = regs.find((s) => String(s.user_id) === uid) || regs[0];
             if (!reg) { warn('server-missing', 'warnServerMissing', { name }); continue; }
-            const folder = Object.prototype.hasOwnProperty.call(localMap, name) ? localMap[name] : null;
-            const source = folder ? await readServerSource(folder) : null;
+            const hostFolder = WP().hostFolderOf(reg.url, gateway);
+            const folder = hostFolder || (Object.prototype.hasOwnProperty.call(localMap, name) ? localMap[name] : null);
+            let source = null;
+            if (hostFolder) {
+                try { source = WP().hostSourceFiles(hostFolder, await window.mcpClient.hostSource(hostFolder)); }
+                catch (e) { console.warn('[package] volume source unreadable:', e.message); }
+            } else if (folder) source = await readServerSource(folder);
             if (folder && !source) warn('folder-unreadable', 'warnFolderUnreadable', { name });
             // Runs on this computer but has no folder in mcps/servers.json: its code can't travel.
             if (!folder && canRead && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])([:/]|$)/i.test(reg.url || '')) {

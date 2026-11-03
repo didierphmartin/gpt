@@ -193,6 +193,31 @@
         return globRe(pattern).test(segs[segs.length - 1]);
     }
 
+    /** The volume folder a registered URL points at (gateway + "/" + folder + ...), else null. */
+    function hostFolderOf(url, gateway) {
+        const gw = String(gateway || '').replace(/\/+$/, '');
+        if (!gw || typeof url !== 'string' || !url.startsWith(gw + '/')) return null;
+        const seg = url.slice(gw.length + 1).split(/[/?#]/)[0];
+        return /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(seg) ? seg : null;
+    }
+
+    /** A supervisor source answer ({files: {rel: base64}}) as { files: {"mcps/<folder>/<rel>": bytes}, manifest }. */
+    function hostSourceFiles(folder, answer) {
+        const files = {};
+        let manifest = null;
+        for (const [rel, b64] of Object.entries((answer && answer.files) || {})) {
+            if (!isSafeSegment(folder) || rel.split('/').some((seg) => !isSafeSegment(seg))) continue;
+            const bin = atob(String(b64));
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            files[`mcps/${folder}/${rel}`] = bytes;
+            if (rel === 'synergyai-mcp.json') {
+                try { manifest = JSON.parse(new TextDecoder().decode(bytes)) || null; } catch (_) { manifest = null; }
+            }
+        }
+        return { files, manifest };
+    }
+
     /** Which of `paths` (relative to the server folder) are shipped: include (if any), then exclude + defaults. */
     function selectServerFiles(paths, manifest) {
         const include = manifest && Array.isArray(manifest.include) && manifest.include.length ? manifest.include : null;
@@ -792,5 +817,5 @@
         return { installed, commands, nodes };
     }
 
-    return { WORKFLOW_KEYS, isSafeSegment, isSafeWritePath, packageSkills, mergeEnv, collectDependencies, missingByNode, serverFolder, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, envFields, renderEnv, parseEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest, readPackage, matchComponent, reviewRows, canConfirm, installPackage };
+    return { WORKFLOW_KEYS, isSafeSegment, isSafeWritePath, packageSkills, mergeEnv, collectDependencies, missingByNode, serverFolder, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, hostFolderOf, hostSourceFiles, envFields, renderEnv, parseEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest, readPackage, matchComponent, reviewRows, canConfirm, installPackage };
 });
