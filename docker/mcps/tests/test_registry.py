@@ -38,3 +38,25 @@ class RegistryTest(unittest.TestCase):
         r.add("x", "X", 1)
         r.set_enabled("x", False)
         self.assertFalse(Registry(self.tmp).get("x")["enabled"])
+
+    def test_concurrent_adds_get_distinct_ports(self):
+        import json
+        import threading
+        r = Registry(self.tmp)
+        errors = []
+
+        def work(i):
+            try:
+                r.add(f"s{i}", "S", 1)
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+
+        ts = [threading.Thread(target=work, args=(i,)) for i in range(20)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        self.assertEqual(errors, [])
+        data = json.loads((self.tmp / "servers.json").read_text())
+        self.assertEqual(len(data), 20)
+        self.assertEqual(len({s["port"] for s in data.values()}), 20)
