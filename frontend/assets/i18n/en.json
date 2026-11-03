@@ -1596,7 +1596,7 @@
       "reasonFolderExists": "\"Use the one already here\" registers the server with that folder as it is: nothing in it is replaced, its settings stay.",
       "hostUnreachable": "The server host is not reachable",
       "hostRunning": "installed and running",
-      "hostStarted": "installed and started",
+      "hostRestarting": "installed, but it stopped and is being started again; its log is below",
       "hostInstallFailed": "installed but it stopped on start; its log is below",
       "hostState": "installed, state: {{state}}",
       "statusVolumeFolderExists": "A server folder {{destination}} is already installed on the server host, but the server is not registered here. Choose what to do:",

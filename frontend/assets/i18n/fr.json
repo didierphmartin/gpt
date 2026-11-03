@@ -1596,7 +1596,7 @@
       "reasonFolderExists": "« Utiliser celui déjà ici » enregistre le serveur avec ce dossier tel quel : rien n'y est remplacé, ses réglages restent.",
       "hostUnreachable": "L'hôte de serveurs n'est pas joignable",
       "hostRunning": "installé et en marche",
-      "hostStarted": "installé et démarré",
+      "hostRestarting": "installé, mais il s'est arrêté et redémarre ; son journal est ci-dessous",
       "hostInstallFailed": "installé mais il s'est arrêté au démarrage ; son journal est ci-dessous",
       "hostState": "installé, état : {{state}}",
       "statusVolumeFolderExists": "Un dossier de serveur {{destination}} est déjà installé sur l'hôte de serveurs, mais le serveur n'est pas enregistré ici. Choisissez quoi faire :",

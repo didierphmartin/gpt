@@ -40,13 +40,21 @@
         return btoa(bin);
     };
 
-    /** Send one server to the Docker app's server host. A long install can outlive the proxy: then watch the list. */
+    /** Send one server to the Docker app's server host. A long install can outlive the proxy: then watch the list.
+     *  "running" at the install reply only means the process was launched, so its state is read once more a moment
+     *  later: a server that stops on start then shows as such, with its log. */
     async function installOnHost(folder, { name, files, env }) {
         const mc = window.mcpClient;
         const encoded = {};
         for (const rel of Object.keys(files)) encoded[rel] = toBase64(files[rel]);
         try {
-            return await mc.hostInstall(folder, { name, files: encoded, env });
+            const r = await mc.hostInstall(folder, { name, files: encoded, env });
+            await wait(POLL_MS);
+            try {
+                const row = (await mc.hostServers()).find((x) => x.folder === folder);
+                if (row) return { ...r, state: row.state, log: row.log };
+            } catch (_) { /* the install reply stands */ }
+            return r;
         } catch (e) {
             if (e.status === 422) {
                 const log = (e.body && e.body.data && e.body.data.log) || (e.body && e.body.log) || [];
@@ -292,8 +300,8 @@
         const hosted = result.installed.filter((x) => x.kind === 'server' && x.state !== undefined);
         if (hosted.length) {
             html += `<div style="${box} display: flex; flex-direction: column; gap: 6px;">${hosted.map((x) => {
-                const ok = x.state === 'running' || x.state === 'starting';   // starting: launched, not yet confirmed up
-                const status = x.state === 'running' ? t('hostRunning') : x.state === 'starting' ? t('hostStarted')
+                const ok = x.state === 'running';   // starting: it stopped and waits to be started again
+                const status = x.state === 'running' ? t('hostRunning') : x.state === 'starting' ? t('hostRestarting')
                     : x.state === 'crashed' ? t('hostInstallFailed') : t('hostState', { state: x.state });
                 return `<div><strong style="font-size: 13px;">${esc(x.name)}</strong>: ${status}`
                     + (!ok && x.log && x.log.length ? `<pre style="margin: 4px 0 0; font-size: 12px; white-space: pre-wrap;">${esc(x.log.slice(0, 20).join('\n'))}</pre>` : '') + '</div>';

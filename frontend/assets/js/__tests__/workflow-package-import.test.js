@@ -12,9 +12,10 @@ const editor = { t: (k) => k };
 const html = (state, log) => resultHtml(editor, { rows: [], values: {} },
     { installed: [{ kind: 'server', name: 'Outlook', destination: 'volume: outlook_mcp', state, log }], commands: [] });
 
-// a server still starting reads "started" (not "running") and shows no log
-assert.match(html('starting', ['booting']), /workflow\.package\.hostStarted/);
-assert.doesNotMatch(html('starting', ['booting']), /hostRunning|booting/);
+// "starting" means it stopped and waits to be started again: not a success, and its log shows
+assert.match(html('starting', ['boom']), /workflow\.package\.hostRestarting[\s\S]*boom/);
+assert.doesNotMatch(html('starting', ['boom']), /hostRunning/);
+assert.doesNotMatch(html('running', ['fine']), /fine/);
 assert.match(html('running'), /workflow\.package\.hostRunning/);
 assert.match(html('crashed', ['boom']), /hostInstallFailed[\s\S]*boom/);
 console.log('workflow-package-import: ok');
