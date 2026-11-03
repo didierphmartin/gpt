@@ -529,6 +529,10 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
             // a folder already in the volume is a clash
             const crow = (await WP.reviewRows(ipkg, { ...hhave, hostFolders: ['outlook_mcp'] })).find((r) => r.name === 'Outlook');
             assert.strictEqual(crow.status, 'clash');
+            // a host without a gateway address is refused before anything is installed or registered
+            const gio = memIo();
+            await assert.rejects(WP.installPackage(hrows, ipkg, { Outlook: { fillLater: true } }, gio, { ...hhave, host: { gateway: '' } }), /no gateway address/);
+            assert.ok(!gio.calls.some((c) => c[0] === 'installServer' || c[0] === 'addServer'));
             // install failure stops before registering
             const fio2 = memIo({ failInstall: 'outlook_mcp' });
             await assert.rejects(WP.installPackage(hrows, ipkg, { Outlook: { fillLater: true } }, fio2, hhave), /install failed at "install server Outlook"/);

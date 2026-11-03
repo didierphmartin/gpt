@@ -659,6 +659,9 @@
             ...plan.playbooks.filter((x) => !x.dest).map((x) => `playbook ${x.r.name}`),
         ];
         if (unsafePaths.length) throw new Error('install refused: unsafe path ' + unsafePaths.join(', '));
+        // A volume server is registered at the host's gateway: without one its address would be "/<folder>/mcp".
+        const volumeServers = ofKind('server').filter(active).some((r) => serverOf(r)?.local && (toInstall(r) || keepsFolder(r)));
+        if (h.host && volumeServers && !String(h.host.gateway || '').trim()) throw new Error('install refused: the server host has no gateway address');
 
         // Never overwrite: every destination of an item to install must be free before anything is written.
         // (a server going to the Docker app's volume is checked by the host: a taken folder answers 409.)
