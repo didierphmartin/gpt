@@ -37,13 +37,13 @@ class McpHostControllerTest extends TestCase
         unset($_ENV['MCPS_URL'], $_ENV['MCPS_TOKEN'], $_ENV['MCPS_PUBLIC_GATEWAY']);
     }
 
-    private function ctl(): McpHostController
+    private function ctl(array $config = []): McpHostController
     {
         $transport = function (string $method, string $url, array $headers, ?string $body): array {
             $this->calls[] = compact('method', 'url', 'headers', 'body');
             return $this->reply;
         };
-        return new McpHostController($this->db, [], fn() => new McpHostClient('http://mcps:8790', 'tok', $transport));
+        return new McpHostController($this->db, $config, fn() => new McpHostClient('http://mcps:8790', 'tok', $transport));
     }
 
     private function req(int $uid, array $body = []): array
@@ -70,6 +70,18 @@ class McpHostControllerTest extends TestCase
         $this->assertSame('POST', $this->calls[0]['method']);
         $this->assertStringEndsWith('/servers/new/install', $this->calls[0]['url']);
         $this->assertSame(3, json_decode($this->calls[0]['body'], true)['installed_by']);
+    }
+
+    public function testCorporateInstallIsAdminOnly(): void
+    {
+        $this->reply = [200, '{"ok":true}'];
+        $corp = $this->ctl(['edition' => 'corporate']);
+        $r = $corp->install($this->req(3, ['files' => []]), 'new');
+        $this->assertSame(403, $r['status_code']);
+        $this->assertSame('Only an admin can install MCP servers here.', $r['data']['error']);
+        $this->assertSame([], $this->calls);
+        $this->assertSame(200, $corp->install($this->req(1, ['files' => []]), 'new')['status_code']);
+        $this->assertSame(200, $this->ctl(['edition' => 'individual'])->install($this->req(3, ['files' => []]), 'new')['status_code']);
     }
 
     public function testOthersCannotTouchOrSeeLogs(): void

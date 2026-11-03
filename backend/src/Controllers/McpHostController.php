@@ -3,11 +3,13 @@ declare(strict_types=1);
 namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use PDO;
+use Quantis\AIPortfolioAssistant\Services\Edition;
 use Quantis\AIPortfolioAssistant\Services\McpHostClient;
 
 /**
  * /api/v1/mcp/host — relays signed-in users to the Docker app's server supervisor. A server is its installer's;
- * admins may act on any. The supervisor's status and body pass through unchanged, except 503 (unreachable) and the
+ * admins may act on any. In the corporate edition only admins install; in the individual edition the container is
+ * the user's, so anyone signed in may. The supervisor's status and body pass through unchanged, except 503 (unreachable) and the
  * log tail, which only the owner (or an admin) sees. The token and request bodies are never logged or returned.
  */
 final class McpHostController
@@ -57,6 +59,10 @@ final class McpHostController
     {
         if (!self::available()) return self::none();
         if (!self::safe($folder = self::raw($request, $folder))) return self::bad();
+        if (Edition::isCorporate($this->config) && !$this->isAdmin($request)) {
+            $e = 'Only an admin can install MCP servers here.';
+            return ['success' => false, 'data' => ['error' => $e], 'error' => $e, 'status_code' => 403];
+        }
         $body = (array) ($request['body'] ?? []);
         $body['installed_by'] = (int) $request['user_id'];
         return self::out($this->client()->request('POST', "/servers/$folder/install", $body));
