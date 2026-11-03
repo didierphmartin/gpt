@@ -37,6 +37,11 @@ final class SkillWheelFetcher
     /** @var \Closure(list<string>): array{code:int,out:string} */
     private \Closure $runner;
 
+    private string $tmp = '';
+
+    /** @var array<string,?string> dep => folder with its built pure wheel (null = not pure) */
+    private array $built = [];
+
     /** @param ?\Closure(list<string>): array{code:int,out:string} $runner */
     public function __construct(?\Closure $runner = null, private readonly string $python = 'python3')
     {
@@ -58,12 +63,14 @@ final class SkillWheelFetcher
         if ($deps === []) {
             return [];
         }
-        if (($this->run([$this->python, '-m', 'pip', '--version']))['code'] !== 0) {
+        if (($this->run([$this->python, '-m', 'pip', '--version', '--no-cache-dir']))['code'] !== 0) {
             throw new SkillWheelError('Exporting a skill with libraries needs Python 3 on the server.', 503);
         }
 
         $tmp = sys_get_temp_dir() . '/skillwheels_' . bin2hex(random_bytes(8));
         mkdir($tmp, 0700);
+        $this->tmp = $tmp;
+        $this->built = [];
         try {
             $wheels = [];
             foreach (self::PLATFORMS as $i => $group) {
@@ -82,39 +89,65 @@ final class SkillWheelFetcher
 
     private function gather(array $deps, array $group, string $dest): void
     {
-        if ($this->download($deps, $group, $dest)['code'] === 0) {
+        $r = $this->download($deps, $group, $dest);
+        if ($r['code'] === 0) {
             return;
         }
+        self::assertNoWheel($r);
         // Find which dependency has no binary wheel on this platform, and try it as pure Python.
         foreach ($deps as $dep) {
-            if ($this->download([$dep], $group, $dest)['code'] === 0) {
+            $r = $this->download([$dep], $group, $dest);
+            if ($r['code'] === 0) {
                 continue;
             }
-            $built = "$dest/built";
-            @mkdir($built);
-            $r = $this->run([$this->python, '-m', 'pip', 'wheel', '--no-deps', '--wheel-dir', $built, $dep]);
-            $pure = $r['code'] === 0 ? (glob("$built/*.whl") ?: []) : [];
-            foreach ($pure as $file) {
-                if (!preg_match('/-(py3|py2\.py3)-none-any\.whl$/', $file)) {
-                    $pure = [];
-                    break;
-                }
-            }
-            if ($pure === []) {
+            self::assertNoWheel($r);
+            $built = $this->buildPure($dep);
+            if ($built === null) {
                 throw new SkillWheelError("No compatible wheel for $dep on {$group[0]}.", 422, ['library' => $dep, 'platform' => $group[0]]);
             }
-            foreach ($pure as $file) {
-                rename($file, $dest . '/' . basename($file));
+            // pip resolves the built wheel plus its own requirements from the index.
+            $r = $this->download([$dep], $group, $dest, $built);
+            if ($r['code'] !== 0) {
+                self::assertNoWheel($r);
+                throw new SkillWheelError("No compatible wheel for a requirement of $dep on {$group[0]}.", 422, ['library' => $dep, 'platform' => $group[0]]);
             }
         }
     }
 
-    private function download(array $deps, array $group, string $dest): array
+    /** Builds $dep from source once per fetch; returns the folder holding its pure-Python wheel, or null. */
+    private function buildPure(string $dep): ?string
     {
-        $argv = [$this->python, '-m', 'pip', 'download', '--only-binary=:all:', '--python-version', '3.12',
+        if (array_key_exists($dep, $this->built)) {
+            return $this->built[$dep];
+        }
+        $dir = $this->tmp . '/built' . count($this->built);
+        mkdir($dir);
+        $r = $this->run([$this->python, '-m', 'pip', 'wheel', '--no-cache-dir', '--no-deps', '--wheel-dir', $dir, $dep]);
+        $files = $r['code'] === 0 ? (glob("$dir/*.whl") ?: []) : [];
+        $pure = $files !== [];
+        foreach ($files as $file) {
+            $pure = $pure && preg_match('/-(py3|py2\.py3)-none-any\.whl$/', $file) === 1;
+        }
+        return $this->built[$dep] = $pure ? $dir : null;
+    }
+
+    /** Only "no wheel" answers may fall back or become a 422; anything else (network, index, bad requirement) is a 502. */
+    private static function assertNoWheel(array $r): void
+    {
+        if (!preg_match('/No matching distribution|Could not find a version/i', $r['out'])) {
+            throw new SkillWheelError('Could not download the libraries: ' . substr(trim($r['out']), -300), 502);
+        }
+    }
+
+    private function download(array $deps, array $group, string $dest, ?string $findLinks = null): array
+    {
+        $argv = [$this->python, '-m', 'pip', 'download', '--no-cache-dir', '--only-binary=:all:', '--python-version', '3.12',
             '--implementation', 'cp', '--abi', 'cp312', '--abi', 'abi3', '--abi', 'none'];
         foreach ($group as $platform) {
             array_push($argv, '--platform', $platform);
+        }
+        if ($findLinks !== null) {
+            array_push($argv, '--find-links', $findLinks);
         }
         array_push($argv, '--dest', $dest);
         return $this->run(array_merge($argv, $deps));

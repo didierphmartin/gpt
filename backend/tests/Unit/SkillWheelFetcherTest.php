@@ -83,10 +83,19 @@ final class SkillWheelFetcherTest extends TestCase
                 file_put_contents("$dest/foo-1.0-py3-none-any.whl", 'built');
                 return ['code' => 0, 'out' => ''];
             }
-            return in_array('foo', $argv, true) ? ['code' => 1, 'out' => 'no matching'] : ['code' => 0, 'out' => ''];
+            if (in_array('--find-links', $argv, true)) {
+                file_put_contents("$dest/foo-1.0-py3-none-any.whl", 'built');
+                file_put_contents("$dest/dep-2.0-py3-none-any.whl", 'dep');
+                return ['code' => 0, 'out' => ''];
+            }
+            return in_array('foo', $argv, true) ? ['code' => 1, 'out' => 'ERROR: No matching distribution found for foo'] : ['code' => 0, 'out' => ''];
         });
         $wheels = $f->fetch(['foo']);
-        $this->assertSame(['foo-1.0-py3-none-any.whl' => 'built'], $wheels);
+        $this->assertEquals(['dep-2.0-py3-none-any.whl' => 'dep', 'foo-1.0-py3-none-any.whl' => 'built'], $wheels);
+        $this->assertCount(1, $this->pipCalls('wheel'), 'sdist built once across the three platform groups');
+        foreach ($this->calls as $argv) {
+            $this->assertContains('--no-cache-dir', $argv);
+        }
         $wheel = $this->pipCalls('wheel')[0];
         $this->assertContains('--no-deps', $wheel);
         $this->assertContains('foo', $wheel);
@@ -99,7 +108,7 @@ final class SkillWheelFetcherTest extends TestCase
                 file_put_contents("$dest/foo-1.0-cp312-cp312-linux_x86_64.whl", 'native');
                 return ['code' => 0, 'out' => ''];
             }
-            return ['code' => 1, 'out' => 'no matching'];
+            return ['code' => 1, 'out' => 'ERROR: No matching distribution found for foo'];
         });
         try {
             $f->fetch(['foo']);
@@ -108,6 +117,20 @@ final class SkillWheelFetcherTest extends TestCase
             $this->assertSame(422, $e->statusCode());
             $this->assertSame(['library' => 'foo', 'platform' => 'manylinux_2_17_x86_64'], $e->data());
         }
+    }
+
+    public function test_other_pip_failure_is_502_with_output_tail(): void
+    {
+        $f = $this->fetcher(fn() => ['code' => 1, 'out' => 'WARNING: connection refused to pypi.org']);
+        try {
+            $f->fetch(['foo']);
+            $this->fail('expected SkillWheelError');
+        } catch (SkillWheelError $e) {
+            $this->assertSame(502, $e->statusCode());
+            $this->assertStringContainsString('Could not download the libraries: ', $e->getMessage());
+            $this->assertStringContainsString('connection refused', $e->getMessage());
+        }
+        $this->assertSame([], $this->pipCalls('wheel'));
     }
 
     public function test_empty_deps_runs_nothing(): void
