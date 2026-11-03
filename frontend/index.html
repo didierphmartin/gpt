@@ -4385,7 +4385,7 @@
     <!-- Pyodide skill-script runner. Lazy-loads Pyodide on first call;
          depends on window.localFs (skill folder resolution) and
          window.skillsFs (frontmatter parsing for declared deps). -->
-    <script src="assets/js/pyodide-runner.js?v=20261103-finalfix"></script>
+    <script src="assets/js/pyodide-runner.js?v=20261103-skilldeps"></script>
     <!-- Parallel skill execution: worker pool used by chat.js for rounds of 2+
          independent run_skill_script calls (the worker itself loads via new Worker). -->
     <script src="assets/js/pyodide-pool.js?v=20260608-parallel"></script>
@@ -4419,12 +4419,12 @@
     <script src="assets/js/workflow-package-ui.js?v=20261103-skilldeps"></script>
     <script src="assets/js/workflow-package-import.js?v=20261103-skilldeps"></script>
     <script src="assets/js/skill-visibility-card.js?v=20261103-1"></script>
-    <script src="assets/js/workflow-editor.js?v=20261103-merge-skillstore"></script>
+    <script src="assets/js/workflow-editor.js?v=20261103-skilldeps"></script>
     <script src="assets/js/agents-library.js?v=20260903-playbook-agent"></script>
     <script src="assets/js/mcp-tool-tester.js?v=20260904-mcplib"></script>
     <script src="assets/js/mcp-library.js?v=20261005-is-mock"></script>
     <script src="assets/js/file-storage.js?v=20260610-fileselect2"></script>
-    <script src="assets/js/chat.js?v=20261103-finalfix"></script>
+    <script src="assets/js/chat.js?v=20261103-skilldeps"></script>
     <script>
       (function initVoiceDictation() {
         const input = document.getElementById('user-input');

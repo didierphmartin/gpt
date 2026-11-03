@@ -449,7 +449,7 @@ _runner_stderr = _stderr_buf.getvalue()
 // payload: { dirName, script, argv, inputFiles, readOutputs, dependencies,
 //            persist } — the object produced by chat.js _buildSkillScriptRequest
 // and consumed by pyodide-runner.js _runOne — plus three transport extras the
-// main thread adds: { skillHandle | skillFiles, wheels, outputsHandle, prefetched }.
+// main thread adds: { skillHandle | skillFiles, wheels, outputsHandle, prefetched, skillsRoot? }.
 // `prefetched` is an optional array of { path, contents } the main thread
 // fetched via the backend proxy (workers do not call the URL proxy — keep
 // network on the main thread for one consistent fetch path).
@@ -468,6 +468,15 @@ async function runSkillScript(payload) {
 
   const mount = await mountSkill(payload.dirName, payload.skillHandle, payload.skillFiles);
   await mountOutputs(payload.outputsHandle);
+  // payload.skillsRoot ({ '<path>/<rel>': bytes }): the skill and the skills it requires, read-only here.
+  if (payload.skillsRoot) {
+    pyodide.FS.mkdirTree('/skills-root');
+    removeTree('/skills-root');
+    for (const [rel, bytes] of Object.entries(payload.skillsRoot)) {
+      ensureParentDir(`/skills-root/${rel}`);
+      pyodide.FS.writeFile(`/skills-root/${rel}`, bytes);
+    }
+  }
 
   // Materialize any prefetched URL content into /tmp (mirrors main-thread prefetch).
   for (const f of (payload.prefetched || [])) {
@@ -598,8 +607,13 @@ async function runSkillScript(payload) {
 
   let exitCode = pyodide.globals.get('_runner_exit') ?? 0;
   let stderrOut = pyodide.globals.get('_runner_stderr') ?? '';
-  // Writes under /skills-root would be lost here: fail the run instead.
-  if (exists('/skills-root')) {
+  // Writes under /skills-root would be lost here: fail the run instead (a given read-only copy: only when changed).
+  const rootChanged = payload.skillsRoot ? Object.keys(changedFiles(payload.skillsRoot, readTree('/skills-root'))).length > 0 : exists('/skills-root');
+  if (payload.skillsRoot && !rootChanged) {
+    removeTree('/skills-root');
+    try { pyodide.FS.rmdir('/skills-root'); } catch (_) {}
+  }
+  if (rootChanged) {
     removeTree('/skills-root');
     try { pyodide.FS.rmdir('/skills-root'); } catch (_) {}
     exitCode = 1;

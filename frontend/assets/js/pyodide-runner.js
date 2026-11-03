@@ -213,9 +213,10 @@
         memCopies.set(root, { files, save });
     }
 
-    /** After a run: send what the script changed in each MEMFS copy back to the store. */
+    /** After a run: send what the script changed in each MEMFS copy back to the store (a read-only copy: never). */
     async function saveMemCopies() {
         for (const [root, copy] of memCopies) {
+            if (!copy.save) continue;
             const changed = changedFiles(copy.files, readTree(root));
             if (!Object.keys(changed).length) continue;
             try {
@@ -343,15 +344,31 @@
      * ensureOutputsMounted().
      */
     let skillsRootMountPath = null;
-    async function ensureSkillsRootMounted() {
+    async function ensureSkillsRootMounted({ dirName = '', asRobot = false } = {}) {
         if (skillsRootMountPath) return skillsRootMountPath;
         if (!window.skillsFs) {
             throw new Error('window.skillsFs is not available — cannot resolve skills folder.');
         }
         const path = '/skills-root';
         if (await window.skillsFs.mode() === 'volume') {
-            // A copy of my own skills; new skills the script writes there become private ones.
-            memCopy(path, await window.skillsFs.skillsRootFiles(), (changed) => window.skillsFs.writeSkillsRoot(changed));
+            // The running skill and the skills it requires, as the caller sees them (own + public; the robot's view
+            // on a robot run). A person's run also gets a copy of all their own skills: what the script changes in
+            // those, or new skills it writes there, is saved back. A robot run gets none of them and is read-only.
+            const required = await skillsRootOf(dirName, asRobot);
+            const files = {};
+            if (!asRobot) Object.assign(files, await window.skillsFs.skillsRootFiles());
+            const foreign = new Set();
+            for (const [p, fl] of Object.entries(required)) {
+                if (Object.keys(files).some((k) => k.startsWith(p + '/'))) continue;   // one of mine: already there
+                foreign.add(p);
+                for (const [rel, b] of Object.entries(fl)) files[`${p}/${rel}`] = b;
+            }
+            const save = asRobot ? null : (changed) => {
+                const mine = {};
+                for (const [k, b] of Object.entries(changed)) if (![...foreign].some((p) => k.startsWith(p + '/'))) mine[k] = b;
+                return Object.keys(mine).length ? window.skillsFs.writeSkillsRoot(mine) : null;
+            };
+            memCopy(path, files, save);
             skillsRootMountPath = path;
             return path;
         }
@@ -364,6 +381,40 @@
         await pyodide.mountNativeFS(path, skillsHandle);
         skillsRootMountPath = path;
         return path;
+    }
+
+    /**
+     * { path: { rel: bytes } } of the skill `dirName` and every skill it requires (SkillRequires closure over the
+     * skills the caller may see; the robot's on a robot run). A required skill that cannot be read is left out:
+     * the script then reports what it could not find.
+     */
+    async function skillsRootOf(dirName, asRobot) {
+        if (!dirName) return {};
+        const cache = new Map();
+        const read = async (p) => {
+            if (!cache.has(p)) {
+                let f = null;
+                try { f = await window.skillsFs.readSkillFiles(p, { asRobot }); } catch { f = null; }
+                cache.set(p, f && Object.keys(f).length ? f : null);
+            }
+            return cache.get(p);
+        };
+        const out = {};
+        const own = await read(dirName);
+        if (!own) return out;
+        out[dirName] = own;
+        if (!window.SkillRequires) return out;
+        const installed = (await window.skillsFs.listSkills({ asRobot })).map((x) => x.dirName || x.path);
+        const r = await window.SkillRequires.closure(dirName, installed, read);
+        for (const p of r.requires) out[p] = cache.get(p);
+        return out;
+    }
+
+    /** A read-only /skills-root (robot run): did the script change it? Then the run fails and nothing is kept. */
+    function readOnlyRootChanged() {
+        const copy = memCopies.get('/skills-root');
+        if (!copy || copy.save) return false;
+        return Object.keys(changedFiles(copy.files, readTree('/skills-root'))).length > 0;
     }
 
     /**
@@ -1221,11 +1272,11 @@ _runner_stderr = _stderr_buf.getvalue()
         // (e.g. skill-creator/scripts/create_skill.py) can create new skill
         // folders in place and have them be immediately live. Mounted on
         // every run for consistency with /outputs/; cached after first call.
-        // In the skill store it is a copy of all my skills, so it is made only
-        // for a script that names /skills-root.
-        // A robot run never gets it there (it holds the person's own skills).
-        const rootThisRun = !store || (!asRobot && scriptNamesSkillsRoot(`${mount}/${script}`));
-        if (rootThisRun) await ensureSkillsRootMounted();
+        // In the skill store it is a copy (my skills + the skills this one
+        // requires), so it is made only for a script that names /skills-root.
+        // A robot run gets the skills this one requires only, read-only.
+        const rootThisRun = !store || scriptNamesSkillsRoot(`${mount}/${script}`);
+        if (rootThisRun) await ensureSkillsRootMounted({ dirName, asRobot: store && asRobot });
 
         const deps = Array.isArray(dependencies)
             ? dependencies
@@ -1377,6 +1428,12 @@ _runner_stderr = _stderr_buf.getvalue()
             try { pyodide.FS.rmdir('/skills-root'); } catch { /* gone */ }
             exitCode = 1;
             stderr = (stderr ? stderr + '\n' : '') + skillsRootUnavailable();
+        }
+        // Robot run: its /skills-root is read-only; a change fails the run (and is never saved).
+        if (store && rootThisRun && readOnlyRootChanged()) {
+            exitCode = 1;
+            stderr = (stderr ? stderr + '\n' : '') + i18nText('skills.run.skillsRootReadOnly',
+                'This skill changed the skills folder, which is read-only on a robot run: the changes were not saved.');
         }
 
         const outputs = {};
@@ -1568,14 +1625,26 @@ _inline_stderr_str = _inline_stderr.getvalue()
      * the skill store, the skill's files for a MEMFS copy.
      */
     const poolHandles = new Map();   // dirName → Promise<handle> (one in-flight resolve per path)
-    async function poolSkillPayload(rawDirName, { asRobot = false } = {}) {
+    async function poolSkillPayload(rawDirName, { asRobot = false, script = '' } = {}) {
         if (!window.skillsFs) throw new Error('skillsFs unavailable for pool path');
         const dirName = await resolveSkillDir(rawDirName, { asRobot });
+        // A script that names /skills-root gets the skill and the skills it requires there, read-only
+        // (skillsRoot: { '<path>/<rel>': bytes }); a worker cannot save anything written there.
+        const rootFor = async (scriptText) => {
+            if (!script || !scriptText || !scriptText.includes('skills-root')) return undefined;
+            const flat = {};
+            for (const [p, fl] of Object.entries(await skillsRootOf(dirName, asRobot))) {
+                for (const [rel, b] of Object.entries(fl)) flat[`${p}/${rel}`] = b;
+            }
+            return flat;
+        };
+        const textOf = (b) => (b ? new TextDecoder().decode(b) : '');
         if (await window.skillsFs.mode() === 'volume') {
             const skillFiles = await storeSkillFiles(dirName, asRobot);
             const dependencies = await getSkillDependencies(dirName, { asRobot });
             const wheels = dependencies.length ? await getSkillWheels(dirName, { asRobot }) : {};
-            return { dirName, dependencies, wheels, skillFiles };
+            const skillsRoot = await rootFor(textOf(skillFiles[script]));
+            return { dirName, dependencies, wheels, skillFiles, ...(skillsRoot ? { skillsRoot } : {}) };
         }
         const dependencies = await getSkillDependencies(dirName);
         const wheels = dependencies.length ? await getSkillWheels(dirName) : {};
@@ -1583,7 +1652,8 @@ _inline_stderr_str = _inline_stderr.getvalue()
         const skillHandle = await poolHandles.get(dirName);
         if (!skillHandle) { poolHandles.delete(dirName); throw new Error('could not resolve the skill handle for pool path'); }
         await ensurePermission(skillHandle, `skill folder "${dirName}"`);
-        return { dirName, dependencies, wheels, skillHandle };
+        const skillsRoot = script ? await rootFor(await window.skillsFs.getSkillFile(dirName, script)) : undefined;
+        return { dirName, dependencies, wheels, skillHandle, ...(skillsRoot ? { skillsRoot } : {}) };
     }
 
     window.pyodideRunner = {
