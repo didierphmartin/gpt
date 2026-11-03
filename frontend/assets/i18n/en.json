@@ -1605,6 +1605,7 @@
       "failed": "Package export failed: {{error}}",
       "warnSkillMissing": "Skill \"{{name}}\" is missing here — not exported.",
       "errSkillMissing": "Skill \"{{name}}\" used by \"{{node}}\" is not installed here, so the package cannot be exported.",
+      "errSkillUnreadable": "Skill \"{{name}}\" used by \"{{node}}\" cannot be read here (no access to the skills folder), so the package cannot be exported.",
       "progressSkill": "Packaging skill {{name}} with its libraries ({{done}} of {{total}})…",
       "warnServerMissing": "MCP server \"{{name}}\" is not registered here — not exported.",
       "warnFolderUnreadable": "The local folder of \"{{name}}\" could not be opened — registration only.",

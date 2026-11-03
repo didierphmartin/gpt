@@ -109,6 +109,37 @@
     }
 
     /**
+     * Put each bound skill into `files` as skills/<dir>.skill.zip (folder + libraries gathered fresh).
+     * Throws naming the node and the skill when one is missing or unreadable, and the library/platform message
+     * when its libraries cannot be gathered. Returns the dirs bundled.
+     */
+    async function bundleSkills({ dirs, nodes, readable, t, files, onProgress }) {
+        const out = [];
+        const nodeLabel = (dir) => {
+            const n = (nodes || []).find((x) => x.node_type === 'agent' && x.config && x.config.bound_skill && x.config.bound_skill.dir_name === dir);
+            const c = (n && n.config) || {};
+            return (n && (n.name || n.label || c.name || c.title || n.id)) || '';
+        };
+        for (const dir of dirs) {
+            if (!readable) throw new Error(t('errSkillUnreadable', { node: nodeLabel(dir), name: dir }));
+            const found = window.skillsImport.filterSkillFiles(await window.skillsFs.readSkillFiles(dir));
+            if (!found['SKILL.md']) throw new Error(t('errSkillMissing', { node: nodeLabel(dir), name: dir }));
+            if (onProgress) onProgress(t('progressSkill', { name: dir, done: out.length + 1, total: dirs.length }));
+            let wheels = { pyodide: {}, native: {} };
+            const wheelDeps = window.SkillZip.skillDependencies(new TextDecoder().decode(found['SKILL.md']));
+            if (wheelDeps.length) {
+                try { wheels = await window.SkillWheels.gather(wheelDeps); }
+                catch (e) { console.error('[workflow-package] gathering wheels failed:', e); throw new Error(window.skillsImport.wheelsError(e)); }
+            }
+            files[WP().skillZipPath(dir)] = await window.SkillZip.build({
+                dir, name: dir.split('/').pop(), files: found, pyodideWheels: wheels.pyodide, nativeWheels: wheels.native,
+            });
+            out.push(dir);
+        }
+        return out;
+    }
+
+    /**
      * Collect the dependencies of the workflow on the canvas and zip them.
      * opts.playbookIds: extra playbooks to bundle (the workflow picks its playbook at run time).
      * Returns { bytes, summary }.
@@ -149,30 +180,8 @@
         const canRead = await folderReadable();
         if (!canRead) warn('folder-not-accessible', 'warnFolderNotAccessible');
 
-        // Skills: each bound skill as a complete skill zip (folder + libraries gathered fresh), with the skill export's filter.
-        const skills = [];
-        const skillsReadable = canRead || (!!window.skillsFs && await window.skillsFs.mode() === 'volume');
-        const nodeLabel = (dir) => {
-            const n = nodes.find((x) => x.node_type === 'agent' && x.config && x.config.bound_skill && x.config.bound_skill.dir_name === dir);
-            const c = (n && n.config) || {};
-            return (n && (n.name || n.label || c.name || c.title || n.id)) || '';
-        };
-        for (const dir of deps.skills) {
-            if (!skillsReadable) { warn('skill-unreadable', 'warnSkillUnreadable', { name: dir }); continue; }
-            const found = window.skillsImport.filterSkillFiles(await window.skillsFs.readSkillFiles(dir));
-            if (!found['SKILL.md']) throw new Error(t('errSkillMissing', { node: nodeLabel(dir), name: dir }));
-            if (opts.onProgress) opts.onProgress(t('progressSkill', { name: dir, done: skills.length + 1, total: deps.skills.length }));
-            let wheels = { pyodide: {}, native: {} };
-            const wheelDeps = window.SkillZip.skillDependencies(new TextDecoder().decode(found['SKILL.md']));
-            if (wheelDeps.length) {
-                try { wheels = await window.SkillWheels.gather(wheelDeps); }
-                catch (e) { console.error('[workflow-package] gathering wheels failed:', e); throw new Error(window.skillsImport.wheelsError(e)); }
-            }
-            files[WP().skillZipPath(dir)] = await window.SkillZip.build({
-                dir, name: dir.split('/').pop(), files: found, pyodideWheels: wheels.pyodide, nativeWheels: wheels.native,
-            });
-            skills.push(dir);
-        }
+        // Skills: each bound skill as a complete skill zip; one that can't be bundled stops the export.
+        const skills = await bundleSkills({ dirs: deps.skills, nodes, readable: canRead || (!!window.skillsFs && await window.skillsFs.mode() === 'volume'), t, files, onProgress: opts.onProgress });
 
         // MCP servers: every registration; a local one's source too (named in mcps/servers.json).
         let localMap = {};
@@ -376,5 +385,5 @@
         };
     }
 
-    window.WorkflowPackageUI = { buildPackageBytes, exportPackage, askFolderAccess, folderReadable, loadServers, esc };
+    window.WorkflowPackageUI = { buildPackageBytes, bundleSkills, exportPackage, askFolderAccess, folderReadable, loadServers, esc };
 })();

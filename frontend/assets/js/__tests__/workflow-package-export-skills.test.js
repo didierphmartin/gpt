@@ -1,0 +1,48 @@
+// Export path for skills: bundleSkills with stubbed skillsFs / skillsImport / SkillZip / SkillWheels.
+const assert = require('assert');
+const enc = (s) => new TextEncoder().encode(s);
+const WP = require('../workflow-package.js');
+const calls = { gather: [], build: [] };
+let store = {}, gatherError = null;
+global.window = {
+    WorkflowPackage: WP,
+    skillsFs: { mode: async () => 'volume', readSkillFiles: async (d) => store[d] || {} },
+    skillsImport: {
+        filterSkillFiles: (f) => f,
+        wheelsError: (e) => (e.code === 'native-missing' ? `No wheel for ${e.library} on ${e.platform}` : `gather: ${e.message}`),
+    },
+    SkillZip: {
+        skillDependencies: (md) => (/dependencies:/.test(md) ? ['numpy'] : []),
+        build: async (o) => { calls.build.push(o); return new Uint8Array([1]); },
+    },
+    SkillWheels: { gather: async (d) => { calls.gather.push(d); if (gatherError) throw gatherError; return { pyodide: { 'a.whl': enc('A') }, native: {} }; } },
+};
+require('../workflow-package-ui.js');
+const { bundleSkills } = window.WorkflowPackageUI;
+const t = (k, p) => `${k}:${JSON.stringify(p)}`;
+const nodes = [{ id: '3', name: 'Summarize', node_type: 'agent', config: { bound_skill: { dir_name: 'pdf' } } }];
+const run = (dirs, readable = true, files = {}) => bundleSkills({ dirs, nodes, readable, t, files });
+
+(async () => {
+    // missing skill: names the node and the skill
+    await assert.rejects(run(['pdf']), (e) => /errSkillMissing/.test(e.message) && e.message.includes('"node":"Summarize"') && e.message.includes('"name":"pdf"'));
+    // unreadable (no folder access): an error, not a silent skip
+    store = { pdf: { 'SKILL.md': enc('---\nname: pdf\n---\n') } };
+    await assert.rejects(run(['pdf'], false), (e) => /errSkillUnreadable/.test(e.message) && e.message.includes('Summarize'));
+    // no dependencies: gather is not called, the zip is built
+    let files = {};
+    assert.deepStrictEqual(await run(['pdf'], true, files), ['pdf']);
+    assert.strictEqual(calls.gather.length, 0);
+    assert.ok(files['skills/pdf.skill.zip']);
+    assert.strictEqual(calls.build[0].dir, 'pdf');
+    // dependencies: gathered fresh, wheels go into the zip
+    store = { pdf: { 'SKILL.md': enc('---\ndependencies: [numpy]\n---\n') } };
+    files = {};
+    await run(['pdf'], true, files);
+    assert.deepStrictEqual(calls.gather, [['numpy']]);
+    assert.deepStrictEqual(Object.keys(calls.build[1].pyodideWheels), ['a.whl']);
+    // 422: library and platform surface
+    gatherError = Object.assign(new Error('x'), { code: 'native-missing', library: 'lxml', platform: 'win-arm64' });
+    await assert.rejects(run(['pdf']), /No wheel for lxml on win-arm64/);
+    console.log('workflow-package-export-skills: ok');
+})().catch((e) => { console.error(e); process.exit(1); });

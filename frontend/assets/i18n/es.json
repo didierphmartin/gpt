@@ -1605,6 +1605,7 @@
       "failed": "Error al exportar el paquete: {{error}}",
       "warnSkillMissing": "La habilidad \"{{name}}\" no está aquí — no se exporta.",
       "errSkillMissing": "La habilidad \"{{name}}\" que usa \"{{node}}\" no está instalada aquí, así que no se puede exportar el paquete.",
+      "errSkillUnreadable": "No se puede leer la habilidad \"{{name}}\" que usa \"{{node}}\" (sin acceso a la carpeta de habilidades), así que no se puede exportar el paquete.",
       "progressSkill": "Empaquetando la habilidad {{name}} con sus librerías ({{done}} de {{total}})…",
       "warnServerMissing": "El servidor MCP \"{{name}}\" no está registrado aquí — no se exporta.",
       "warnFolderUnreadable": "No se pudo abrir la carpeta local de \"{{name}}\" — solo el registro.",
