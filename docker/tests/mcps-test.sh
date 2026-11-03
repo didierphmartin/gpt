@@ -2,6 +2,7 @@
 # The MCP host: an imported server runs, is reachable through the published
 # gateway, and survives a restart of mcps and a rebuild of the stack.
 set -euo pipefail
+cd "$(dirname "$0")/../.."
 fail() { echo "FAIL: $1" >&2; exit 1; }
 
 # Isolated project, ports and teardown: see stack-test.sh. `down -v` below must

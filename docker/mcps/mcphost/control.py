@@ -163,6 +163,9 @@ class Control:
                     p.chmod(0o755)   # a browser upload carries no mode bits, and start is usually ./run.sh
             (d / ".env").write_text(env_text, encoding="utf-8")
             manifest = _manifest(d)
+            start = manifest.get("start")
+            if isinstance(start, str) and start.startswith("./") and is_safe_rel_path(start[2:]) and (d / start[2:]).is_file():
+                (d / start[2:]).chmod(0o755)   # a start like ./server
             cmd = manifest.get("install")
             if isinstance(cmd, str) and cmd.strip():
                 if not self._run_install(d, cmd):

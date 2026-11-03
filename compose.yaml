@@ -57,7 +57,8 @@ services:
       # it) takes no new code path.
       GPT_EDITION: ${GPT_EDITION-individual}
       # The MCP server host (see the mcps service). The token is not here: web's
-      # entrypoint generates it into gpt-secrets, which both containers share.
+      # entrypoint generates it into gpt-secrets and copies it to the
+      # small gpt-mcps-token volume, the only thing mcps mounts.
       MCPS_URL: http://mcps:9000
       MCPS_GATEWAY: http://mcps:8790
       MCPS_PUBLIC_GATEWAY: http://localhost:${MCPS_PORT:-8790}
@@ -70,6 +71,8 @@ services:
       # Per-install JWT_SECRET / APP_KEY_SECRET. Without this they would be
       # re-rolled on every recreate, invalidating every session and app key.
       - gpt-secrets:/run/gpt
+      # Just the MCP host's token, for the mcps container (see there).
+      - gpt-mcps-token:/run/mcps-token
 
   # Hosts the MCP servers imported in the Docker app. They live in the gpt-mcps
   # volume and start by themselves. Its control API (9000) stays on the compose
@@ -81,12 +84,14 @@ services:
       dockerfile: docker/mcps/Dockerfile
     restart: unless-stopped
     depends_on:
-      # web's entrypoint is the only writer of MCPS_TOKEN in secrets.env.
+      # web's entrypoint is the only writer of the token file.
       web:
         condition: service_healthy
     volumes:
       - gpt-mcps:/mcps
-      - gpt-secrets:/run/gpt:ro
+      # Only the token, never gpt-secrets: servers imported here run third-party
+      # code, which must not be able to read the JWT secrets.
+      - gpt-mcps-token:/run/mcps-token:ro
     ports:
       - "127.0.0.1:${MCPS_PORT:-8790}:8790"
     healthcheck:
@@ -180,3 +185,4 @@ volumes:
   gpt-db:
   gpt-secrets:
   gpt-mcps:
+  gpt-mcps-token:

@@ -59,14 +59,11 @@ grep -q '^LOGIN_APP_KEY_SECRET=' "$SECRETS" || \
 # on the login service. gpt only needs this one to verify tokens in sso_exchange.
 grep -q '^LOGIN_JWT_SECRET=' "$SECRETS" || \
     echo "LOGIN_JWT_SECRET=$(openssl rand -hex 32)" >> "$SECRETS"
-# Shared with the mcps container (which mounts this volume read-only) so the
-# backend can call its control API.
+# Also written ALONE to its own volume for the mcps container. That container
+# runs imported third-party code, so it must never see secrets.env (JWT_SECRET
+# and friends would let a server forge sessions): it mounts only this file.
 grep -q '^MCPS_TOKEN=' "$SECRETS" || \
     echo "MCPS_TOKEN=$(openssl rand -hex 32)" >> "$SECRETS"
-# The mcps container runs as uid/gid 1000, not root: group-read lets it read
-# the token (and nobody else on the volume beyond the stack's own containers).
-chgrp 1000 "$SECRETS"
-chmod 640 "$SECRETS"
 
 # shellcheck disable=SC1090
 . "$SECRETS"
@@ -117,6 +114,12 @@ set_env MCPS_URL "${MCPS_URL:-}"
 set_env MCPS_GATEWAY "${MCPS_GATEWAY:-}"
 set_env MCPS_PUBLIC_GATEWAY "${MCPS_PUBLIC_GATEWAY:-}"
 set_env MCPS_TOKEN "$MCPS_TOKEN"
+# Rewritten every boot, so it can never drift from secrets.env. Group 1000 is
+# the mcps container's user; read-only for it, nobody else needs it.
+mkdir -p /run/mcps-token
+printf '%s\n' "$MCPS_TOKEN" > /run/mcps-token/token
+chown root:1000 /run/mcps-token/token
+chmod 0440 /run/mcps-token/token
 if [ "${GPT_EDITION:-}" = "corporate" ]; then
     # gpt verifies the login service's tokens in sso_exchange (with the login
     # service's own secret, distinct from JWT_SECRET) and reads its users table

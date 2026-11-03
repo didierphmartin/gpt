@@ -6,33 +6,33 @@ import threading
 import time
 from pathlib import Path
 
-from mcphost import control, envfile, gateway
+from mcphost import control, gateway
 from mcphost.procs import Manager
 from mcphost.registry import Registry
 
 ROOT = Path(os.environ.get("MCPS_ROOT", "/mcps"))
-SECRETS = "/run/gpt/secrets.env"
+TOKEN_FILE = "/run/mcps-token/token"
 TOKEN_WAIT = 120
 CONTROL_PORT = 9000
 GATEWAY_PORT = 8790
 TICK = 0.5
 
 
-def read_token(secrets=SECRETS, wait=TOKEN_WAIT) -> str:
-    """MCPS_TOKEN from the environment, else from the shared secrets file (which may appear after start)."""
+def read_token(token_file=TOKEN_FILE, wait=TOKEN_WAIT) -> str:
+    """MCPS_TOKEN from the environment, else from the token file (which may appear after start)."""
     token = os.environ.get("MCPS_TOKEN")
     if token:
         return token
     deadline = time.monotonic() + wait
     while True:
         try:
-            token = envfile.parse(Path(secrets).read_text(encoding="utf-8")).get("MCPS_TOKEN")
+            token = Path(token_file).read_text(encoding="utf-8").strip()
         except OSError:
             token = None
         if token:
             return token
         if time.monotonic() >= deadline:
-            sys.exit("MCPS_TOKEN is not set and was not found in " + str(secrets))
+            sys.exit("MCPS_TOKEN is not set and was not found in " + str(token_file))
         time.sleep(1)
 
 

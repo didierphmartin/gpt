@@ -160,9 +160,9 @@ class SupervisorTest(unittest.TestCase):
     def test_token_from_env_then_file(self):
         with mock.patch.dict("os.environ", {"MCPS_TOKEN": "fromenv"}):
             self.assertEqual(supervisor.read_token("/nonexistent", wait=0), "fromenv")
-        f = Path(tempfile.mkdtemp()) / "secrets.env"
+        f = Path(tempfile.mkdtemp()) / "token"
         self.addCleanup(shutil.rmtree, f.parent, True)
-        f.write_text('OTHER=1\nMCPS_TOKEN="filetok"\n')
+        f.write_text("filetok\n")
         with mock.patch.dict("os.environ", {}, clear=True):
             self.assertEqual(supervisor.read_token(f, wait=0), "filetok")
             with self.assertRaises(SystemExit):

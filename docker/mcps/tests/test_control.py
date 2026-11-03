@@ -72,6 +72,21 @@ class ControlTest(unittest.TestCase):
         self.assertEqual(self.get("/servers", token="wrong").status, 401)
         self.assertEqual(self.get("/servers").json(), [])
 
+    def test_install_makes_scripts_and_start_executable(self):
+        m = {"name": "x", "start": "./server"}
+        files = {"synergyai-mcp.json": b64(json.dumps(m)), "server": b64("#!/bin/sh\nsleep 30\n"),
+                 "run.sh": b64("#!/bin/sh\n"), "bin/x.sh": b64("#!/bin/sh\n"), "data.txt": b64("d")}
+        self.assertEqual(self.install("ex", files=files).status, 201)
+        d = self.root / "ex"
+        for rel in ("server", "run.sh", "bin/x.sh"):
+            self.assertTrue((d / rel).stat().st_mode & 0o111, rel)
+        self.assertFalse((d / "data.txt").stat().st_mode & 0o111)
+        for _ in range(50):
+            if self.manager.state("ex") == "running":
+                break
+            time.sleep(0.1)
+        self.assertEqual(self.manager.state("ex"), "running")
+
     def test_install_refuses_existing_and_unsafe(self):
         self.assertEqual(self.install("ok_server").status, 201)
         self.assertEqual(self.install("ok_server").status, 409)
