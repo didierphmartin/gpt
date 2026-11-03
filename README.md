@@ -295,6 +295,11 @@ Docker Engine + Compose v2, and either your own LLM provider keys or an account 
 MCP servers you import in the Docker app are kept in the `gpt-mcps` volume
 and start by themselves, also after a restart or a rebuild of the stack.
 
+Skills you create or import in the Docker app are kept in the `gpt-skills`
+volume (public or private, per person), so they survive a rebuild and need no
+local folder. Exporting a skill together with its Python libraries needs
+Python 3 and pip on the server; the Docker image already has them.
+
 ### Using Rancher Desktop
 
 Rancher Desktop runs both Docker installs above, once it is set up for the
@@ -456,6 +461,14 @@ or `GPT_PORT` at anything you care about when invoking it.
 This is how our hosted service runs: directly on Apache + PHP + MySQL, with no
 container. Use it to install on a hosted web server, or if you already run
 Apache and MySQL and prefer to install the parts yourself.
+
+**Essential setup for skills.** Skills run Python in the browser with
+Pyodide, which the app serves itself. Run `scripts/vendor-pyodide.sh` once
+after cloning (it fetches `frontend/vendor/pyodide/`, which is not in git).
+When you deploy to a web server, upload `frontend/vendor/pyodide/` too.
+Exporting a skill with its libraries needs Python 3 and pip on the server.
+Without `SKILLS_DIR` skills live in your chosen local folder; the Docker app
+sets it to the `gpt-skills` volume.
 
 **Prerequisites**
 

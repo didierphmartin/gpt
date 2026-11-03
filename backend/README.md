@@ -60,6 +60,27 @@ composer install --no-dev
 
 4. Access the API at `http://localhost/gpt/backend`
 
+## Skills storage
+
+**Essential setup.** Pyodide must be present for skills to run: run
+`scripts/vendor-pyodide.sh` once (repo root) and, on a web server, upload
+`frontend/vendor/pyodide/`. Exporting a skill with libraries
+(`POST /skills/native-wheels`) needs Python 3 and pip on the server.
+
+Two modes, chosen by the `SKILLS_DIR` environment variable:
+
+- **Folder mode** (unset): skills live in the user's local folder, read by the
+  browser. Only `POST /api/v1/skills/native-wheels` and `GET /skills/store`
+  answer; the other `/skills*` routes return 404 `no skill store`.
+- **Store mode** (`SKILLS_DIR=/skills`, the Docker app's `gpt-skills` volume):
+  `SkillStore` keeps public and private skills per user.
+
+Routes under `/api/v1/skills`: `GET /store`, `GET /` (rows include
+`owner_name`), `GET /files` (`wheels=0` leaves out bundled wheels),
+`GET|PUT /file` (base64 bytes), `POST /import`, `PUT /visibility`,
+`POST /move`, `DELETE /`, `POST /native-wheels`. The robot account uses public
+skills only; deleting or hiding a skill a robot workflow uses returns 409.
+
 ## Configuration
 
 Edit `config/ai_config.php` to configure:
