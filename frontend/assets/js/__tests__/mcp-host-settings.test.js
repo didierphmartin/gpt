@@ -75,7 +75,7 @@ const makeStub = (over = {}) => {
         saved: null, enabled: null, restarted: null, deleted: null, serverDeleted: null,
         servers: new Map(),
         hostStatus: async () => ({ available: true, gateway: 'http://localhost:8790' }),
-        hostServers: async () => [{ folder: 'outlook_mcp', state: 'running', enabled: true }],
+        hostServers: async () => [{ folder: 'outlook_mcp', state: 'running', enabled: true, installed_by: 1 }],
         hostSettings: async () => ({ fields: [
             { name: 'K', label: 'key', secret: true, required: true, filled: true },
             { name: 'N', label: 'n', required: true, filled: false },
@@ -189,11 +189,11 @@ const makeStub = (over = {}) => {
         assert.strictEqual(panel.myMcpServers[0].effective_on, true);
         assert.strictEqual(calls.notes.at(-1)[0], 'error');
     }
-    // toggle: a server row someone else owns never reaches the supervisor
+    // toggle: a server someone else installed never reaches the supervisor, whoever owns the registration
     {
-        const stub = makeStub();
+        const stub = makeStub({ hostServers: async () => [{ folder: 'outlook_mcp', state: 'running', enabled: true, installed_by: 2 }] });
         const { panel } = makeEnv(stub);
-        panel.myMcpServers = [{ ...server, user_id: 2 }];
+        panel.myMcpServers = [{ ...server }];
         await panel.refreshMCPLocal(panel.myMcpServers);
         await panel.toggleMCPServer(7);
         assert.strictEqual(stub.enabled, null);
@@ -242,6 +242,75 @@ const makeStub = (over = {}) => {
         const names = item._panel.querySelectorAll('[data-value]').map((i) => i.dataset.value).join(',');
         assert.strictEqual(names, shown);
         assert.strictEqual(calls.nameHtml.join('').includes('⚠'), warn);   // a hidden required setting is not missing
+    }
+    // toggle: the installer drives the process even when the registration row is someone else's; so does an admin
+    {
+        const stub = makeStub();
+        const { panel } = makeEnv(stub);
+        panel.myMcpServers = [{ ...server, user_id: 2 }];
+        await panel.refreshMCPLocal(panel.myMcpServers);
+        await panel.toggleMCPServer(7);
+        assert.deepStrictEqual(stub.enabled, ['outlook_mcp', false]);
+        const a = makeStub({ hostServers: async () => [{ folder: 'outlook_mcp', state: 'running', enabled: true, installed_by: 2 }] });
+        const env = makeEnv(a);
+        env.ctx.window.accountStore = { getActiveUser: () => ({ id: 1, role: 'admin' }) };
+        env.panel.myMcpServers = [{ ...server }];
+        await env.panel.refreshMCPLocal(env.panel.myMcpServers);
+        await env.panel.toggleMCPServer(7);
+        assert.deepStrictEqual(a.enabled, ['outlook_mcp', false]);
+    }
+    // toggle: a 403 from the host keeps the registration switch, with an info toast
+    {
+        const stub = makeStub({ hostSetEnabled: async () => { throw Object.assign(new Error('HTTP 403: x'), { status: 403 }); } });
+        const { panel, calls } = makeEnv(stub);
+        panel.myMcpServers = [{ ...server }];
+        await panel.refreshMCPLocal(panel.myMcpServers);
+        await panel.toggleMCPServer(7);
+        assert.strictEqual(JSON.stringify(stub.toggles), '[false]');
+        assert.strictEqual(panel.myMcpServers[0].effective_on, false);
+        assert.deepStrictEqual(calls.notes.at(-1), ['info', 'settings.mcpHostNotOwner']);
+    }
+    // delete: the owner is warned that the server and its data go for everyone; anyone else deletes the registration only
+    {
+        const stub = makeStub();
+        const { panel, ctx } = makeEnv(stub);
+        const asked = [];
+        ctx.confirm = (m) => { asked.push(m); return true; };
+        panel.myMcpServers = [server];
+        await panel.refreshMCPLocal([server]);
+        await panel.deleteMCPServer(7);
+        assert.match(asked[0], /settings\.mcpHostDeleteNote/);
+        assert.strictEqual(stub.deleted, 'outlook_mcp');
+        const other = makeStub({ hostServers: async () => [{ folder: 'outlook_mcp', state: 'running', enabled: true, installed_by: 2 }] });
+        const env = makeEnv(other);
+        const asked2 = [];
+        env.ctx.confirm = (m) => { asked2.push(m); return true; };
+        env.panel.myMcpServers = [server];
+        await env.panel.refreshMCPLocal([server]);
+        await env.panel.deleteMCPServer(7);
+        assert.doesNotMatch(asked2[0], /mcpHostDeleteNote/);
+        assert.strictEqual(other.deleted, null, 'not uninstalled');
+        assert.strictEqual(other.serverDeleted, true, 'registration deleted');
+    }
+    // delete: a 403 from the host deletes the registration only, with an info toast
+    {
+        const stub = makeStub({ hostDelete: async () => { throw Object.assign(new Error('HTTP 403: x'), { status: 403 }); } });
+        const { panel, calls } = makeEnv(stub);
+        panel.myMcpServers = [server];
+        await panel.refreshMCPLocal([server]);
+        await panel.deleteMCPServer(7);
+        assert.strictEqual(stub.serverDeleted, true);
+        assert.ok(calls.notes.some(([k, m]) => k === 'info' && m === 'settings.mcpHostNotOwner'));
+    }
+    // restart: a 403 is an info toast, not an error
+    {
+        const stub = makeStub({ hostRestart: async () => { throw Object.assign(new Error('HTTP 403: x'), { status: 403 }); } });
+        const { panel, calls } = makeEnv(stub);
+        panel.myMcpServers = [server];
+        await panel.refreshMCPLocal([server]);
+        await panel._restartMCPHost(7, panel.mcpLocal.get(7), null);
+        assert.ok(calls.notes.some(([k, m]) => k === 'info' && m === 'settings.mcpHostOwnerOnly'));
+        assert.ok(!calls.notes.some(([k]) => k === 'error'));
     }
     console.log('mcp-host-settings: ok');
 })().catch((e) => { console.error(e); process.exit(1); });

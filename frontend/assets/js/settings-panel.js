@@ -1737,10 +1737,32 @@ class SettingsPanel {
         return /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(seg) ? seg : null;
     }
 
+    /** The owner of a volume server's process: the user who installed it (supervisor's installed_by), or an admin. */
+    _isMCPHostOwner(installedBy) {
+        if (window.accountStore?.getActiveUser?.()?.role === 'admin') return true;
+        return installedBy != null && String(installedBy) === String(window.mcpClient?.getUserId?.());
+    }
+
+    /** Ownership of the volume server behind registration `id`; asks the host when the list has not read it. */
+    async _ownsMCPHost(id, folder) {
+        let info = this.mcpLocal?.get(Number(id));
+        if (!info?.host) {
+            try { info = { installedBy: (await window.mcpClient.hostServers()).find(h => h.folder === folder)?.installed_by }; }
+            catch (_) { info = null; }   // unknown owner: treated as not ours, the registration alone is touched
+        }
+        return this._isMCPHostOwner(info?.installedBy);
+    }
+
+    /** A 403 from the host: someone else owns the server; `registration` = only this user's registration changed. */
+    _mcpHostNotOwner(registration = true) {
+        this.showNotification(this.t(registration ? 'settings.mcpHostNotOwner' : 'settings.mcpHostOwnerOnly'), 'info');
+    }
+
     /** One volume server: its declared settings (no secret values) and its supervisor state. */
     async _readMCPHostInfo(folder, host) {
         const info = { host: true, folder, fields: [], shown: {}, missing: [], manifest: null,
-            state: host?.state || '', enabled: host ? host.enabled !== false : true, error: false };
+            state: host?.state || '', enabled: host ? host.enabled !== false : true,
+            installedBy: host?.installed_by ?? host?.installedBy ?? null, error: false };
         try {
             const data = await window.mcpClient.hostSettings(folder);
             const all = data?.fields || [];
@@ -1802,7 +1824,8 @@ class SettingsPanel {
             await window.mcpClient.hostRestart(info.folder);
             this.showNotification(this.t('settings.mcpHostRestarted'), 'success');
         } catch (e) {
-            this.showNotification(this._tp('settings.mcpHostRestartFailed', { error: e.message }), 'error');
+            if (e.status === 403) this._mcpHostNotOwner(false);
+            else this.showNotification(this._tp('settings.mcpHostRestartFailed', { error: e.message }), 'error');
         }
         await this._reloadMCPHostInfo(id, info);
     }
@@ -1837,7 +1860,8 @@ class SettingsPanel {
             await this._reloadMCPHostInfo(id, info);
         } catch (e) {
             console.warn('[settings:mcp] host settings save failed:', e.message);
-            this.showNotification(this.t('settings.mcpLocalSaveFailed'), 'error');
+            if (e.status === 403) this._mcpHostNotOwner(false);
+            else this.showNotification(this.t('settings.mcpLocalSaveFailed'), 'error');
         } finally {
             if (btn) btn.disabled = false;
         }
@@ -2014,10 +2038,11 @@ class SettingsPanel {
             revert();
             this.showNotification(result?.error || 'Failed to toggle server', 'error');
         } else {
-            // Only the owner's switch drives a volume server's process; a shared row's per-user switch must not stop it.
-            const owner = listEntry?.user_id ?? server?.user_id;
-            const owned = !isGlobal && owner != null && String(owner) === String(window.mcpClient?.getUserId?.());
-            if (owned && !(await this._syncMCPHostEnabled(id, listEntry?.url || server?.url, newOn))) {
+            // Only the owner's switch drives a volume server's process (R19); a global row's "for me" switch never does.
+            const url = listEntry?.url || server?.url;
+            const folder = this._hostFolder(url);
+            const owned = !isGlobal && !!folder && (await this._ownsMCPHost(id, folder));
+            if (owned && !(await this._syncMCPHostEnabled(id, url, newOn))) {
                 revert();
                 try { await window.mcpClient.toggleServer(id, currentlyOn); } catch (_) { /* the host error is already shown */ }
             }
@@ -2032,6 +2057,7 @@ class SettingsPanel {
         try {
             await window.mcpClient.hostSetEnabled(folder, on);
         } catch (e) {
+            if (e.status === 403) { this._mcpHostNotOwner(); return true; }   // the registration switch stands
             console.warn('[settings:mcp] host enable failed:', e.message);
             this.showNotification(this._tp('settings.mcpHostEnableFailed', { error: e.message }), 'error');
             return false;
@@ -2094,7 +2120,9 @@ class SettingsPanel {
     async deleteMCPServer(serverId) {
         const entry = (this.myMcpServers || []).find(s => String(s.id) === String(serverId))
             || window.mcpClient?.servers?.get(parseInt(serverId, 10));
-        const hostFolder = this._hostFolder(entry?.url);   // a volume server is uninstalled with its registration
+        // The owner's delete also uninstalls the volume server (R15, R19); anyone else deletes the registration only.
+        const folder = this._hostFolder(entry?.url);
+        const hostFolder = folder && (await this._ownsMCPHost(serverId, folder)) ? folder : null;
         const question = 'Are you sure you want to delete this MCP server?';
         if (!confirm(hostFolder ? `${question}\n\n${this.t('settings.mcpHostDeleteNote')}` : question)) {
             return;
@@ -2103,7 +2131,9 @@ class SettingsPanel {
         if (hostFolder) {
             // Uninstall first: on failure the registration stays, so the row is still there to retry.
             try { await window.mcpClient.hostDelete(hostFolder); } catch (e) {
-                if (e.status !== 404) {   // 404 = already gone
+                if (e.status === 403) {
+                    this._mcpHostNotOwner();   // not ours after all: delete the registration only
+                } else if (e.status !== 404) {   // 404 = already gone
                     console.warn('[settings:mcp] host delete failed:', e.message);
                     this.showNotification(this._tp('settings.mcpHostDeleteFailed', { error: e.message }), 'error');
                     return;
