@@ -83,8 +83,15 @@ class MCPClient {
 
     // The Docker app's server host (backend relay to the supervisor); every answer is {success, data}.
     async hostStatus() {
-        // Only an answer is cached; a failure throws, so a caller never mistakes it for "no host".
-        if (!this._hostStatus) this._hostStatus = (await this.request('/mcp/host')).data || { available: false };
+        // Only an answer is cached (404 = route missing = no host); any other failure throws, never mistaken for "no host".
+        if (!this._hostStatus) {
+            try {
+                this._hostStatus = (await this.request('/mcp/host')).data || { available: false };
+            } catch (e) {
+                if (e.status !== 404) throw e;   // a backend without the route (not the Docker app): no host
+                this._hostStatus = { available: false };
+            }
+        }
         return this._hostStatus;
     }
     async hostServers() { return (await this.request('/mcp/host/servers')).data || []; }
