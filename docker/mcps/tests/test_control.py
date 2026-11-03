@@ -127,6 +127,7 @@ class ControlTest(unittest.TestCase):
                 time.sleep(0.01)
                 states = [s["state"] for s in self.get("/servers").json() if s["folder"] == "slow"]
             self.assertIn("installing", states)
+            self.assertEqual([s["installed_by"] for s in self.get("/servers").json() if s["folder"] == "slow"], [7])
         finally:
             t.join()
 

@@ -56,7 +56,7 @@ final class McpHostController
     public function install(array $request, string|int $folder): array
     {
         if (!self::available()) return self::none();
-        if (!self::safe($folder = (string) $folder)) return self::bad();
+        if (!self::safe($folder = self::raw($request, $folder))) return self::bad();
         $body = (array) ($request['body'] ?? []);
         $body['installed_by'] = (int) $request['user_id'];
         return self::out($this->client()->request('POST', "/servers/$folder/install", $body));
@@ -96,12 +96,12 @@ final class McpHostController
     private function owned(array $request, string|int $folder, string $method, string $sub, bool $withBody): array
     {
         if (!self::available()) return self::none();
-        if (!self::safe($folder = (string) $folder)) return self::bad();
+        if (!self::safe($folder = self::raw($request, $folder))) return self::bad();
         $list = $this->client()->request('GET', '/servers');
         if ($list['status'] !== 200) return self::out($list);
         $found = null;
         foreach ($list['body'] as $s) {
-            if (($s['folder'] ?? null) === $folder) $found = $s;
+            if (($s['folder'] ?? null) === $folder) { $found = $s; break; }
         }
         if ($found === null) return ['success' => false, 'data' => ['error' => 'not found'], 'error' => 'not found', 'status_code' => 404];
         if ((int) ($found['installed_by'] ?? 0) !== (int) $request['user_id'] && !$this->isAdmin($request)) {
@@ -119,6 +119,12 @@ final class McpHostController
     private function isAdmin(array $request): bool
     {
         return $this->requireAdmin($request) === null;
+    }
+
+    /** index.php casts numeric-looking params ("007" -> 7); the raw segment is in request['params']. */
+    private static function raw(array $request, string|int $folder): string
+    {
+        return (string) ($request['params']['folder'] ?? $folder);
     }
 
     /** Same shape the supervisor enforces: no leading dot, no separators. */
@@ -144,6 +150,9 @@ final class McpHostController
             $e = 'The server host is not reachable';
             return ['success' => false, 'data' => ['error' => $e], 'error' => $e, 'status_code' => 503];
         }
-        return ['success' => $r['status'] < 400, 'data' => $r['body'], 'status_code' => $r['status']];
+        $ok = $r['status'] < 400;
+        $out = ['success' => $ok, 'data' => $r['body'], 'status_code' => $r['status']];
+        if (!$ok) $out['error'] = (string) ($r['body']['error'] ?? 'error');
+        return $out;
     }
 }

@@ -100,6 +100,14 @@ class McpHostControllerTest extends TestCase
         $r = $this->ctl()->restart($this->req(1), 'a');
         $this->assertSame(409, $r['status_code']);
         $this->assertSame('disabled', $r['data']['error']);
+        $this->assertSame('disabled', $r['error']);
+    }
+
+    public function testRawFolderSurvivesNumericCast(): void
+    {
+        $this->reply = [200, '{"ok":true}'];
+        $this->ctl()->install(['user_id' => 3, 'body' => [], 'params' => ['folder' => '007']], 7);
+        $this->assertStringEndsWith('/servers/007/install', $this->calls[0]['url']);
     }
 
     public function testBadFolderIs400(): void

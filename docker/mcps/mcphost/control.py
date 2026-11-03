@@ -90,7 +90,7 @@ class Control:
     def __init__(self, root, registry, manager):
         self.root, self.registry, self.manager = Path(root), registry, manager
         self._lock = threading.Lock()
-        self._installing = {}   # folder -> display name while its install runs
+        self._installing = {}   # folder -> (display name, installed_by) while its install runs
 
     # ---- helpers ----
     def _folder(self, folder: str) -> Path:
@@ -119,9 +119,9 @@ class Control:
                         "log": self.manager.log_tail(folder, LOG_LINES)})
         with self._lock:
             building = dict(self._installing)
-        for folder, name in building.items():
+        for folder, (name, owner) in building.items():
             if folder not in {s["folder"] for s in out}:
-                out.append({"folder": folder, "name": name, "port": None, "enabled": True, "installed_by": None,
+                out.append({"folder": folder, "name": name, "port": None, "enabled": True, "installed_by": owner,
                             "state": "installing", "log": self.manager.log_tail(folder, LOG_LINES)})
         return out
 
@@ -146,7 +146,7 @@ class Control:
             if folder in self._installing or d.exists() or self.registry.get(folder) is not None:
                 raise ApiError(409, "folder already exists")
             d.mkdir(parents=True)   # claims the folder; a racing install now sees it
-            self._installing[folder] = str(body.get("name") or folder)
+            self._installing[folder] = (str(body.get("name") or folder), body.get("installed_by"))
         try:
             return self._do_install(folder, d, body, decoded, env_text)
         finally:
