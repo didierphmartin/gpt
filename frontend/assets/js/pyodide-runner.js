@@ -115,12 +115,12 @@
      * folders for "<group>/<name>/SKILL.md". Falls back to the original name
      * so the caller still throws a clear "not found".
      */
-    async function resolveSkillDir(dirName) {
+    async function resolveSkillDir(dirName, { asRobot = false } = {}) {
         if (!dirName || dirName.includes('/') || !window.skillsFs) return dirName;
         // Top-level skill folder? (e.g. "docx")
-        if (await window.skillsFs.getSkillFile(dirName, 'SKILL.md') !== null) return dirName;
-        // Otherwise a skill inside a group folder with that leaf name.
-        const hit = (await window.skillsFs.listSkills()).find(s => s.leafName === dirName);
+        if (await window.skillsFs.getSkillFile(dirName, 'SKILL.md', { asRobot }) !== null) return dirName;
+        // Otherwise a skill inside a group folder with that leaf name (among what the robot may see, on a robot run).
+        const hit = (await window.skillsFs.listSkills({ asRobot })).find(s => s.leafName === dirName);
         return hit ? hit.dirName : dirName;
     }
 
@@ -132,6 +132,23 @@
     // keeps, per MEMFS root, the files as copied (to diff against) and how to
     // write changes back.
     const memCopies = new Map();   // root → { files, save(changed) }
+
+    // A robot-owned workflow's run reads skills as the robot sees them (skill
+    // store: public only in corporate) and never writes back. Set for the
+    // length of one runSkillScript so a script's own ensureMounted() of a
+    // sibling skill (from Python) gets the same view.
+    let runAsRobot = false;
+
+    const SKILLS_ROOT_UNAVAILABLE = 'This skill wrote to the skills folder, which is not available for it here.';
+
+    function exists(p) {
+        try { pyodide.FS.stat(p); return true; } catch { return false; }
+    }
+
+    /** Store mode: the robot may not use this skill (private, or not there): a clear refusal. */
+    function robotRefusal(dirName) {
+        return new Error(`Skill "${dirName}" is not available to the robot: a robot workflow uses public skills only.`);
+    }
 
     function writeTree(root, files) {
         for (const [rel, bytes] of Object.entries(files)) {
@@ -211,20 +228,35 @@
         }
     }
 
-    async function ensureMounted(dirName) {
+    /** Store mode: the skill's files, read as the robot on a robot run (refused when it may not see it). */
+    async function storeSkillFiles(dirName, asRobot) {
+        let files = {};
+        try {
+            files = await window.skillsFs.readSkillFiles(dirName, { asRobot });
+        } catch (e) {
+            if (asRobot && (e.status === 403 || e.status === 404)) throw robotRefusal(dirName);
+            throw e;
+        }
+        if (!Object.keys(files).length) throw asRobot ? robotRefusal(dirName) : new Error(`Skill "${dirName}" not found.`);
+        return files;
+    }
+
+    /** Store mode: write a run's changes to a skill folder back — my own skills only, never on a robot run. */
+    async function saveSkillChanges(dirName, changed, { asRobot = false } = {}) {
+        if (asRobot || !changed || !Object.keys(changed).length) return;
+        if (!(await window.skillsFs.listSkills()).some(s => s.path === dirName && s.mine)) return;
+        for (const [rel, b] of Object.entries(changed)) await window.skillsFs.writeSkillFile(dirName, rel, b);
+    }
+
+    async function ensureMounted(dirName, { asRobot = runAsRobot } = {}) {
         if (mountedSkills.has(dirName)) return mountedSkills.get(dirName);
         if (!window.skillsFs) {
             throw new Error('window.skillsFs is not available — cannot resolve skill folder.');
         }
         const mountPath = `/skill/${dirName}`;
         if (await window.skillsFs.mode() === 'volume') {
-            const files = await window.skillsFs.readSkillFiles(dirName);
-            if (!Object.keys(files).length) throw new Error(`Skill "${dirName}" not found.`);
-            memCopy(mountPath, files, async (changed) => {
-                // Only my own skills take changes back; another owner's public skill stays as it is.
-                if (!(await window.skillsFs.listSkills()).some(s => s.path === dirName && s.mine)) return;
-                for (const [rel, b] of Object.entries(changed)) await window.skillsFs.writeSkillFile(dirName, rel, b);
-            });
+            const files = await storeSkillFiles(dirName, asRobot);
+            memCopy(mountPath, files, (changed) => saveSkillChanges(dirName, changed, { asRobot }));
             mountedSkills.set(dirName, mountPath);   // cleared at the start of every run (fresh copy per run)
             return mountPath;
         }
@@ -249,6 +281,8 @@
         if (!memCopies.size) return;
         for (const root of memCopies.keys()) {
             for (const [d, m] of mountedSkills) if (m === root) mountedSkills.delete(d);
+            removeTree(root);
+            try { pyodide.FS.rmdir(root); } catch { /* not empty or gone */ }
         }
         memCopies.clear();
         skillsRootMountPath = null;
@@ -343,12 +377,12 @@
      * isn't declared — the runner installs nothing in that case and lets the
      * script's import error surface to the caller.
      */
-    async function getSkillDependencies(dirName) {
+    async function getSkillDependencies(dirName, { asRobot = false } = {}) {
         if (!window.skillsFs || typeof window.skillsFs.parseFrontmatter !== 'function') {
             return [];
         }
         // A group-folder prefix in dirName (e.g. "SEO/ai-search-audit") resolves as a path.
-        const text = await window.skillsFs.getSkillFile(dirName, 'SKILL.md');
+        const text = await window.skillsFs.getSkillFile(dirName, 'SKILL.md', { asRobot });
         if (!text) return [];
         const { meta } = window.skillsFs.parseFrontmatter(text);
         return parseDepsField(meta.dependencies);
@@ -361,12 +395,12 @@
      * by the PHP backend (POST /gpt/backend/api/v1/fetch-url) before the
      * script runs. Returns false if the flag is absent, false, or unparseable.
      */
-    async function getSkillFetchesUrls(dirName) {
+    async function getSkillFetchesUrls(dirName, { asRobot = false } = {}) {
         if (!window.skillsFs || typeof window.skillsFs.parseFrontmatter !== 'function') {
             return false;
         }
         // A group-folder prefix in dirName (e.g. "SEO/ai-search-audit") resolves as a path.
-        const text = await window.skillsFs.getSkillFile(dirName, 'SKILL.md');
+        const text = await window.skillsFs.getSkillFile(dirName, 'SKILL.md', { asRobot });
         if (!text) return false;
         const { meta } = window.skillsFs.parseFrontmatter(text);
         const v = meta.fetches_urls;
@@ -570,9 +604,9 @@
     /**
      * The Pyodide wheels a skill bundles (.wheels/pyodide/), as { file: bytes }; {} when none.
      */
-    async function getSkillWheels(dirName) {
+    async function getSkillWheels(dirName, { asRobot = false } = {}) {
         if (!window.skillsFs || !dirName) return {};
-        const files = await window.skillsFs.readSkillFiles(dirName, { withWheels: true, under: '.wheels/pyodide' });
+        const files = await window.skillsFs.readSkillFiles(dirName, { asRobot, withWheels: true, under: '.wheels/pyodide' });
         const out = {};
         for (const [rel, b] of Object.entries(files)) out[rel.slice('.wheels/pyodide/'.length)] = b;
         return out;
@@ -1071,21 +1105,16 @@ _runner_stderr = _stderr_buf.getvalue()
 `;
 
     async function _runOne(opts) {
-        const {
-            script,
-            argv = [],
-            inputFiles = null,
-            readOutputs = null,
-            dependencies = null,
-            persist = true,
-        } = opts || {};
+        const script = opts?.script;
 
         // Normalize the requested skill name to its real on-disk path BEFORE
         // any helper touches it (mount, deps, fetches_urls, output bucketing
         // all assume the full group-prefixed form). A bare leaf like
         // "geo-report" becomes "GEO/geo-report"; an already-pathed or
         // top-level name is unchanged.
-        const dirName = await resolveSkillDir(opts?.dirName);
+        // asRobot: the run belongs to a robot-owned workflow (see runAsRobot).
+        const asRobot = !!opts?.asRobot;
+        const dirName = await resolveSkillDir(opts?.dirName, { asRobot });
 
         if (!dirName) throw new Error('runSkillScript: dirName is required');
         if (!script) throw new Error('runSkillScript: script is required');
@@ -1094,7 +1123,24 @@ _runner_stderr = _stderr_buf.getvalue()
         await ensureLoaded();
         const store = window.skillsFs && await window.skillsFs.mode() === 'volume';
         if (store) freshMemCopies();
-        const mount = await ensureMounted(dirName);
+        runAsRobot = asRobot;
+        try {
+            return await _runMounted(opts, dirName, asRobot, store, t0);
+        } finally {
+            runAsRobot = false;
+        }
+    }
+
+    async function _runMounted(opts, dirName, asRobot, store, t0) {
+        const {
+            script,
+            argv = [],
+            inputFiles = null,
+            readOutputs = null,
+            dependencies = null,
+            persist = true,
+        } = opts || {};
+        const mount = await ensureMounted(dirName, { asRobot });
         // Outputs folder is sibling-mounted at `/outputs/` on every run so
         // skill scripts can write generated documents there via absolute
         // paths (e.g. `-o /outputs/result.html`).
@@ -1105,14 +1151,16 @@ _runner_stderr = _stderr_buf.getvalue()
         // every run for consistency with /outputs/; cached after first call.
         // In the skill store it is a copy of all my skills, so it is made only
         // for a script that names /skills-root.
-        if (!store || scriptNamesSkillsRoot(`${mount}/${script}`)) await ensureSkillsRootMounted();
+        // A robot run never gets it there (it holds the person's own skills).
+        const rootThisRun = !store || (!asRobot && scriptNamesSkillsRoot(`${mount}/${script}`));
+        if (rootThisRun) await ensureSkillsRootMounted();
 
         const deps = Array.isArray(dependencies)
             ? dependencies
-            : await getSkillDependencies(dirName);
+            : await getSkillDependencies(dirName, { asRobot });
         // Bundled wheels are read only while something is still to install.
         const needsInstall = !!planDeps(deps, installedDeps, []);
-        await ensureDeps(deps, { wheels: needsInstall ? await getSkillWheels(dirName) : null });
+        await ensureDeps(deps, { wheels: needsInstall ? await getSkillWheels(dirName, { asRobot }) : null });
 
         // pyodide.toPy() rejects undefined/null/non-cloneable values with
         // "Unsupported data type". Validate argv before handing it off so we
@@ -1136,7 +1184,7 @@ _runner_stderr = _stderr_buf.getvalue()
         // the hardened SKILL.md prevents fabricated reports in that case.
         let effectiveArgv = argv;
         try {
-            const fetchesUrls = await getSkillFetchesUrls(dirName);
+            const fetchesUrls = await getSkillFetchesUrls(dirName, { asRobot });
             if (fetchesUrls) {
                 effectiveArgv = await prefetchUrlArgs(argv, dirName);
             }
@@ -1248,6 +1296,15 @@ _runner_stderr = _stderr_buf.getvalue()
             // in the harness, etc.) and we surface it as exit 1.
             exitCode = 1;
             stderr = String(e && e.message ? e.message : e);
+        }
+        // Skill store: /skills-root was not given to this run (heuristic, or a
+        // robot run), so anything the script wrote there would be lost — fail
+        // the run instead (and drop what it wrote).
+        if (store && !rootThisRun && exists('/skills-root')) {
+            removeTree('/skills-root');
+            try { pyodide.FS.rmdir('/skills-root'); } catch { /* gone */ }
+            exitCode = 1;
+            stderr = (stderr ? stderr + '\n' : '') + SKILLS_ROOT_UNAVAILABLE;
         }
 
         const outputs = {};
@@ -1439,16 +1496,17 @@ _inline_stderr_str = _inline_stderr.getvalue()
      * the skill store, the skill's files for a MEMFS copy.
      */
     const poolHandles = new Map();   // dirName → Promise<handle> (one in-flight resolve per path)
-    async function poolSkillPayload(rawDirName) {
+    async function poolSkillPayload(rawDirName, { asRobot = false } = {}) {
         if (!window.skillsFs) throw new Error('skillsFs unavailable for pool path');
-        const dirName = await resolveSkillDir(rawDirName);
-        const dependencies = await getSkillDependencies(dirName);
-        const wheels = dependencies.length ? await getSkillWheels(dirName) : {};
+        const dirName = await resolveSkillDir(rawDirName, { asRobot });
         if (await window.skillsFs.mode() === 'volume') {
-            const skillFiles = await window.skillsFs.readSkillFiles(dirName);
-            if (!Object.keys(skillFiles).length) throw new Error(`Skill "${dirName}" not found.`);
+            const skillFiles = await storeSkillFiles(dirName, asRobot);
+            const dependencies = await getSkillDependencies(dirName, { asRobot });
+            const wheels = dependencies.length ? await getSkillWheels(dirName, { asRobot }) : {};
             return { dirName, dependencies, wheels, skillFiles };
         }
+        const dependencies = await getSkillDependencies(dirName);
+        const wheels = dependencies.length ? await getSkillWheels(dirName) : {};
         if (!poolHandles.has(dirName)) poolHandles.set(dirName, window.skillsFs.folderHandle(dirName));
         const skillHandle = await poolHandles.get(dirName);
         if (!skillHandle) { poolHandles.delete(dirName); throw new Error('could not resolve the skill handle for pool path'); }
@@ -1471,6 +1529,8 @@ _inline_stderr_str = _inline_stderr.getvalue()
         getSkillDependencies,
         getSkillFetchesUrls,
         poolSkillPayload,
+        // After a pool run in the store: save result.skillChanges (own skills only, never on a robot run).
+        savePoolChanges: (dirName, changes, opts) => saveSkillChanges(dirName, changes, opts),
         ensureDeps,
         _planDeps: planDeps,         // pure, for tests
         _changedFiles: changedFiles, // pure, for tests

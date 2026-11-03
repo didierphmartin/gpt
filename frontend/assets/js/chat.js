@@ -3407,7 +3407,7 @@ class ChatApp {
         return new window.PyodideWorkerPool({
             workerFactory: () => {
                 const wid = ++workerN;
-                const w = new Worker('assets/js/pyodide.worker.js?v=20261103-skillstore');
+                const w = new Worker('assets/js/pyodide.worker.js?v=20261103-skillsfs-fix1');
                 console.log(`[pool] spawned worker w${wid} (each worker loads its own Pyodide — first use is a cold start)`);
                 let seq = 0;
                 const pending = new Map();
@@ -3462,7 +3462,7 @@ class ChatApp {
             }
             return this._poolHandleCache.get(path);
         };
-        const skill = await window.pyodideRunner.poolSkillPayload(req.dirName);
+        const skill = await window.pyodideRunner.poolSkillPayload(req.dirName, { asRobot: !!req.asRobot });
         const outputsHandle = await resolveCached('outputs', { create: true });
         if (!outputsHandle) throw new Error('could not resolve outputs handle for pool path');
         // Permission must be granted on the main thread (a worker can't prompt).
@@ -3481,6 +3481,12 @@ class ChatApp {
             ...req, ...skill, authToken, outputsHandle, prefetched: [],
         }]);
         if (!r || !r.ok) throw new Error(r ? r.error : 'pool returned no result');
+        // Skill store: what the script changed in its skill folder goes back (own skills, not on robot runs).
+        if (r.result?.skillChanges) {
+            const { skillChanges, ...result } = r.result;
+            await window.pyodideRunner.savePoolChanges(skill.dirName, skillChanges, { asRobot: !!req.asRobot });
+            return result;
+        }
         return r.result;
     }
 
@@ -3687,7 +3693,8 @@ class ChatApp {
                     // Read agents/<subagent_type>.md inside the active skill
                     // (folder or skill store) as text.
                     if (!window.skillsFs) throw new Error('window.skillsFs unavailable');
-                    const systemPrompt = await window.skillsFs.getSkillFile(dirName, `agents/${subagentType}.md`);
+                    // ctx.asRobot: a robot-owned run reads skills as the robot sees them.
+                    const systemPrompt = await window.skillsFs.getSkillFile(dirName, `agents/${subagentType}.md`, { asRobot: !!ctx?.asRobot });
                     if (systemPrompt === null) throw new Error(`agents/${subagentType}.md not found in skill ${dirName}`);
                     // Hand the work to the no-tools agent endpoint.
                     const headers = {
@@ -4768,6 +4775,8 @@ class ChatApp {
             inputFiles: finalInputFiles,
             readOutputs: mergedReadOutputs.length > 0 ? mergedReadOutputs : null,
             preInputFiles,
+            // A robot-owned run (ctx.asRobot) runs skills as the robot sees them; chat is the person's own.
+            asRobot: !!ctx?.asRobot,
         };
     }
 

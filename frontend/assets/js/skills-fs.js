@@ -746,7 +746,8 @@
         let files;
         const sub = String(under || '').replace(/^\/+|\/+$/g, '');
         if (await mode() === 'volume') {
-            const d = await api('GET', `/skills/files?path=${enqPath(path)}${asRobot ? '&as=robot' : ''}`);
+            // wheels=0: the server leaves .wheels/ out instead of sending what would be dropped here.
+            const d = await api('GET', `/skills/files?path=${enqPath(path)}${asRobot ? '&as=robot' : ''}${withWheels ? '' : '&wheels=0'}`);
             files = {};
             for (const [rel, b64] of Object.entries((d && d.files) || {})) {
                 if (!sub || rel.startsWith(sub + '/')) files[rel] = fromB64(b64);
@@ -760,6 +761,28 @@
             for (const rel of Object.keys(files)) if (rel.startsWith('.wheels/')) delete files[rel];
         }
         return files;
+    }
+
+    /**
+     * Names of the folders directly under a skill's `under` folder (e.g. the run folders of
+     * body-opt-results). Folder mode lists the directory without reading files; the store derives
+     * them from that folder's files.
+     */
+    async function listSkillFolders(path, under) {
+        const sub = String(under || '').replace(/^\/+|\/+$/g, '');
+        if (await mode() !== 'volume') {
+            const dir = await window.localFs?.resolvePath(sub ? `skills/${path}/${sub}` : `skills/${path}`);
+            if (!dir) return [];
+            const out = [];
+            for await (const e of dir.values()) if (e.kind === 'directory') out.push(e.name);
+            return out.sort();
+        }
+        const names = new Set();
+        for (const rel of Object.keys(await readSkillFiles(path, { under: sub }))) {
+            const parts = (sub ? rel.slice(sub.length + 1) : rel).split('/');
+            if (parts.length > 1) names.add(parts[0]);
+        }
+        return [...names].sort();
     }
 
     /** Folder mode: the skill's directory handle ('' = the skills root, created when missing). Store: null. */
@@ -903,6 +926,7 @@
         writeSkillFiles,
         skillExists,
         folderHandle,
+        listSkillFolders,
         importSkill,
         setVisibility,
         skillsRootFiles,

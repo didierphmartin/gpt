@@ -51,7 +51,8 @@ final class SkillStoreController
     public function files(array $request): array
     {
         return $this->run(function (SkillStore $s) use ($request) {
-            $files = $s->files(self::uid($request), self::q($request, 'path'), self::robot($request));
+            // wheels=0: leave .wheels/ out (the caller would only drop it).
+            $files = $s->files(self::uid($request), self::q($request, 'path'), self::robot($request), self::q($request, 'wheels') !== '0');
             return ['files' => array_map('base64_encode', $files)];
         });
     }

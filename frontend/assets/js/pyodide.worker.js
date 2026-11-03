@@ -53,11 +53,58 @@ async function ensureLoaded() {
 }
 
 // Skill store (Docker app): no folder handle, the main thread sends the skill's
-// files; they are written into MEMFS at the mount path, fresh on every run.
-// Changes the script makes there are not written back from a worker.
+// files; they are written into MEMFS at the mount path, fresh on every run (the
+// previous copy is removed first). What the script changes there goes back to
+// the main thread as result.skillChanges, which writes it to the store.
+function removeTree(dir) {
+  let names;
+  try { names = pyodide.FS.readdir(dir); } catch (_) { return; }
+  for (const n of names) {
+    if (n === '.' || n === '..') continue;
+    const abs = `${dir}/${n}`;
+    if (pyodide.FS.isDir(pyodide.FS.stat(abs).mode)) { removeTree(abs); pyodide.FS.rmdir(abs); }
+    else pyodide.FS.unlink(abs);
+  }
+}
+
+function readTree(root) {
+  const out = {};
+  const walk = (dir, rel) => {
+    let names;
+    try { names = pyodide.FS.readdir(dir); } catch (_) { return; }
+    for (const n of names) {
+      if (n === '.' || n === '..') continue;
+      const abs = `${dir}/${n}`;
+      const r = rel ? `${rel}/${n}` : n;
+      if (pyodide.FS.isDir(pyodide.FS.stat(abs).mode)) walk(abs, r);
+      else out[r] = pyodide.FS.readFile(abs);
+    }
+  };
+  walk(root, '');
+  return out;
+}
+
+// Mirror of pyodide-runner.js changedFiles: files of `after` that are new or differ from `before`.
+function changedFiles(before, after) {
+  const out = {};
+  for (const [rel, b] of Object.entries(after)) {
+    const a = before[rel];
+    if (!a || a.length !== b.length || a.some((v, i) => v !== b[i])) out[rel] = b;
+  }
+  return out;
+}
+
+// Same message as pyodide-runner.js: a worker never has /skills-root.
+const SKILLS_ROOT_UNAVAILABLE = 'This skill wrote to the skills folder, which is not available for it here.';
+
+function exists(p) {
+  try { pyodide.FS.stat(p); return true; } catch (_) { return false; }
+}
+
 function copySkill(dirName, files) {
   const mountPath = `/skill/${dirName}`;
   pyodide.FS.mkdirTree(mountPath);
+  removeTree(mountPath);
   for (const [rel, bytes] of Object.entries(files)) {
     const abs = `${mountPath}/${rel}`;
     ensureParentDir(abs);
@@ -502,11 +549,22 @@ async function runSkillScript(payload) {
     }
   }
 
+  let exitCode = pyodide.globals.get('_runner_exit') ?? 0;
+  let stderrOut = pyodide.globals.get('_runner_stderr') ?? '';
+  // Writes under /skills-root would be lost here: fail the run instead.
+  if (exists('/skills-root')) {
+    removeTree('/skills-root');
+    try { pyodide.FS.rmdir('/skills-root'); } catch (_) {}
+    exitCode = 1;
+    stderrOut = (stderrOut ? stderrOut + '\n' : '') + SKILLS_ROOT_UNAVAILABLE;
+  }
   return {
     stdout: pyodide.globals.get('_runner_stdout') ?? '',
-    stderr: pyodide.globals.get('_runner_stderr') ?? '',
-    exitCode: pyodide.globals.get('_runner_exit') ?? 0,
+    stderr: stderrOut,
+    exitCode,
     outputs,
+    // Store mode: what the script changed in its skill folder, for the main thread to save.
+    ...(payload.skillFiles ? { skillChanges: changedFiles(payload.skillFiles, readTree(mount)) } : {}),
     durationMs: Date.now() - t0,
   };
 }

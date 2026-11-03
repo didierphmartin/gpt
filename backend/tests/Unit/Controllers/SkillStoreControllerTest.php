@@ -80,6 +80,20 @@ final class SkillStoreControllerTest extends TestCase
         self::assertSame("x\0y", base64_decode($g['data']['content']));
     }
 
+    public function test_files_leaves_wheels_out_when_wheels_is_0(): void
+    {
+        $c = $this->ctl();
+        $c->import($this->req([], ['path' => 'g/demo', 'visibility' => 'private', 'files' => [
+            'SKILL.md' => base64_encode("---\nname: demo\ndescription: d\n---\nhi"),
+            '.wheels/pyodide/a.whl' => base64_encode('W'),
+        ]]));
+        $all = array_keys($c->files($this->req(['path' => 'g/demo']))['data']['files']);
+        sort($all);
+        self::assertSame(['.wheels/pyodide/a.whl', 'SKILL.md'], $all);
+        $plain = $c->files($this->req(['path' => 'g/demo', 'wheels' => '0']))['data']['files'];
+        self::assertSame(['SKILL.md'], array_keys($plain));
+    }
+
     public function test_exception_status_codes_pass_through(): void
     {
         $c = $this->ctl(true, 'corporate');

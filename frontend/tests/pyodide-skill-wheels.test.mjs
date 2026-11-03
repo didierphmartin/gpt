@@ -23,22 +23,35 @@ function fakePyodide() {
     writeFile(p, b) { files.set(p, typeof b === 'string' ? new TextEncoder().encode(b) : b); },
     readFile(p, o) { if (!files.has(p)) throw new Error('ENOENT'); const b = files.get(p); return o && o.encoding ? new TextDecoder().decode(b) : b; },
     readdir(p) { if (!dirs.has(p) && !children(p).length) throw new Error('ENOENT'); return ['.', '..', ...children(p)]; },
-    stat(p) { return { mode: files.has(p) ? 1 : 2 }; },
+    stat(p) { if (files.has(p)) return { mode: 1 }; if (dirs.has(p) || children(p).length) return { mode: 2 }; throw new Error('ENOENT'); },
+    syncfs(_populate, cb) { cb(null); },
     isDir(m) { return m === 2; },
     unlink(p) { files.delete(p); },
     rmdir(p) { dirs.delete(p); },
   };
-  return {
-    FS, files, calls,
+  const py = {
+    FS, files, calls, script: null,   // script(FS): what the "Python script" does when the harness runs
     globals: { set: (k, v) => globals.set(k, v), get: (k) => globals.get(k) },
+    toPy: (v) => v,
+    mountNativeFS: async (p) => { FS.mkdirTree(p); return { syncfs: async () => {} }; },
     loadPackage: async (n) => { calls.push(['loadPackage', n]); },
-    runPythonAsync: async (code) => { calls.push(['python', code, globals.get('_runner_wheel_urls') || globals.get('_runner_micropip_deps')]); },
+    runPythonAsync: async (code) => {
+      calls.push(['python', code, globals.get('_runner_wheel_urls') || globals.get('_runner_micropip_deps')]);
+      if (code.includes('runpy.run_path')) {
+        if (py.script) py.script(FS);
+        globals.set('_runner_exit', 0); globals.set('_runner_stdout', ''); globals.set('_runner_stderr', '');
+      }
+    },
   };
+  return py;
 }
+
+const okHandle = { queryPermission: async () => 'granted' };
+const localFs = { ensureStandardSubdirs: async () => {}, resolvePath: async () => okHandle };
 
 function load({ skillsFs } = {}) {
   const py = fakePyodide();
-  const window = { skillsFs, loadPyodide: async () => py };
+  const window = { skillsFs, localFs, loadPyodide: async () => py };
   const ctx = vm.createContext({ window, document: { baseURI: 'http://x/gpt/' }, console, URL, TextEncoder, TextDecoder, Uint8Array, performance });
   vm.runInContext(SRC, ctx);
   return { runner: window.pyodideRunner, py };
@@ -121,4 +134,103 @@ test('poolSkillPayload: store sends the files and bundled wheels; folder sends t
   assert.equal(f.skillHandle, handle);
   assert.deepEqual(Object.keys(f.wheels), []);
   assert.equal(f.skillFiles, undefined);
+});
+
+
+/** A store-mode skillsFs: `skills` = { path: { files, mine, public } }; as=robot sees public ones only. */
+function storeFs(skills) {
+  const writes = [];
+  const visible = (p, asRobot) => skills[p] && (!asRobot || skills[p].public);
+  const notFound = () => Object.assign(new Error('HTTP 404'), { status: 404 });
+  return {
+    writes,
+    mode: async () => 'volume',
+    parseFrontmatter: () => ({ meta: {} }),
+    getSkillFile: async (p, rel, o = {}) => (visible(p, o.asRobot) && skills[p].files[rel] ? new TextDecoder().decode(skills[p].files[rel]) : null),
+    readSkillFiles: async (p, o = {}) => {
+      if (!visible(p, o.asRobot)) throw notFound();
+      const out = {};
+      for (const [r, b] of Object.entries(skills[p].files)) if (!o.under || r.startsWith(o.under + '/')) out[r] = b;
+      return out;
+    },
+    listSkills: async (o = {}) => Object.keys(skills).filter((p) => visible(p, o.asRobot))
+      .map((p) => ({ path: p, dirName: p, leafName: p.split('/').pop(), mine: !!skills[p].mine })),
+    writeSkillFile: async (p, rel, b) => { writes.push([p, rel]); },
+    skillsRootFiles: async () => ({}),
+    writeSkillsRoot: async () => ({ ok: true }),
+  };
+}
+const skill = (extra = {}) => ({ files: { 'SKILL.md': enc('---\nname: x\n---\n'), 'scripts/a.py': enc('print(1)'), ...extra } });
+
+test('robot run: a private skill is refused at mount; a public one runs, without write-back', async () => {
+  const fs = storeFs({ 'GEO/priv': { ...skill(), mine: true }, pub: { ...skill(), mine: true, public: true } });
+  const { runner, py } = load({ skillsFs: fs });
+  await assert.rejects(runner.runSkillScript({ dirName: 'GEO/priv', script: 'scripts/a.py', asRobot: true }), /not available to the robot/);
+  // The bare leaf does not resolve to the private grouped skill either.
+  await assert.rejects(runner.runSkillScript({ dirName: 'priv', script: 'scripts/a.py', asRobot: true }), /not available to the robot/);
+  py.script = (FS) => FS.writeFile('/skill/pub/scripts/a.py', enc('changed'));
+  const r = await runner.runSkillScript({ dirName: 'pub', script: 'scripts/a.py', asRobot: true });
+  assert.equal(r.exitCode, 0);
+  assert.deepEqual(fs.writes, []);
+  // The same change on the person's own run is written back.
+  await runner.runSkillScript({ dirName: 'pub', script: 'scripts/a.py' });
+  assert.deepEqual(fs.writes, [['pub', 'scripts/a.py']]);
+});
+
+test('store: a run that writes /skills-root without having it fails with a clear error', async () => {
+  const fs = storeFs({ s: { ...skill(), mine: true } });
+  const { runner, py } = load({ skillsFs: fs });
+  py.script = (FS) => { FS.mkdirTree('/skills-root/new'); FS.writeFile('/skills-root/new/SKILL.md', enc('x')); };
+  const r = await runner.runSkillScript({ dirName: 's', script: 'scripts/a.py' });
+  assert.equal(r.exitCode, 1);
+  assert.match(r.stderr, /This skill wrote to the skills folder, which is not available for it here\./);
+  // Nothing is left behind for the next run.
+  py.script = null;
+  assert.equal((await runner.runSkillScript({ dirName: 's', script: 'scripts/a.py' })).exitCode, 0);
+});
+
+test('poolSkillPayload as the robot refuses a private skill; savePoolChanges skips robot runs and others\' skills', async () => {
+  const fs = storeFs({ priv: { ...skill(), mine: true }, theirs: { ...skill(), public: true } });
+  const { runner } = load({ skillsFs: fs });
+  await assert.rejects(runner.poolSkillPayload('priv', { asRobot: true }), /not available to the robot/);
+  await runner.savePoolChanges('priv', { 'a.txt': enc('1') }, { asRobot: true });
+  await runner.savePoolChanges('theirs', { 'a.txt': enc('1') });
+  assert.deepEqual(fs.writes, []);
+  await runner.savePoolChanges('priv', { 'a.txt': enc('1') });
+  assert.deepEqual(fs.writes, [['priv', 'a.txt']]);
+});
+
+const WORKER = readFileSync(fileURLToPath(new URL('../assets/js/pyodide.worker.js', import.meta.url)), 'utf8');
+
+/** Run the pool worker in a vm: returns call(payload) → the worker's reply for verb runSkillScript. */
+function loadWorker() {
+  const py = fakePyodide();
+  const replies = [];
+  const self = { location: 'http://x/gpt/assets/js/pyodide.worker.js', postMessage: (m) => replies.push(m) };
+  const ctx = vm.createContext({ self, importScripts: () => {}, loadPyodide: async () => py, console, URL, TextEncoder, TextDecoder, Uint8Array, Date });
+  vm.runInContext(WORKER, ctx);
+  let id = 0;
+  const call = async (payload) => {
+    const myId = ++id;
+    await self.onmessage({ data: { id: myId, verb: 'runSkillScript', payload } });
+    return replies.find((r) => r.id === myId);
+  };
+  return { py, call };
+}
+
+test('worker (store): clears the previous copy, returns the skill changes, fails on /skills-root writes', async () => {
+  const { py, call } = loadWorker();
+  const base = { dirName: 's', script: 'scripts/a.py', argv: [], outputsHandle: okHandle, persist: false };
+  // First copy has an extra file; the second copy must not keep it.
+  await call({ ...base, skillFiles: { 'scripts/a.py': enc('1'), 'old.txt': enc('o') } });
+  py.script = (FS) => FS.writeFile('/skill/s/new.txt', enc('n'));
+  const r = await call({ ...base, skillFiles: { 'scripts/a.py': enc('1') } });
+  assert.equal(r.ok, true);
+  assert.equal(py.files.has('/skill/s/old.txt'), false);
+  assert.deepEqual(Object.keys(r.result.skillChanges), ['new.txt']);
+  py.script = (FS) => FS.writeFile('/skills-root/x/SKILL.md', enc('x'));
+  const bad = await call({ ...base, skillFiles: { 'scripts/a.py': enc('1') } });
+  assert.equal(bad.result.exitCode, 1);
+  assert.match(bad.result.stderr, /This skill wrote to the skills folder, which is not available for it here\./);
+  assert.equal(py.files.has('/skills-root/x/SKILL.md'), false);
 });

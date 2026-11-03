@@ -482,19 +482,18 @@
 
     const DEC = new TextDecoder();
 
-    /**
-     * The run folders under the skill's <sub>/ (body-opt-results, desc-opt-results), read through
-     * skillsFs (folder or skill store): { '<run>': { '<path in run>': bytes } }.
-     */
-    async function readRuns(sub) {
-        const files = await window.skillsFs.readSkillFiles(state.skill.dir_name, { under: sub });
-        const runs = {};
-        for (const [rel, bytes] of Object.entries(files)) {
-            const [, run, ...rest] = rel.split('/');
-            if (!run || !rest.length) continue;
-            (runs[run] = runs[run] || {})[rest.join('/')] = bytes;
-        }
-        return runs;
+    /** Run folder names under the skill's <sub>/ (body-opt-results, desc-opt-results), through skillsFs. */
+    function listRuns(sub) {
+        return window.skillsFs.listSkillFolders(state.skill.dir_name, sub);
+    }
+
+    /** One run's files, keyed by their path inside the run: { 'logs/00-baseline.json': bytes, ... }. */
+    async function readRun(sub, name) {
+        const prefix = `${sub}/${name}/`;
+        const files = await window.skillsFs.readSkillFiles(state.skill.dir_name, { under: `${sub}/${name}` });
+        const out = {};
+        for (const [rel, bytes] of Object.entries(files)) out[rel.slice(prefix.length)] = bytes;
+        return out;
     }
 
     /**
@@ -509,11 +508,12 @@
         const parts = state.resultsDir.split('/').filter(Boolean);  // ["skill","<dir>","body-opt-results"]
         if (parts[0] !== 'skill') return;
         const subPath = parts.slice(2).join('/');                    // "body-opt-results"
-        const runs = await readRuns(subPath);
-        // Newest run folder (body-loop_*_<timestamp>)
-        const newestName = Object.keys(runs).sort().pop() || '';
+        // Skill store: the run's files reach the store when the run ends, so polling meanwhile reads nothing new.
+        if (state.running && await window.skillsFs.mode() === 'volume') return;
+        // Newest run folder (body-loop_*_<timestamp>); only its files are read.
+        const newestName = (await listRuns(subPath)).pop() || '';
         if (!newestName) { state.lastSnapshot = { phase: 'starting' }; return; }
-        const newest = runs[newestName];   // { 'logs/00-baseline.json': bytes, 'results.json': bytes, ... }
+        const newest = await readRun(subPath, newestName);   // { 'logs/00-baseline.json': bytes, 'results.json': bytes, ... }
         // Read logs/*.json + (if present) results.json
         const snap = { runDir: newestName, iterations: [] };
         for (const [rel, bytes] of Object.entries(newest)) {
@@ -633,8 +633,8 @@
         // List both desc-opt-results/ and body-opt-results/ if present.
         const runs = [];
         for (const sub of ['body-opt-results', 'desc-opt-results']) {
-            const found = await readRuns(sub).catch(() => ({}));
-            for (const name of Object.keys(found)) runs.push({ sub, name });
+            const found = await listRuns(sub).catch(() => []);
+            for (const name of found) runs.push({ sub, name });
         }
         runs.sort((a, b) => b.name.localeCompare(a.name));
 
@@ -684,8 +684,8 @@
         const detail = document.querySelector('#so-run-detail');
         if (!detail) return;
         detail.innerHTML = `<div class="text-xs text-gray-500">Loading ${escapeHtml(name)}…</div>`;
-        const run = (await readRuns(sub).catch(() => ({})))[name];
-        if (!run) { detail.innerHTML = `<div class="text-xs text-red-600">Run dir not found.</div>`; return; }
+        const run = await readRun(sub, name).catch(() => null);
+        if (!run || !Object.keys(run).length) { detail.innerHTML = `<div class="text-xs text-red-600">Run dir not found.</div>`; return; }
         let results = null;
         try { if (run['results.json']) results = JSON.parse(DEC.decode(run['results.json'])); } catch {}
         if (!results) {

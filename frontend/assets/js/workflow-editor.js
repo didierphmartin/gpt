@@ -15106,9 +15106,12 @@ class WorkflowEditor {
 
     async _runSkillPooledOrMain(req) {
         req = this._timestampOutputPaths(req);
+        // A robot-owned workflow runs its skills as the robot sees them (skill store: public only in corporate,
+        // no write-back) — whichever skill the node calls, not only its bound one.
+        req = { ...req, asRobot: !!this.currentWorkflowIsRobot };
         try {
             let fetchesUrls = false;
-            try { fetchesUrls = await window.pyodideRunner.getSkillFetchesUrls(req.dirName); } catch (_) {}
+            try { fetchesUrls = await window.pyodideRunner.getSkillFetchesUrls(req.dirName, { asRobot: req.asRobot }); } catch (_) {}
             if (!fetchesUrls && typeof Worker !== 'undefined' && window.PyodideWorkerPool && window.localFs) {
                 if (!this._pyodidePool) this._pyodidePool = this._makePyodidePool();
                 return await this._runViaPool(req);
@@ -15125,7 +15128,7 @@ class WorkflowEditor {
         return new window.PyodideWorkerPool({
             workerFactory: () => {
                 const wid = ++workerN;
-                const w = new Worker('assets/js/pyodide.worker.js?v=20261103-skillstore');
+                const w = new Worker('assets/js/pyodide.worker.js?v=20261103-skillsfs-fix1');
                 console.log(`[wf-pool] spawned worker w${wid} (each worker loads its own Pyodide — first use is a cold start)`);
                 let seq = 0;
                 const pending = new Map();
@@ -15168,7 +15171,7 @@ class WorkflowEditor {
             return this._poolHandleCache.get(path);
         };
         // The skill side (folder handle or the store's files, deps, bundled wheels) reads through skillsFs.
-        const skill = await window.pyodideRunner.poolSkillPayload(req.dirName);
+        const skill = await window.pyodideRunner.poolSkillPayload(req.dirName, { asRobot: !!req.asRobot });
         const outputsHandle = await resolveCached('outputs', { create: true });
         if (!outputsHandle) throw new Error('could not resolve outputs handle for pool path');
         if ((await outputsHandle.queryPermission({ mode: 'readwrite' })) !== 'granted') {
@@ -15181,6 +15184,12 @@ class WorkflowEditor {
             ...req, ...skill, authToken, outputsHandle, prefetched: [],
         }]);
         if (!r || !r.ok) throw new Error(r ? r.error : 'pool returned no result');
+        // Skill store: what the script changed in its skill folder goes back (own skills, not on robot runs).
+        if (r.result?.skillChanges) {
+            const { skillChanges, ...result } = r.result;
+            await window.pyodideRunner.savePoolChanges(skill.dirName, skillChanges, { asRobot: !!req.asRobot });
+            return result;
+        }
         return r.result;
     }
 
@@ -15931,7 +15940,7 @@ class WorkflowEditor {
     _codeWorkerJob(verb, payload, limitMs, timeoutMsg) {
         const runOne = () => {
             const cold = !this._codeWorker || !this._codeWorkerWarm;
-            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261103-skillstore');
+            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261103-skillsfs-fix1');
             const w = this._codeWorker;
             const id = (this._codeSeq = (this._codeSeq || 0) + 1);
             const limit = limitMs + (cold ? 90000 : 0);

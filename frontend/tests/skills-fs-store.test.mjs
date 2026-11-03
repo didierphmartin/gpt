@@ -214,7 +214,23 @@ test('store: getSkillContent / listSkillScripts read as the robot when asked', a
   assert.equal(await fs.getSkillContent('s', { asRobot: true }), 'B');
   assert.deepEqual([...await fs.listSkillScripts('s', { asRobot: true })], ['scripts/a.py']);
   assert.ok(calls.some((c) => c.path === '/skills/file?path=s&rel=SKILL.md&as=robot'));
-  assert.ok(calls.some((c) => c.path === '/skills/files?path=s&as=robot'));
+  assert.ok(calls.some((c) => c.path === '/skills/files?path=s&as=robot&wheels=0'));
+});
+
+test('store: readSkillFiles asks the server to leave wheels out unless they are wanted', async () => {
+  const { fs, calls } = load({ routes: { ...volume, 'GET /skills/files': () => [200, { files: {} }] } });
+  await fs.readSkillFiles('s');
+  await fs.readSkillFiles('s', { withWheels: true });
+  assert.deepEqual(calls.filter((c) => c.key === 'GET /skills/files').map((c) => c.path), ['/skills/files?path=s&wheels=0', '/skills/files?path=s']);
+});
+
+test('listSkillFolders: folder lists directories without reading files; the store derives them', async () => {
+  const runs = fakeDir({ 'run-1': { 'r.json': '1' }, 'run-2': {}, 'note.txt': 'x' }, 'body-opt-results');
+  const localFs = { resolvePath: async (p) => (p === 'skills/s/body-opt-results' ? runs : null) };
+  assert.deepEqual([...await load({ localFs }).fs.listSkillFolders('s', 'body-opt-results')], ['run-1', 'run-2']);
+  const files = { 'body-opt-results/run-1/r.json': b64('1'), 'body-opt-results/run-3/logs/a.json': b64('2'), 'SKILL.md': b64('x') };
+  const v = load({ routes: { ...volume, 'GET /skills/files': () => [200, { files }] } });
+  assert.deepEqual([...await v.fs.listSkillFolders('s', 'body-opt-results')], ['run-1', 'run-3']);
 });
 
 test('store writeSkillFiles: a new skill is imported private, my existing one is written file by file', async () => {
