@@ -536,6 +536,7 @@
             let read;
             try { read = readPackageSkill(pkg, dir); } catch (e) { r.status = 'attention'; r.reasons.push('unreadable'); rows.push(r); continue; }
             r.status = classify('skill', { dir, hash: await filesHash(read.files) }, h.skills).status;
+            r.requires = (read.requires || []).map((x) => x.dir);   // the skills it needs, carried in its zip
             rows.push(r);
         }
 
@@ -623,7 +624,8 @@
      * io (paths relative to the user's folder; writeFile creates parent folders):
      *   exists(path) -> boolean, ensureDir(path), writeFile(path, Uint8Array), readJson(path) -> obj|undefined, writeJson(path, obj),
      *   addServer({name,url,description,transport,is_mock,headers}) -> {id}, createPlaybook({pkey,title,text}) -> {id},
-     *   importComponents(bundle, nodes) -> nodes, importSkill(read, {visibility}) -> {status} (throws .code 'clash').
+     *   importComponents(bundle, nodes) -> nodes, importSkill(read, {visibility}) -> {status, requires?} (throws .code 'clash'),
+     *   checkSkill(read) -> [{dir, name, status}] (optional: skillsFs.importPlan; a 'clash' refuses before any write).
      * Skipped rows do nothing; use-existing / present rows write nothing but lend their existing id
      * (from `have`) to the re-link. Refuses (writing nothing) while a review item is unresolved or when a
      * skill folder, server folder or playbook file to install already exists, or when a path to write would leave its
@@ -706,6 +708,14 @@
         const taken = [];
         for (const t of targets) if (await step(`check ${t}`, () => io.exists(t))) taken.push(t);
         if (taken.length) throw new Error('install refused: would overwrite ' + taken.join(', '));
+        // Skills (and the skills each requires): a different skill already there under any of their names stops it all.
+        if (typeof io.checkSkill === 'function') {
+            for (const { read } of plan.skills) {
+                if (!read) continue;
+                const hit = ((await step(`check skill ${read.dir}`, () => io.checkSkill(read))) || []).find((x) => x.status === 'clash');
+                if (hit) throw new Error(`install refused: a different skill named ${hit.name || hit.dir} is already installed`);
+            }
+        }
 
         for (const dir of WRITE_ROOTS.filter((d) => !(h.host && d === 'mcps'))) await step(`create folder ${dir}`, () => io.ensureDir(guard(dir, dir)));
 
@@ -713,6 +723,9 @@
         for (const { r, dest, read } of plan.skills) {
             if (typeof io.importSkill !== 'function') throw new Error('install refused: no skill installer');
             const res = await step(`install skill ${r.name}`, () => io.importSkill(read, { visibility: 'private' }));
+            for (const q of (res && res.requires) || []) {
+                installed.push({ kind: 'skill', name: q.dir, destination: `skills/${q.dir}`, requiredBy: r.name, ...(q.status === 'identical' ? { alreadyInstalled: true } : {}) });
+            }
             installed.push({ kind: 'skill', name: r.name, destination: dest, ...(res && res.status === 'identical' ? { alreadyInstalled: true } : {}) });
         }
 

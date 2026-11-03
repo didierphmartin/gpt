@@ -823,8 +823,32 @@
         return { ok: true };
     }
 
-    /** Install a SkillZip.read() result. Throws an Error with .code = 'clash' when a different skill is there. */
-    async function importSkill(read, { visibility = 'private' } = {}) {
+    const clashError = (read) => Object.assign(new Error(`A different skill named "${read.name || read.dir}" already exists.`), { code: 'clash', skill: read.name || read.dir });
+    const sameBytes = (a, b) => a && a.length === b.length && a.every((v, i) => v === b[i]);
+
+    /** What installing this one skill would do, writing nothing: 'new' | 'identical' | 'clash'. */
+    async function skillStatus(read, { visibility = 'private' } = {}) {
+        const all = window.SkillZip.toStoreFiles(read);
+        if (await mode() === 'volume') {
+            const files = {};
+            for (const [rel, b] of Object.entries(all)) if (!rel.startsWith('.wheels/')) files[rel] = toB64(asBytes(b));
+            try {
+                const r = await api('POST', '/skills/import', { path: read.dir, visibility, files, dry_run: true });
+                return r && r.status === 'identical' ? 'identical' : 'new';
+            } catch (e) {
+                if (e.status === 409) return 'clash';
+                throw e;
+            }
+        }
+        const existing = await readSkillFiles(read.dir);
+        if (!Object.keys(existing).length) return 'new';
+        const incoming = Object.keys(all).filter((r) => !r.startsWith('.wheels/'));
+        const same = incoming.length === Object.keys(existing).length && incoming.every((r) => sameBytes(existing[r], asBytes(all[r])));
+        return same ? 'identical' : 'clash';
+    }
+
+    /** Install one skill (no required skills). Throws .code 'clash' when a different skill is there. */
+    async function importOne(read, { visibility = 'private' } = {}) {
         const all = window.SkillZip.toStoreFiles(read);
         if (await mode() === 'volume') {
             const files = {};
@@ -832,28 +856,46 @@
             try {
                 return await api('POST', '/skills/import', { path: read.dir, visibility, files });
             } catch (e) {
-                if (e.status === 409) {
-                    const err = new Error('A different skill with this name already exists.');
-                    err.code = 'clash';
-                    throw err;
-                }
+                if (e.status === 409) throw clashError(read);
                 throw e;
             }
         }
-        const existing = await readSkillFiles(read.dir);
-        if (Object.keys(existing).length) {
-            const incoming = Object.keys(all).filter((r) => !r.startsWith('.wheels/'));
-            const same = incoming.length === Object.keys(existing).length && incoming.every((r) => {
-                const a = existing[r], b = asBytes(all[r]);
-                return a && a.length === b.length && a.every((v, i) => v === b[i]);
-            });
-            if (same) return { status: 'identical' };
-            const err = new Error('A different skill with this name already exists.');
-            err.code = 'clash';
-            throw err;
-        }
+        const st = await skillStatus(read);
+        if (st === 'identical') return { status: 'identical' };
+        if (st === 'clash') throw clashError(read);
         for (const [rel, b] of Object.entries(all)) await writeLocalFile(`${read.dir}/${rel}`, b);
         return { status: 'installed' };
+    }
+
+    /**
+     * What importing a read (and the skills it requires, read.requires) would do, writing nothing:
+     * [{ dir, name, status: 'new'|'identical'|'clash' }], required skills first, the read itself last.
+     */
+    async function importPlan(read, opts = {}) {
+        const out = [];
+        for (const r of [...(read.requires || []), read]) out.push({ dir: r.dir, name: r.name || r.dir.split('/').pop(), status: await skillStatus(r, opts) });
+        return out;
+    }
+
+    /**
+     * Install a SkillZip.read() result and the skills it requires (read.requires), all with the same visibility.
+     * Every skill is checked before anything is written: a clash in any of them throws (.code 'clash', .skill)
+     * and writes nothing. Required skills install first; an identical one is already installed.
+     * Returns { status, requires: [{ dir, name, status }] } ('installed' | 'identical').
+     */
+    async function importSkill(read, opts = {}) {
+        const reqs = read.requires || [];
+        if (!reqs.length) return importOne(read, opts);
+        const plan = await importPlan(read, opts);
+        const clash = plan.find((x) => x.status === 'clash');
+        if (clash) throw clashError(clash);
+        const requires = [];
+        for (let i = 0; i < reqs.length; i++) {
+            const res = plan[i].status === 'identical' ? { status: 'identical' } : await importOne(reqs[i], opts);
+            requires.push({ dir: reqs[i].dir, name: plan[i].name, status: (res && res.status) || 'installed' });
+        }
+        const main = await importOne(read, opts);
+        return { ...main, requires };
     }
 
     async function setVisibility(path, visibility) {
@@ -945,6 +987,7 @@
         folderHandle,
         listSkillFolders,
         importSkill,
+        importPlan,
         setVisibility,
         skillsRootFiles,
         writeSkillsRoot,

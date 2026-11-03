@@ -109,7 +109,8 @@
     }
 
     /**
-     * Put each bound skill into `files` as skills/<dir>.skill.zip (folder + libraries gathered fresh).
+     * Put each bound skill into `files` as skills/<dir>.skill.zip (folder + libraries gathered fresh, plus the
+     * skills it requires, each with its own libraries).
      * Throws naming the node and the skill when one is missing or unreadable, and the library/platform message
      * when its libraries cannot be gathered. Returns the dirs bundled.
      */
@@ -126,15 +127,20 @@
             const found = window.skillsImport.filterSkillFiles(await window.skillsFs.readSkillFiles(dir));
             if (!found['SKILL.md']) throw new Error(t('errSkillMissing', { node: nodeLabel(dir), name: dir }));
             if (onProgress) onProgress(t('progressSkill', { name: dir, done: out.length + 1, total: dirs.length }));
-            let wheels = { pyodide: {}, native: {} };
-            const wheelDeps = window.SkillZip.skillDependencies(new TextDecoder().decode(found['SKILL.md']));
-            if (wheelDeps.length) {
-                try { wheels = await window.SkillWheels.gather(wheelDeps, { session: wheelSession }); }
-                catch (e) { console.error('[workflow-package] gathering wheels failed:', e); throw new Error(window.skillsImport.wheelsError(e)); }
+            // The skills it requires travel inside its zip (a required skill that is not installed stops the export).
+            const requires = window.skillsImport.readRequires ? await window.skillsImport.readRequires(dir, found) : [];
+            const skills = [{ dir, name: dir.split('/').pop(), files: found }, ...requires];
+            const withWheels = [];
+            for (const sk of skills) {
+                let wheels = { pyodide: {}, native: {} };
+                const wheelDeps = window.SkillZip.skillDependencies(new TextDecoder().decode(sk.files['SKILL.md'] || new Uint8Array()));
+                if (wheelDeps.length) {
+                    try { wheels = await window.SkillWheels.gather(wheelDeps, { session: wheelSession }); }
+                    catch (e) { console.error('[workflow-package] gathering wheels failed:', e); throw new Error(window.skillsImport.wheelsError(e)); }
+                }
+                withWheels.push({ ...sk, pyodideWheels: wheels.pyodide, nativeWheels: wheels.native });
             }
-            files[WP().skillZipPath(dir)] = await window.SkillZip.build({
-                dir, name: dir.split('/').pop(), files: found, pyodideWheels: wheels.pyodide, nativeWheels: wheels.native,
-            });
+            files[WP().skillZipPath(dir)] = await window.SkillZip.build({ ...withWheels[0], requires: withWheels.slice(1) });
             out.push(dir);
         }
         return out;

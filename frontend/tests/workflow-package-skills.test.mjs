@@ -82,3 +82,30 @@ test('a zip naming another folder is unreadable', async () => {
     assert.equal(rows[0].status, 'attention');
     assert.ok(rows[0].reasons.includes('unreadable'));
 });
+
+async function packageWithRequired() {
+    const z = await SkillZip.build({ dir: 'auto', name: 'auto', files: { 'SKILL.md': md }, requires: [{ dir: 'flow', name: 'flow', files: { 'SKILL.md': md } }] }, { fflate });
+    const manifest = WP.buildManifest({ workflowName: 'w', skills: ['auto'], deps: {} });
+    return WP.readPackage({ 'manifest.json': enc.encode(JSON.stringify(manifest)), 'skills/auto.skill.zip': z });
+}
+
+test('a bound skill\'s required skills: listed on its review row, carried to importSkill, reported as installed', async () => {
+    const pkg = await packageWithRequired();
+    const rows = await WP.reviewRows(pkg, { skills: [] });
+    assert.deepEqual(rows[0].requires, ['flow']);
+    let got;
+    const res = await WP.installPackage(rows, pkg, {}, { ...noop, importSkill: async (r) => { got = r; return { status: 'installed', requires: [{ dir: 'flow', name: 'flow', status: 'identical' }] }; } }, {});
+    assert.deepEqual(got.requires.map((r) => r.dir), ['flow']);
+    assert.deepEqual(res.installed.map((x) => [x.name, !!x.alreadyInstalled]), [['flow', true], ['auto', false]]);
+});
+
+test('a clash in any package skill (required ones included) is found before anything is written', async () => {
+    const pkg = await packageWithRequired();
+    const rows = await WP.reviewRows(pkg, { skills: [] });
+    let imported = 0, dirs = 0;
+    const io = { ...noop, ensureDir: async () => { dirs++; }, importSkill: async () => { imported++; return { status: 'installed' }; },
+        checkSkill: async (read) => (read.requires || []).map((r) => ({ dir: r.dir, name: r.name, status: 'clash' })) };
+    await assert.rejects(WP.installPackage(rows, pkg, {}, io, {}), /install refused: a different skill named flow is already installed/);
+    assert.equal(imported, 0);
+    assert.equal(dirs, 0);
+});

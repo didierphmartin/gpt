@@ -84,8 +84,9 @@
     }
 
     /**
-     * Install a read result through skillsFs.importSkill. visibility only matters in the corporate edition.
-     * Returns { ok, name, status: 'installed'|'identical', fileCount } or { ok: false, error }.
+     * Install a read result (and the skills it requires) through skillsFs.importSkill. visibility only matters in
+     * the corporate edition. A clash in any of them installs nothing; the error names that skill.
+     * Returns { ok, name, status: 'installed'|'identical', fileCount, requires: [{ dir, name, status }] } or { ok: false, error }.
      * 'identical' (also an identical public copy someone else owns) counts as already installed.
      */
     async function installRead(read, { visibility = 'private' } = {}) {
@@ -94,10 +95,11 @@
             return { ok: false, error: 'Local filesystem not available — pick your data folder in Settings first.' };
         }
         try {
+            // Required skills (read.requires) are checked with it and installed first, same visibility (skillsFs).
             const r = await window.skillsFs.importSkill(read, { visibility });
-            return { ok: true, name: read.name, status: (r && r.status) || 'installed', fileCount: Object.keys(read.files).length };
+            return { ok: true, name: read.name, status: (r && r.status) || 'installed', fileCount: Object.keys(read.files).length, requires: (r && r.requires) || [] };
         } catch (e) {
-            if (e?.code === 'clash') return { ok: false, error: tr('skills.zip.clash', { name: read.name }) };
+            if (e?.code === 'clash') return { ok: false, error: tr('skills.zip.clash', { name: e.skill || read.name }) };
             console.error('[skillsImport] install failed:', e);
             return { ok: false, error: tr('skills.zip.failed', { message: e?.message || e }) };
         }
@@ -314,29 +316,65 @@
 
     const isCompiled = (rel) => rel.split('/').some((seg) => seg === '__pycache__') || rel.endsWith('.pyc');
 
+    /** One skill's files for a zip: the export filter, no bytecode; null when there is nothing (not installed / not visible). */
+    async function zipFiles(dirName) {
+        const found = filterSkillFiles(window.skillsFs ? await window.skillsFs.readSkillFiles(dirName) : {});
+        for (const rel of Object.keys(found)) if (isCompiled(rel)) delete found[rel];
+        return Object.keys(found).length ? found : null;
+    }
+
     /**
-     * Export: a self-contained zip (SkillZip format): the skill, plus - when SKILL.md declares dependencies -
-     * the Pyodide and native wheels they need (the one online step). Junk, dotfiles, __pycache__ and *.pyc are left out.
+     * The skills dirName requires (SkillRequires closure over the installed skills, dependencies first), each
+     * read for a zip: [{ dir, name, files }]. files: dirName's own files (already read).
+     * Throws a translated Error (.code 'missing-skill', .skill) when a required skill is not installed.
+     */
+    async function readRequires(dirName, files) {
+        if (!window.SkillRequires || !window.skillsFs) return [];
+        const installed = (await window.skillsFs.listSkills()).map((s) => s.dirName);
+        const cache = new Map([[dirName, files]]);
+        const read = async (p) => { if (!cache.has(p)) cache.set(p, await zipFiles(p)); return cache.get(p); };
+        const r = await window.SkillRequires.closure(dirName, installed, read);
+        if (r.missing.length) {
+            const e = window.SkillRequires.missingError(r.missing);
+            throw Object.assign(new Error(tr('skills.zip.requiresMissing', { by: e.by || dirName, name: e.skill })), { code: e.code, skill: e.skill, by: e.by });
+        }
+        return r.requires.map((p) => ({ dir: p, name: p.split('/').pop(), files: cache.get(p) }));
+    }
+
+    /** A skill ({ dir, name, files }) with the wheels its SKILL.md dependencies need (gathered online). */
+    async function withWheels(skill, opts) {
+        const md = skill.files['SKILL.md'] ? new TextDecoder().decode(skill.files['SKILL.md']) : '';
+        const w = await window.SkillWheels.gather(window.SkillZip.skillDependencies(md), opts || {});
+        return { ...skill, pyodideWheels: w.pyodide, nativeWheels: w.native };
+    }
+
+    /**
+     * Export: a self-contained zip (SkillZip format): the skill and every skill it requires (skill-requires.js),
+     * each with the Pyodide and native wheels its SKILL.md dependencies need (the one online step).
+     * Junk, dotfiles, __pycache__ and *.pyc are left out.
      * onProgress(stage): 'native' | 'pyodide-load' | 'pyodide-install' | 'pack'.
-     * Returns { ok, name, bytes } or { ok: false, error } (error text is translated, naming library + platform on a 422).
+     * Returns { ok, name, bytes, requires: [dir] } or { ok: false, error } (error text is translated, naming
+     * library + platform on a 422, or the required skill that is not installed).
      */
     async function exportSkillZip(dirName, { onProgress } = {}) {
         if (!window.SkillZip || !window.SkillWheels) return { ok: false, error: 'Zip library (fflate) is not loaded.' };
-        const found = filterSkillFiles(window.skillsFs ? await window.skillsFs.readSkillFiles(dirName) : {});
-        for (const rel of Object.keys(found)) if (isCompiled(rel)) delete found[rel];
-        if (!Object.keys(found).length) return { ok: false, error: `Skill folder "${dirName}" not found.` };
+        const found = await zipFiles(dirName);
+        if (!found) return { ok: false, error: `Skill folder "${dirName}" not found.` };
         const leaf = dirName.split('/').pop();
-        const md = found['SKILL.md'] ? new TextDecoder().decode(found['SKILL.md']) : '';
-        let wheels;
+        let requires;
+        try { requires = await readRequires(dirName, found); } catch (e) { return { ok: false, error: e.message }; }
+        const session = {};   // one export Pyodide for the skill and the skills it requires
+        let main;
         try {
-            wheels = await window.SkillWheels.gather(window.SkillZip.skillDependencies(md), { onProgress });
+            main = await withWheels({ dir: dirName, name: leaf, files: found }, { onProgress, session });
+            for (let i = 0; i < requires.length; i++) requires[i] = await withWheels(requires[i], { onProgress, session });
         } catch (e) {
             console.error('[skillsImport] gathering wheels failed:', e);
             return { ok: false, error: wheelsError(e) };
         }
         if (onProgress) onProgress('pack');
-        const bytes = await window.SkillZip.build({ dir: dirName, name: leaf, files: found, pyodideWheels: wheels.pyodide, nativeWheels: wheels.native });
-        return { ok: true, name: leaf, bytes };
+        const bytes = await window.SkillZip.build({ ...main, requires });
+        return { ok: true, name: leaf, bytes, requires: requires.map((r) => r.dir) };
     }
 
     function wheelsError(e) {
@@ -359,6 +397,8 @@
         importFromZipFile,    // exposed for drag-drop later
         readFromGitHub,
         exportSkillZip,
+        readRequires,
+        withWheels,
         readFolderFiles,
         filterSkillFiles,
     };

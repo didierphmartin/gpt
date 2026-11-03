@@ -94,15 +94,19 @@ final class SkillStore
         });
     }
 
-    /** @param array<string,string> $files rel => bytes @return array{status:string} */
-    public function import(int $userId, string $path, array $files, string $visibility = 'private'): array
+    /**
+     * @param array<string,string> $files rel => bytes
+     * @param bool $dryRun only say what the import would do: 'new' | 'identical', or the clash; nothing is written
+     * @return array{status:string}
+     */
+    public function import(int $userId, string $path, array $files, string $visibility = 'private', bool $dryRun = false): array
     {
         $this->checkPath($path);
         $this->checkVisibility($visibility);
         foreach (array_keys($files) as $rel) {
             $this->checkRel((string) $rel);
         }
-        return $this->locked(function () use ($userId, $path, $files, $visibility) {
+        return $this->locked(function () use ($userId, $path, $files, $visibility, $dryRun) {
             $index = $this->index();
             foreach ([$this->areaFor($userId, 'private'), 'public'] as $area) {
                 $e = $index["$area/$path"] ?? null;
@@ -125,6 +129,9 @@ final class SkillStore
             }
             $this->assertLeafFree($index, $userId, $path, true);
             $area = $this->areaFor($userId, $visibility);
+            if ($dryRun) {
+                return ['status' => 'new'];
+            }
             $dir = $this->dir($area, $path);
             $this->rmtree($dir); // a folder with no index entry has no owner: never merge into it
             $this->mkdir($dir);

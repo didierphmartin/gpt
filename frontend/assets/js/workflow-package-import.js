@@ -93,6 +93,7 @@
             },
             writeFile,
             importSkill: (read, o) => window.skillsFs.importSkill(read, o),
+            checkSkill: (read) => window.skillsFs.importPlan(read),
             async readJson(path) {
                 const fh = await fileHandle(path, false);
                 if (!fh) return undefined;
@@ -236,6 +237,9 @@
         const parts = [];
         if (reasons.length && !skipped) {
             parts.push(`<ul style="margin: 0 0 0 18px; color: #92400e; font-size: 13px;">${reasons.map((x) => `<li>${t(REASON_KEY[x])}</li>`).join('')}</ul>`);
+        }
+        if (r.kind === 'skill' && live && (r.requires || []).length) {
+            parts.push(`<div style="color: #475569; font-size: 13px;">${t('alsoInstalls', { list: r.requires.join(', ') })}</div>`);
         }
         if (r.status === 'clash') {
             parts.push(`<div style="display: flex; gap: 8px;">

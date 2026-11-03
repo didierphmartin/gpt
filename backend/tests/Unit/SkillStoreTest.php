@@ -122,6 +122,18 @@ final class SkillStoreTest extends TestCase
         $this->assertSame(['status' => 'identical'], $s->import(1, 'docx', $this->skill()));
     }
 
+    public function test_dry_run_import_reports_without_writing(): void
+    {
+        $s = $this->store();
+        $this->assertSame(['status' => 'new'], $s->import(1, 'docx', $this->skill(), 'private', true));
+        $this->assertSame([], $s->list(1));
+        $this->assertFileDoesNotExist($this->root . '/users/1/docx/SKILL.md');
+        $s->import(1, 'docx', $this->skill());
+        $this->assertSame(['status' => 'identical'], $s->import(1, 'docx', $this->skill(), 'private', true));
+        $this->expectException(SkillClashException::class);
+        $s->import(1, 'docx', $this->skill('docx', 'changed'), 'private', true);
+    }
+
     public function test_different_reimport_throws_clash(): void
     {
         $s = $this->store();

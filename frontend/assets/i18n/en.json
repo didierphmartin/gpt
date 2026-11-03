@@ -423,7 +423,8 @@
         "pack": "Writing the zip..."
       },
       "noFile": "No file selected — try again.",
-      "unreadable": "the file could not be read as a skill."
+      "unreadable": "the file could not be read as a skill.",
+      "requiresMissing": "{{by}} needs skill {{name}}, which is not installed."
     },
     "section": {
       "public": "Public",
@@ -467,7 +468,8 @@
     },
     "run": {
       "skillsRootUnavailable": "This skill wrote to the skills folder, which is not available for it here.",
-      "robotRefusal": "Skill \"{{name}}\" is not available to the robot: a robot workflow uses public skills only."
+      "robotRefusal": "Skill \"{{name}}\" is not available to the robot: a robot workflow uses public skills only.",
+      "skillsRootReadOnly": "This skill changed the skills folder, which is read-only on a robot run: the changes were not saved."
     },
     "bundle": {
       "unknownFiles": "This skill bundles files that are not Python packages for this Pyodide ({{version}}): {{files}}. Export the skill again."
@@ -487,7 +489,11 @@
       "destination": "Installs into",
       "destFolder": "your skills folder (skills/{{dir}})",
       "destStore": "this app's skill storage, as one of your skills",
-      "visibility": "Visibility"
+      "visibility": "Visibility",
+      "alsoInstalls": "Also installs",
+      "alreadyInstalled": "already installed",
+      "requiredClash": "a different skill with this name is installed",
+      "alsoInstalled": "Also installed: {{list}}."
     }
   },
   "fileStorage": {
@@ -1723,7 +1729,8 @@
       "copied": "Copied",
       "copyFailed": "Copy failed",
       "importFailed": "Package import failed: {{error}}",
-      "importStopped": "Import stopped: no SynergyAI folder selected."
+      "importStopped": "Import stopped: no SynergyAI folder selected.",
+      "alsoInstalls": "Also installs the skills it needs: {{list}}"
     }
   },
   "robot": {

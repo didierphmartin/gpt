@@ -270,3 +270,50 @@ test('the backend envelope { success, data } is unwrapped', async () => {
   assert.equal(await fs.edition(), 'individual');
   assert.deepEqual([...(await fs.listSkills()).map((s) => s.dirName)], ['a']);
 });
+
+const sk = (dir, text, requires) => ({ dir, name: dir.split('/').pop(), files: { 'SKILL.md': new TextEncoder().encode(text) }, pyodideWheels: {}, nativeWheels: {}, ...(requires ? { requires } : {}) });
+
+test('store importSkill with required skills: every skill is checked first; a clash in a required one writes nothing', async () => {
+  const posts = [];
+  const { fs } = load({ routes: { ...volume, 'POST /skills/import': (b) => {
+    posts.push(b);
+    if (b.path === 'flow') return [409, { data: { clash: 'different' } }];
+    return [200, { status: b.dry_run ? 'new' : 'installed' }];
+  } } });
+  const read = sk('auto', 'A', [sk('pb', 'P'), sk('flow', 'F')]);
+  await assert.rejects(() => fs.importSkill(read, { visibility: 'public' }), (e) => e.code === 'clash' && e.skill === 'flow');
+  assert.ok(posts.every((p) => p.dry_run === true), 'only dry runs before the clash');
+  assert.deepEqual(posts.map((p) => p.path), ['pb', 'flow', 'auto']);
+});
+
+test('store importSkill: required skills install first with the same visibility; an identical one counts as already installed', async () => {
+  const real = [];
+  const { fs } = load({ routes: { ...volume, 'POST /skills/import': (b) => {
+    if (!b.dry_run) real.push([b.path, b.visibility]);
+    return [200, { status: b.path === 'pb' ? 'identical' : (b.dry_run ? 'new' : 'installed') }];
+  } } });
+  const r = await fs.importSkill(sk('auto', 'A', [sk('pb', 'P'), sk('flow', 'F')]), { visibility: 'public' });
+  assert.equal(r.status, 'installed');
+  assert.deepEqual(JSON.parse(JSON.stringify(r.requires)), [{ dir: 'pb', name: 'pb', status: 'identical' }, { dir: 'flow', name: 'flow', status: 'installed' }]);
+  assert.deepEqual(real, [['flow', 'public'], ['auto', 'public']]);
+  const plan = await fs.importPlan(sk('auto', 'A', [sk('pb', 'P')]));
+  assert.deepEqual(JSON.parse(JSON.stringify(plan)), [{ dir: 'pb', name: 'pb', status: 'identical' }, { dir: 'auto', name: 'auto', status: 'new' }]);
+});
+
+test('folder importSkill with required skills: a clash in a required skill writes nothing; identical ones are kept', async () => {
+  const writes = [];
+  const tree = { pb: { 'SKILL.md': 'P' }, flow: { 'SKILL.md': 'other' } };
+  const sink = { async getFileHandle(n) { return { createWritable: async () => ({ write: async () => writes.push(n), close: async () => {} }) }; } };
+  const localFs = { resolvePath: async (p, o) => {
+    const d = p.replace(/^skills\/?/, '');
+    if (tree[d]) return writableDir(tree[d], d);
+    return o && o.create ? sink : null;
+  } };
+  const { fs } = load({ localFs });
+  await assert.rejects(() => fs.importSkill(sk('auto', 'A', [sk('pb', 'P'), sk('flow', 'F')])), (e) => e.code === 'clash' && e.skill === 'flow');
+  assert.equal(writes.length, 0);
+  delete tree.flow;
+  const r = await fs.importSkill(sk('auto', 'A', [sk('pb', 'P'), sk('flow', 'F')]));
+  assert.deepEqual(JSON.parse(JSON.stringify(r.requires.map((x) => x.status))), ['identical', 'installed']);
+  assert.equal(writes.length, 2);   // flow/SKILL.md and auto/SKILL.md
+});

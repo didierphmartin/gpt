@@ -939,7 +939,9 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
                 showStatus(result.error || 'Import failed.', 'error');
                 return;
             }
-            showStatus(`Imported "${result.name}" (${result.fileCount} file${result.fileCount === 1 ? '' : 's'}).`, 'ok');
+            const also = (result.requires || []).filter((r) => r.status === 'installed').map((r) => r.name || r.dir);
+            showStatus(`Imported "${result.name}" (${result.fileCount} file${result.fileCount === 1 ? '' : 's'}).`
+                + (also.length ? ' ' + this.t('skills.import.alsoInstalled', { list: also.join(', ') }) : ''), 'ok');
             // Refresh the tree so the new skill appears.
             this.loadTree();
             // Auto-close after a short read time.
@@ -1052,6 +1054,18 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         const destination = mode === 'folder'
             ? t('skills.import.destFolder', { dir: read.dir })
             : t('skills.import.destStore');
+        // The skills it requires come with it (skill zip): each marked when it is already installed.
+        let alsoInstalls = '';
+        if ((read.requires || []).length) {
+            let plan = [];
+            try { plan = window.skillsFs?.importPlan ? await window.skillsFs.importPlan(read) : []; } catch (e) { console.warn('[skillsImport] import plan failed:', e); }
+            const statusOf = (dir) => (plan.find((x) => x.dir === dir) || {}).status;
+            alsoInstalls = read.requires.map((r) => {
+                const st = statusOf(r.dir);
+                const note = st === 'identical' ? ` (${t('skills.import.alreadyInstalled')})` : st === 'clash' ? ` (${t('skills.import.requiredClash')})` : '';
+                return esc(r.name || r.dir) + esc(note);
+            }).join(', ');
+        }
 
         // The choices and any "Opening folder picker…" line belong to the step that is now over.
         modal.querySelector('#skills-import-choose')?.classList.add('hidden');
@@ -1071,6 +1085,7 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
                 ${row(t('skills.import.contents'), `${esc(t('skills.zip.files', { count: summary.total }))}, ${esc(sizeText(summary.bytes))}
                     <ul class="mt-1 space-y-0.5">${summary.groups.map((g) => `<li>${esc(groupText(g))}</li>`).join('')}</ul>`)}
                 ${row(t('skills.import.libraries'), esc(libraries))}
+                ${alsoInstalls ? row(t('skills.import.alsoInstalls'), alsoInstalls) : ''}
                 ${row(t('skills.import.destination'), esc(destination))}
                 ${edition === 'corporate' ? row(t('skills.import.visibility'), `
                     <span class="flex gap-4">

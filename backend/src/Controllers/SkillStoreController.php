@@ -110,7 +110,7 @@ final class SkillStoreController
             foreach ($in as $rel => $content) {
                 $files[(string) $rel] = self::decode($content);
             }
-            return $s->import(self::uid($request), (string) ($b['path'] ?? ''), $files, (string) ($b['visibility'] ?? 'private'));
+            return $s->import(self::uid($request), (string) ($b['path'] ?? ''), $files, (string) ($b['visibility'] ?? 'private'), ($b['dry_run'] ?? false) === true);
         });
     }
 

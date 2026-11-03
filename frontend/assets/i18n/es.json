@@ -423,7 +423,8 @@
         "pack": "Escribiendo el zip..."
       },
       "noFile": "No se seleccionó ningún archivo; inténtelo de nuevo.",
-      "unreadable": "el archivo no se pudo leer como una habilidad."
+      "unreadable": "el archivo no se pudo leer como una habilidad.",
+      "requiresMissing": "{{by}} necesita la habilidad {{name}}, que no está instalada."
     },
     "section": {
       "public": "Públicas",
@@ -467,7 +468,8 @@
     },
     "run": {
       "skillsRootUnavailable": "Esta habilidad escribió en la carpeta de habilidades, que no está disponible para ella aquí.",
-      "robotRefusal": "La habilidad \"{{name}}\" no está disponible para el robot: un flujo de trabajo de robot solo usa habilidades públicas."
+      "robotRefusal": "La habilidad \"{{name}}\" no está disponible para el robot: un flujo de trabajo de robot solo usa habilidades públicas.",
+      "skillsRootReadOnly": "Esta habilidad modificó la carpeta de habilidades, que es de solo lectura en una ejecución del robot: los cambios no se guardaron."
     },
     "bundle": {
       "unknownFiles": "Esta habilidad incluye archivos que no son paquetes de Python para este Pyodide ({{version}}): {{files}}. Exporte la habilidad de nuevo."
@@ -487,7 +489,11 @@
       "destination": "Se instala en",
       "destFolder": "tu carpeta de habilidades (skills/{{dir}})",
       "destStore": "el almacenamiento de habilidades de la aplicación, como una de tus habilidades",
-      "visibility": "Visibilidad"
+      "visibility": "Visibilidad",
+      "alsoInstalls": "También instala",
+      "alreadyInstalled": "ya instalada",
+      "requiredClash": "hay instalada otra habilidad con este nombre",
+      "alsoInstalled": "También se instaló: {{list}}."
     }
   },
   "fileStorage": {
@@ -1723,7 +1729,8 @@
       "copied": "Copiado",
       "copyFailed": "Error al copiar",
       "importFailed": "Error al importar el paquete: {{error}}",
-      "importStopped": "Importación detenida: no se seleccionó ninguna carpeta SynergyAI."
+      "importStopped": "Importación detenida: no se seleccionó ninguna carpeta SynergyAI.",
+      "alsoInstalls": "También instala las habilidades que necesita: {{list}}"
     }
   },
   "robot": {
