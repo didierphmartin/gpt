@@ -41,11 +41,12 @@ class ProcsTest(unittest.TestCase):
         self._d = tempfile.TemporaryDirectory()
         self.addCleanup(self._d.cleanup)
         self.root = Path(self._d.name)
-        for name in ("ok_server", "dies"):
+        for name in ("ok_server", "dies", "stubborn"):
             shutil.copytree(FIXTURES / name, self.root / name)
         self.reg = Registry(self.root)
         self.reg.add("ok_server", "OK", 1)     # port 9101
         self.reg.add("dies", "Dies", 1)
+        self.reg.add("stubborn", "Stubborn", 1)
         self.clock = FakeClock()
         self.m = Manager(self.root, self.reg, clock=self.clock)
         self.addCleanup(self.m.stop_all)
@@ -131,6 +132,26 @@ class ProcsTest(unittest.TestCase):
             self.m.tick()
         run_until_exit(self.m, "dies")
         self.assertTrue((self.root / "dies/server.log.1").exists())
+
+    def test_slow_stop_does_not_block_other_servers(self):
+        import threading
+        import mcphost.procs as procs
+        self.addCleanup(setattr, procs, "STOP_GRACE", procs.STOP_GRACE)
+        procs.STOP_GRACE = 3
+        self.m.start("stubborn")
+        self.m.start("ok_server")
+        wait_until(lambda: "ready" in self.m.log_tail("stubborn"))
+        t = threading.Thread(target=self.m.stop, args=("stubborn",))
+        t.start()
+        time.sleep(0.3)
+        self.assertTrue(t.is_alive())      # still waiting out the grace period
+        t0 = time.monotonic()
+        self.m.tick()
+        self.assertEqual(self.m.state("ok_server"), "running")
+        self.assertIsNone(self.m.next_start("ok_server"))
+        self.assertLess(time.monotonic() - t0, 1.0)
+        t.join(10)
+        self.assertEqual(self.m.state("stubborn"), "stopped")
 
     def test_missing_start_is_crashed(self):
         (self.root / "dies/synergyai-mcp.json").write_text("{}")

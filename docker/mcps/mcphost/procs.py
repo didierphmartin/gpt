@@ -11,7 +11,7 @@ from pathlib import Path
 from . import envfile
 
 BACKOFF_START = 1
-BACKOFF_MAX = 300
+BACKOFF_MAX = 300   # cap kept per spec, though MAX_FAILURES gives up after delays of 1+2+4+8 s
 BACKOFF_RESET_AFTER = 600
 MAX_FAILURES = 5
 STOP_GRACE = 10
@@ -60,10 +60,11 @@ class Manager:
         self._wanted = set()    # folders that should be running (started, not stopped, not crashed)
         self._crashed = set()
         self._pumps = {}
+        self._guards = {}       # folder -> lock serialising its start/stop
 
     # ---- public ----
     def start(self, folder: str) -> None:
-        with self._lock:
+        with self._guard(folder), self._lock:
             if self._alive(folder):
                 return
             self._failures[folder] = 0
@@ -73,16 +74,15 @@ class Manager:
             self._spawn(folder)
 
     def stop(self, folder: str) -> None:
-        with self._lock:
-            self._wanted.discard(folder)
-            self._crashed.discard(folder)
-            self._next_start.pop(folder, None)
-            self._terminate(folder)
+        # the global lock covers bookkeeping only; signalling and waiting happen outside it
+        with self._guard(folder):
+            with self._lock:
+                victim = self._detach(folder)
+            self._kill([victim])
 
     def restart(self, folder: str) -> None:
-        with self._lock:
-            self.stop(folder)
-            self.start(folder)
+        self.stop(folder)
+        self.start(folder)
 
     def state(self, folder: str) -> str:
         with self._lock:
@@ -123,8 +123,8 @@ class Manager:
 
     def stop_all(self) -> None:
         with self._lock:
-            for folder in list(self._procs):
-                self.stop(folder)
+            victims = [self._detach(f) for f in list(self._procs)]
+        self._kill(victims)
 
     # ---- internals ----
     def _alive(self, folder: str) -> bool:
@@ -195,25 +195,38 @@ class Manager:
             log.write(line.decode("utf-8", "replace"))
         proc.stdout.close()
 
-    def _terminate(self, folder: str) -> None:
-        proc = self._procs.get(folder)
-        if proc is None:
-            return
-        if proc.poll() is None:
-            self._signal(proc, signal.SIGTERM)
+    def _guard(self, folder: str):
+        """Per-folder lock so a start never races a stop of the same server."""
+        with self._lock:
+            return self._guards.setdefault(folder, threading.Lock())
+
+    def _detach(self, folder: str):
+        """Forget the folder's process (caller holds the lock); returns (proc, pump) to kill outside it."""
+        self._wanted.discard(folder)
+        self._crashed.discard(folder)
+        self._next_start.pop(folder, None)
+        return self._procs.pop(folder, None), self._pumps.pop(folder, None)
+
+    @classmethod
+    def _kill(cls, victims: list) -> None:
+        """SIGTERM every group first, then wait out the grace period once, SIGKILL stragglers, join pumps."""
+        live = [p for p, _ in victims if p is not None and p.poll() is None]
+        for p in live:
+            cls._signal(p, signal.SIGTERM)
+        deadline = time.monotonic() + STOP_GRACE
+        for p in live:
             try:
-                proc.wait(STOP_GRACE)
+                p.wait(max(0.0, deadline - time.monotonic()))
             except subprocess.TimeoutExpired:
-                self._signal(proc, signal.SIGKILL)
-                proc.wait()
-        else:
-            self._signal(proc, signal.SIGKILL)   # leftovers of its process group
-        t = self._pumps.pop(folder, None)
-        if t is not None:
-            t.join(2)
+                cls._signal(p, signal.SIGKILL)
+                p.wait()
+        for _, t in victims:
+            if t is not None:
+                t.join(2)
 
     @staticmethod
     def _signal(proc, sig) -> None:
+        # only for a child not yet reaped: after reaping its pid (= group id) may belong to someone else
         try:
             os.killpg(proc.pid, sig)
         except (ProcessLookupError, PermissionError):
