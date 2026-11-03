@@ -83,3 +83,11 @@ test('only exact quoted literals or /leaf/ segments count: "text/html", "docx/" 
     const ok = { 'scripts/a.py': enc("FORMAT = {'html': 'html', \"docx\": \"docx\"}; c = '/root/workflow-compile/compile.py'") };
     assert.deepEqual(plain(SR.direct('me', ok, inst)), { requires: ['docx', 'html', 'workflow-compile'], missing: [] });
 });
+
+test('leafCollision: two required skills with one leaf (or one taking the main skill\'s place) is an error naming both', () => {
+    const e = SR.leafCollision('auto', ['A/x', 'flow', 'B/x']);
+    assert.equal(e.code, 'leaf-collision');
+    assert.equal(e.message, "Skills A/x and B/x both need to be available as 'x'; rename one.");
+    assert.equal(SR.leafCollision('x', ['GEO/x']).leaf, 'x');
+    assert.equal(SR.leafCollision('G/m', ['m2', 'H/n']), null);
+});

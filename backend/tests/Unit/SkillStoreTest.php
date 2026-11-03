@@ -500,4 +500,49 @@ final class SkillStoreTest extends TestCase
         $e = $this->refused(fn() => $s->delete(1, 'g/flow', true, ['g/auto']));
         $this->assertSame(['outside'], $e->data()['required_by']);
     }
+
+    public function test_public_import_of_a_zip_whose_skills_declare_each_other(): void
+    {
+        $s = $this->store();
+        $decl = fn(string $n, string $req) => ['SKILL.md' => "---\nname: $n\nrequires-skills: [$req]\n---\n"];
+        // Dry run of every skill of the zip before any is written: the batch's own names resolve.
+        $batch = ['pb', 'flow', 'auto'];
+        $this->assertSame(['status' => 'new', 'made_public' => []], $s->import(1, 'pb', $this->loader('pb'), 'public', true, null, $batch));
+        $this->assertSame(['status' => 'new', 'made_public' => []], $s->import(1, 'flow', $decl('flow', 'pb'), 'public', true, null, $batch));   // req → req
+        $this->assertSame(['status' => 'new', 'made_public' => []], $s->import(1, 'auto', $decl('auto', 'flow'), 'public', true, null, $batch)); // main → req
+        // Then the real imports, required first.
+        $s->import(1, 'pb', $this->loader('pb'), 'public', false, [], $batch);
+        $s->import(1, 'flow', $decl('flow', 'pb'), 'public', false, [], $batch);
+        $s->import(1, 'auto', $decl('auto', 'flow'), 'public', false, [], $batch);
+        $this->assertSame(['public', 'public', 'public'], array_column($s->list(1), 'visibility'));
+        // A declared name neither installed nor in the batch still refuses.
+        $e = $this->refused(fn() => $s->import(1, 'lone', $decl('lone', 'ghost'), 'public', true, null, ['lone']));
+        $this->assertSame('"lone" needs "ghost", which you can\'t make public.', $e->getMessage());
+    }
+
+    public function test_group_delete_except_compares_area_and_path(): void
+    {
+        $s = $this->store();
+        $s->import(1, 'g/flow', $this->loader('flow'));
+        $s->setVisibility(1, 'g/flow', 'public');
+        $s->import(2, 'g/auto', $this->loader('auto', 'flow'));    // user 2's skill at a path user 1 also deletes "with"
+        $s->setVisibility(2, 'g/auto', 'public');
+        // User 1 has no g/auto of their own: naming it in "with" does not hide user 2's public dependent.
+        $e = $this->refused(fn() => $s->delete(1, 'g/flow', true, ['g/auto']));
+        $this->assertSame(['g/auto'], $e->data()['required_by']);
+    }
+
+    public function test_compile_resolver_prefers_the_dependents_group_then_own_then_public(): void
+    {
+        // Individual edition (no public area) can't hold two y's for one user; corporate: my private B/y + 2's public A/y
+        // can coexist only when mine came first (the make-public leaf check is public-only).
+        $s = $this->store();
+        $s->import(1, 'B/y', $this->loader('y', '2'));                // mine, private
+        $s->import(2, 'A/y', $this->loader('y', '1'));
+        $s->setVisibility(2, 'A/y', 'public');                       // public y of someone else
+        $r = $s->compileResolver(1, false);
+        $this->assertSame(realpath($this->root . '/users/1/B/y'), realpath((string) $r('y', 'me')));       // own before public
+        $this->assertSame(realpath($this->root . '/public/A/y'), realpath((string) $r('y', 'A/needs')));   // dependent's group first
+        $this->assertSame(realpath($this->root . '/public/A/y'), realpath((string) $s->compileResolver(3, false)('y')));   // only public
+    }
 }

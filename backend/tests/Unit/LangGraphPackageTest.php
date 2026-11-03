@@ -574,6 +574,17 @@ PY;
         self::assertSame($want, $paths($s->compileResolver(3, false)));
     }
 
+    public function testTwoRequiredSkillsWithOneLeafAreAnError(): void
+    {
+        $root = $this->skillsRoot();
+        foreach (['auto' => "---\nname: auto\nrequires-skills: [A/x, B/x]\n---\n", 'A/x' => "---\nname: x\n---\n", 'B/x' => "---\nname: x\n---\n"] as $d => $md) {
+            mkdir("$root/$d", 0777, true);
+            file_put_contents("$root/$d/SKILL.md", $md);
+        }
+        $this->expectExceptionMessage("Skills \"A/x\" and \"B/x\" both need to be available as 'x'; rename one.");
+        $this->generator($this->graph('auto'), $root)->generate(44, '3', ['modular' => true]);
+    }
+
     /** A relative SYNERGYAI_SKILLS_DIR (the README's ./skills) reaches a skill script as an absolute path. */
     public function testSkillScriptsGetAnAbsoluteSkillsDir(): void
     {

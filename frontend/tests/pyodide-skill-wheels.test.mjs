@@ -379,6 +379,17 @@ test('store: a grouped required skill sits at its leaf in /skills-root; its libr
   assert.deepEqual(Object.keys(p.wheels), ['fpdf2-2.8-py3-none-any.whl']);
 });
 
+test('store: two required skills with one leaf cannot share /skills-root/<leaf>: the run says so', async () => {
+  const fs = storeFs({
+    auto: { files: { 'SKILL.md': enc('---\nname: auto\nrequires-skills: [A/x, B/x]\n---\n'), 'scripts/a.py': enc("'/skills-root'") }, mine: true },
+    'A/x': { files: { 'SKILL.md': enc('x') }, public: true },
+    'B/x': { files: { 'SKILL.md': enc('x') }, public: true },
+  });
+  const { runner } = load({ skillsFs: fs });
+  await assert.rejects(runner.runSkillScript({ dirName: 'auto', script: 'scripts/a.py' }), /Skills A\/x and B\/x both need to be available as 'x'; rename one\./);
+  await assert.rejects(runner.poolSkillPayload('auto', { script: 'scripts/a.py' }), /both need to be available as 'x'/);
+});
+
 const WORKER = readFileSync(fileURLToPath(new URL('../assets/js/pyodide.worker.js', import.meta.url)), 'utf8');
 
 /** Run the pool worker in a vm: returns call(payload) → the worker's reply for verb runSkillScript. */

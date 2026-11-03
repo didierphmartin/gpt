@@ -167,10 +167,13 @@ final class LangGraphPackage
         while ($queue !== []) {
             [$d, $by, $as] = array_shift($queue);
             if (isset($done[$as])) {
+                if ($done[$as] !== $d) {   // two different skills would land in one folder
+                    throw new RuntimeException("Skills \"{$done[$as]}\" and \"{$d}\" both need to be available as '{$as}'; rename one.");
+                }
                 continue;
             }
-            $done[$as] = true;
-            $base = self::skillBase($d, $skillsRoot, $root);
+            $done[$as] = $d;
+            $base = self::skillBase($d, $skillsRoot, $root, $by);
             if ($base === false) {
                 throw new RuntimeException($by === null
                     ? "Skill folder \"{$d}\" is not available on this server, so it can't be packaged."
@@ -206,7 +209,7 @@ final class LangGraphPackage
     }
 
     /** The real folder of skill $d (inside the root, or from the store resolver), false when unsafe or absent. */
-    private static function skillBase(string $d, string|\Closure $skillsRoot, string|false|null $root): string|false
+    private static function skillBase(string $d, string|\Closure $skillsRoot, string|false|null $root, ?string $from = null): string|false
     {
         // dir_name comes from the client-saved node config: plain segments ("GEO/geo-report" for a grouped
         // skill; none empty, "." or "..", none starting with "." (.git, .superpowers), no "\"), resolved
@@ -217,7 +220,7 @@ final class LangGraphPackage
             return false;
         }
         if ($root === null) {
-            $dir = $skillsRoot($d);
+            $dir = $skillsRoot($d, $from);   // $from: the skill that needs it (a store resolver prefers its group)
             $base = $dir === null ? false : realpath($dir);
         } else {
             $base = $root !== false ? realpath($root . DIRECTORY_SEPARATOR . $d) : false;
@@ -270,7 +273,7 @@ final class LangGraphPackage
             if ($c === $self || !preg_match('#^[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)?$#', $c)) {
                 continue;
             }
-            $dir = $resolve($c);
+            $dir = $resolve($c, $self);
             if ($dir !== null && is_file($dir . '/SKILL.md')) {
                 $out[] = $c;
             }

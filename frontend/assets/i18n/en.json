@@ -424,7 +424,8 @@
       },
       "noFile": "No file selected — try again.",
       "unreadable": "the file could not be read as a skill.",
-      "requiresMissing": "{{by}} needs skill {{name}}, which is not installed."
+      "requiresMissing": "{{by}} needs skill {{name}}, which is not installed.",
+      "leafCollision": "Skills {{a}} and {{b}} both need to be available as '{{leaf}}'; rename one."
     },
     "section": {
       "public": "Public",

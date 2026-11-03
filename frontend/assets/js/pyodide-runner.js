@@ -391,12 +391,13 @@
      */
     async function skillsRootOf(dirName, asRobot) {
         const placed = await requiredClosure(dirName, asRobot);
+        const clash = window.SkillRequires && window.SkillRequires.leafCollision(dirName, placed.required);
+        if (clash) {
+            throw new Error(i18nText('skills.zip.leafCollision', clash.message, { a: clash.skills[0], b: clash.skills[1], leaf: clash.leaf }));
+        }
         const files = {};
         if (placed.own) files[dirName] = placed.own;
-        for (const p of placed.required) {
-            const leaf = p.split('/').pop();
-            if (!(leaf in files)) files[leaf] = placed.cache.get(p);
-        }
+        for (const p of placed.required) files[p.split('/').pop()] = placed.cache.get(p);
         return { files, required: placed.required };
     }
 

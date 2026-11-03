@@ -341,6 +341,8 @@
             const e = window.SkillRequires.missingError(r.missing);
             throw Object.assign(new Error(tr('skills.zip.requiresMissing', { by: e.by || dirName, name: e.skill })), { code: e.code, skill: e.skill, by: e.by });
         }
+        const clash = window.SkillRequires.leafCollision(dirName, r.requires);
+        if (clash) throw Object.assign(new Error(tr('skills.zip.leafCollision', { a: clash.skills[0], b: clash.skills[1], leaf: clash.leaf })), { code: clash.code });
         return r.requires.map((p) => ({ dir: p, name: p.split('/').pop(), files: cache.get(p) }));
     }
 

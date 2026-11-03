@@ -424,7 +424,8 @@
       },
       "noFile": "Aucun fichier sélectionné — réessayez.",
       "unreadable": "le fichier n’a pas pu être lu comme une compétence.",
-      "requiresMissing": "{{by}} a besoin de la compétence {{name}}, qui n’est pas installée."
+      "requiresMissing": "{{by}} a besoin de la compétence {{name}}, qui n’est pas installée.",
+      "leafCollision": "Les compétences {{a}} et {{b}} doivent toutes deux être disponibles sous '{{leaf}}' ; renommez-en une."
     },
     "section": {
       "public": "Publiques",

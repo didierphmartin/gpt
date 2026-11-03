@@ -886,13 +886,14 @@
      * What installing this one skill would do, writing nothing: 'new' | 'identical' | 'clash', plus (store, public)
      * madePublic: my own private skills it requires that would go public with it.
      */
-    async function skillPlan(read, { visibility = 'private' } = {}) {
+    async function skillPlan(read, { visibility = 'private', batch = [] } = {}) {
         const all = window.SkillZip.toStoreFiles(read);
         if (await mode() === 'volume') {
             const files = {};
             for (const [rel, b] of Object.entries(all)) if (!rel.startsWith('.wheels/')) files[rel] = toB64(asBytes(b));
             try {
-                const r = await api('POST', '/skills/import', { path: read.dir, visibility, files, dry_run: true });
+                // batch: the other skills of the same zip (installed with it): a requirement naming one resolves to it.
+                const r = await api('POST', '/skills/import', { path: read.dir, visibility, files, dry_run: true, ...(batch.length ? { incoming: batch } : {}) });
                 return { status: r && r.status === 'identical' ? 'identical' : 'new', madePublic: (r && r.made_public) || [] };
             } catch (e) {
                 if (e.status === 409 && e.data?.data?.reason) throw e;   // a required skill it cannot take public along
@@ -908,13 +909,13 @@
     }
 
     /** Install one skill (no required skills). Throws .code 'clash' when a different skill is there. */
-    async function importOne(read, { visibility = 'private', expectPublic = null } = {}) {
+    async function importOne(read, { visibility = 'private', expectPublic = null, batch = [] } = {}) {
         const all = window.SkillZip.toStoreFiles(read);
         if (await mode() === 'volume') {
             const files = {};
             for (const [rel, b] of Object.entries(all)) files[rel] = toB64(asBytes(b));
             try {
-                return await api('POST', '/skills/import', { path: read.dir, visibility, files, ...(expectPublic ? { expect_public: expectPublic } : {}) });
+                return await api('POST', '/skills/import', { path: read.dir, visibility, files, ...(expectPublic ? { expect_public: expectPublic } : {}), ...(batch.length ? { incoming: batch } : {}) });
             } catch (e) {
                 if (e.status === 409) throw clashError(read);
                 throw e;
@@ -932,10 +933,13 @@
      * [{ dir, name, status: 'new'|'identical'|'clash', madePublic: [path] }], required skills first, the read itself last.
      * madePublic (store, visibility public): my own private skills that go public with that one.
      */
+    const batchOf = (read) => [...(read.requires || []), read].map((r) => r.dir);
+
     async function importPlan(read, opts = {}) {
         const out = [];
+        const batch = batchOf(read);
         for (const r of [...(read.requires || []), read]) {
-            const p = await skillPlan(r, opts);
+            const p = await skillPlan(r, { ...opts, batch: batch.filter((d) => d !== r.dir) });
             out.push({ dir: r.dir, name: r.name || r.dir.split('/').pop(), status: p.status, madePublic: p.madePublic });
         }
         return out;
@@ -951,7 +955,9 @@
      */
     async function importSkill(read, opts = {}) {
         const reqs = read.requires || [];
-        const one = (r) => importOne(r, { ...opts, expectPublic: opts.confirmed ? (opts.confirmed[r.dir] || []) : null });
+        const batch = batchOf(read);
+        const one = (r) => importOne(r, { ...opts, batch: reqs.length ? batch.filter((d) => d !== r.dir) : [],
+            expectPublic: opts.confirmed ? (opts.confirmed[r.dir] || []) : null });
         if (!reqs.length) return one(read);
         const plan = await importPlan(read, opts);
         const clash = plan.find((x) => x.status === 'clash');

@@ -425,3 +425,17 @@ test('folder group delete: a skill outside the group that needs one inside refus
   assert.deepEqual([...r.requiredBy], ['out']);
   assert.deepEqual(f2.removed, []);
 });
+
+test('store import of a zip: every dry run and import names the other skills of the zip (incoming)', async () => {
+  const posts = [];
+  const { fs } = load({ routes: { ...volume, 'POST /skills/import': (b) => { posts.push(b); return [200, { status: b.dry_run ? 'new' : 'installed', made_public: [] }]; } } });
+  const read = sk('auto', '---\nrequires-skills: [flow]\n---\n', [sk('pb', 'P'), sk('flow', '---\nrequires-skills: [pb]\n---\n')]);
+  await fs.importSkill(read, { visibility: 'public' });
+  const by = (dry) => posts.filter((p) => !!p.dry_run === dry).map((p) => [p.path, p.incoming]);
+  assert.deepEqual(by(true), [['pb', ['flow', 'auto']], ['flow', ['pb', 'auto']], ['auto', ['pb', 'flow']]]);
+  assert.deepEqual(by(false), [['pb', ['flow', 'auto']], ['flow', ['pb', 'auto']], ['auto', ['pb', 'flow']]]);
+  // A single skill sends none.
+  posts.length = 0;
+  await fs.importSkill(sk('solo', 'S'), { visibility: 'public' });
+  assert.equal(posts[0].incoming, undefined);
+});

@@ -110,11 +110,30 @@
         return { requires: order, missing };
     }
 
+    /**
+     * Required skills land at their leaf (SKILLS_ROOT/<leaf>/): two different skills with one leaf cannot both be there.
+     * main: the skill's own path (it stays at that path); required: [path]. Returns an Error (code 'leaf-collision',
+     * .skills, .leaf) or null.
+     */
+    function leafCollision(main, required) {
+        const at = new Map(main ? [[main, main]] : []);
+        for (const p of required || []) {
+            const leaf = leafOf(p);
+            const other = at.get(leaf);
+            if (other !== undefined && other !== p) {
+                return Object.assign(new Error(`Skills ${other} and ${p} both need to be available as '${leaf}'; rename one.`),
+                    { code: 'leaf-collision', skills: [other, p], leaf });
+            }
+            at.set(leaf, p);
+        }
+        return null;
+    }
+
     function missingError(missing) {
         const m = (missing || [])[0] || {};
         const e = new Error(`${m.by || '?'} needs skill ${m.name || '?'}, which is not installed.`);
         return Object.assign(e, { code: 'missing-skill', skill: m.name, by: m.by });
     }
 
-    return { declared, resolveName, direct, closure, missingError };
+    return { declared, resolveName, direct, closure, missingError, leafCollision };
 });

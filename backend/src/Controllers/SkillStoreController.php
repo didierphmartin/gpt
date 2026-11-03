@@ -112,7 +112,8 @@ final class SkillStoreController
                 $files[(string) $rel] = self::decode($content);
             }
             return $s->import(self::uid($request), (string) ($b['path'] ?? ''), $files, (string) ($b['visibility'] ?? 'private'), ($b['dry_run'] ?? false) === true,
-                is_array($b['expect_public'] ?? null) ? array_values(array_map('strval', $b['expect_public'])) : null);
+                is_array($b['expect_public'] ?? null) ? array_values(array_map('strval', $b['expect_public'])) : null,
+                is_array($b['incoming'] ?? null) ? array_values(array_map('strval', $b['incoming'])) : []);
         });
     }
 

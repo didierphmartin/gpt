@@ -424,7 +424,8 @@
       },
       "noFile": "No se seleccionó ningún archivo; inténtelo de nuevo.",
       "unreadable": "el archivo no se pudo leer como una habilidad.",
-      "requiresMissing": "{{by}} necesita la habilidad {{name}}, que no está instalada."
+      "requiresMissing": "{{by}} necesita la habilidad {{name}}, que no está instalada.",
+      "leafCollision": "Las habilidades {{a}} y {{b}} deben estar disponibles ambas como '{{leaf}}'; renombra una."
     },
     "section": {
       "public": "Públicas",

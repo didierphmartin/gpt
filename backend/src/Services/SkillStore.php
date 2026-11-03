@@ -100,17 +100,18 @@ final class SkillStore
      * @param list<string>|null $expectPublic (public) the required skills the user confirmed go public along; 409 when it differs
      * @return array{status:string, made_public?: list<string>}
      * A public import takes along the skills it requires that are still my own private ones (as setVisibility does),
-     * all or nothing.
+     * all or nothing. $batch: the other skills of the same import (one zip), installed public with it: a requirement
+     * naming one of them resolves to it (after my own and the public skills) instead of being missing.
      */
     public function import(int $userId, string $path, array $files, string $visibility = 'private', bool $dryRun = false,
-        ?array $expectPublic = null): array
+        ?array $expectPublic = null, array $batch = []): array
     {
         $this->checkPath($path);
         $this->checkVisibility($visibility);
         foreach (array_keys($files) as $rel) {
             $this->checkRel((string) $rel);
         }
-        return $this->locked(function () use ($userId, $path, $files, $visibility, $dryRun, $expectPublic) {
+        return $this->locked(function () use ($userId, $path, $files, $visibility, $dryRun, $expectPublic, $batch) {
             $index = $this->index();
             foreach ([$this->areaFor($userId, 'private'), 'public'] as $area) {
                 $e = $index["$area/$path"] ?? null;
@@ -135,7 +136,8 @@ final class SkillStore
             $area = $this->areaFor($userId, $visibility);
             $along = [];
             if ($visibility === 'public') {
-                $along = $this->privateRequired($index, $userId, $path, $this->requiresOnly($this->withoutWheels($files)));
+                $along = $this->privateRequired($index, $userId, $path, $this->requiresOnly($this->withoutWheels($files)), null,
+                    array_values(array_filter(array_map('strval', $batch), fn($x) => $x !== $path)));
                 foreach ($along as $q) {
                     $this->assertLeafFree($index, $userId, $q, false);
                 }
@@ -226,7 +228,15 @@ final class SkillStore
             if ($area === 'public') {
                 $this->assertNotBoundByRobot($path);
             }
-            $this->assertNotRequired($userId, $area, $path, 'delete', $with);
+            // The rest of the group, as the skills of mine at those paths (area + path, never someone else's same path).
+            $except = [];
+            foreach ($with as $w) {
+                $r = $this->resolve($userId, (string) $w, false);
+                if ($r !== null && (int) $r[1]['owner'] === $userId) {
+                    $except[] = $r[0] . '/' . $w;
+                }
+            }
+            $this->assertNotRequired($userId, $area, $path, 'delete', $except);
             if ($dryRun) {
                 return;
             }
@@ -266,20 +276,22 @@ final class SkillStore
     }
 
     /**
-     * What a compile reads skills through (LangGraphPackage::skillFiles): (string $dir): ?string, the folder of the skill
-     * the owner sees at $dir, else (a required skill named by its leaf) the one with that leaf in a group; null otherwise.
+     * What a compile reads skills through (LangGraphPackage::skillFiles): (string $dir, ?string $from): ?string, the folder
+     * of the skill the owner sees at $dir, else (a required skill named by its leaf) one with that leaf: in the group of
+     * $from (the skill that needs it), then the owner's own, then public; null otherwise.
      */
     public function compileResolver(int $ownerId, bool $asRobot): \Closure
     {
-        return function (string $dir) use ($ownerId, $asRobot): ?string {
+        return function (string $dir, ?string $from = null) use ($ownerId, $asRobot): ?string {
             try {
                 $path = $this->absolutePath($ownerId, $dir, $asRobot);
                 if ($path === null && !str_contains($dir, '/')) {
-                    foreach ($this->list($ownerId, $asRobot) as $row) {
-                        if ($this->leaf($row['path']) === $dir) {
-                            return $this->absolutePath($ownerId, $row['path'], $asRobot);
-                        }
-                    }
+                    // By leaf: in the group of the skill that needs it, then the owner's own skill, then a public one.
+                    $hits = array_values(array_filter($this->list($ownerId, $asRobot), fn($r) => $this->leaf($r['path']) === $dir));
+                    $group = $from !== null && str_contains($from, '/') ? explode('/', $from)[0] : null;
+                    usort($hits, fn($a, $b) => [$group !== null && str_starts_with($a['path'], "$group/") ? 0 : 1, $a['mine'] ? 0 : 1, $a['path']]
+                        <=> [$group !== null && str_starts_with($b['path'], "$group/") ? 0 : 1, $b['mine'] ? 0 : 1, $b['path']]);
+                    return $hits === [] ? null : $this->absolutePath($ownerId, $hits[0]['path'], $asRobot);
                 }
                 return $path;
             } catch (SkillPathInvalid) {
@@ -311,7 +323,7 @@ final class SkillStore
     }
 
     /** path => area a user resolves a skill path to: their own skill first, then a public one (never another's private). */
-    private function viewOf(array $index, int $userId): array
+    private function viewOf(array $index, int $userId, array $incoming = []): array
     {
         $own = $pub = [];
         foreach ($index as $key => $e) {
@@ -325,7 +337,8 @@ final class SkillStore
                 $pub[$p] = $area;
             }
         }
-        return $own + $pub;
+        // The rest of the same import (to be installed public with it): only where nothing of mine or public is.
+        return $own + $pub + array_fill_keys($incoming, 'incoming');
     }
 
     /** Only what the requires rule reads: SKILL.md and scripts/**. */
@@ -349,22 +362,22 @@ final class SkillStore
      * What skill $p (in $area, owned by $owner) requires, resolved from its owner's viewpoint: [[area, path]], plus the
      * declared names that resolve to nothing.
      */
-    private function requirementsOf(array $index, int $owner, string $area, string $p, ?array $files = null): array
+    private function requirementsOf(array $index, int $owner, string $area, string $p, ?array $files = null, array $incoming = []): array
     {
-        $view = $this->viewOf($index, $owner);
+        $view = $this->viewOf($index, $owner, $incoming);
         $req = LangGraphPackage::requiredSkills($p, $files ?? $this->requiresFiles($area, $p), array_map('strval', array_keys($view)));
         return ['resolved' => array_map(fn(string $q) => [$view[$q], $q], $req['requires']), 'missing' => $req['missing']];
     }
 
     /**
-     * The skills $userId sees (only public ones when $publicOnly; $except left out) whose requirement, resolved from
+     * The skills $userId sees (only public ones when $publicOnly; $except: "area/path" keys left out) whose requirement, resolved from
      * their owner's viewpoint, is the skill at $area/$path. Sorted paths.
      */
     private function dependents(array $index, int $userId, string $area, string $path, bool $publicOnly = false, array $except = []): array
     {
         $out = [];
         foreach ($this->visibleEntries($index, $userId) as [$a, $p]) {
-            if (($a === $area && $p === $path) || ($publicOnly && $a !== 'public') || in_array($p, $except, true)) {
+            if (($a === $area && $p === $path) || ($publicOnly && $a !== 'public') || in_array("$a/$p", $except, true)) {
                 continue;
             }
             $owner = (int) ($index["$a/$p"]['owner'] ?? 0);
@@ -397,7 +410,8 @@ final class SkillStore
      * along), in discovery order. A required skill that is neither mine nor public refuses it. $files: the skill's
      * files when it is not stored yet (an import).
      */
-    private function privateRequired(array $index, int $userId, string $path, ?array $files = null, ?string $startArea = null): array
+    private function privateRequired(array $index, int $userId, string $path, ?array $files = null, ?string $startArea = null,
+        array $incoming = []): array
     {
         $own = $this->areaFor($userId, 'private');
         $along = [];
@@ -405,7 +419,7 @@ final class SkillStore
         $queue = [[$startArea ?? $own, $path, $files]];
         while ($queue !== []) {
             [$a, $p, $f] = array_shift($queue);
-            $req = $this->requirementsOf($index, $userId, $a, $p, $f);
+            $req = $this->requirementsOf($index, $userId, $a, $p, $f, $incoming);
             foreach ($req['missing'] as $m) {
                 throw new SkillRequiredBy("\"{$this->leaf($p)}\" needs \"$m\", which you can't make public.", 'public', $p, [], $m);
             }
