@@ -21,6 +21,21 @@ class RegistryTest(unittest.TestCase):
         self.assertIn("servers.json", err.getvalue())
         self.assertEqual((self.tmp / "servers.json").read_text(), "{not json")
 
+    def test_corrupt_or_odd_file_is_never_overwritten(self):
+        import contextlib
+        import io
+        for text in ("{not json", "[1, 2]", '{"a": 5, "b": {"name": "B", "port": 9101}}'):
+            (self.tmp / "servers.json").write_text(text)
+            r = Registry(self.tmp)
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(RegistryError):
+                    r.add("new", "New", 1)
+                with self.assertRaises(RegistryError):
+                    r.remove("b")
+                with self.assertRaises(ValueError):
+                    r.load(strict=True)
+            self.assertEqual((self.tmp / "servers.json").read_text(), text)
+
     def test_non_dict_entries_are_ignored(self):
         (self.tmp / "servers.json").write_text('{"a": 5, "b": {"name": "B", "port": 9101}}')
         self.assertEqual(list(Registry(self.tmp).load()), ["b"])

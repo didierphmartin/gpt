@@ -245,6 +245,13 @@ class LeftoverTest(unittest.TestCase):
         self.assertTrue((self.root / "note.txt").exists())
         self.assertTrue((self.root / "servers.json").exists())
 
+    def test_odd_shaped_registry_removes_nothing(self):
+        (self.root / "srv").mkdir()
+        (self.root / "other").mkdir()
+        (self.root / "servers.json").write_text('{"srv": {"name": "S", "port": 9101}, "other": 5}')
+        self.control()
+        self.assertTrue((self.root / "other").is_dir())
+
     def test_corrupt_registry_removes_nothing(self):
         import contextlib
         import io

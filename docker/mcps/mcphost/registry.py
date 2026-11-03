@@ -25,8 +25,8 @@ class Registry:
         self._lock = threading.Lock()   # held across each load-modify-save
 
     def load(self, strict: bool = False) -> dict:
-        """The registered servers; a corrupt file reads as none (logged) and stays as is until the next write.
-        strict: a corrupt file raises instead."""
+        """The registered servers; a corrupt file reads as none (logged) and is never overwritten.
+        strict: a corrupt file, or one of the wrong shape, raises ValueError instead."""
         try:
             data = json.loads(self.file.read_text(encoding="utf-8"))
         except FileNotFoundError:
@@ -36,9 +36,19 @@ class Registry:
                 raise
             print(f"[supervisor] cannot read {self.file}: {e}", file=sys.stderr)
             return {}
-        if not isinstance(data, dict):
-            return {}
+        if not isinstance(data, dict) or not all(isinstance(v, dict) for v in data.values()):
+            if strict:
+                raise ValueError(f"{self.file} is not a map of servers")
+            if not isinstance(data, dict):
+                return {}
         return {k: v for k, v in data.items() if isinstance(v, dict)}
+
+    def _load_for_write(self) -> dict:
+        """A write never replaces a file it cannot fully read: the servers it lists would be lost."""
+        try:
+            return self.load(strict=True)
+        except (ValueError, OSError) as e:
+            raise RegistryError(f"servers.json cannot be read, so it is not changed: {e}") from e
 
     def _save(self, data: dict) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -59,7 +69,7 @@ class Registry:
 
     def add(self, folder: str, name: str, installed_by) -> dict:
         with self._lock:
-            data = self.load()
+            data = self._load_for_write()
             if folder in data:
                 raise RegistryError(f"folder already registered: {folder}")
             used = {s.get("port") for s in data.values()}
@@ -72,7 +82,7 @@ class Registry:
 
     def set_enabled(self, folder: str, enabled: bool) -> None:
         with self._lock:
-            data = self.load()
+            data = self._load_for_write()
             if folder not in data:
                 raise RegistryError(f"unknown folder: {folder}")
             data[folder]["enabled"] = bool(enabled)
@@ -80,6 +90,6 @@ class Registry:
 
     def remove(self, folder: str) -> None:
         with self._lock:
-            data = self.load()
+            data = self._load_for_write()
             if data.pop(folder, None) is not None:
                 self._save(data)
