@@ -1604,6 +1604,8 @@
       "saved": "Paquet enregistré sous {{name}}",
       "failed": "Échec de l’export du paquet : {{error}}",
       "warnSkillMissing": "La compétence « {{name}} » est absente ici — non exportée.",
+      "errSkillMissing": "La compétence « {{name}} » utilisée par « {{node}} » n'est pas installée ici, le paquet ne peut donc pas être exporté.",
+      "progressSkill": "Empaquetage de la compétence {{name}} avec ses bibliothèques ({{done}} sur {{total}})…",
       "warnServerMissing": "Le serveur MCP « {{name}} » n’est pas enregistré ici — non exporté.",
       "warnFolderUnreadable": "Le dossier local de « {{name}} » n’a pas pu être ouvert — enregistrement seulement.",
       "warnNoInstall": "« {{name}} » n’a pas d’instructions d’installation — voir son README.",

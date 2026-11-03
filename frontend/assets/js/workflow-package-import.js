@@ -92,6 +92,7 @@
                 if (!(await fs().resolvePath(path, { create: true, kind: 'directory' }))) throw new Error(`cannot create ${path}`);
             },
             writeFile,
+            importSkill: (read, o) => window.skillsFs.importSkill(read, o),
             async readJson(path) {
                 const fh = await fileHandle(path, false);
                 if (!fh) return undefined;

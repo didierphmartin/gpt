@@ -350,6 +350,7 @@
     }
 
     window.skillsImport = {
+        wheelsError,
         readFromFolder,
         importFromZipPicker,
         pickZipFile,
