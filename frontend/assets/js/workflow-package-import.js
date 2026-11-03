@@ -31,6 +31,39 @@
     /** The per-row values object, created null-prototype on first use. */
     const rowValues = (values, name) => own(values, name) || (values[name] = Object.create(null));
 
+    const POLL_MS = 3000, POLL_MAX_MS = 15 * 60 * 1000;
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const toBase64 = (bytes) => {
+        let bin = '';
+        for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        return btoa(bin);
+    };
+
+    /** Send one server to the Docker app's server host. A long install can outlive the proxy: then watch the list. */
+    async function installOnHost(folder, { name, files, env }) {
+        const mc = window.mcpClient;
+        const encoded = {};
+        for (const rel of Object.keys(files)) encoded[rel] = toBase64(files[rel]);
+        try {
+            return await mc.hostInstall(folder, { name, files: encoded, env });
+        } catch (e) {
+            if (e.status === 422) {
+                const log = (e.body && e.body.data && e.body.data.log) || (e.body && e.body.log) || [];
+                throw new Error(`${e.message}${log.length ? '\n' + log.slice(0, 20).join('\n') : ''}`);
+            }
+            if (e.status !== undefined && e.status !== 502 && e.status !== 504) throw e;
+        }
+        for (const start = Date.now(); Date.now() - start < POLL_MAX_MS;) {
+            await wait(POLL_MS);
+            let list;
+            try { list = await mc.hostServers(); } catch (_) { continue; }
+            const row = list.find((x) => x.folder === folder);
+            if (!row) throw new Error('the install did not finish');
+            if (['running', 'starting', 'crashed'].includes(row.state)) return { state: row.state, log: row.log };
+        }
+        throw new Error('the install is taking too long');
+    }
+
     /** The io installPackage writes through: the user's folder, the server list, playbooks, components. */
     function defaultIo(editor) {
         const fs = () => window.localFs;
@@ -68,6 +101,7 @@
                 return { id: created.id };
             },
             importComponents: (bundle, nodes) => editor._importCodeComponents(bundle, nodes),
+            installServer: (folder, body) => installOnHost(folder, body),
         };
     }
 
@@ -89,11 +123,20 @@
             if (CC) await CC.cache.load(CC.api());
             have.components = CC ? CC.cache.all() : [];
         }
+        if (!have.host && !have.hostFolders && window.mcpClient && (await window.mcpClient.hostStatus()).available) {
+            const st = await window.mcpClient.hostStatus();
+            have.host = { gateway: st.gateway || '' };
+            try {
+                have.hostFolders = (await window.mcpClient.hostServers()).map((x) => x.folder);
+            } catch (e) {
+                throw new Error(e.status === 503 ? editor.t('workflow.package.hostUnreachable') : e.message);
+            }
+        }
         if (!have.serverFolders) {
             have.serverFolders = [];
             // Local servers' folders already in the user's folder: reviewRows offers to keep them.
             const deps = (pkg.manifest && pkg.manifest.dependencies) || [];
-            for (const s of (pkg.servers || []).filter((x) => x.local)) {
+            for (const s of have.host ? [] : (pkg.servers || []).filter((x) => x.local)) {
                 const f = WP().serverFolder(s, deps.find((d) => d.kind === 'server' && d.name === s.name));
                 if (f && window.localFs && await window.localFs.resolvePath(`mcps/${f}`, { kind: 'directory' })) have.serverFolders.push(f);
             }
@@ -169,6 +212,7 @@
         const v = own(state.values, r.name) || {};
         const skipped = r.choice === 'skip';
         const live = !skipped && r.choice !== 'use-existing' && r.status !== 'present';   // will be installed
+        const volume = !!r.volume;   // the server goes to the Docker app's server host
         const registers = live || (!!r.folderExists && r.choice === 'use-existing');      // kept folder: registered only
         const warn = r.status === 'clash' || r.status === 'attention';
         let status;
@@ -177,7 +221,7 @@
         else if (r.status === 'present') status = t('statusPresent');
         else if (r.status === 'clash') status = r.folderExists ? t('statusFolderExists', { destination: r.destination }) : t('statusClash', { name: r.name });
         else if (r.kind === 'secrets') status = t('statusKeys');
-        else status = r.destination ? t('statusInstallTo', { destination: r.destination }) : t('statusInstall');
+        else status = r.destination && !volume ? t('statusInstallTo', { destination: r.destination }) : t('statusInstall');
         const reasons = (r.reasons || []).filter((x) => REASON_KEY[x]);
         const parts = [];
         if (reasons.length && !skipped) {
@@ -191,7 +235,7 @@
             parts.push(`<div><button type="button" data-choice="skip" style="${skipped ? BTN_ON : BTN_PLAIN}">${t('skipIt')}</button></div>`);
         }
         if (registers && r.kind === 'server') {
-            if (r.url !== undefined) {
+            if (r.url !== undefined && !volume) {
                 parts.push(fieldRow(t('serverUrl'), false, `<input type="text" data-value="url" value="${esc(v.url !== undefined ? v.url : r.url)}" style="${INPUT}">`, t('serverUrlHelp')));
             }
             if ((r.reasons || []).includes('needs-key')) {
@@ -243,6 +287,14 @@
         const later = state.rows.filter((r) => r.envFields && (own(state.values, r.name) || {}).fillLater && r.choice !== 'skip' && r.choice !== 'use-existing');
         if (later.length) {
             html += `<div style="${box} border-color: #f59e0b; background: #fffbeb;">⚠ ${t('resultFillLater', { names: later.map((r) => r.name).join(', ') })}</div>`;
+        }
+        const hosted = result.installed.filter((x) => x.kind === 'server' && x.state !== undefined);
+        if (hosted.length) {
+            html += `<div style="${box} display: flex; flex-direction: column; gap: 6px;">${hosted.map((x) => {
+                const ok = x.state === 'running';
+                return `<div><strong style="font-size: 13px;">${esc(x.name)}</strong>: ${ok ? t('hostRunning') : x.state === 'crashed' ? t('hostInstallFailed') : t('hostState', { state: x.state })}`
+                    + (!ok && x.log && x.log.length ? `<pre style="margin: 4px 0 0; font-size: 12px; white-space: pre-wrap;">${esc(x.log.slice(0, 20).join('\n'))}</pre>` : '') + '</div>';
+            }).join('')}</div>`;
         }
         const cmds = result.commands.filter((c) => c.install || c.start);
         if (cmds.length) {

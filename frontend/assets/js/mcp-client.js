@@ -72,10 +72,34 @@ class MCPClient {
             const errField = parsed?.error;
             const errDetail = errField && typeof errField === 'object' ? errField.message : errField;
             const detail = errDetail || parsed?.message || raw || response.statusText;
-            throw new Error(`HTTP ${response.status}: ${detail}`);
+            const err = new Error(`HTTP ${response.status}: ${detail}`);
+            err.status = response.status;
+            err.body = parsed;
+            throw err;
         }
 
         return parsed ?? {};
+    }
+
+    // The Docker app's server host (backend relay to the supervisor); every answer is {success, data}.
+    hostStatus() {
+        if (!this._hostStatus) {
+            this._hostStatus = this.request('/mcp/host').then((r) => r.data || { available: false }).catch(() => ({ available: false }));
+        }
+        return this._hostStatus;
+    }
+    async hostServers() { return (await this.request('/mcp/host/servers')).data || []; }
+    hostInstall(folder, body) { return this._host(folder, 'install', { method: 'POST', body: JSON.stringify(body) }); }
+    hostRestart(folder) { return this._host(folder, 'restart', { method: 'POST' }); }
+    hostSetEnabled(folder, enabled) { return this._host(folder, 'enabled', { method: 'POST', body: JSON.stringify({ enabled: !!enabled }) }); }
+    hostSettings(folder) { return this._host(folder, 'settings'); }
+    hostSaveSettings(folder, values) { return this._host(folder, 'settings', { method: 'PUT', body: JSON.stringify({ values }) }); }
+    hostSource(folder) { return this._host(folder, 'source'); }
+    async hostDelete(folder) {
+        return (await this.request(`/mcp/host/servers/${encodeURIComponent(folder)}`, { method: 'DELETE' })).data;
+    }
+    async _host(folder, action, options) {
+        return (await this.request(`/mcp/host/servers/${encodeURIComponent(folder)}/${action}`, options)).data;
     }
 
     /**

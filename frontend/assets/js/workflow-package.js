@@ -484,11 +484,12 @@
                 const prefix = `mcps/${f}/`;
                 if (!f || Object.keys(files).some((p) => p.startsWith(prefix) && !isEnvFile(p) && !isSafeWritePath(p, 'mcps'))) { unsafe(r); continue; }
                 r.destination = `mcps/${f}`;
+                if (h.host) r.volume = true;
             }
             const folder = r.destination;
             const cls = classify('server', s, h.servers).status;
             // Not registered here, but its folder is already in the user's folder (e.g. another install shares it).
-            if (folder && cls === 'install' && (h.serverFolders || []).includes(folder.slice('mcps/'.length))) {
+            if (folder && cls === 'install' && ((h.host ? h.hostFolders : h.serverFolders) || []).includes(folder.slice('mcps/'.length))) {
                 r.folderExists = true;
                 r.reasons.push('folder-exists');
             }
@@ -499,7 +500,7 @@
                 const fields = envFields(man, ex ? dec(ex) : '');
                 if (fields.some((f) => f.required)) { r.reasons.push('settings-required'); r.envFields = fields; }
             }
-            if (isLocalUrl(s.url)) { r.reasons.push('localhost-url'); r.url = s.url; }
+            if (!h.host && isLocalUrl(s.url)) { r.reasons.push('localhost-url'); r.url = s.url; }
             if (s.needs_auth) r.reasons.push('needs-key');
             if (s.global) r.reasons.push('global-server');
             r.status = r.folderExists ? 'clash' : cls !== 'install' ? cls : r.reasons.some((x) => x !== 'global-server') ? 'attention' : cls;
@@ -632,7 +633,8 @@
         if (unsafePaths.length) throw new Error('install refused: unsafe path ' + unsafePaths.join(', '));
 
         // Never overwrite: every destination of an item to install must be free before anything is written.
-        const targets = [...plan.skills.map((x) => x.dest), ...plan.servers.map((x) => x.dest), ...plan.playbooks.map((x) => x.dest)];
+        // (a server going to the Docker app's volume is checked by the host: a taken folder answers 409.)
+        const targets = [...plan.skills.map((x) => x.dest), ...(h.host ? [] : plan.servers.map((x) => x.dest)), ...plan.playbooks.map((x) => x.dest)];
         const taken = [];
         for (const t of targets) if (await step(`check ${t}`, () => io.exists(t))) taken.push(t);
         if (taken.length) throw new Error('install refused: would overwrite ' + taken.join(', '));
@@ -646,7 +648,24 @@
 
         // Local server source + private settings, then the name -> folder map.
         const map = Object.create(null);
+        const volumeState = new Map();
         for (const { r, folder, dest, paths } of plan.servers) {
+            if (h.host) {
+                // Docker app: the files and settings go to the server host's volume; nothing in the user's folder.
+                const v = rowValues(r);
+                const man = parse(`${dest}/synergyai-mcp.json`);
+                const ex = pick(files, `${dest}/.env.example`);
+                const env = Object.create(null);
+                if (!pick(v, 'fillLater')) {
+                    for (const f of envFields(man, ex ? dec(ex) : '')) { const x = pick(v, f.name); env[f.name] = x !== undefined && x !== null ? x : f.default; }
+                }
+                const sent = Object.create(null);
+                for (const p of paths) sent[p.slice(dest.length + 1)] = files[p];
+                const res = await step(`install server ${r.name}`, () => io.installServer(folder, { name: r.name, files: sent, env }));
+                volumeState.set(r.name, res || {});
+                map[r.name] = folder;
+                continue;
+            }
             for (const p of paths) await step(`write server ${r.name}: ${p}`, () => writeFile(p, 'mcps', files[p]));
             installed.push({ kind: 'server-files', name: r.name, destination: dest });
             const v = rowValues(r);
@@ -665,9 +684,10 @@
             const folder = r.destination.slice('mcps/'.length);
             const man = parse(`${r.destination}/synergyai-mcp.json`);
             map[r.name] = folder;
+            if (h.host) continue;
             commands.push({ server: r.name, install: (man && man.install) || null, start: (man && man.start) || null });
         }
-        if (Object.keys(map).length) {
+        if (!h.host && Object.keys(map).length) {
             await step('update mcps/servers.json', async () => {
                 const cur = await io.readJson('mcps/servers.json');
                 const next = Object.create(null);
@@ -689,10 +709,16 @@
             }
             const v = rowValues(r);
             const url = pick(v, 'url'), auth = pick(v, 'authorization');
-            const reg = { name: s.name, url: url !== undefined && url !== '' ? url : s.url, description: s.description || '',
+            const volumeFolder = h.host && s.local ? map[r.name] : null;   // served by the host at a fixed address
+            const reg = { name: s.name, url: volumeFolder ? `${h.host.gateway}/${volumeFolder}/mcp` : url !== undefined && url !== '' ? url : s.url, description: s.description || '',
                 transport: s.transport || 'http', is_mock: !!s.is_mock, headers: auth ? { Authorization: auth } : {} };
             const res = await step(`register server ${r.name}`, () => io.addServer(reg));
             serverIdByName.set(r.name, Number(res.id));
+            if (volumeFolder) {
+                const st = volumeState.get(r.name);
+                installed.push({ kind: 'server', name: r.name, destination: `volume: ${volumeFolder}`, ...(st ? { state: st.state, log: st.log } : {}) });
+                continue;
+            }
             installed.push({ kind: 'server', name: r.name, destination: plan.servers.find((x) => x.r === r)?.dest || (keepsFolder(r) ? r.destination : null) });
         }
         const serverNameByOldId = new Map((pkg.servers || []).filter((s) => isId(s.old_id)).map((s) => [Number(s.old_id), s.name]));
