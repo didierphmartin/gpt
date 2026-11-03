@@ -112,7 +112,7 @@ final class SkillStoreTest extends TestCase
         $s->import(1, 'docx', $this->skill());
         $s->setVisibility(1, 'docx', 'public');
         try {
-            $s->import(2, 'x/docx', $this->skill());
+            $s->import(2, 'x/docx', $this->skill('docx', 'other'));
             $this->fail('expected clash');
         } catch (SkillClashException $e) {
             $this->assertSame(409, $e->statusCode());
