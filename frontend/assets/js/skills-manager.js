@@ -945,12 +945,12 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         modal.querySelector('#skills-import-zip-btn').addEventListener('click', async () => {
             showStatus('Choose a .zip / .skill file…', 'info');
             const file = await window.skillsImport.pickZipFile();
-            if (!file) { showStatus('No file selected — try again.', 'info'); return; }
+            if (!file) { showStatus(this.t('skills.zip.noFile'), 'info'); return; }
             let read;
             try {
                 read = await window.skillsImport.readZipFile(file);
             } catch (e) {
-                showStatus(e.message || this.t('skills.zip.failed', { message: '' }), 'error');
+                showStatus(this.t('skills.zip.failed', { message: e?.message || this.t('skills.zip.unreadable') }), 'error');
                 return;
             }
             this.showZipReview(modal, read, showStatus, handleResult);
@@ -1208,10 +1208,12 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         try {
             await window.skillsFs.setVisibility(skill.dir_name, to);
         } catch (e) {
-            const robots = e.data && Array.isArray(e.data.robot_workflows) ? e.data.robot_workflows : null;
+            // skillsFs.api() puts the whole body on e.data: {success, data:{message, robot_workflows | clash}, error}.
+            const d = e.data?.data ?? e.data ?? {};
+            const robots = Array.isArray(d.robot_workflows) && d.robot_workflows.length ? d.robot_workflows : null;
             if (robots) {
-                this.notify(this.t('skills.visibility.robotBlocked', { names: robots.map(r => r.name).join(', ') }));
-            } else if (e.data && e.data.clash) {
+                this.notify(this.t('skills.visibility.robotBlocked', { names: robots.map(r => r.name ?? r.id ?? r).join(', ') }));
+            } else if (d.clash) {
                 this.notify(this.t('skills.visibility.clash', { name: skill.name }));
             } else {
                 this.notify(this.t('skills.visibility.failed', { message: e.message }));
@@ -1844,9 +1846,10 @@ document.addEventListener('DOMContentLoaded', () => {
     window.skillsManager = new SkillsManager(window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1', getHeaders, t);
     window.skillsManager.init();
     // Docker app only (the offer checks the store mode itself); runs after login with the other startup tasks.
+    // Getters: the splash reads them after login, once the translations are loaded.
     window.startupTasks?.register('skills-migrate', () => window.skillsManager.offerMigration(), {
-        label: 'Skills',
+        get label() { return t('skills.startup.label'); },
         icon: '🎯',
-        desc: 'Checking your existing skills'
+        get desc() { return t('skills.startup.desc'); }
     });
 });

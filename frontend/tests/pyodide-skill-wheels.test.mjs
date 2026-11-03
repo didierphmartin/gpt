@@ -49,9 +49,9 @@ function fakePyodide() {
 const okHandle = { queryPermission: async () => 'granted' };
 const localFs = { ensureStandardSubdirs: async () => {}, resolvePath: async () => okHandle };
 
-function load({ skillsFs } = {}) {
+function load({ skillsFs, i18n } = {}) {
   const py = fakePyodide();
-  const window = { skillsFs, localFs, loadPyodide: async () => py };
+  const window = { skillsFs, localFs, loadPyodide: async () => py, i18n };
   const ctx = vm.createContext({ window, document: { baseURI: 'http://x/gpt/' }, console, URL, TextEncoder, TextDecoder, Uint8Array, performance });
   vm.runInContext(SRC, ctx);
   return { runner: window.pyodideRunner, py };
@@ -64,7 +64,8 @@ test('planDeps: nothing fresh → null; bundled wheels win; otherwise the prebui
   assert.equal(runner._planDeps(['a'], new Set(['a']), ['a-1.whl']), null);
   assert.equal(runner._planDeps([], new Set(), []), null);
   const w = runner._planDeps(['fpdf2', 'pillow'], new Set(), ['pillow-1.whl', 'fpdf2-2.whl', 'wheels.json']);
-  assert.deepEqual(JSON.parse(JSON.stringify(w)), { fresh: ['fpdf2', 'pillow'], wheels: ['fpdf2-2.whl', 'pillow-1.whl'] });
+  // Every bundled file is planned (none dropped); installBundle sorts them by kind.
+  assert.deepEqual(JSON.parse(JSON.stringify(w)), { fresh: ['fpdf2', 'pillow'], wheels: ['fpdf2-2.whl', 'pillow-1.whl', 'wheels.json'] });
   const o = runner._planDeps(['fpdf2', 'pillow'], new Set(), []);
   assert.deepEqual(JSON.parse(JSON.stringify(o)), { fresh: ['fpdf2', 'pillow'], prebuilt: ['pillow'], viaMicropip: ['fpdf2'] });
 });
@@ -82,6 +83,75 @@ test('ensureDeps with bundled wheels installs them from MEMFS with deps=False an
   py.calls.length = 0;
   await runner.ensureDeps(['fpdf2'], { wheels: { 'fpdf2-2.8-py3-none-any.whl': enc('W') } });
   assert.equal(py.calls.length, 0);
+});
+
+// A scipy-like bundle: scipy + numpy wheels and the openblas shared library (a .zip in Pyodide's lock).
+const LOCK = {
+  numpy: { name: 'numpy', file_name: 'numpy-2.0.2-cp312-cp312-pyodide_2024_0_wasm32.whl', install_dir: 'site' },
+  openblas: { name: 'openblas', file_name: 'openblas-0.3.26.zip', install_dir: 'dynlib' },
+  scipy: { name: 'scipy', file_name: 'scipy-1.14.1-cp312-cp312-pyodide_2024_0_wasm32.whl', install_dir: 'site' },
+};
+const SCIPY_BUNDLE = () => ({
+  'scipy-1.14.1-cp312-cp312-pyodide_2024_0_wasm32.whl': enc('S'),
+  'numpy-2.0.2-cp312-cp312-pyodide_2024_0_wasm32.whl': enc('N'),
+  'openblas-0.3.26.zip': enc('O'),
+  'fpdf2-2.8-py3-none-any.whl': enc('F'),
+});
+/** Give a fake Pyodide a lock + installer; `vendored` = names its local index can load. */
+function withLock(py, vendored) {
+  py.loadedPackages = {};
+  py.installs = [];
+  py.loadPackage = async (n) => {
+    py.calls.push(['loadPackage', n]);
+    for (const x of [].concat(n)) if (vendored.includes(x) || x === 'micropip') py.loadedPackages[x] = 'default channel';
+  };
+  py._api = {
+    lockfile_packages: LOCK,
+    package_loader: { get_install_dir: (d) => (d === 'dynlib' ? '/usr/lib' : '/lib/python3.12/site-packages') },
+    install: async (bytes, file, dir) => { py.installs.push([file, dir, new TextDecoder().decode(bytes)]); },
+  };
+  return py;
+}
+
+test('planBundle: distro files (shared libraries included) by name, other wheels via micropip, the rest unknown', () => {
+  const { runner } = load();
+  const p = JSON.parse(JSON.stringify(runner._planBundle([...Object.keys(SCIPY_BUNDLE()), 'notes.txt'], LOCK)));
+  assert.deepEqual(p.distro.map((d) => d.name), ['numpy', 'openblas', 'scipy']);
+  assert.deepEqual(p.wheels, ['fpdf2-2.8-py3-none-any.whl']);
+  assert.deepEqual(p.unknown, ['notes.txt']);
+});
+
+test('ensureDeps (bundle): distro packages, the openblas .zip included, load from the local index', async () => {
+  const { runner, py } = load();
+  await runner.ensureLoaded();
+  withLock(py, ['numpy', 'openblas', 'scipy']);
+  await runner.ensureDeps(['scipy', 'fpdf2'], { wheels: SCIPY_BUNDLE() });
+  const loads = JSON.parse(JSON.stringify(py.calls.filter((c) => c[0] === 'loadPackage').map((c) => c[1])));
+  assert.deepEqual(loads, [['numpy', 'openblas', 'scipy'], 'micropip']);
+  assert.deepEqual(py.installs, []);
+  assert.deepEqual([...py.calls.find((c) => c[0] === 'python')[2]], ['emfs:/tmp/skill-wheels/fpdf2-2.8-py3-none-any.whl']);
+});
+
+test('ensureDeps (bundle): distro files the local index lacks install from their bundled bytes', async () => {
+  const { runner, py } = load();
+  await runner.ensureLoaded();
+  withLock(py, []);   // nothing vendored
+  await runner.ensureDeps(['scipy'], { wheels: SCIPY_BUNDLE() });
+  assert.deepEqual(py.installs, [['openblas-0.3.26.zip', '/usr/lib', 'O']]);
+  assert.deepEqual([...py.calls.find((c) => c[0] === 'python')[2]], [
+    'emfs:/tmp/skill-wheels/fpdf2-2.8-py3-none-any.whl',
+    'emfs:/tmp/skill-wheels/numpy-2.0.2-cp312-cp312-pyodide_2024_0_wasm32.whl',
+    'emfs:/tmp/skill-wheels/scipy-1.14.1-cp312-cp312-pyodide_2024_0_wasm32.whl',
+  ]);
+});
+
+test('ensureDeps (bundle): an unknown bundled file is a clear error, not dropped', async () => {
+  const { runner, py } = load();
+  await runner.ensureLoaded();
+  withLock(py, []);
+  await assert.rejects(runner.ensureDeps(['x'], { wheels: { 'mystery-1.0.zip': enc('?'), 'a-1-py3-none-any.whl': enc('a') } }),
+    /not Python packages for this Pyodide \(0\.27\.7\): mystery-1\.0\.zip/);
+  assert.equal(py.calls.filter((c) => c[0] === 'python').length, 0);
 });
 
 test('ensureDeps without wheels keeps the online path', async () => {
@@ -109,6 +179,12 @@ test('changedFiles keeps new and different files only', () => {
   const { runner } = load();
   const out = runner._changedFiles({ a: enc('1'), b: enc('2') }, { a: enc('1'), b: enc('3'), c: enc('4') });
   assert.deepEqual(Object.keys(out).sort(), ['b', 'c']);
+});
+
+test('changedFiles never returns Python bytecode (__pycache__ / .pyc)', () => {
+  const { runner } = load();
+  const out = runner._changedFiles({}, { 'scripts/__pycache__/a.cpython-312.pyc': enc('b'), 'x.pyc': enc('c'), 'scripts/a.py': enc('1') });
+  assert.deepEqual(Object.keys(out), ['scripts/a.py']);
 });
 
 test('poolSkillPayload: store sends the files and bundled wheels; folder sends the handle', async () => {
@@ -177,6 +253,13 @@ test('robot run: a private skill is refused at mount; a public one runs, without
   assert.deepEqual(fs.writes, [['pub', 'scripts/a.py']]);
 });
 
+test('runner messages use window.i18n when present (English otherwise)', async () => {
+  const fs = storeFs({ priv: { ...skill(), mine: true } });
+  const i18n = { t: (k, p) => (k === 'skills.run.robotRefusal' ? `ROBOT NO ${p.name}` : k) };
+  const { runner } = load({ skillsFs: fs, i18n });
+  await assert.rejects(runner.runSkillScript({ dirName: 'priv', script: 'scripts/a.py', asRobot: true }), /^Error: ROBOT NO priv$/);
+});
+
 test('store: a run that writes /skills-root without having it fails with a clear error', async () => {
   const fs = storeFs({ s: { ...skill(), mine: true } });
   const { runner, py } = load({ skillsFs: fs });
@@ -198,6 +281,22 @@ test('poolSkillPayload as the robot refuses a private skill; savePoolChanges ski
   assert.deepEqual(fs.writes, []);
   await runner.savePoolChanges('priv', { 'a.txt': enc('1') });
   assert.deepEqual(fs.writes, [['priv', 'a.txt']]);
+});
+
+test('savePoolChanges never throws: a failed save after a pool run is a warning (no second run)', async () => {
+  const fs = storeFs({ mine: { ...skill(), mine: true } });
+  fs.writeSkillFile = async () => { throw new Error('HTTP 500'); };
+  const { runner } = load({ skillsFs: fs });
+  const warned = [];
+  const orig = console.warn;
+  console.warn = (...a) => warned.push(a.join(' '));
+  try {
+    assert.equal(await runner.savePoolChanges('mine', { 'a.txt': enc('1') }), false);
+  } finally { console.warn = orig; }
+  assert.equal(warned.length, 1);
+  assert.match(warned[0], /could not save the changes of mine/);
+  fs.writeSkillFile = async () => {};
+  assert.equal(await runner.savePoolChanges('mine', { 'a.txt': enc('1') }), true);
 });
 
 const WORKER = readFileSync(fileURLToPath(new URL('../assets/js/pyodide.worker.js', import.meta.url)), 'utf8');
@@ -233,4 +332,21 @@ test('worker (store): clears the previous copy, returns the skill changes, fails
   assert.equal(bad.result.exitCode, 1);
   assert.match(bad.result.stderr, /This skill wrote to the skills folder, which is not available for it here\./);
   assert.equal(py.files.has('/skills-root/x/SKILL.md'), false);
+  // Bytecode Python writes on import is never sent back.
+  py.script = (FS) => { FS.writeFile('/skill/s/scripts/__pycache__/a.cpython-312.pyc', enc('b')); FS.writeFile('/skill/s/m.pyc', enc('c')); };
+  const pyc = await call({ ...base, skillFiles: { 'scripts/a.py': enc('1') } });
+  assert.deepEqual(Object.keys(pyc.result.skillChanges), []);
+});
+
+test('worker (bundle): scipy-like bundle loads distro packages by name, the rest from bytes, unknown files fail', async () => {
+  const { py, call } = loadWorker();
+  withLock(py, ['numpy', 'scipy']);   // openblas not in the local index: installed from the bundle
+  const base = { dirName: 's', script: 'scripts/a.py', argv: [], outputsHandle: okHandle, persist: false, skillFiles: { 'scripts/a.py': enc('1') } };
+  const r = await call({ ...base, dependencies: ['scipy'], wheels: SCIPY_BUNDLE() });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual(JSON.parse(JSON.stringify(py.calls.filter((c) => c[0] === 'loadPackage').map((c) => c[1])))[0], ['numpy', 'openblas', 'scipy']);
+  assert.deepEqual(py.installs, [['openblas-0.3.26.zip', '/usr/lib', 'O']]);
+  const bad = await call({ ...base, dependencies: ['other'], wheels: { 'mystery-1.0.zip': enc('?') } });
+  assert.equal(bad.ok, false);
+  assert.match(bad.error, /not Python packages for this Pyodide \(0\.27\.7\): mystery-1\.0\.zip/);
 });

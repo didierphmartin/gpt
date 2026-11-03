@@ -421,7 +421,9 @@
         "pyodide-load": "Cargando Pyodide (puede tardar unos 20 segundos)...",
         "pyodide-install": "Instalando las bibliotecas para incluirlas...",
         "pack": "Escribiendo el zip..."
-      }
+      },
+      "noFile": "No se seleccionó ningún archivo; inténtelo de nuevo.",
+      "unreadable": "el archivo no se pudo leer como una habilidad."
     },
     "section": {
       "public": "Públicas",
@@ -458,6 +460,17 @@
       "nowPublic": "Pública",
       "clash": "Ya existe otra habilidad pública con este nombre.",
       "robotUse": "Usada por flujos de trabajo del robot: {{workflows}}"
+    },
+    "startup": {
+      "label": "Habilidades",
+      "desc": "Comprobando sus habilidades existentes"
+    },
+    "run": {
+      "skillsRootUnavailable": "Esta habilidad escribió en la carpeta de habilidades, que no está disponible para ella aquí.",
+      "robotRefusal": "La habilidad \"{{name}}\" no está disponible para el robot: un flujo de trabajo de robot solo usa habilidades públicas."
+    },
+    "bundle": {
+      "unknownFiles": "Esta habilidad incluye archivos que no son paquetes de Python para este Pyodide ({{version}}): {{files}}. Exporte la habilidad de nuevo."
     }
   },
   "fileStorage": {

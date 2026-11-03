@@ -421,7 +421,9 @@
         "pyodide-load": "Loading Pyodide (this can take about 20 seconds)...",
         "pyodide-install": "Installing libraries to bundle them...",
         "pack": "Writing the zip..."
-      }
+      },
+      "noFile": "No file selected — try again.",
+      "unreadable": "the file could not be read as a skill."
     },
     "section": {
       "public": "Public",
@@ -458,6 +460,17 @@
       "nowPublic": "Public",
       "clash": "A different public skill already has this name.",
       "robotUse": "Used by robot workflows: {{workflows}}"
+    },
+    "startup": {
+      "label": "Skills",
+      "desc": "Checking your existing skills"
+    },
+    "run": {
+      "skillsRootUnavailable": "This skill wrote to the skills folder, which is not available for it here.",
+      "robotRefusal": "Skill \"{{name}}\" is not available to the robot: a robot workflow uses public skills only."
+    },
+    "bundle": {
+      "unknownFiles": "This skill bundles files that are not Python packages for this Pyodide ({{version}}): {{files}}. Export the skill again."
     }
   },
   "fileStorage": {

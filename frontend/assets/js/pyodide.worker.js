@@ -84,10 +84,17 @@ function readTree(root) {
   return out;
 }
 
-// Mirror of pyodide-runner.js changedFiles: files of `after` that are new or differ from `before`.
+// Python's bytecode cache (`__pycache__/`, `*.pyc`): never saved back to the store.
+function isPyCache(rel) {
+  return rel.split('/').includes('__pycache__') || rel.endsWith('.pyc');
+}
+
+// Mirror of pyodide-runner.js changedFiles: files of `after` that are new or differ from `before`,
+// minus Python's bytecode cache.
 function changedFiles(before, after) {
   const out = {};
   for (const [rel, b] of Object.entries(after)) {
+    if (isPyCache(rel)) continue;   // bytecode Python wrote on import: never part of the skill
     const a = before[rel];
     if (!a || a.length !== b.length || a.some((v, i) => v !== b[i])) out[rel] = b;
   }
@@ -135,9 +142,56 @@ async function mountOutputs(outputsHandle) {
   return '/outputs';
 }
 
-// Mirror of pyodide-runner.js ensureDeps: a skill's bundled wheels
-// (.wheels/pyodide/, passed as { file: bytes }) install from MEMFS with
-// deps=False and nothing online; otherwise loadPackage for prebuilt names,
+// Mirror of pyodide-runner.js planBundle: distro files (same file name in this Pyodide's lock, shared
+// libraries included) load by name from the local index; other .whl files go through micropip; anything
+// else is unknown.
+function planBundle(files, lock) {
+  const byFile = new Map(Object.values(lock || {}).map(p => [p.file_name, p]));
+  const out = { distro: [], wheels: [], unknown: [] };
+  for (const f of [...files].sort()) {
+    const pkg = byFile.get(f);
+    if (pkg) out.distro.push({ file: f, name: pkg.name, installDir: pkg.install_dir });
+    else if (f.endsWith('.whl')) out.wheels.push(f);
+    else out.unknown.push(f);
+  }
+  return out;
+}
+
+// Mirror of pyodide-runner.js installBundle: offline install of a skill's bundled packages; a distro package
+// missing from the local index installs from its bundled bytes (shared libraries before the wheels).
+async function installBundle(wheels) {
+  const plan = planBundle(Object.keys(wheels), pyodide._api && pyodide._api.lockfile_packages);
+  if (plan.unknown.length) {
+    throw new Error(`This skill bundles files that are not Python packages for this Pyodide (0.27.7): ${plan.unknown.join(', ')}. Export the skill again.`);
+  }
+  const fromBytes = [...plan.wheels];
+  const archives = [];
+  if (plan.distro.length) {
+    await pyodide.loadPackage(plan.distro.map(d => d.name));
+    for (const d of plan.distro) {
+      if (pyodide.loadedPackages[d.name] !== undefined) continue;
+      if (d.file.endsWith('.whl')) fromBytes.push(d.file);
+      else archives.push(d);
+    }
+  }
+  for (const d of archives) {
+    await pyodide._api.install(wheels[d.file], d.file, pyodide._api.package_loader.get_install_dir(d.installDir),
+      'pyodide.loadPackage', 'skill bundle');
+  }
+  if (fromBytes.length) {
+    pyodide.FS.mkdirTree('/tmp/skill-wheels');
+    for (const f of fromBytes) pyodide.FS.writeFile(`/tmp/skill-wheels/${f}`, wheels[f]);
+    await pyodide.loadPackage('micropip');
+    pyodide.globals.set('_runner_wheel_urls', fromBytes.sort().map(f => `emfs:/tmp/skill-wheels/${f}`));
+    await pyodide.runPythonAsync(`
+import micropip
+await micropip.install(list(_runner_wheel_urls), deps=False)
+    `);
+  }
+}
+
+// Mirror of pyodide-runner.js ensureDeps: a skill's bundled packages
+// (.wheels/pyodide/, passed as { file: bytes }) install offline (installBundle); otherwise loadPackage for prebuilt names,
 // micropip for everything else (pinned wheels, anything not in the prebuilt
 // set). Split is by PREBUILT_PACKAGES membership — NOT by `==` presence.
 async function ensureDeps(deps, wheels) {
@@ -147,19 +201,12 @@ async function ensureDeps(deps, wheels) {
 
   const prebuilt = fresh.filter(d => PREBUILT_PACKAGES.has(d));
   const viaMicropip = fresh.filter(d => !PREBUILT_PACKAGES.has(d));
-  const wheelFiles = Object.keys(wheels || {}).filter(f => f.endsWith('.whl')).sort();
+  const bundled = Object.keys(wheels || {});
 
   const tDeps = Date.now();
   report(`installing deps [${fresh.join(', ')}] …`);
-  if (wheelFiles.length) {
-    pyodide.FS.mkdirTree('/tmp/skill-wheels');
-    for (const f of wheelFiles) pyodide.FS.writeFile(`/tmp/skill-wheels/${f}`, wheels[f]);
-    await pyodide.loadPackage('micropip');
-    pyodide.globals.set('_runner_wheel_urls', wheelFiles.map(f => `emfs:/tmp/skill-wheels/${f}`));
-    await pyodide.runPythonAsync(`
-import micropip
-await micropip.install(list(_runner_wheel_urls), deps=False)
-    `);
+  if (bundled.length) {
+    await installBundle(wheels);
   } else {
     if (prebuilt.length) {
       await pyodide.loadPackage(prebuilt);

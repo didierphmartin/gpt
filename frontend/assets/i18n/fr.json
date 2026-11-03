@@ -421,7 +421,9 @@
         "pyodide-load": "Chargement de Pyodide (environ 20 secondes)...",
         "pyodide-install": "Installation des bibliothèques à inclure...",
         "pack": "Écriture du zip..."
-      }
+      },
+      "noFile": "Aucun fichier sélectionné — réessayez.",
+      "unreadable": "le fichier n’a pas pu être lu comme une compétence."
     },
     "section": {
       "public": "Publiques",
@@ -458,6 +460,17 @@
       "nowPublic": "Publique",
       "clash": "Une autre compétence publique porte déjà ce nom.",
       "robotUse": "Utilisée par les workflows du robot : {{workflows}}"
+    },
+    "startup": {
+      "label": "Compétences",
+      "desc": "Vérification de vos compétences existantes"
+    },
+    "run": {
+      "skillsRootUnavailable": "Cette compétence a écrit dans le dossier des compétences, qui n’est pas disponible pour elle ici.",
+      "robotRefusal": "La compétence « {{name}} » n’est pas disponible pour le robot : un flux de travail robot n’utilise que des compétences publiques."
+    },
+    "bundle": {
+      "unknownFiles": "Cette compétence contient des fichiers qui ne sont pas des paquets Python pour ce Pyodide ({{version}}) : {{files}}. Exportez à nouveau la compétence."
     }
   },
   "fileStorage": {

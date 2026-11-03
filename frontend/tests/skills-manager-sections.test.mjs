@@ -71,7 +71,7 @@ test('visibility toggle only on my own skills, only in corporate', () => {
 
 test('toggling visibility shows the robot workflows that block it', async () => {
   const alerts = [];
-  const fs = { setVisibility: async () => { const e = new Error('409'); e.status = 409; e.data = { robot_workflows: [{ id: 1, name: 'Nightly' }, { id: 2, name: 'Weekly' }] }; throw e; } };
+  const fs = { setVisibility: async () => { const e = new Error('409'); e.status = 409; e.data = { success: false, data: { message: 'in use by robot workflows', robot_workflows: [{ id: 1, name: 'Nightly' }, { id: 2, name: 'Weekly' }] }, error: 'in use by robot workflows' }; throw e; } };
   const { mgr, window } = load({ fs });
   window.alert = (m) => alerts.push(m);
   mgr.loadTree = async () => {};
@@ -79,6 +79,17 @@ test('toggling visibility shows the robot workflows that block it', async () => 
   await mgr.toggleVisibility(SKILLS[1]);
   assert.equal(alerts.length, 1);
   assert.ok(alerts[0].includes('Nightly') && alerts[0].includes('Weekly'));
+});
+
+test('toggling visibility explains a clash from the real error body', async () => {
+  const alerts = [];
+  const fs = { setVisibility: async () => { const e = new Error('409'); e.status = 409; e.data = { success: false, data: { message: 'taken', clash: 'different' }, error: 'taken' }; throw e; } };
+  const { mgr } = load({ fs });
+  mgr.loadTree = async () => {};
+  mgr.notify = (m) => alerts.push(m);
+  await mgr.toggleVisibility(SKILLS[1]);
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0], /clash/);
 });
 
 test('toggling flips public to private and back', async () => {

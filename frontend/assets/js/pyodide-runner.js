@@ -139,7 +139,8 @@
     // sibling skill (from Python) gets the same view.
     let runAsRobot = false;
 
-    const SKILLS_ROOT_UNAVAILABLE = 'This skill wrote to the skills folder, which is not available for it here.';
+    const skillsRootUnavailable = () => i18nText('skills.run.skillsRootUnavailable',
+        'This skill wrote to the skills folder, which is not available for it here.');
 
     function exists(p) {
         try { pyodide.FS.stat(p); return true; } catch { return false; }
@@ -147,7 +148,8 @@
 
     /** Store mode: the robot may not use this skill (private, or not there): a clear refusal. */
     function robotRefusal(dirName) {
-        return new Error(`Skill "${dirName}" is not available to the robot: a robot workflow uses public skills only.`);
+        return new Error(i18nText('skills.run.robotRefusal',
+            'Skill "{{name}}" is not available to the robot: a robot workflow uses public skills only.', { name: dirName }));
     }
 
     function writeTree(root, files) {
@@ -187,10 +189,16 @@
         }
     }
 
-    /** Files of `after` that are new or differ from `before` (pure). */
+    /** Python's bytecode cache (`__pycache__/`, `*.pyc`): never saved back to the store. */
+    function isPyCache(rel) {
+        return rel.split('/').includes('__pycache__') || rel.endsWith('.pyc');
+    }
+
+    /** Files of `after` that are new or differ from `before`, minus Python's bytecode cache (pure). */
     function changedFiles(before, after) {
         const out = {};
         for (const [rel, b] of Object.entries(after)) {
+            if (isPyCache(rel)) continue;   // bytecode Python wrote on import: never part of the skill
             const a = before[rel];
             if (!a || a.length !== b.length || a.some((v, i) => v !== b[i])) out[rel] = b;
         }
@@ -586,19 +594,90 @@
 
     /**
      * What ensureDeps does (pure): null when every dep is installed already;
-     * { wheels: [files] } when the skill bundles Pyodide wheels (install those,
-     * nothing online); else today's split { prebuilt, viaMicropip }.
+     * { wheels: [files] } when the skill bundles Pyodide packages (install
+     * every bundled file, nothing online); else today's split
+     * { prebuilt, viaMicropip }.
      */
     function planDeps(deps, installed, wheelFiles) {
         const fresh = (deps || []).filter(d => !installed.has(d));
         if (fresh.length === 0) return null;
-        const wheels = (wheelFiles || []).filter(f => f.endsWith('.whl')).sort();
+        const wheels = [...(wheelFiles || [])].sort();
         if (wheels.length) return { fresh, wheels };
         return {
             fresh,
             prebuilt: fresh.filter(d => PREBUILT_PACKAGES.has(d)),
             viaMicropip: fresh.filter(d => !PREBUILT_PACKAGES.has(d)),
         };
+    }
+
+    /**
+     * How the files of a skill bundle install (pure). `lock` is this Pyodide's
+     * lock (`packages`: name → { name, file_name, install_dir }).
+     *   distro:   files that are this Pyodide's own builds (same file name in
+     *             the lock; shared libraries such as openblas-*.zip included):
+     *             loaded by name from the local index, offline;
+     *   wheels:   other .whl files: micropip from MEMFS with deps=False;
+     *   unknown:  anything else (a non-wheel archive the lock does not know).
+     */
+    function planBundle(files, lock) {
+        const byFile = new Map(Object.values(lock || {}).map(p => [p.file_name, p]));
+        const out = { distro: [], wheels: [], unknown: [] };
+        for (const f of [...files].sort()) {
+            const pkg = byFile.get(f);
+            if (pkg) out.distro.push({ file: f, name: pkg.name, installDir: pkg.install_dir });
+            else if (f.endsWith('.whl')) out.wheels.push(f);
+            else out.unknown.push(f);
+        }
+        return out;
+    }
+
+    function i18nText(key, fallback, params) {
+        const t = window.i18n && typeof window.i18n.t === 'function' ? window.i18n.t(key, params) : null;
+        let text = t && t !== key ? t : fallback;
+        for (const [k, v] of Object.entries(params || {})) text = text.split(`{{${k}}}`).join(String(v));
+        return text;
+    }
+
+    /**
+     * Install a skill's bundled Pyodide packages ({ file: bytes }) into `py`,
+     * offline. Distro packages load by name from the vendored index; one the
+     * index does not have (vendor-pyodide.sh vendors only PREBUILT_PACKAGES'
+     * closure) installs from its bundled bytes instead — a wheel with the
+     * others through micropip, a shared library (.zip/.tar) through Pyodide's
+     * own installer, before the wheels that link it. A file of unknown type
+     * stops the run with a clear error: nothing is dropped silently.
+     */
+    async function installBundle(py, wheels) {
+        const plan = planBundle(Object.keys(wheels), py._api && py._api.lockfile_packages);
+        if (plan.unknown.length) {
+            throw new Error(i18nText('skills.bundle.unknownFiles',
+                'This skill bundles files that are not Python packages for this Pyodide ({{version}}): {{files}}. Export the skill again.',
+                { version: PYODIDE_VERSION, files: plan.unknown.join(', ') }));
+        }
+        const fromBytes = [...plan.wheels];
+        const archives = [];
+        if (plan.distro.length) {
+            await py.loadPackage(plan.distro.map(d => d.name));
+            for (const d of plan.distro) {
+                if (py.loadedPackages[d.name] !== undefined) continue;   // loaded from the local index
+                if (d.file.endsWith('.whl')) fromBytes.push(d.file);
+                else archives.push(d);
+            }
+        }
+        for (const d of archives) {
+            await py._api.install(wheels[d.file], d.file, py._api.package_loader.get_install_dir(d.installDir),
+                'pyodide.loadPackage', 'skill bundle');
+        }
+        if (fromBytes.length) {
+            py.FS.mkdirTree('/tmp/skill-wheels');
+            for (const f of fromBytes) py.FS.writeFile(`/tmp/skill-wheels/${f}`, wheels[f]);
+            await py.loadPackage('micropip');
+            py.globals.set('_runner_wheel_urls', fromBytes.sort().map(f => `emfs:/tmp/skill-wheels/${f}`));
+            await py.runPythonAsync(`
+import micropip
+await micropip.install(list(_runner_wheel_urls), deps=False)
+            `);
+        }
     }
 
     /**
@@ -615,7 +694,7 @@
     /**
      * Install the given Python packages into the running Pyodide. When the
      * skill bundles wheels (`wheels`: { file: bytes } from .wheels/pyodide/),
-     * those are installed from MEMFS with deps=False and nothing is fetched.
+     * those are installed offline by installBundle and nothing is fetched online.
      * Otherwise pre-built names go through loadPackage (fast, WASM) and the
      * rest fall through to micropip. Already-installed names are skipped —
      * Pyodide's loadPackage is idempotent but micropip's install isn't
@@ -626,14 +705,7 @@
         if (!plan) return;
 
         if (plan.wheels) {
-            pyodide.FS.mkdirTree('/tmp/skill-wheels');
-            for (const f of plan.wheels) pyodide.FS.writeFile(`/tmp/skill-wheels/${f}`, wheels[f]);
-            await pyodide.loadPackage('micropip');
-            pyodide.globals.set('_runner_wheel_urls', plan.wheels.map(f => `emfs:/tmp/skill-wheels/${f}`));
-            await pyodide.runPythonAsync(`
-import micropip
-await micropip.install(list(_runner_wheel_urls), deps=False)
-            `);
+            await installBundle(pyodide, wheels);
         } else {
             if (plan.prebuilt.length) {
                 await pyodide.loadPackage(plan.prebuilt);
@@ -1304,7 +1376,7 @@ _runner_stderr = _stderr_buf.getvalue()
             removeTree('/skills-root');
             try { pyodide.FS.rmdir('/skills-root'); } catch { /* gone */ }
             exitCode = 1;
-            stderr = (stderr ? stderr + '\n' : '') + SKILLS_ROOT_UNAVAILABLE;
+            stderr = (stderr ? stderr + '\n' : '') + skillsRootUnavailable();
         }
 
         const outputs = {};
@@ -1530,9 +1602,21 @@ _inline_stderr_str = _inline_stderr.getvalue()
         getSkillFetchesUrls,
         poolSkillPayload,
         // After a pool run in the store: save result.skillChanges (own skills only, never on a robot run).
-        savePoolChanges: (dirName, changes, opts) => saveSkillChanges(dirName, changes, opts),
+        // Never throws: the script already ran, and a caller that falls back to the main thread on any
+        // error would run it a second time. A failed save is a warning, as in saveMemCopies.
+        savePoolChanges: async (dirName, changes, opts) => {
+            try {
+                await saveSkillChanges(dirName, changes, opts);
+                return true;
+            } catch (e) {
+                console.warn(`[pyodide-runner] could not save the changes of ${dirName} to the skill store:`, e);
+                return false;
+            }
+        },
         ensureDeps,
         _planDeps: planDeps,         // pure, for tests
+        _planBundle: planBundle,     // pure, for tests
+        _installBundle: installBundle, // (py, { file: bytes }), for tests against a real Pyodide
         _changedFiles: changedFiles, // pure, for tests
         // exposed for tests / introspection
         _state: () => ({

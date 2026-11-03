@@ -656,7 +656,8 @@
         return listUnder(dirName, 'references', '.md', asRobot);
     }
 
-    const failure = (e) => ({ ok: false, error: e?.message || String(e) });
+    // The backend's own message (e.g. which path a rename/move clashes with) beats "HTTP 409: clash".
+    const failure = (e) => ({ ok: false, error: e?.data?.data?.message || e?.message || String(e) });
 
     // Groups exist implicitly in the store (a group is the first segment of a skill path).
     async function createFolder(name) {

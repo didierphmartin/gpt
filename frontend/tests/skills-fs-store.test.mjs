@@ -135,6 +135,14 @@ test('volume getSkillContent, writeSkillFile, setVisibility, move, delete, creat
   assert.equal((await fs.createFolder('grp')).name, 'grp');
 });
 
+test('volume move/rename onto a taken path returns the backend clash message', async () => {
+  const { fs } = load({ routes: { ...volume,
+    'POST /skills/move': () => [409, { success: false, data: { clash: 'different', message: "A skill already exists at 'b/s'." }, error: 'clash' }],
+  } });
+  assert.deepEqual(JSON.parse(JSON.stringify(await fs.moveSkill('a/s', 'b'))), { ok: false, error: "A skill already exists at 'b/s'." });
+  assert.equal((await fs.renameSkill('a/s', 't')).error, "A skill already exists at 'b/s'.");
+});
+
 test('volume skillsRootFiles lists own skills only; writeSkillsRoot imports new, writes existing', async () => {
   const puts = []; let imp;
   const { fs } = load({ routes: {

@@ -73,3 +73,39 @@ test('progress reports the stages', async () => {
     });
     assert.deepEqual(seen, ['native', 'pyodide-load', 'pyodide-install']);
 });
+
+test('a session reuses one export Pyodide across skills; a later skill still gets the deps an earlier one installed', async () => {
+    const calls = [], fetched = [];
+    const lock = {
+        numpy: { name: 'numpy', file_name: 'numpy-2.0.whl', depends: [] },
+        openblas: { name: 'openblas', file_name: 'openblas-0.3.26.zip', depends: [] },
+        scipy: { name: 'scipy', file_name: 'scipy-1.whl', depends: ['numpy', 'openblas'] },
+        pandas: { name: 'pandas', file_name: 'pandas-2.whl', depends: ['numpy', 'python-dateutil'] },
+        'python-dateutil': { name: 'python-dateutil', file_name: 'python_dateutil-2.whl', depends: [] },
+        micropip: { name: 'micropip', file_name: 'micropip-0.whl', depends: [] },
+    };
+    let loads = 0;
+    const py = {
+        loadedPackages: {},
+        async loadPackage(n) { if (n === 'micropip') py.loadedPackages.micropip = 'default channel'; },
+        globals: { set: (k, v) => calls.push(v) },
+        async runPythonAsync() {
+            const deps = calls[calls.length - 1];
+            const gain = { scipy: ['scipy', 'numpy', 'openblas'], 'pandas>=2': ['pandas', 'numpy', 'python-dateutil'] };
+            for (const d of deps) for (const n of gain[d]) py.loadedPackages[n] = 'default channel';
+            return JSON.stringify({ packages: lock });
+        },
+    };
+    const session = {};
+    const opts = {
+        indexURL: INDEX, session, nativeWheels: async () => ({}),
+        loadPyodide: async () => { loads++; return py; },
+        fetch: async (u) => { fetched.push(u); return { ok: true, arrayBuffer: async () => bytes(u) }; },
+    };
+    const a = await SkillWheels.gather(['scipy'], opts);
+    const b = await SkillWheels.gather(['pandas>=2'], opts);
+    assert.equal(loads, 1);
+    assert.deepEqual(Object.keys(a.pyodide).sort(), ['numpy-2.0.whl', 'openblas-0.3.26.zip', 'scipy-1.whl']);
+    assert.deepEqual(Object.keys(b.pyodide).sort(), ['numpy-2.0.whl', 'pandas-2.whl', 'python_dateutil-2.whl']);
+    assert.equal(fetched.filter((u) => u.endsWith('numpy-2.0.whl')).length, 1);
+});

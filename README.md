@@ -297,7 +297,8 @@ and start by themselves, also after a restart or a rebuild of the stack.
 
 Skills you create or import in the Docker app are kept in the `gpt-skills`
 volume (public or private, per person), so they survive a rebuild and need no
-local folder. Exporting a skill together with its Python libraries needs
+local skills folder (runs still write their results to your local folder's
+`outputs/`). Exporting a skill together with its Python libraries needs
 Python 3 and pip on the server; the Docker image already has them.
 
 ### Using Rancher Desktop

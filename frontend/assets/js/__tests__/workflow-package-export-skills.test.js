@@ -15,7 +15,7 @@ global.window = {
         skillDependencies: (md) => (/dependencies:/.test(md) ? ['numpy'] : []),
         build: async (o) => { calls.build.push(o); return new Uint8Array([1]); },
     },
-    SkillWheels: { gather: async (d) => { calls.gather.push(d); if (gatherError) throw gatherError; return { pyodide: { 'a.whl': enc('A') }, native: {} }; } },
+    SkillWheels: { gather: async (d, o) => { calls.gather.push(d); calls.sessions = (calls.sessions || []).concat([o && o.session]); if (gatherError) throw gatherError; return { pyodide: { 'a.whl': enc('A') }, native: {} }; } },
 };
 require('../workflow-package-ui.js');
 const { bundleSkills } = window.WorkflowPackageUI;
@@ -41,6 +41,15 @@ const run = (dirs, readable = true, files = {}) => bundleSkills({ dirs, nodes, r
     await run(['pdf'], true, files);
     assert.deepStrictEqual(calls.gather, [['numpy']]);
     assert.deepStrictEqual(Object.keys(calls.build[1].pyodideWheels), ['a.whl']);
+    // several skills of one package share ONE export Pyodide session; the next export starts a new one
+    store = { pdf: store.pdf, doc: { 'SKILL.md': enc('---\ndependencies: [numpy]\n---\n') } };
+    calls.sessions = [];
+    await run(['pdf', 'doc'], true, {});
+    assert.strictEqual(calls.sessions.length, 2);
+    assert.ok(calls.sessions[0] && typeof calls.sessions[0] === 'object');
+    assert.strictEqual(calls.sessions[0], calls.sessions[1]);
+    await run(['pdf'], true, {});
+    assert.notStrictEqual(calls.sessions[2], calls.sessions[0]);
     // 422: library and platform surface
     gatherError = Object.assign(new Error('x'), { code: 'native-missing', library: 'lxml', platform: 'win-arm64' });
     await assert.rejects(run(['pdf']), /No wheel for lxml on win-arm64/);

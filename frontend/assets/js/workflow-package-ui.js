@@ -115,6 +115,7 @@
      */
     async function bundleSkills({ dirs, nodes, readable, t, files, onProgress }) {
         const out = [];
+        const wheelSession = {};   // one export Pyodide for all the skills of this package
         const nodeLabel = (dir) => {
             const n = (nodes || []).find((x) => x.node_type === 'agent' && x.config && x.config.bound_skill && x.config.bound_skill.dir_name === dir);
             const c = (n && n.config) || {};
@@ -128,7 +129,7 @@
             let wheels = { pyodide: {}, native: {} };
             const wheelDeps = window.SkillZip.skillDependencies(new TextDecoder().decode(found['SKILL.md']));
             if (wheelDeps.length) {
-                try { wheels = await window.SkillWheels.gather(wheelDeps); }
+                try { wheels = await window.SkillWheels.gather(wheelDeps, { session: wheelSession }); }
                 catch (e) { console.error('[workflow-package] gathering wheels failed:', e); throw new Error(window.skillsImport.wheelsError(e)); }
             }
             files[WP().skillZipPath(dir)] = await window.SkillZip.build({
