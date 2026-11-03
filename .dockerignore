@@ -23,6 +23,7 @@
 !backend
 !frontend
 !docker
+!scripts/vendor-pyodide.sh
 !langchain_runner
 !index.html
 !.htaccess

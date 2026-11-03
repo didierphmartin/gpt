@@ -36,7 +36,7 @@ for n in sorted(seen):
 PY
 while read -r name sum; do
     curl -fsSL "$BASE/$name" -o "$DEST/$name"
-    got="$(shasum -a 256 "$DEST/$name" | cut -d' ' -f1)"
+    got="$(python3 -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$DEST/$name")"
     [ "$got" = "$sum" ] || { echo "checksum mismatch: $name" >&2; exit 1; }
 done < "$LIST"
 echo "Pyodide $VERSION installed in $DEST"
