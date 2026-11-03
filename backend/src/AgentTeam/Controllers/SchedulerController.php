@@ -160,7 +160,8 @@ class SchedulerController
 
         $tick = new ScheduleTick(
             $this->scheduleService,
-            ScheduleTick::workflowRunner($workflowRepository, $graphRepository, $graphWorkflowRunner, $workflowRunner)
+            ScheduleTick::workflowRunner($workflowRepository, $graphRepository, $graphWorkflowRunner, $workflowRunner,
+                new \Quantis\AIPortfolioAssistant\Services\RobotSkillPolicy($this->db, $this->config, \Quantis\AIPortfolioAssistant\Services\SkillStore::fromEnv($this->config)))
         );
         // A missing active_workflows table (not migrated yet) must not break the tick: then nothing is due, never every schedule.
         try {

@@ -87,7 +87,7 @@ final class RobotSkillPolicyTest extends TestCase
     {
         $this->db->prepare('INSERT INTO workflow_nodes (workflow_id, node_type, config) VALUES (?, ?, ?)')
             ->execute([self::WF, 'agent', json_encode(['bound_skill' => ['dir_name' => 'ghost']])]);
-        $this->assertContains(['path' => 'ghost', 'owner_id' => 0, 'owner_name' => ''], $this->policy()->privateSkills(self::WF));
+        $this->assertContains(['path' => 'ghost', 'owner_id' => 0, 'owner_name' => '', 'missing' => true], $this->policy()->privateSkills(self::WF));
     }
 
     public function test_none_in_individual(): void
@@ -119,6 +119,7 @@ final class RobotSkillPolicyTest extends TestCase
     {
         $this->assertSame(['success' => false, 'code' => 'private_skills',
             'message' => 'This workflow uses private skills. The robot can only use public skills.',
+            'error' => 'This workflow uses private skills. The robot can only use public skills.',
             'data' => ['skills' => $this->secret()], 'status_code' => 409], RobotSkillPolicy::refusal($this->secret()));
     }
 
@@ -184,14 +185,14 @@ final class RobotSkillPolicyTest extends TestCase
             $this->assertSame([['id' => self::WF, 'name' => 'Mail to PDF']], $e->workflows());
             $this->assertSame(409, $e->statusCode());
         }
-        $this->assertSame('public', $this->store()->list(self::OWNER)[0]['visibility'] ?? 'public');
+        $this->assertDirectoryExists("{$this->root}/public/shared");
+        $this->assertDirectoryDoesNotExist("{$this->root}/users/" . self::OWNER . '/shared');
     }
 
     public function test_delete_refused_when_robot_workflow_binds_it(): void
     {
         $this->toRobot();
         $_ENV['SKILLS_DIR'] = $this->root;
-        $_ENV['GPT_EDITION'] = 'corporate';
         $c = new SkillStoreController($this->db, ['edition' => 'corporate']);
         $r = $c->delete(['user_id' => self::OWNER, 'query' => ['path' => 'shared']]);
         $this->assertSame([409, [['id' => self::WF, 'name' => 'Mail to PDF']]], [$r['status_code'], $r['data']['robot_workflows']]);
@@ -209,12 +210,43 @@ final class RobotSkillPolicyTest extends TestCase
         $s->move(self::OWNER, 'grp/shared', 'grp/renamed');
     }
 
-    public function test_unbound_skills_and_individual_edition_are_free(): void
+    public function test_unbound_skills_are_free(): void
     {
         $this->toRobot();
-        $this->store()->import(self::OWNER, 'free', $this->files('free'), 'public');
-        $this->store()->setVisibility(self::OWNER, 'free', 'private');
-        $this->store()->delete(self::OWNER, 'free');
-        $this->assertTrue(true);
+        $s = $this->store();
+        $s->import(self::OWNER, 'free', $this->files('free'), 'public');
+        $s->setVisibility(self::OWNER, 'free', 'private');
+        $this->assertDirectoryExists("{$this->root}/users/" . self::OWNER . '/free');
+        $s->delete(self::OWNER, 'free');
+        $this->assertDirectoryDoesNotExist("{$this->root}/users/" . self::OWNER . '/free');
+    }
+
+    public function test_bound_skill_stays_free_in_individual(): void
+    {
+        $this->toRobot();
+        $root = $this->root . '_ind';
+        mkdir($root);
+        $s = new SkillStore($root, 'individual', fn(string $leaf) => $this->policy()->robotWorkflowsUsing($leaf));
+        $s->import(self::OWNER, 'shared', $this->files('shared'));
+        $s->setVisibility(self::OWNER, 'shared', 'private');   // no public area; and no pin on a bound skill
+        $s->delete(self::OWNER, 'shared');
+        $this->assertSame([], $s->list(self::OWNER));
+        exec('rm -rf ' . escapeshellarg($root));
+    }
+
+    public function test_scheduled_robot_run_refused_and_runner_not_invoked(): void
+    {
+        $this->toRobot();
+        $wf = $this->createMock(\AgentTeam\Services\WorkflowRepository::class);
+        $workflow = $this->createMock(\AgentTeam\Models\Workflow::class);
+        $workflow->method('isEnabled')->willReturn(true);
+        $wf->method('findById')->willReturn($workflow);
+        $graph = $this->createMock(\AgentTeam\Services\GraphWorkflowRunner::class);
+        $graph->expects($this->never())->method('run');
+        $linear = $this->createMock(\AgentTeam\Services\WorkflowRunner::class);
+        $linear->expects($this->never())->method('run');
+        $run = \AgentTeam\Services\ScheduleTick::workflowRunner($wf, null, $graph, $linear, $this->policy());
+        $r = $run(['workflow_id' => self::WF, 'user_id' => $this->robot]);
+        $this->assertSame([false, 'private_skills', $this->secret()], [$r['success'], $r['code'], $r['skills']]);
     }
 }

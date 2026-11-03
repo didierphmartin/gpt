@@ -19,14 +19,14 @@ final class RobotSkillPolicy
     {
     }
 
-    /** The 409 every refusal answers with. @param list<array{path:string,owner_id:int,owner_name:string}> $skills */
+    /** The 409 every refusal answers with. @param list<array{path:string,owner_id:int,owner_name:string,missing?:true}> $skills */
     public static function refusal(array $skills): array
     {
         return ['success' => false, 'code' => 'private_skills', 'message' => self::MESSAGE,
-            'data' => ['skills' => $skills], 'status_code' => 409];
+            'error' => self::MESSAGE, 'data' => ['skills' => $skills], 'status_code' => 409];
     }
 
-    /** @return list<array{path:string,owner_id:int,owner_name:string}> empty unless corporate + volume mode */
+    /** @return list<array{path:string,owner_id:int,owner_name:string,missing?:true}> empty unless corporate + volume mode */
     public function privateSkills(int $workflowId): array
     {
         $robot = RobotAccount::id($this->db);
@@ -45,9 +45,16 @@ final class RobotSkillPolicy
             }
             $found = $this->store->findPrivate($leaf);
             $out[$leaf] = ['path' => $found['path'] ?? $dir, 'owner_id' => $found['owner_id'] ?? 0,
-                'owner_name' => $found === null ? '' : $this->ownerName($found['owner_id'])];
+                'owner_name' => $found === null ? '' : $this->ownerName($found['owner_id'])]
+                + ($found === null ? ['missing' => true] : []);
         }
         return array_values($out);
+    }
+
+    /** privateSkills() for a workflow run on behalf of $ownerId: only the robot's runs are held to public skills. */
+    public function privateSkillsForOwner(int $ownerId, int $workflowId): array
+    {
+        return RobotAccount::id($this->db) === $ownerId ? $this->privateSkills($workflowId) : [];
     }
 
     /** @return list<array{id:int,name:string}> the robot's workflows whose nodes bind the skill $leafName */
