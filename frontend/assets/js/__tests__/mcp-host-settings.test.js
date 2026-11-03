@@ -205,6 +205,19 @@ const makeStub = (over = {}) => {
         await env.panel.toggleMCPServer(7);
         assert.strictEqual(g.enabled, null);
     }
+    // an unset field (value "" from the host) shows its default, and Save does not send it
+    {
+        const stub = makeStub({ hostSettings: async () => ({ fields: [
+            { name: 'D', label: 'd', required: false, filled: false, value: '', default: 'dflt' },
+        ] }) });
+        const { panel, calls, item } = makeEnv(stub);
+        panel.myMcpServers = [server];
+        await panel.refreshMCPLocal([server]);
+        panel.showMCPLocalPanel(7);
+        assert.strictEqual(item._panel.querySelectorAll('[data-value]')[0].value, 'dflt');
+        await panel.saveMCPLocalSettings(7, item._panel);
+        assert.strictEqual(stub.saved, null);
+    }
     // saving with nothing changed says so
     {
         const stub = makeStub();

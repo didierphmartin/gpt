@@ -1745,7 +1745,7 @@ class SettingsPanel {
             const data = await window.mcpClient.hostSettings(folder);
             info.fields = data?.fields || [];
             // Secrets show empty (their placeholder says they are set); the rest show value or default.
-            info.shown = Object.fromEntries(info.fields.map(f => [f.name, f.secret ? '' : (f.value ?? f.default ?? '')]));   // default shows while unset
+            info.shown = Object.fromEntries(info.fields.map(f => [f.name, f.secret ? '' : (f.filled ? (f.value ?? '') : (f.default ?? ''))]));   // default shows while unset (display only)
             info.missing = info.fields.filter(f => f.required && !f.filled).map(f => f.name);
         } catch (e) {
             console.warn('[settings:mcp] host settings unreadable:', e.message);
