@@ -29,9 +29,9 @@ q() { docker compose exec -T db mysql -ugpt -pgpt gpt_chatbot -N -B -e "$1" 2>/d
 [ "$(q 'SELECT COUNT(*) FROM system_llm_settings;')" -gt 0 ] \
   || fail "provider catalog was not seeded"
 
-# Default profile starts exactly two containers.
-[ "$(docker compose ps --services | wc -l | tr -d ' ')" = "2" ] \
-  || fail "default profile should start only db and web"
+# Default profile starts exactly three containers.
+[ "$(docker compose ps --services | wc -l | tr -d ' ')" = "3" ] \
+  || fail "default profile should start only db, web and mcps"
 
 echo "PASS: stack up, schema and seed loaded"
 

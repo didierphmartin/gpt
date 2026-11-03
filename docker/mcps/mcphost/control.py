@@ -159,6 +159,8 @@ class Control:
                 p = d / rel
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_bytes(data)
+                if rel.endswith(".sh"):
+                    p.chmod(0o755)   # a browser upload carries no mode bits, and start is usually ./run.sh
             (d / ".env").write_text(env_text, encoding="utf-8")
             manifest = _manifest(d)
             cmd = manifest.get("install")
