@@ -8,6 +8,8 @@ use Quantis\AIPortfolioAssistant\Services\SkillForbidden;
 use Quantis\AIPortfolioAssistant\Services\SkillNotFound;
 use Quantis\AIPortfolioAssistant\Services\SkillPathInvalid;
 use Quantis\AIPortfolioAssistant\Services\SkillStore;
+use Quantis\AIPortfolioAssistant\Services\SkillWheelError;
+use Quantis\AIPortfolioAssistant\Services\SkillWheelFetcher;
 
 /**
  * /api/v1/skills — the Docker app's skills volume (SkillStore). Without SKILLS_DIR (folder mode) every route but
@@ -19,8 +21,11 @@ final class SkillStoreController
     /** @var \Closure(): ?SkillStore */
     private \Closure $storeFactory;
 
-    public function __construct(private readonly PDO $db, private readonly array $config, ?\Closure $storeFactory = null)
+    private SkillWheelFetcher $wheels;
+
+    public function __construct(private readonly PDO $db, private readonly array $config, ?\Closure $storeFactory = null, ?SkillWheelFetcher $wheels = null)
     {
+        $this->wheels = $wheels ?? new SkillWheelFetcher();
         $this->storeFactory = $storeFactory ?? fn() => SkillStore::fromEnv($this->config);
     }
 
@@ -102,6 +107,21 @@ final class SkillStoreController
             $s->delete(self::uid($request), self::q($request, 'path'));
             return [];
         });
+    }
+
+    /** Works in both modes (the export needs it everywhere), so it bypasses the "no skill store" guard. */
+    public function nativeWheels(array $request): array
+    {
+        $deps = self::body($request)['dependencies'] ?? null;
+        if (!is_array($deps) || array_filter($deps, fn($d) => !is_string($d))) {
+            return ['success' => false, 'data' => ['message' => 'dependencies must be a list of strings.'], 'error' => 'dependencies must be a list of strings.', 'status_code' => 400];
+        }
+        try {
+            $wheels = array_map('base64_encode', $this->wheels->fetch(array_values($deps)));
+            return ['success' => true, 'data' => ['wheels' => (object) $wheels], 'status_code' => 200];
+        } catch (SkillWheelError $e) {
+            return ['success' => false, 'data' => ['message' => $e->getMessage()] + $e->data(), 'error' => $e->getMessage(), 'status_code' => $e->statusCode()];
+        }
     }
 
     /** @param \Closure(SkillStore): mixed $fn */
