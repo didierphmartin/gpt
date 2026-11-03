@@ -398,7 +398,8 @@ final class SkillStore
                 continue;
             }
             $rel = substr($f->getPathname(), strlen($dir) + 1);
-            if (str_starts_with($rel, '.wheels/native/') || (!$withWheels && str_starts_with($rel, '.wheels/'))) {
+            if (str_starts_with($rel, '.wheels/native/') || (!$withWheels && str_starts_with($rel, '.wheels/'))
+                || $this->isPyCache($rel)) {
                 continue;
             }
             $out[$rel] = (string) file_get_contents($f->getPathname());
@@ -412,11 +413,20 @@ final class SkillStore
         return array_filter($files, fn($k) => !str_starts_with((string) $k, '.wheels/'), ARRAY_FILTER_USE_KEY);
     }
 
+    /** Python's bytecode cache (`__pycache__/`, `*.pyc`): never part of a skill's content. */
+    private function isPyCache(string $rel): bool
+    {
+        return in_array('__pycache__', explode('/', $rel), true) || str_ends_with($rel, '.pyc');
+    }
+
     /** @param array<string,string> $files */
     private function fingerprint(array $files): array
     {
         $out = [];
         foreach ($files as $rel => $bytes) {
+            if ($this->isPyCache((string) $rel)) {
+                continue;
+            }
             $out[(string) $rel] = hash('sha256', $bytes);
         }
         ksort($out);

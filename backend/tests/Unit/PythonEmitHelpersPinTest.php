@@ -31,9 +31,9 @@ class PythonEmitHelpersPinTest extends TestCase
     public function testSkillDepsBlockUnchanged(): void
     {
         $block = PythonEmitHelpers::skillDepsBlock();
-        $this->assertSame(3466, strlen($block), 'skillDepsBlock byte length changed');
+        $this->assertSame(4380, strlen($block), 'skillDepsBlock byte length changed');
         $this->assertSame(
-            'f672309fef1c4e895f516ce950aa01b9a8decf262120a8e4cd510fc3017926b1',
+            '3904a498a7210c65e9d783bd60670af8a45e3aac3c2ca77c6434802d42049a15',
             hash('sha256', $block),
             'skillDepsBlock content changed — this alters generated Python for both generators'
         );
@@ -49,6 +49,9 @@ class PythonEmitHelpersPinTest extends TestCase
         $dir = sys_get_temp_dir() . '/skilldeps_' . bin2hex(random_bytes(4));
         mkdir("$dir/wheels/.wheels/native", 0777, true);
         mkdir("$dir/plain", 0777, true);
+        mkdir("$dir/have", 0777, true);
+        // Already installed (a distribution, a module): no pip process at all, as in LangGraph's _importable.
+        file_put_contents("$dir/have/SKILL.md", "---\nname: have\ndependencies: [pip>=1, json]\n---\n");
         file_put_contents("$dir/wheels/.wheels/native/zz_a-1.0-py3-none-any.whl", 'PK');
         foreach (['wheels', 'plain'] as $s) {
             file_put_contents("$dir/$s/SKILL.md", "---\nname: $s\ndependencies: [zz-a, zz-b>=1.0]\n---\n");
@@ -66,6 +69,9 @@ _INSTALLED_DEPS.clear()
 calls.clear()
 _ensure_skill_deps(os.path.join(root, "plain"))     # no wheels: one online install per dependency, as before
 print(json.dumps(calls))
+calls.clear()
+_ensure_skill_deps(os.path.join(root, "have"))
+print("have", json.dumps(calls))
 PY;
         file_put_contents("$dir/probe.py", $py);
         exec('python3 ' . escapeshellarg("$dir/probe.py") . ' ' . escapeshellarg($dir) . ' 2>&1', $out, $rc);
@@ -74,6 +80,7 @@ PY;
         $calls = array_values(array_filter($out, fn(string $l) => str_starts_with($l, '[[')));
         $this->assertSame(['[["install", "-q", "--no-index", "--find-links", "<root>/wheels/.wheels/native", "zz-a", "zz-b>=1.0"]]',
             '[["install", "-q", "zz-a"], ["install", "-q", "zz-b>=1.0"]]'], $calls, implode("\n", $out));
+        $this->assertContains('have []', $out, implode("\n", $out));
     }
 
     public function testDocumentConverterBlockUnchanged(): void

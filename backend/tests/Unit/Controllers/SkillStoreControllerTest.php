@@ -119,7 +119,15 @@ final class SkillStoreControllerTest extends TestCase
         $c->visibility($this->req([], ['path' => 'g/demo', 'visibility' => 'public']));
         $clash = $this->import($c, 'g/demo', 'other');
         self::assertSame(409, $clash['status_code']);
-        self::assertSame(['clash' => 'different'], $clash['data']);
+        self::assertSame('different', $clash['data']['clash']);
+        self::assertSame("A different skill is already installed at 'g/demo'.", $clash['data']['message']);
+        // A move onto a taken path says which path.
+        $this->import($c, 'g/a', 'a');
+        $this->import($c, 'g/b', 'b');
+        $mv = $c->move($this->req([], ['from' => 'g/a', 'to' => 'g/b']));
+        self::assertSame(409, $mv['status_code']);
+        self::assertSame('different', $mv['data']['clash']);
+        self::assertSame("A skill already exists at 'g/b'.", $mv['data']['message']);
         self::assertSame(404, $c->files($this->req(['path' => 'nope']))['status_code']);
         self::assertSame(403, $c->writeFile($this->req([], ['path' => 'g/demo', 'rel' => 'x', 'content' => ''], 8))['status_code']);
         self::assertSame(404, $c->readFile($this->req(['path' => 'g/demo', 'rel' => 'zzz'], [], 7))['status_code']);

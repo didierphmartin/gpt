@@ -166,8 +166,8 @@ final class SkillStoreController
             return ['success' => true, 'data' => $fn($s), 'status_code' => 200];
         } catch (SkillInUse $e) {
             return ['success' => false, 'data' => ['message' => $e->getMessage(), 'robot_workflows' => $e->workflows()], 'error' => $e->getMessage(), 'status_code' => $e->statusCode()];
-        } catch (SkillClashException) {
-            return ['success' => false, 'data' => ['clash' => 'different'], 'error' => 'clash', 'status_code' => 409];
+        } catch (SkillClashException $e) {
+            return ['success' => false, 'data' => ['clash' => 'different', 'message' => $e->getMessage()], 'error' => 'clash', 'status_code' => 409];
         } catch (SkillNotFound | SkillForbidden | SkillPathInvalid $e) {
             return ['success' => false, 'data' => ['message' => $e->getMessage()], 'error' => $e->getMessage(), 'status_code' => $e->statusCode()];
         }

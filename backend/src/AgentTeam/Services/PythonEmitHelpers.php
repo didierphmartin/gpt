@@ -253,6 +253,24 @@ _INSTALLED_DEPS = set()
 _DEPS_LOCK = threading.Lock()
 
 
+def _importable(dep: str) -> bool:
+    """Is a declared dependency (a pip requirement such as 'beautifulsoup4' or 'pypdf>=4') already
+    installed: a distribution of that name, or a module of that name?"""
+    import importlib.metadata, importlib.util, re
+    name = re.split(r"[\s<>=!~;\[]", dep.strip(), maxsplit=1)[0]
+    if not name:
+        return False
+    try:
+        importlib.metadata.distribution(name)
+        return True
+    except Exception:  # noqa: BLE001 -- PackageNotFoundError, or a bad name
+        pass
+    try:
+        return importlib.util.find_spec(name.replace("-", "_")) is not None
+    except Exception:  # noqa: BLE001 -- e.g. a dotted name whose parent is missing
+        return False
+
+
 def _ensure_skill_deps(skill_dir: str) -> None:
     md = os.path.join(skill_dir, "SKILL.md")
     if not os.path.isfile(md):
@@ -279,8 +297,14 @@ def _ensure_skill_deps(skill_dir: str) -> None:
     wheels = os.path.join(skill_dir, ".wheels", "native")
     offline = os.path.isdir(wheels) and any(f.endswith(".whl") for f in os.listdir(wheels))
     with _DEPS_LOCK:
-        missing = [d for d in deps if d not in _INSTALLED_DEPS]
-        _INSTALLED_DEPS.update(missing)
+        missing = []
+        for d in deps:
+            if d in _INSTALLED_DEPS:
+                continue
+            _INSTALLED_DEPS.add(d)
+            if _importable(d):   # requirements.txt (or the runner's venv) already has it: no pip at all
+                continue
+            missing.append(d)
         if offline and missing:
             names = " ".join(missing)
             try:

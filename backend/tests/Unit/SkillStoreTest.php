@@ -91,6 +91,30 @@ final class SkillStoreTest extends TestCase
         $this->assertSame('print(\'hi\')' . "\n", (new SkillStore($this->root . '/individual', 'individual'))->readFile(99, 'b', 'scripts/run.py', true));
     }
 
+    public function test_python_bytecode_is_not_skill_content(): void
+    {
+        $s = $this->store();
+        $s->import(1, 'docx', $this->skill());
+        // A run left Python's bytecode cache in the stored skill (older clients saved it back).
+        $s->writeFile(1, 'docx', 'scripts/__pycache__/run.cpython-312.pyc', "\x00bytecode");
+        $s->writeFile(1, 'docx', 'scripts/old.pyc', "\x00bytecode");
+        $this->assertSame(['status' => 'identical'], $s->import(1, 'docx', $this->skill()));
+        $this->assertSame('identical', $s->import(1, 'g/docx', $this->skill())['status']);
+        // Incoming bytecode does not make an otherwise identical copy different either.
+        $withPyc = $this->skill() + ['scripts/__pycache__/x.pyc' => 'b'];
+        $this->assertSame(['status' => 'identical'], $s->import(1, 'docx', $withPyc));
+        // And it is never served.
+        $this->assertSame(['SKILL.md', 'scripts/run.py'], $this->sortedKeys($s->files(1, 'docx')));
+    }
+
+    /** @param array<string,string> $a */
+    private function sortedKeys(array $a): array
+    {
+        $k = array_map('strval', array_keys($a));
+        sort($k);
+        return $k;
+    }
+
     public function test_identical_reimport_reports_identical(): void
     {
         $s = $this->store();
