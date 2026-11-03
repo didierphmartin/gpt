@@ -1,0 +1,167 @@
+import base64
+import http.client
+import json
+import shutil
+import tempfile
+import threading
+import unittest
+from pathlib import Path
+
+from mcphost import control, envfile
+from mcphost.procs import Manager
+from mcphost.registry import Registry
+
+FIXTURES = Path(__file__).parent / "fixtures"
+TOKEN = "t0ken"
+
+
+def b64(data) -> str:
+    return base64.b64encode(data if isinstance(data, bytes) else data.encode()).decode()
+
+
+class Resp:
+    def __init__(self, r):
+        self.status, self.raw = r.status, r.read()
+
+    def json(self):
+        return json.loads(self.raw)
+
+
+class ControlTest(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.registry = Registry(self.root)
+        self.manager = Manager(self.root, self.registry)
+        self.srv = control.make_server(self.root, self.registry, self.manager, TOKEN, port=0)
+        self.port = self.srv.server_address[1]
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+        self.manager.stop_all()
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def call(self, method, path, body=None, token=TOKEN, raw=None):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
+        h = {"Authorization": "Bearer " + token} if token else {}
+        data = raw if raw is not None else (json.dumps(body) if body is not None else None)
+        c.request(method, path, data, h)
+        r = Resp(c.getresponse())
+        c.close()
+        return r
+
+    def get(self, path, token=TOKEN): return self.call("GET", path, token=token)
+    def put(self, path, body): return self.call("PUT", path, body)
+
+    def fixture_files(self, name="ok_server", manifest_install=None):
+        files = {str(p.relative_to(FIXTURES / name)): b64(p.read_bytes()) for p in (FIXTURES / name).rglob("*") if p.is_file()}
+        if manifest_install is not None:
+            m = json.loads((FIXTURES / name / "synergyai-mcp.json").read_text())
+            m["install"] = manifest_install
+            files["synergyai-mcp.json"] = b64(json.dumps(m))
+        return files
+
+    def install(self, folder, files=None, env=None, manifest_install=None, name="Fake"):
+        files = self.fixture_files(manifest_install=manifest_install) if files is None else files
+        return self.call("POST", f"/servers/{folder}/install", {"name": name, "installed_by": 7, "files": files, "env": env or {}})
+
+    def test_needs_token(self):
+        self.assertEqual(self.get("/servers", token=None).status, 401)
+        self.assertEqual(self.get("/servers", token="wrong").status, 401)
+        self.assertEqual(self.get("/servers").json(), [])
+
+    def test_install_refuses_existing_and_unsafe(self):
+        self.assertEqual(self.install("ok_server").status, 201)
+        self.assertEqual(self.install("ok_server").status, 409)
+        self.assertEqual(self.install("bad", files={"../x": b64("x")}).status, 400)
+        self.assertFalse((self.root / "bad").exists())
+        self.assertEqual(self.install(".hidden").status, 400)
+
+    def test_install_lists_server(self):
+        r = self.install("ok_server")
+        self.assertEqual(set(r.json()), {"folder", "port", "state"})
+        s = self.get("/servers").json()[0]
+        self.assertEqual((s["folder"], s["name"], s["installed_by"], s["enabled"]), ("ok_server", "Fake", 7, True))
+
+    def test_failed_install_leaves_nothing(self):
+        r = self.install("broken", files=self.fixture_files(manifest_install="echo boom; exit 3"))
+        self.assertEqual(r.status, 422)
+        self.assertEqual(r.json()["error"], "install-failed")
+        self.assertIn("boom", r.json()["log"])
+        self.assertFalse((self.root / "broken").exists())
+        self.assertIsNone(self.registry.get("broken"))
+
+    def test_concurrent_install_one_wins(self):
+        files = self.fixture_files(manifest_install="sleep 1")
+        out = []
+        ts = [threading.Thread(target=lambda: out.append(self.install("same", files=files).status)) for _ in range(2)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        self.assertEqual(sorted(out), [201, 409])
+
+    def test_installing_state_visible(self):
+        files = self.fixture_files(manifest_install="sleep 1")
+        t = threading.Thread(target=lambda: self.install("slow", files=files))
+        t.start()
+        try:
+            end = __import__("time").monotonic() + 5
+            states = []
+            while __import__("time").monotonic() < end and "installing" not in states:
+                states = [s["state"] for s in self.get("/servers").json() if s["folder"] == "slow"]
+            self.assertIn("installing", states)
+        finally:
+            t.join()
+
+    def test_secrets_never_returned_and_kept_when_blank(self):
+        self.install("ok_server", env={"FAKE_TOKEN": "s3cret", "FAKE_DB_PATH": "n"})
+        body = self.get("/servers/ok_server/settings").json()
+        sec = next(f for f in body["fields"] if f["name"] == "FAKE_TOKEN")
+        self.assertEqual((sec["filled"], "value" in sec), (True, False))
+        self.assertNotIn("s3cret", json.dumps(body))
+        plain = next(f for f in body["fields"] if f["name"] == "FAKE_DB_PATH")
+        self.assertEqual(plain["value"], "n")
+        r = self.put("/servers/ok_server/settings", {"values": {"FAKE_TOKEN": "", "FAKE_DB_PATH": "m"}})
+        self.assertEqual((r.status, r.json()), (200, {"missing": []}))
+        self.assertEqual(envfile.parse((self.root / "ok_server/.env").read_text()), {"FAKE_TOKEN": "s3cret", "FAKE_DB_PATH": "m"})
+
+    def test_missing_required_reported(self):
+        m = {"name": "r", "start": "./run.sh", "env": [{"name": "NEED", "required": True}]}
+        self.install("req", files={"synergyai-mcp.json": b64(json.dumps(m)), "run.sh": b64("#!/bin/sh\nsleep 30\n")})
+        self.assertEqual(self.put("/servers/req/settings", {"values": {}}).json(), {"missing": ["NEED"]})
+
+    def test_source_excludes_private_files(self):
+        self.install("ok_server", env={"FAKE_TOKEN": "x"})
+        d = self.root / "ok_server"
+        (d / ".venv").mkdir(); (d / ".venv/a.py").write_text("x")
+        (d / "tests").mkdir(); (d / "tests/t.py").write_text("x")
+        (d / "sub").mkdir(); (d / "sub/keep.py").write_text("k")
+        (d / "server.log.1").write_text("old")
+        files = self.get("/servers/ok_server/source").json()["files"]
+        self.assertNotIn(".env", files)
+        self.assertFalse(any(p.startswith((".venv/", "data/", "tests/")) or p.startswith("server.log") for p in files))
+        self.assertIn("run.sh", files)
+        self.assertEqual(base64.b64decode(files["sub/keep.py"]), b"k")
+
+    def test_source_honours_include(self):
+        m = {"name": "i", "start": "./run.sh", "include": ["run.sh", "synergyai-mcp.json"]}
+        self.install("inc", files={"synergyai-mcp.json": b64(json.dumps(m)), "run.sh": b64("sleep 30"), "other.py": b64("x")})
+        self.assertEqual(sorted(self.get("/servers/inc/source").json()["files"]), ["run.sh", "synergyai-mcp.json"])
+
+    def test_enabled_restart_delete(self):
+        self.install("ok_server")
+        r = self.call("POST", "/servers/ok_server/enabled", {"enabled": False})
+        self.assertEqual((r.status, self.registry.get("ok_server")["enabled"], self.manager.state("ok_server")), (200, False, "stopped"))
+        self.assertEqual(self.call("POST", "/servers/ok_server/restart").status, 200)
+        self.assertEqual(self.call("DELETE", "/servers/ok_server").status, 200)
+        self.assertFalse((self.root / "ok_server").exists())
+        self.assertIsNone(self.registry.get("ok_server"))
+        self.assertEqual(self.call("POST", "/servers/ok_server/restart").status, 404)
+
+    def test_bad_folder_and_body_limits(self):
+        self.assertEqual(self.get("/servers/..%2Fx/settings").status, 400)
+        self.assertEqual(self.call("DELETE", "/servers/.hid").status, 400)
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        c.request("POST", "/servers/x/install", None, {"Authorization": "Bearer " + TOKEN, "Content-Length": str(51 * 1024 * 1024)})
+        self.assertEqual(c.getresponse().status, 413)
+        self.assertEqual(self.call("POST", "/servers/x/install", raw="not json").status, 400)
