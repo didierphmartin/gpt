@@ -10,6 +10,7 @@ use Quantis\AIPortfolioAssistant\Services\RobotAccount;
 use Quantis\AIPortfolioAssistant\Services\Edition;
 use Quantis\AIPortfolioAssistant\Services\LoginAccounts;
 use Quantis\AIPortfolioAssistant\Services\DecisionProviders;
+use Quantis\AIPortfolioAssistant\Services\McpEndpoint;
 use PDO;
 use Exception;
 
@@ -3974,6 +3975,7 @@ Return ONLY the JSON array, no explanation or markdown.";
     /**
      * Low-level MCP HTTP call with SSE support + session id propagation.
      * $sessionId is updated by-reference from any Mcp-Session-Id response header.
+     * The URL goes through McpEndpoint::internal (the Docker gateway rewrite).
      * Returns ['ok' => bool, 'error' => string|null, 'data' => array|null].
      */
     private function mcpHttpCall(string $url, array $request, array $extraHeaders, ?string &$sessionId, bool $expectResponse = true): array
@@ -3986,7 +3988,7 @@ Return ONLY the JSON array, no explanation or markdown.";
             $headers[] = 'Mcp-Session-Id: ' . $sessionId;
         }
 
-        $ch = curl_init($url);
+        $ch = curl_init(McpEndpoint::internal($url));
         curl_setopt_array($ch, [
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => json_encode($request),

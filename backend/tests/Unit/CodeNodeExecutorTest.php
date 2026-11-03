@@ -107,6 +107,32 @@ final class CodeNodeExecutorTest extends TestCase
         self::assertArrayNotHasKey('other', $servers);
     }
 
+    public function testDockerGatewayUrlIsRewrittenForTheRunner(): void
+    {
+        $saved = [$_ENV['MCPS_GATEWAY'] ?? null, $_ENV['MCPS_PUBLIC_GATEWAY'] ?? null];
+        $_ENV['MCPS_GATEWAY'] = 'http://mcps:8790';
+        $_ENV['MCPS_PUBLIC_GATEWAY'] = 'http://localhost:8790';
+        try {
+            $pdo = new \PDO('sqlite::memory:');
+            $pdo->exec('CREATE TABLE mcp_servers (id INTEGER PRIMARY KEY, user_id TEXT, name TEXT, url TEXT, headers TEXT, enabled INTEGER)');
+            $pdo->exec("INSERT INTO mcp_servers (user_id, name, url, headers, enabled) VALUES ('3', 'Outlook', 'http://localhost:8790/outlook_mcp/mcp', NULL, 1)");
+            $pdo->exec("INSERT INTO mcp_servers (user_id, name, url, headers, enabled) VALUES ('3', 'Other', 'http://localhost:8770/mcp', NULL, 1)");
+            $m = new \ReflectionMethod(CodeNodeExecutor::class, 'servers');
+            $m->setAccessible(true);
+            $servers = $m->invoke(new CodeNodeExecutor($pdo, []), '3');
+            self::assertSame('http://mcps:8790/outlook_mcp/mcp', $servers['outlook']['url']);
+            self::assertSame('http://localhost:8770/mcp', $servers['other']['url']);
+        } finally {
+            foreach (['MCPS_GATEWAY', 'MCPS_PUBLIC_GATEWAY'] as $i => $k) {
+                if ($saved[$i] === null) {
+                    unset($_ENV[$k]);
+                } else {
+                    $_ENV[$k] = $saved[$i];
+                }
+            }
+        }
+    }
+
     public function testRunnerFailureBecomesAnErrorResult(): void
     {
         $out = (new CodeNodeExecutor($this->pdo(), ['code_nodes' => ['python' => '/usr/bin/false']]))
