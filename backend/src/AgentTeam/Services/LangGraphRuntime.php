@@ -3200,13 +3200,32 @@ class SkillRuntime:
                 val = s.split(":", 1)[1].strip().strip("[]")
                 deps = [d.strip().strip("'").strip('"') for d in val.split(",") if d.strip()]
                 break
+        # A skill that carries its libraries (.wheels/native/, bundled at export) installs them from
+        # there, in one pip call, without the internet.
+        wheels = os.path.join(skill_dir, ".wheels", "native")
+        offline = os.path.isdir(wheels) and any(f.endswith(".whl") for f in os.listdir(wheels))
         with self._deps_lock:
+            missing = []
             for d in deps:
                 if d in self._installed_deps:
                     continue
                 self._installed_deps.add(d)
                 if self._importable(d):   # requirements.txt (or the runner's venv) already has it
                     continue
+                missing.append(d)
+            if offline and missing:
+                names = " ".join(missing)
+                try:
+                    node_print(f"  [run_skill_script] installing {names} from the skill's own wheels")
+                    r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-index", "--find-links", wheels,
+                                        *missing], capture_output=True, text=True, timeout=600)
+                    if r.returncode != 0:
+                        node_print(f"  [run_skill_script] pip install {names} FAILED: "
+                                   f"{(r.stderr or '')[-300:]}")
+                except Exception as e:
+                    node_print(f"  [run_skill_script] pip install {names} error: {e}")
+                return
+            for d in missing:
                 try:
                     node_print(f"[warn] installing {d} (not in requirements.txt)")
                     r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", d],

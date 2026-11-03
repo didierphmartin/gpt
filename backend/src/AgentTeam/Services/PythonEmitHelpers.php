@@ -274,11 +274,26 @@ def _ensure_skill_deps(skill_dir: str) -> None:
             val = s.split(":", 1)[1].strip().strip("[]")
             deps = [d.strip().strip("'").strip('"') for d in val.split(",") if d.strip()]
             break
+    # A skill that carries its libraries (.wheels/native/, bundled at export) installs them from
+    # there, in one pip call, without the internet.
+    wheels = os.path.join(skill_dir, ".wheels", "native")
+    offline = os.path.isdir(wheels) and any(f.endswith(".whl") for f in os.listdir(wheels))
     with _DEPS_LOCK:
-        for d in deps:
-            if d in _INSTALLED_DEPS:
-                continue
-            _INSTALLED_DEPS.add(d)
+        missing = [d for d in deps if d not in _INSTALLED_DEPS]
+        _INSTALLED_DEPS.update(missing)
+        if offline and missing:
+            names = " ".join(missing)
+            try:
+                print(f"  [run_skill_script] installing {names} from the skill's own wheels", flush=True)
+                r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-index", "--find-links", wheels,
+                                    *missing], capture_output=True, text=True, timeout=600)
+                if r.returncode != 0:
+                    print(f"  [run_skill_script] pip install {names} FAILED: "
+                          f"{(r.stderr or '')[-300:]}", flush=True)
+            except Exception as e:
+                print(f"  [run_skill_script] pip install {names} error: {e}", flush=True)
+            return
+        for d in missing:
             try:
                 print(f"  [run_skill_script] ensuring dependency: {d}", flush=True)
                 r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", d],

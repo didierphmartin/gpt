@@ -30,7 +30,7 @@ class LangGraphGenerator
     private WorkflowGraphRepository $graphRepo;
     private AgentRepository $agentRepo;
     /** Where the skill folders the modular package copies are read from (LangGraphPackage). */
-    private string $skillsRoot;
+    private string|\Closure $skillsRoot;
     /** The requesting user's document storage: the only place a Start document is copied from (none: no copy). */
     private ?StartDocumentStore $startDocuments;
 
@@ -39,7 +39,7 @@ class LangGraphGenerator
         WorkflowRepository $workflowRepo,
         WorkflowGraphRepository $graphRepo,
         AgentRepository $agentRepo,
-        ?string $skillsRoot = null,
+        string|\Closure|null $skillsRoot = null,
         ?StartDocumentStore $startDocuments = null
     ) {
         $this->db = $db;

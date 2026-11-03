@@ -31,12 +31,48 @@ class PythonEmitHelpersPinTest extends TestCase
     public function testSkillDepsBlockUnchanged(): void
     {
         $block = PythonEmitHelpers::skillDepsBlock();
-        $this->assertSame(2423, strlen($block), 'skillDepsBlock byte length changed');
+        $this->assertSame(3466, strlen($block), 'skillDepsBlock byte length changed');
         $this->assertSame(
-            '79f69500a85e9aa03f75f4336d93f8913bb954608a18e59885f90207af20948d',
+            'f672309fef1c4e895f516ce950aa01b9a8decf262120a8e4cd510fc3017926b1',
             hash('sha256', $block),
             'skillDepsBlock content changed — this alters generated Python for both generators'
         );
+    }
+
+    /** Skill-store Task 13: a skill with .wheels/native/ installs its dependencies in one pip call, from that folder only. */
+    public function testSkillDepsBlockInstallsFromTheSkillsOwnWheels(): void
+    {
+        exec('command -v python3', $o, $rc);
+        if ($rc !== 0) {
+            $this->markTestSkipped('python3 missing');
+        }
+        $dir = sys_get_temp_dir() . '/skilldeps_' . bin2hex(random_bytes(4));
+        mkdir("$dir/wheels/.wheels/native", 0777, true);
+        mkdir("$dir/plain", 0777, true);
+        file_put_contents("$dir/wheels/.wheels/native/zz_a-1.0-py3-none-any.whl", 'PK');
+        foreach (['wheels', 'plain'] as $s) {
+            file_put_contents("$dir/$s/SKILL.md", "---\nname: $s\ndependencies: [zz-a, zz-b>=1.0]\n---\n");
+        }
+        $py = "import os, sys, subprocess, threading, json\n" . PythonEmitHelpers::skillDepsBlock() . "\n" . <<<'PY'
+calls = []
+class R:
+    returncode, stderr = 0, ""
+subprocess.run = lambda argv, **kw: calls.append(argv[3:]) or R()
+root = sys.argv[1]
+_ensure_skill_deps(os.path.join(root, "wheels"))
+_ensure_skill_deps(os.path.join(root, "wheels"))   # once per process
+print(json.dumps(calls).replace(root, "<root>"))
+_INSTALLED_DEPS.clear()
+calls.clear()
+_ensure_skill_deps(os.path.join(root, "plain"))     # no wheels: one online install per dependency, as before
+print(json.dumps(calls))
+PY;
+        file_put_contents("$dir/probe.py", $py);
+        exec('python3 ' . escapeshellarg("$dir/probe.py") . ' ' . escapeshellarg($dir) . ' 2>&1', $out, $rc);
+        $this->assertSame(0, $rc, implode("\n", $out));
+        $calls = array_values(array_filter($out, fn(string $l) => str_starts_with($l, '[[')));
+        $this->assertSame(['[["install", "-q", "--no-index", "--find-links", "<root>/wheels/.wheels/native", "zz-a", "zz-b>=1.0"]]',
+            '[["install", "-q", "zz-a"], ["install", "-q", "zz-b>=1.0"]]'], $calls, implode("\n", $out));
     }
 
     public function testDocumentConverterBlockUnchanged(): void

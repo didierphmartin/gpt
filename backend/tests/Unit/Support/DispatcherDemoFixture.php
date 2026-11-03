@@ -84,14 +84,50 @@ final class DispatcherDemoFixture
      * @param class-string<T> $generatorClass
      * @return T
      */
-    public static function generator(string $generatorClass, \PDO $db): object
+    public static function generator(string $generatorClass, \PDO $db, string|\Closure|null $skillsRoot = null): object
     {
         return new $generatorClass(
             $db,
             new WorkflowRepository($db),
             new WorkflowGraphRepository($db),
-            new AgentRepository($db)
+            new AgentRepository($db),
+            $skillsRoot
         );
+    }
+
+    /** The fixture with "IT claims" (node 3) bound to the skill $dir. */
+    public static function pdoWithSkill(string $dir = 'pdf-report'): \PDO
+    {
+        $db = self::pdo();
+        $cfg = json_decode((string) $db->query('SELECT config FROM workflow_nodes WHERE id = 3')->fetchColumn(), true);
+        $cfg['bound_skill'] = ['dir_name' => $dir];
+        $db->prepare('UPDATE workflow_nodes SET config = ? WHERE id = 3')->execute([json_encode($cfg)]);
+        return $db;
+    }
+
+    /**
+     * A temp skills root holding pdf-report, whose libraries were bundled: .wheels/native/ (regular Python),
+     * .wheels/pyodide/ (the browser's) and .wheels/wheels.json.
+     */
+    public static function wheelSkillsRoot(): string
+    {
+        $root = sys_get_temp_dir() . '/wheelskills_' . bin2hex(random_bytes(4));
+        mkdir("$root/pdf-report/.wheels/native", 0777, true);
+        mkdir("$root/pdf-report/.wheels/pyodide", 0777, true);
+        file_put_contents("$root/pdf-report/SKILL.md", "---\nname: pdf-report\ndependencies: [fpdf2]\n---\nRender a PDF.\n");
+        file_put_contents("$root/pdf-report/run.py", "print('pdf')\n");
+        file_put_contents("$root/pdf-report/.wheels/native/fpdf2-2.8.1-py3-none-any.whl", "PK\x03\x04\xffnative");
+        file_put_contents("$root/pdf-report/.wheels/pyodide/fpdf2-2.8.1-py3-none-any.whl", "PK\x03\x04pyodide");
+        file_put_contents("$root/pdf-report/.wheels/wheels.json", '{"format":1}');
+        return $root;
+    }
+
+    /** The skill files (skills/...) of a package, sorted. */
+    public static function skillPaths(array $files): array
+    {
+        $paths = array_values(array_filter(array_column($files, 'path'), fn($p) => str_starts_with($p, 'skills/')));
+        sort($paths);
+        return $paths;
     }
 
     /** generatePackage() of the fixture workflow, as [path => code]. */

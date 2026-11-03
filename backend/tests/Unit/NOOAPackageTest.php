@@ -3,10 +3,18 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
+use Quantis\AIPortfolioAssistant\Tests\Unit\Support\CompiledSkillWheelsTests;
 use Quantis\AIPortfolioAssistant\Tests\Unit\Support\DispatcherDemoFixture;
 
 final class NOOAPackageTest extends TestCase
 {
+    use CompiledSkillWheelsTests;
+
+    protected static function generatorClass(): string
+    {
+        return \AgentTeam\Services\NOOAGenerator::class;
+    }
+
     private function generator(\PDO $db): \AgentTeam\Services\NOOAGenerator
     {
         return DispatcherDemoFixture::generator(\AgentTeam\Services\NOOAGenerator::class, $db);

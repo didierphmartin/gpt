@@ -167,6 +167,54 @@ final class RobotSkillPolicyTest extends TestCase
         $this->assertNotSame('private_skills', $r['code'] ?? null);
     }
 
+    /** Task 13: compiling a corporate robot workflow that binds a private skill is refused, for every target. */
+    public function test_robot_compile_refused_with_private_skills(): void
+    {
+        $this->toRobot();
+        $_ENV['SKILLS_DIR'] = $this->root;
+        $c = new WorkflowController($this->db, ['edition' => 'corporate']);
+        $req = ['user_id' => self::OWNER, 'params' => ['id' => self::WF], 'query' => ['modular' => '1']];
+        foreach (['generatePython', 'generateAdk', 'generateMaf', 'generateNooa'] as $route) {
+            $this->assertSame(RobotSkillPolicy::refusal($this->secret()), $c->$route($req), $route);
+        }
+    }
+
+    /** Task 13: in the Docker app a compile reads each skill from the store, with the workflow owner's visibility. */
+    public function test_compile_reads_skills_from_the_store(): void
+    {
+        $this->db->exec('ALTER TABLE users ADD COLUMN storage_folder TEXT');   // the Start documents' store reads it
+        $this->db->exec('CREATE TABLE IF NOT EXISTS mcp_server_tools (id INTEGER PRIMARY KEY, server_id INTEGER, tool_name TEXT,
+            description TEXT, input_schema TEXT)');
+        foreach (['Outlook', 'Converter', 'SharePoint'] as $i => $name) {   // the code nodes' MCP servers
+            $this->db->prepare('INSERT INTO mcp_servers (user_id, name, url) VALUES (?, ?, ?)')
+                ->execute([self::OWNER, $name, 'http://127.0.0.1:' . (8770 + $i) . '/mcp']);
+            $this->db->prepare("INSERT INTO mcp_server_tools (server_id, tool_name, description, input_schema) VALUES (?, 'ping', 'Ping', '{}')")
+                ->execute([(int) $this->db->lastInsertId()]);
+        }
+        // The two skill-bound nodes become agents between the Start and the Output.
+        $ids = fn(string $type) => $this->db->query("SELECT id FROM workflow_nodes WHERE workflow_id = 75 AND node_type = '$type' ORDER BY id")
+            ->fetchAll(PDO::FETCH_COLUMN);
+        $edge = $this->db->prepare("INSERT INTO workflow_edges (workflow_id, from_node_id, to_node_id, from_port) VALUES (75, ?, ?, 'output_1')");
+        foreach ($ids('agent') as $i => $id) {
+            $cfg = json_decode((string) $this->db->query("SELECT config FROM workflow_nodes WHERE id = $id")->fetchColumn(), true);
+            $cfg = ['type' => 'agent-template', 'agent_name' => "Agent $i", 'agent_type' => 'standard', 'instructions' => 'x',
+                'agent_provider' => 'claude', 'model' => 'claude-sonnet-4-5', 'tools' => []] + $cfg;
+            $this->db->prepare('UPDATE workflow_nodes SET config = ? WHERE id = ?')->execute([json_encode($cfg), $id]);
+            $edge->execute([$ids('start')[0], $id]);
+            $edge->execute([$id, $ids('output')[0]]);
+        }
+        $_ENV['SKILLS_DIR'] = $this->root;
+        $c = new WorkflowController($this->db, ['edition' => 'corporate']);
+        $req = ['user_id' => self::OWNER, 'params' => ['id' => self::WF], 'query' => ['modular' => '1']];
+        foreach (['generatePython', 'generateAdk'] as $route) {
+            $r = $c->$route($req);
+            $this->assertTrue($r['success'], $route . ': ' . ($r['error'] ?? ''));
+            $paths = array_column($r['data']['files'], 'path');
+            $this->assertContains('skills/tools/secret/SKILL.md', $paths, $route);   // the owner's private skill
+            $this->assertContains('skills/shared/SKILL.md', $paths, $route);          // a public one
+        }
+    }
+
     public function test_robot_workflows_using_matches_the_leaf(): void
     {
         $this->assertSame([], $this->policy()->robotWorkflowsUsing('shared'));   // wf 75 is still the owner's

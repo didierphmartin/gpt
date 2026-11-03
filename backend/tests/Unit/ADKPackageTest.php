@@ -3,10 +3,18 @@
 declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
+use Quantis\AIPortfolioAssistant\Tests\Unit\Support\CompiledSkillWheelsTests;
 use Quantis\AIPortfolioAssistant\Tests\Unit\Support\DispatcherDemoFixture;
 
 final class ADKPackageTest extends TestCase
 {
+    use CompiledSkillWheelsTests;
+
+    protected static function generatorClass(): string
+    {
+        return \AgentTeam\Services\ADKGenerator::class;
+    }
+
     /**
      * generatePackage() of the "Dispatcher demo" workflow, built in an
      * in-memory SQLite database by DispatcherDemoFixture and read through the

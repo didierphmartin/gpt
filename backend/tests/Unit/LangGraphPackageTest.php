@@ -12,6 +12,7 @@ use AgentTeam\Services\StartOptionGraph;
 use AgentTeam\Services\WorkflowGraphRepository;
 use AgentTeam\Services\WorkflowRepository;
 use PHPUnit\Framework\TestCase;
+use Quantis\AIPortfolioAssistant\Tests\Unit\Support\DispatcherDemoFixture;
 
 /** spec 2026-10-15 langgraph standalone §5: the modular package carries everything it runs on. */
 final class LangGraphPackageTest extends TestCase
@@ -63,7 +64,7 @@ final class LangGraphPackageTest extends TestCase
         return $pdo;
     }
 
-    private function generator(array $graph, string $skillsRoot, bool $storage = false, ?StartDocumentStore $docs = null,
+    private function generator(array $graph, string|\Closure $skillsRoot, bool $storage = false, ?StartDocumentStore $docs = null,
                                ?string $outputFolder = null): LangGraphGenerator
     {
         $wfRepo = $this->createMock(WorkflowRepository::class);
@@ -533,6 +534,70 @@ PY;
         exec('python3 ' . escapeshellarg("$dir/probe.py") . ' 2>&1', $out, $rc);
         self::assertSame(0, $rc, implode("\n", $out));
         self::assertSame(['[warn] installing zz-not-installed-pkg>=1.0 (not in requirements.txt)', "pip ['zz-not-installed-pkg>=1.0']"], $out);
+    }
+
+    /** Skill-store Task 13: the skill's native wheels travel with it; the browser's (.wheels/pyodide/) never do. */
+    public function testNativeWheelsTravelWithTheSkill(): void
+    {
+        $files = $this->generator($this->graph(), DispatcherDemoFixture::wheelSkillsRoot())->generate(44, '3', ['modular' => true])['files'];
+        self::assertSame(['skills/pdf-report/.wheels/native/fpdf2-2.8.1-py3-none-any.whl', 'skills/pdf-report/SKILL.md',
+            'skills/pdf-report/run.py'], DispatcherDemoFixture::skillPaths($files));
+        $whl = array_column($files, null, 'path')['skills/pdf-report/.wheels/native/fpdf2-2.8.1-py3-none-any.whl'];
+        self::assertSame("PK\x03\x04\xffnative", base64_decode($whl['code']));
+    }
+
+    /** In the Docker app each skill folder is resolved by the store (the owner's visibility), not under one root. */
+    public function testTheResolverPicksEachSkillFolder(): void
+    {
+        $root = DispatcherDemoFixture::wheelSkillsRoot();
+        $asked = [];
+        $resolver = function (string $dir) use ($root, &$asked): ?string {
+            $asked[] = $dir;
+            return "$root/$dir";
+        };
+        $files = $this->generator($this->graph(), $resolver)->generate(44, '3', ['modular' => true])['files'];
+        self::assertSame(['pdf-report'], $asked);
+        self::assertContains('skills/pdf-report/SKILL.md', DispatcherDemoFixture::skillPaths($files));
+        $this->expectExceptionMessage('Skill folder "pdf-report" is not available on this server, so it can\'t be packaged.');
+        $this->generator($this->graph(), fn(string $d): ?string => null)->generate(44, '3', ['modular' => true]);
+    }
+
+    public function testTheProgramInstallsFromTheSkillsOwnWheels(): void
+    {
+        $files = $this->generator($this->graph(), DispatcherDemoFixture::wheelSkillsRoot())->generate(44, '3', ['modular' => true])['files'];
+        $code = implode("\n", array_column($files, 'code'));
+        self::assertStringContainsString('"--no-index", "--find-links"', $code);
+        self::assertStringContainsString('os.path.join(skill_dir, ".wheels", "native")', $code);
+    }
+
+    /** A skill with .wheels/native/ installs its missing dependencies in one pip call, from that folder only. */
+    public function testEnsureDepsInstallsFromTheSkillsOwnWheels(): void
+    {
+        exec('command -v python3', $o, $rc);
+        if ($rc !== 0) {
+            self::markTestSkipped('python3 missing');
+        }
+        $dir = self::tempDir('lgpkg_wheels_');
+        mkdir("$dir/skills/s/.wheels/native", 0777, true);
+        file_put_contents("$dir/skills/s/.wheels/native/zz_a-1.0-py3-none-any.whl", 'PK');
+        file_put_contents("$dir/skills/s/SKILL.md", "---\nname: s\ndependencies: [json, zz-a, zz-b>=1.0]\n---\n");
+        $py = "from __future__ import annotations\nimport os, sys, subprocess, threading, json, re, time, asyncio, shutil\nfrom functools import cached_property\n"
+            . "def node_print(line):\n    print(line, flush=True)\n"
+            . "PACKAGE_DIR = " . var_export($dir, true) . "\n"
+            . LangGraphRuntime::skillRuntimeBlock(true) . "\n"
+            . <<<'PY'
+calls = []
+class R:
+    returncode, stderr = 0, ""
+subprocess.run = lambda argv, **kw: calls.append(argv[3:]) or R()
+SKILLS.ensure_deps(os.path.join(SKILLS_DIR, "s"))
+SKILLS.ensure_deps(os.path.join(SKILLS_DIR, "s"))   # once per process
+print("pip", json.dumps(calls).replace(SKILLS_DIR, "<skills>"))
+PY;
+        file_put_contents("$dir/probe.py", $py);
+        exec('python3 ' . escapeshellarg("$dir/probe.py") . ' 2>&1', $out, $rc);
+        self::assertSame(0, $rc, implode("\n", $out));
+        self::assertSame('pip [["install", "-q", "--no-index", "--find-links", "<skills>/s/.wheels/native", "zz-a", "zz-b>=1.0"]]', end($out));
     }
 
     public function testEveryPythonFileOfThePackageCompiles(): void

@@ -13,7 +13,7 @@ final class ADKPackage
     /** The compile target, as CompiledPackage reads it. */
     public const TARGET = ['key' => 'adk', 'title' => 'Google ADK', 'framework' => self::FRAMEWORK];
 
-    public static function files(array $analyzed, string $skillsRoot, array $documentFiles = [], string $layout = 'modular'): array
+    public static function files(array $analyzed, string|\Closure $skillsRoot, array $documentFiles = [], string $layout = 'modular'): array
     {
         return CompiledPackage::files($analyzed, $skillsRoot, $documentFiles, self::TARGET, $layout);
     }

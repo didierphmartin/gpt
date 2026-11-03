@@ -36,7 +36,7 @@ final class CompiledPackage
      * @param list<array> $documentFiles the start_documents/ entries (LangGraphPackage::startDocuments()['files'])
      * @return list<array{path:string,code:string,encoding?:string}>
      */
-    public static function files(array $analyzed, string $skillsRoot, array $documentFiles, array $target,
+    public static function files(array $analyzed, string|\Closure $skillsRoot, array $documentFiles, array $target,
         string $layout = 'modular'): array
     {
         $skills = LangGraphPackage::skillFiles(['agentData' => $analyzed['agents'] ?? []], $skillsRoot);
