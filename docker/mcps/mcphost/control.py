@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import threading
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -195,6 +196,8 @@ class Control:
 
     def restart(self, folder: str):
         self._known(folder)
+        if not self.registry.get(folder).get("enabled", True):
+            raise ApiError(409, "disabled")
         self.manager.restart(folder)
         return 200, {"state": self.manager.state(folder)}
 
@@ -230,13 +233,17 @@ class Control:
             raise ApiError(400, "values must be an object")
         fields = self._fields(d)
         secret = {f["name"] for f in fields if f["secret"]}
-        keep = {k: v for k, v in values.items() if not (v == "" and (k in secret or (k not in {f["name"] for f in fields} and envfile.SECRET_FIELD_RE.search(k))))}
+        declared = {f["name"] for f in fields}
+        undeclared_secret = {k for k in values if k not in declared and envfile.SECRET_FIELD_RE.search(k)}
+        blank_keeps = secret | undeclared_secret   # a blank value leaves these unchanged
+        keep = {k: v for k, v in values.items() if not (v == "" and k in blank_keeps)}
         try:
             text = envfile.merge(_read(d / ".env"), keep)
         except ValueError as e:
             raise ApiError(400, str(e))
         (d / ".env").write_text(text, encoding="utf-8")
-        self.manager.restart(folder)
+        if self.registry.get(folder).get("enabled", True):
+            self.manager.restart(folder)
         current = envfile.parse(text)
         return 200, {"missing": [f["name"] for f in fields if f["required"] and not current.get(f["name"])]}
 
@@ -255,7 +262,10 @@ class Control:
     def delete(self, folder: str):
         d = self._known(folder)
         self.manager.stop(folder)
-        shutil.rmtree(d, ignore_errors=True)
+        try:
+            shutil.rmtree(d)
+        except OSError as e:
+            raise ApiError(500, f"cannot remove the folder: {e}")
         self.registry.remove(folder)
         return 200, {"deleted": folder}
 
@@ -328,6 +338,7 @@ def make_server(root, registry, manager, token, port=9000, host="127.0.0.1") -> 
                 self.close_connection = True   # the request body may be unread
                 self._send(e.status, {"error": str(e), **e.extra})
             except Exception:
+                traceback.print_exc()   # stderr; never the request body
                 self._send(500, {"error": "internal error"})
 
         def do_GET(self): self._route("GET")

@@ -3,6 +3,7 @@ import http.client
 import json
 import shutil
 import tempfile
+import time
 import threading
 import unittest
 from pathlib import Path
@@ -105,9 +106,10 @@ class ControlTest(unittest.TestCase):
         t = threading.Thread(target=lambda: self.install("slow", files=files))
         t.start()
         try:
-            end = __import__("time").monotonic() + 5
+            end = time.monotonic() + 5
             states = []
-            while __import__("time").monotonic() < end and "installing" not in states:
+            while time.monotonic() < end and "installing" not in states:
+                time.sleep(0.01)
                 states = [s["state"] for s in self.get("/servers").json() if s["folder"] == "slow"]
             self.assertIn("installing", states)
         finally:
@@ -152,11 +154,28 @@ class ControlTest(unittest.TestCase):
         self.install("ok_server")
         r = self.call("POST", "/servers/ok_server/enabled", {"enabled": False})
         self.assertEqual((r.status, self.registry.get("ok_server")["enabled"], self.manager.state("ok_server")), (200, False, "stopped"))
+        self.call("POST", "/servers/ok_server/enabled", {"enabled": True})
         self.assertEqual(self.call("POST", "/servers/ok_server/restart").status, 200)
         self.assertEqual(self.call("DELETE", "/servers/ok_server").status, 200)
         self.assertFalse((self.root / "ok_server").exists())
         self.assertIsNone(self.registry.get("ok_server"))
         self.assertEqual(self.call("POST", "/servers/ok_server/restart").status, 404)
+
+    def test_disabled_server_not_started_by_settings_or_restart(self):
+        self.install("ok_server")
+        self.call("POST", "/servers/ok_server/enabled", {"enabled": False})
+        self.assertEqual(self.put("/servers/ok_server/settings", {"values": {"FAKE_DB_PATH": "z"}}).status, 200)
+        self.assertEqual(self.manager.state("ok_server"), "stopped")
+        r = self.call("POST", "/servers/ok_server/restart")
+        self.assertEqual((r.status, r.json()["error"]), (409, "disabled"))
+        self.assertEqual(self.manager.state("ok_server"), "stopped")
+
+    def test_delete_keeps_registry_when_rmtree_fails(self):
+        from unittest import mock
+        self.install("ok_server")
+        with mock.patch("mcphost.control.shutil.rmtree", side_effect=OSError("busy")):
+            self.assertEqual(self.call("DELETE", "/servers/ok_server").status, 500)
+        self.assertIsNotNone(self.registry.get("ok_server"))
 
     def test_bad_folder_and_body_limits(self):
         self.assertEqual(self.get("/servers/..%2Fx/settings").status, 400)
