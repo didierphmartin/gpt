@@ -36,7 +36,7 @@ final class CompiledPackage
      * @param list<array> $documentFiles the start_documents/ entries (LangGraphPackage::startDocuments()['files'])
      * @return list<array{path:string,code:string,encoding?:string}>
      */
-    public static function files(array $analyzed, string $skillsRoot, array $documentFiles, array $target,
+    public static function files(array $analyzed, string|\Closure $skillsRoot, array $documentFiles, array $target,
         string $layout = 'modular'): array
     {
         $skills = LangGraphPackage::skillFiles(['agentData' => $analyzed['agents'] ?? []], $skillsRoot);
@@ -114,7 +114,8 @@ final class CompiledPackage
 
     /**
      * The packages a $target program of $layout imports: the one list its requirements.txt, its TO RUN install
-     * line and its README come from. $skillFiles: the skills the package carries (their SKILL.md dependencies);
+     * line and its README come from. $skillFiles: the skills the package carries (the SKILL.md dependencies of
+     * those without bundled wheels, which install offline from .wheels/native/);
      * the single file reads its skills from the editor's folder and installs their dependencies at the first run.
      *
      * @return list<string>
@@ -130,11 +131,7 @@ final class CompiledPackage
         }
         // A playbook node runs the shared interpreter (langchain-core + langgraph + its provider's package).
         array_push($req, ...PlaybookEmit::requirementNames($analyzed));
-        foreach ($skillFiles as $f) {
-            if ($f['rel'] === 'SKILL.md') {
-                array_push($req, ...LangGraphPackage::skillDependencies($f['bytes']));
-            }
-        }
+        array_push($req, ...LangGraphPackage::skillRequirementNames($skillFiles));
         array_push($req, ...PythonRequirements::documentNames($analyzed['startDocuments'] ?? []));
         return $req;
     }

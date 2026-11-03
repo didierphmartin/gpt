@@ -56,7 +56,7 @@ final class LangGraphPackage
      *
      * @return list<array{path:string,code:string,encoding?:string}>
      */
-    public static function files(array $facts, string $skillsRoot, ?StartDocumentStore $documents = null): array
+    public static function files(array $facts, string|\Closure $skillsRoot, ?StartDocumentStore $documents = null): array
     {
         $skills = self::skillFiles($facts, $skillsRoot);
         $out = self::docFiles($facts, 'modular', $skills, (string) $facts['safeName'] . (isset($facts['swarm']) ? '_modular_swarm' : '_modular'), 'workflow.py');
@@ -145,36 +145,40 @@ final class LangGraphPackage
     }
 
     /**
-     * Every file of every used skill folder (skipping __pycache__, .DS_Store, *.pyc, .env*, dot-directories), sorted.
+     * Every file of every used skill folder (skipping __pycache__, .DS_Store, *.pyc, .env*, dot-directories), sorted,
+     * plus the skill's native wheels (.wheels/native/: the program installs its libraries from there, offline);
+     * never the browser's (.wheels/pyodide/).
+     *
+     * $skillsRoot: the folder holding the skills, or (the Docker app's skill store) a resolver
+     * (string $dir): ?string giving each skill's own folder, null when the owner cannot see it.
      *
      * @return list<array{dir:string,rel:string,bytes:string,entry:array}>
      */
-    public static function skillFiles(array $facts, string $skillsRoot): array
+    public static function skillFiles(array $facts, string|\Closure $skillsRoot): array
     {
         $out = [];
-        $root = realpath($skillsRoot);
+        $root = is_string($skillsRoot) ? realpath($skillsRoot) : null;
         foreach (self::skillDirs($facts) as $d) {
             // dir_name comes from the client-saved node config: plain segments ("GEO/geo-report" for a grouped
             // skill; none empty, "." or "..", none starting with "." (.git, .superpowers), no "\"), resolved
             // inside the root.
             $segments = StartDocumentStore::safeSegments($d);
             $safe = $segments !== null && array_filter($segments, fn(string $seg) => str_starts_with($seg, '.')) === [];
-            $base = $safe && $root !== false ? realpath($root . DIRECTORY_SEPARATOR . $d) : false;
-            if ($base === false || !str_starts_with($base, $root . DIRECTORY_SEPARATOR) || !is_dir($base)) {
+            if (!$safe) {
+                $base = false;
+            } elseif ($root === null) {
+                $dir = $skillsRoot($d);
+                $base = $dir === null ? false : realpath($dir);
+            } else {
+                $base = $root !== false ? realpath($root . DIRECTORY_SEPARATOR . $d) : false;
+                $base = $base !== false && str_starts_with($base, $root . DIRECTORY_SEPARATOR) ? $base : false;
+            }
+            if ($base === false || !is_dir($base)) {
                 throw new RuntimeException("Skill folder \"{$d}\" is not available on this server, so it can't be packaged.");
             }
-            $found = [];
-            $it = new \RecursiveIteratorIterator(new \RecursiveCallbackFilterIterator(
-                new \RecursiveDirectoryIterator($base, \FilesystemIterator::SKIP_DOTS),
-                fn(\SplFileInfo $f) => !in_array($f->getFilename(), self::SKIP_NAMES, true) && !str_ends_with($f->getFilename(), '.pyc')
-                    && !str_starts_with($f->getFilename(), '.env')
-                    && !($f->isDir() && str_starts_with($f->getFilename(), '.'))));   // .git/, .pytest_cache/, ...
-            foreach ($it as $f) {
-                // A file is copied only if it really lives in the skill folder (a symlink may point elsewhere).
-                $real = $f->isFile() ? realpath($f->getPathname()) : false;
-                if ($real !== false && str_starts_with($real, $base . DIRECTORY_SEPARATOR)) {
-                    $found[] = substr($f->getPathname(), strlen($base) + 1);
-                }
+            $found = self::folderFiles($base, $base);
+            if (is_dir("{$base}/.wheels/native")) {
+                array_push($found, ...self::folderFiles($base, "{$base}/.wheels/native"));
             }
             sort($found, SORT_STRING);
             foreach ($found as $rel) {
@@ -183,6 +187,49 @@ final class LangGraphPackage
             }
         }
         return $out;
+    }
+
+    /** The files under $from (paths relative to the skill folder $base), skipping junk, .env* and dot-directories. */
+    private static function folderFiles(string $base, string $from): array
+    {
+        $found = [];
+        $it = new \RecursiveIteratorIterator(new \RecursiveCallbackFilterIterator(
+            new \RecursiveDirectoryIterator($from, \FilesystemIterator::SKIP_DOTS),
+            fn(\SplFileInfo $f) => !in_array($f->getFilename(), self::SKIP_NAMES, true) && !str_ends_with($f->getFilename(), '.pyc')
+                && !str_starts_with($f->getFilename(), '.env')
+                && !($f->isDir() && str_starts_with($f->getFilename(), '.'))));   // .git/, .pytest_cache/, .wheels/ ...
+        foreach ($it as $f) {
+            // A file is copied only if it really lives in the skill folder (a symlink may point elsewhere).
+            $real = $f->isFile() ? realpath($f->getPathname()) : false;
+            if ($real !== false && str_starts_with($real, $base . DIRECTORY_SEPARATOR)) {
+                $found[] = substr($f->getPathname(), strlen($base) + 1);
+            }
+        }
+        return $found;
+    }
+
+    /**
+     * The SKILL.md dependencies a package's requirements.txt lists: those of each skill without bundled wheels.
+     * A skill that carries .wheels/native/*.whl installs its libraries from there, offline, at its first use.
+     *
+     * @param list<array{dir:string,rel:string,bytes:string}> $skillFiles skillFiles()
+     * @return list<string>
+     */
+    public static function skillRequirementNames(array $skillFiles): array
+    {
+        $bundled = [];
+        foreach ($skillFiles as $f) {
+            if (str_starts_with($f['rel'], '.wheels/native/') && str_ends_with($f['rel'], '.whl')) {
+                $bundled[$f['dir']] = true;
+            }
+        }
+        $req = [];
+        foreach ($skillFiles as $f) {
+            if ($f['rel'] === 'SKILL.md' && !isset($bundled[$f['dir']])) {
+                array_push($req, ...self::skillDependencies($f['bytes']));
+            }
+        }
+        return $req;
     }
 
     /** `dependencies:` of a SKILL.md's frontmatter, parsed as SkillRuntime.ensure_deps parses it. */
@@ -226,7 +273,7 @@ final class LangGraphPackage
     /**
      * The packages a LangGraph program of $layout ('single' | 'modular' | 'a2a') imports: the one list its
      * requirements.txt, its TO RUN install line and its README come from. $skillFiles: the skills the package
-     * carries (their SKILL.md dependencies); a program that reads its skills from the editor's folder installs
+     * carries (the SKILL.md dependencies of those without bundled wheels); a program that reads its skills from the editor's folder installs
      * their dependencies at the first run instead.
      *
      * @return list<string>
@@ -248,11 +295,7 @@ final class LangGraphPackage
                 $req[] = self::PROVIDER_REQUIREMENTS[$p];
             }
         }
-        foreach ($skillFiles as $f) {
-            if ($f['rel'] === 'SKILL.md') {
-                array_push($req, ...self::skillDependencies($f['bytes']));
-            }
-        }
+        array_push($req, ...self::skillRequirementNames($skillFiles));
         array_push($req, ...PythonRequirements::documentNames($facts['startDocuments'] ?? []));
         return $req;
     }

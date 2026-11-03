@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 namespace AgentTeam\Services;
 
+use Quantis\AIPortfolioAssistant\Services\RobotSkillPolicy;
+
 /**
  * One scheduler tick: run every due schedule once, or, for a run that did work after a code node
  * (drain), again at once until it reports nothing to do, at most MAX_RUNS_PER_TICK times.
@@ -90,9 +92,10 @@ final class ScheduleTick
 
     /** The runSchedule callable both entry points use: load the workflow and run it once. */
     public static function workflowRunner(WorkflowRepository $workflows, $graphRepository,
-                                          GraphWorkflowRunner $graphRunner, WorkflowRunner $linearRunner): callable
+                                          GraphWorkflowRunner $graphRunner, WorkflowRunner $linearRunner,
+                                          ?RobotSkillPolicy $skills = null): callable
     {
-        return static function (array $schedule) use ($workflows, $graphRepository, $graphRunner, $linearRunner): array {
+        return static function (array $schedule) use ($workflows, $graphRepository, $graphRunner, $linearRunner, $skills): array {
             $workflowId = (int) $schedule['workflow_id'];
             $workflow = $workflows->findById($workflowId);
             if (!$workflow) {
@@ -107,6 +110,9 @@ final class ScheduleTick
                 $input['prompt'] = $schedule['input_prompt'];
             }
             $userId = (int) $schedule['user_id'];
+            if ($skills !== null && ($private = $skills->privateSkillsForOwner($userId, $workflowId)) !== []) {
+                return ['success' => false, 'error' => RobotSkillPolicy::MESSAGE, 'code' => 'private_skills', 'skills' => $private];
+            }
             return !empty($graphRepository->getNodes($workflowId))
                 ? $graphRunner->run($workflow, $userId, $input)
                 : $linearRunner->run($workflow, $userId, $input);

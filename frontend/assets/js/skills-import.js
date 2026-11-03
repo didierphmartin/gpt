@@ -2,19 +2,18 @@
  * Skill import (and zip export) service.
  *
  * Import paths:
- *   1. importFromFolder() — opens a folder picker, copies the source folder
- *      tree into <root>/skills/<name>/.
- *   2. importFromZipPicker() — opens a file picker for a .zip, extracts it
- *      via fflate, writes the contents into <root>/skills/<name>/.
+ *   1. readFromFolder() — opens a folder picker and reads the source folder.
+ *   2. pickZipFile() + readZipFile() — a .zip via SkillZip.read.
+ *   3. readFromGitHub() — downloads a repo path.
+ * Folder and GitHub reads return { ok: true, read }; all three go through installRead (skillsFs.importSkill).
  *
- * exportSkillZip() is the reverse of path 2: it zips a skill folder.
+ * exportSkillZip() builds the self-contained SkillZip (skill + wheels); zip imports read it with SkillZip.read
+ * and install through skillsFs.importSkill (clash/identical handling lives there).
  *
- * Both imports validate that the source contains a SKILL.md at its root and that
- * the destination name doesn't already exist under <root>/skills/. Failure
- * modes return { ok: false, error: ... } so the caller can surface them.
+ * Failure modes return { ok: false, error: ... } so the caller can surface them.
  *
  * Depends on:
- *   - window.localFs.resolvePath('skills', { create: true })
+ *   - window.skillsFs (the skills folder, or the skill store in the Docker app)
  *   - window.fflate.unzip  (loaded via CDN script tag)
  */
 (function () {
@@ -22,53 +21,10 @@
 
     const SKIP_PREFIXES = ['.DS_Store', '__MACOSX', 'Thumbs.db'];
     const isJunk = (name) => SKIP_PREFIXES.some(p => name === p || name.startsWith(p + '/'));
+    const tr = (key, params) => (window.i18n && window.i18n.t ? window.i18n.t(key, params || {}) : key);
 
-    /**
-     * Verify the destination skills directory exists and that no folder
-     * named `name` already lives inside it. Returns the skills directory
-     * handle on success.
-     */
-    async function ensureSkillsDir(name) {
-        if (!window.localFs) {
-            return { ok: false, error: 'Local filesystem not available — pick your data folder in Settings first.' };
-        }
-        const skillsDir = await window.localFs.resolvePath('skills', { create: true });
-        if (!skillsDir) {
-            return { ok: false, error: 'Could not open or create the skills folder under your data root.' };
-        }
-        // Collision check.
-        try {
-            await skillsDir.getDirectoryHandle(name, { create: false });
-            return { ok: false, error: `A skill folder named "${name}" already exists. Rename or remove it first.` };
-        } catch {
-            // Doesn't exist — good, continue.
-        }
-        return { ok: true, skillsDir };
-    }
-
-    /**
-     * Recursively copy a source directory handle into a destination
-     * directory handle, mirroring the tree. Skips macOS/Windows junk
-     * artifacts. Returns the count of files copied.
-     */
-    async function copyDirectory(srcDir, destDir) {
-        let files = 0;
-        for await (const entry of srcDir.values()) {
-            if (isJunk(entry.name)) continue;
-            if (entry.kind === 'file') {
-                const file = await entry.getFile();
-                const newHandle = await destDir.getFileHandle(entry.name, { create: true });
-                const writable = await newHandle.createWritable();
-                await writable.write(await file.arrayBuffer());
-                await writable.close();
-                files++;
-            } else if (entry.kind === 'directory') {
-                const subDest = await destDir.getDirectoryHandle(entry.name, { create: true });
-                files += await copyDirectory(entry, subDest);
-            }
-        }
-        return files;
-    }
+    /** A read-shaped result ({dir, name, files, pyodideWheels, nativeWheels}) for a plain folder of files. */
+    const plainRead = (name, files) => ({ dir: name, name, files, pyodideWheels: {}, nativeWheels: {}, legacy: true, manifest: null });
 
     /**
      * Look at the immediate contents of a directory handle and decide if
@@ -87,7 +43,7 @@
      * Import a skill from a folder picked via showDirectoryPicker. The
      * picked folder's name becomes the slug under <root>/skills/.
      */
-    async function importFromFolder() {
+    async function readFromFolder() {
         if (typeof window.showDirectoryPicker !== 'function') {
             return { ok: false, error: 'File System Access API not supported in this browser.' };
         }
@@ -106,150 +62,78 @@
                 error: `Folder "${srcDir.name}" doesn't contain a SKILL.md at its root. Pick the folder that contains SKILL.md (not its parent).`
             };
         }
-        const ensured = await ensureSkillsDir(srcDir.name);
-        if (!ensured.ok) return ensured;
-        let destDir;
+        let files;
         try {
-            destDir = await ensured.skillsDir.getDirectoryHandle(srcDir.name, { create: true });
-        } catch (e) {
-            console.error('[skillsImport] could not create destination:', e);
-            return { ok: false, error: 'Could not create destination folder: ' + (e?.message || e) };
-        }
-        let fileCount;
-        try {
-            fileCount = await copyDirectory(srcDir, destDir);
+            files = await readFolderFiles(srcDir, '', (entry) => !isJunk(entry.name));
         } catch (e) {
             console.error('[skillsImport] copy failed:', e);
             return { ok: false, error: 'Copy failed: ' + (e?.message || e) };
         }
-        console.log(`[skillsImport] copied ${fileCount} files to skills/${srcDir.name}/`);
-        return { ok: true, name: srcDir.name, fileCount };
+        return { ok: true, read: plainRead(srcDir.name, files) };
     }
 
     /**
-     * Decide where the SKILL.md sits inside a zip's flat record produced
-     * by fflate.unzip. Returns either:
-     *   - { topDir: 'medium-format' }   when entries look like
-     *     'medium-format/SKILL.md', 'medium-format/scripts/...'
-     *   - { topDir: '' }                when 'SKILL.md' sits at the root
-     *     and the user-supplied fallback name should be used
-     *   - null                          when SKILL.md isn't at any
-     *     reasonable location (reject)
+     * Read a File (zip) into a SkillZip.read() result ({dir, name, files, pyodideWheels, nativeWheels, legacy, manifest}).
+     * Throws an Error (message already readable) when the file is not a skill zip.
      */
-    function detectZipLayout(entries) {
-        const paths = Object.keys(entries).filter(p => !isJunk(p) && !p.endsWith('/'));
-        // SKILL.md at root?
-        if (paths.includes('SKILL.md')) {
-            return { topDir: '' };
-        }
-        // Single top-level directory pattern?
-        const topDirs = new Set(paths.map(p => p.split('/')[0]));
-        if (topDirs.size === 1) {
-            const top = [...topDirs][0];
-            if (paths.includes(`${top}/SKILL.md`)) {
-                return { topDir: top };
-            }
-        }
-        return null;
+    async function readZipFile(file) {
+        if (!window.fflate || !window.SkillZip) throw new Error('Zip library (fflate) is not loaded.');
+        const fallbackName = file.name.replace(/\.(zip|skill)$/i, '').replace(/[\\/:*?"<>|]/g, '_').trim();
+        const read = window.SkillZip.read(new Uint8Array(await file.arrayBuffer()), { fallbackName });
+        return read;
     }
 
     /**
-     * Read a File (zip) into memory, extract via fflate, write entries
-     * into <root>/skills/<name>/.
+     * Install a read result through skillsFs.importSkill. visibility only matters in the corporate edition.
+     * Returns { ok, name, status: 'installed'|'identical', fileCount } or { ok: false, error }.
+     * 'identical' (also an identical public copy someone else owns) counts as already installed.
      */
-    async function importFromZipFile(file) {
-        if (!window.fflate || typeof window.fflate.unzip !== 'function') {
-            return { ok: false, error: 'Zip library (fflate) is not loaded.' };
+    async function installRead(read, { visibility = 'private' } = {}) {
+        if (!window.skillsFs) return { ok: false, error: 'Local filesystem not available — pick your data folder in Settings first.' };
+        if (await window.skillsFs.mode() !== 'volume' && !window.localFs) {
+            return { ok: false, error: 'Local filesystem not available — pick your data folder in Settings first.' };
         }
-        const buf = new Uint8Array(await file.arrayBuffer());
-        const entries = await new Promise((resolve, reject) => {
-            window.fflate.unzip(buf, (err, data) => err ? reject(err) : resolve(data));
-        });
-
-        const layout = detectZipLayout(entries);
-        if (!layout) {
-            return { ok: false, error: 'Zip does not contain a SKILL.md at the root or inside a single top-level folder.' };
+        try {
+            const r = await window.skillsFs.importSkill(read, { visibility });
+            return { ok: true, name: read.name, status: (r && r.status) || 'installed', fileCount: Object.keys(read.files).length };
+        } catch (e) {
+            if (e?.code === 'clash') return { ok: false, error: tr('skills.zip.clash', { name: read.name }) };
+            console.error('[skillsImport] install failed:', e);
+            return { ok: false, error: tr('skills.zip.failed', { message: e?.message || e }) };
         }
+    }
 
-        // Pick the destination skill folder name.
-        // - If the zip nests everything under "medium-format/", use that.
-        // - Otherwise (SKILL.md is bare at root), derive from the file name,
-        //   minus the .zip / .skill extension.
-        let name = layout.topDir;
-        if (!name) {
-            name = file.name.replace(/\.(zip|skill)$/i, '');
-        }
-        if (!name || /^[. ]+$/.test(name)) {
-            return { ok: false, error: 'Could not derive a folder name for this skill.' };
-        }
-        // Sanitize: only allow safe filename chars; preserve hyphens and underscores.
-        name = name.replace(/[\\/:*?"<>|]/g, '_').trim();
-
-        const ensured = await ensureSkillsDir(name);
-        if (!ensured.ok) return ensured;
-        const destDir = await ensured.skillsDir.getDirectoryHandle(name, { create: true });
-
-        // Helper: get-or-create nested directory handles for a path.
-        const dirCache = new Map(); // path -> handle, including '' -> destDir
-        dirCache.set('', destDir);
-        const ensureDir = async (relPath) => {
-            if (dirCache.has(relPath)) return dirCache.get(relPath);
-            const parts = relPath.split('/');
-            const parent = await ensureDir(parts.slice(0, -1).join('/'));
-            const handle = await parent.getDirectoryHandle(parts[parts.length - 1], { create: true });
-            dirCache.set(relPath, handle);
-            return handle;
-        };
-
-        let fileCount = 0;
-        for (const [path, content] of Object.entries(entries)) {
-            if (isJunk(path)) continue;
-            // fflate flags directories with a trailing slash — skip them
-            // (we create dirs on demand via ensureDir).
-            if (path.endsWith('/')) continue;
-
-            // Strip the zip's top-level folder if there was one, so files
-            // land at <skill>/SKILL.md not <skill>/<top>/SKILL.md.
-            let rel = path;
-            if (layout.topDir && rel.startsWith(layout.topDir + '/')) {
-                rel = rel.slice(layout.topDir.length + 1);
-            }
-            const slash = rel.lastIndexOf('/');
-            const dirPart = slash >= 0 ? rel.slice(0, slash) : '';
-            const fileName = slash >= 0 ? rel.slice(slash + 1) : rel;
-            if (!fileName) continue;
-
-            const dir = await ensureDir(dirPart);
-            const fh = await dir.getFileHandle(fileName, { create: true });
-            const w = await fh.createWritable();
-            await w.write(content);
-            await w.close();
-            fileCount++;
-        }
-
-        return { ok: true, name, fileCount };
+    /** Pick a zip and install it without a review (private). The Skills page reviews first: pickZipFile + readZipFile + installRead. */
+    async function importFromZipFile(file, opts) {
+        let read;
+        try { read = await readZipFile(file); } catch (e) { return { ok: false, error: e.message }; }
+        return installRead(read, opts);
     }
 
     /**
      * Open a file picker for .zip / .skill files and import the chosen one.
      * Browser shows a standard input dialog; no FSA-only behavior here.
      */
-    function importFromZipPicker() {
+    function pickZipFile() {
         return new Promise((resolve) => {
             const input = document.createElement('input');
             input.type = 'file';
             input.accept = '.zip,.skill,application/zip';
             input.style.display = 'none';
-            input.onchange = async () => {
+            input.onchange = () => {
                 const file = input.files?.[0];
                 input.remove();
-                if (!file) return resolve({ ok: false, cancelled: true });
-                resolve(await importFromZipFile(file));
+                resolve(file || null);
             };
             // Some browsers need the input in the DOM to fire the dialog.
             document.body.appendChild(input);
             input.click();
         });
+    }
+
+    async function importFromZipPicker() {
+        const file = await pickZipFile();
+        return file ? importFromZipFile(file) : { ok: false, cancelled: true };
     }
 
     /**
@@ -306,15 +190,16 @@
     }
 
     /**
-     * Walk a directory in a GitHub repo via the contents API and write
-     * everything into `destDir` preserving the tree. Returns file count.
+     * Walk a directory in a GitHub repo via the contents API and collect
+     * everything into `files` ({ rel: bytes }, rel under `prefix`) preserving
+     * the tree. Returns file count.
      * Throws on any unrecoverable error so the caller can surface it.
      *
      * Anonymous GitHub API has a 60 req/hour rate limit per IP. A typical
      * skill folder is ~5-15 files; the limit is plenty for normal use,
      * just noisy if a user spams installs.
      */
-    async function fetchGitHubTree(owner, repo, ref, path, destDir) {
+    async function fetchGitHubTree(owner, repo, ref, path, files, prefix = '') {
         const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`;
         const res = await fetch(apiUrl, {
             headers: { Accept: 'application/vnd.github+json' },
@@ -327,7 +212,7 @@
         if (!Array.isArray(items)) {
             throw new Error('GitHub contents API returned a non-array — expected a directory.');
         }
-        let files = 0;
+        let count = 0;
         for (const item of items) {
             if (isJunk(item.name)) continue;
             if (item.type === 'file') {
@@ -336,19 +221,14 @@
                 if (!fileRes.ok) {
                     throw new Error(`Could not download ${item.path}: ${fileRes.status}`);
                 }
-                const buf = await fileRes.arrayBuffer();
-                const fh = await destDir.getFileHandle(item.name, { create: true });
-                const w = await fh.createWritable();
-                await w.write(buf);
-                await w.close();
-                files++;
+                files[prefix + item.name] = new Uint8Array(await fileRes.arrayBuffer());
+                count++;
             } else if (item.type === 'dir') {
-                const sub = await destDir.getDirectoryHandle(item.name, { create: true });
-                files += await fetchGitHubTree(owner, repo, ref, item.path, sub);
+                count += await fetchGitHubTree(owner, repo, ref, item.path, files, `${prefix}${item.name}/`);
             }
             // Symlinks/submodules: skip silently.
         }
-        return files;
+        return count;
     }
 
     /**
@@ -357,7 +237,7 @@
      * folder name under <root>/skills/. Validates SKILL.md presence at
      * the target path before writing anything.
      */
-    async function importFromGitHub(url) {
+    async function readFromGitHub(url) {
         const parsed = parseGitHubUrl(url);
         if (!parsed) {
             return { ok: false, error: 'Could not parse GitHub URL. Expected forms: https://github.com/owner/repo[/tree/branch[/path]] or owner/repo.' };
@@ -389,26 +269,26 @@
             return { ok: false, error: 'Could not reach GitHub API: ' + (e?.message || e) };
         }
 
-        const ensured = await ensureSkillsDir(safeName);
-        if (!ensured.ok) return ensured;
-        let destDir;
+        const files = {};
         try {
-            destDir = await ensured.skillsDir.getDirectoryHandle(safeName, { create: true });
-        } catch (e) {
-            return { ok: false, error: 'Could not create destination folder: ' + (e?.message || e) };
-        }
-
-        let fileCount;
-        try {
-            fileCount = await fetchGitHubTree(owner, repo, ref, path, destDir);
+            await fetchGitHubTree(owner, repo, ref, path, files);
         } catch (e) {
             return { ok: false, error: 'Download failed: ' + (e?.message || e) };
         }
-        return { ok: true, name: safeName, fileCount };
+        return { ok: true, read: plainRead(safeName, files) };
     }
 
     /** The skill filter: junk, dotfiles (may hold secrets) and __pycache__ are left out. */
     const skillEntryFilter = (entry) => !(isJunk(entry.name) || entry.name.startsWith('.') || entry.name === '__pycache__');
+
+    /** The same filter over a { rel: bytes } map (e.g. skillsFs.readSkillFiles): a path is kept when every segment passes. */
+    function filterSkillFiles(files) {
+        const out = {};
+        for (const [rel, b] of Object.entries(files || {})) {
+            if (rel.split('/').every((name) => skillEntryFilter({ name }))) out[rel] = b;
+        }
+        return out;
+    }
 
     /**
      * Every file under dirHandle as { "<prefix>/<relative path>": bytes } (no prefix: bare relative paths).
@@ -432,33 +312,54 @@
         return files;
     }
 
+    const isCompiled = (rel) => rel.split('/').some((seg) => seg === '__pycache__') || rel.endsWith('.pyc');
+
     /**
-     * Export: zip <root>/skills/<dirName>/ with every file under one top-level
-     * folder named after the skill, the layout importFromZipFile() reads back.
-     * Junk, dotfiles (may hold secrets) and __pycache__ are left out.
-     * Returns { ok, name, bytes } or { ok: false, error }.
+     * Export: a self-contained zip (SkillZip format): the skill, plus - when SKILL.md declares dependencies -
+     * the Pyodide and native wheels they need (the one online step). Junk, dotfiles, __pycache__ and *.pyc are left out.
+     * onProgress(stage): 'native' | 'pyodide-load' | 'pyodide-install' | 'pack'.
+     * Returns { ok, name, bytes } or { ok: false, error } (error text is translated, naming library + platform on a 422).
      */
-    async function exportSkillZip(dirName) {
-        if (!window.fflate || typeof window.fflate.zip !== 'function') {
-            return { ok: false, error: 'Zip library (fflate) is not loaded.' };
+    async function exportSkillZip(dirName, { onProgress } = {}) {
+        if (!window.SkillZip || !window.SkillWheels) return { ok: false, error: 'Zip library (fflate) is not loaded.' };
+        const found = filterSkillFiles(window.skillsFs ? await window.skillsFs.readSkillFiles(dirName) : {});
+        for (const rel of Object.keys(found)) if (isCompiled(rel)) delete found[rel];
+        if (!Object.keys(found).length) return { ok: false, error: `Skill folder "${dirName}" not found.` };
+        const leaf = dirName.split('/').pop();
+        const md = found['SKILL.md'] ? new TextDecoder().decode(found['SKILL.md']) : '';
+        let wheels;
+        try {
+            wheels = await window.SkillWheels.gather(window.SkillZip.skillDependencies(md), { onProgress });
+        } catch (e) {
+            console.error('[skillsImport] gathering wheels failed:', e);
+            return { ok: false, error: wheelsError(e) };
         }
-        const dir = window.localFs && await window.localFs.resolvePath(`skills/${dirName}`);
-        if (!dir) return { ok: false, error: `Skill folder "${dirName}" not found.` };
+        if (onProgress) onProgress('pack');
+        const bytes = await window.SkillZip.build({ dir: dirName, name: leaf, files: found, pyodideWheels: wheels.pyodide, nativeWheels: wheels.native });
+        return { ok: true, name: leaf, bytes };
+    }
 
-        const files = await readFolderFiles(dir, dir.name);
-
-        const bytes = await new Promise((resolve, reject) => {
-            window.fflate.zip(files, { level: 6 }, (err, data) => err ? reject(err) : resolve(data));
-        });
-        return { ok: true, name: dir.name, bytes };
+    function wheelsError(e) {
+        switch (e?.code) {
+            case 'native-missing': return tr('skills.zip.nativeMissing', { library: e.library || '?', platform: e.platform || '?' });
+            case 'native-unavailable': return tr('skills.zip.nativeUnavailable');
+            case 'native-failed': return tr('skills.zip.nativeFailed', { message: e.message });
+            case 'download': return tr('skills.zip.downloadFailed', { message: e.message });
+            default: return tr('skills.zip.gatherFailed', { message: e?.message || e });
+        }
     }
 
     window.skillsImport = {
-        importFromFolder,
+        wheelsError,
+        readFromFolder,
         importFromZipPicker,
+        pickZipFile,
+        readZipFile,
+        installRead,
         importFromZipFile,    // exposed for drag-drop later
-        importFromGitHub,
+        readFromGitHub,
         exportSkillZip,
         readFolderFiles,
+        filterSkillFiles,
     };
 })();

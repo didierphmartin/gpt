@@ -12,6 +12,7 @@ class SkillsManager {
         this.t = t; // i18n translation function
         this.skills = [];
         this.folders = [];                  // group folders under skills/
+        this.edition = '';                  // 'corporate' shows Public / Private sections
         this.collapsedFolders = new Set();  // folder names currently collapsed
         this.contextMenu = null;
         this.contextTarget = null; // { type: 'skill'|'category', id: ... }
@@ -90,6 +91,7 @@ class SkillsManager {
     async loadTree() {
         try {
             this.folders = window.skillsFs ? await window.skillsFs.listFolders() : [];
+            this.edition = window.skillsFs?.edition ? await window.skillsFs.edition() : '';
             // Enrich each group folder with its README.md (if present at
             // skills/<group>/README.md, alongside the contained skill folders).
             // The README explains what the bundle of skills is for and may
@@ -128,6 +130,9 @@ class SkillsManager {
      */
     async renderFsAccessNotice() {
         if (!this.treeContainer || !window.localFs?.getStatus) return false;
+        // In the Docker app the list comes from the skill store, not the folder: an empty
+        // store is "no skills yet", never a folder-permission problem.
+        if (window.skillsFs?.mode && await window.skillsFs.mode() !== 'folder') return false;
         let status;
         try { status = await window.localFs.getStatus(); } catch (e) { return false; }
         if (!status || status.state === 'granted') return false;
@@ -256,6 +261,10 @@ class SkillsManager {
                     tags: [],
                     group: s.group || null,            // parent group folder, or null at top level
                     source: 'local',
+                    visibility: s.visibility || 'private',
+                    mine: s.mine !== false,           // false: another user's public skill (read-only here)
+                    owner_id: s.ownerId ?? null,
+                    owner_name: s.ownerName || '',
                     dir_name: s.dirName,               // path relative to skills/ (may include a group prefix)
                     scripts,                           // skill-relative paths to executable scripts (e.g. ['scripts/transform.py'])
                     references,                         // skill-relative paths to Markdown reference docs (e.g. ['references/second.md'])
@@ -303,6 +312,20 @@ class SkillsManager {
      * and the workflow-editor skill picker.
      */
     buildTreeHtml(filteredSkills, query) {
+        if (this.edition !== 'corporate') return this.buildGroupedHtml(filteredSkills, query, false);
+        // Corporate: everything public, then my private skills, each with its own heading.
+        const isPublic = (s) => s.visibility === 'public';
+        const section = (key, list) => `
+            <div class="skills-section" data-section="${key}">
+                <div class="px-2 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500">${this.escapeHtml(this.t('skills.section.' + key))}</div>
+                ${this.buildGroupedHtml(list, query, true)}
+            </div>`;
+        return section('public', filteredSkills.filter(isPublic))
+            + section('private', filteredSkills.filter((s) => !isPublic(s)));
+    }
+
+    /** Group folders (collapsible) with their skills, then the top-level skills. */
+    buildGroupedHtml(filteredSkills, query, hideEmptyFolders) {
         const byGroup = new Map();
         const rootSkills = [];
         for (const s of filteredSkills) {
@@ -319,7 +342,7 @@ class SkillsManager {
             folderNames.add(folder.name);
             const inFolder = byGroup.get(folder.name) || [];
             // While searching, hide folders with no matching skill.
-            if (query && inFolder.length === 0) continue;
+            if ((query || hideEmptyFolders) && inFolder.length === 0) continue;
             html += this.renderFolder(folder, inFolder);
         }
         // Orphaned skills — their group folder is gone — render at top level.
@@ -618,15 +641,26 @@ class SkillsManager {
                 specBadge = `<span class="bg-emerald-100 text-emerald-700 text-[10px] px-1 rounded" title="SKILL.md frontmatter is spec-compliant (agentskills.io / Anthropic).">✓ spec</span>`;
             }
         }
+        const owner = (this.edition === 'corporate' && skill.mine === false && skill.owner_name)
+            ? `<span class="text-[10px] text-gray-400 flex-shrink-0">${this.escapeHtml(this.t('skills.visibility.by', { name: skill.owner_name }))}</span>`
+            : '';
+        // Corporate edition: the owner flips a skill between Public and Private.
+        const toggle = (this.edition === 'corporate' && skill.mine !== false)
+            ? `<button type="button" class="skills-item-visibility px-1 text-[10px] text-gray-500 hover:text-indigo-700 hover:bg-gray-100 rounded transition flex-shrink-0"
+                       data-skill-id="${skill.id}"
+                       title="${this.escapeHtml(this.t(skill.visibility === 'public' ? 'skills.visibility.makePrivate' : 'skills.visibility.makePublic'))}">${this.escapeHtml(this.t(skill.visibility === 'public' ? 'skills.visibility.public' : 'skills.visibility.private'))}</button>`
+            : '';
         return `
             <div class="skills-item flex items-center gap-1 px-2 py-1.5 text-xs text-gray-700 cursor-pointer hover:bg-blue-50 rounded select-none"
                  draggable="true"
                  data-skill-id="${skill.id}" title="${this.escapeHtml(skill.description || '')}">
                 <span>${icon}</span>
                 <span class="flex-1 truncate">${this.escapeHtml(skill.name)}</span>
+                ${owner}
                 ${tags}
                 ${specBadge}
                 ${badge}
+                ${toggle}
                 <button type="button"
                         class="skills-item-menu px-1 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded transition flex-shrink-0"
                         data-skill-id="${skill.id}"
@@ -706,8 +740,11 @@ class SkillsManager {
                     dir_name: skill.dir_name || null,
                     scripts: Array.isArray(skill.scripts) ? skill.scripts : [],
                     source: skill.source || null,
+                    mine: skill.mine !== false,
                 };
                 e.dataTransfer.setData('application/x-skill', JSON.stringify(payload));
+                // Folder drop targets accept only this marker: others' public skills can go to the chat, not into a folder.
+                if (skill.mine !== false) e.dataTransfer.setData('application/x-skill-movable', '1');
                 // copy → dropping onto the chat input; move → onto a folder.
                 e.dataTransfer.effectAllowed = 'copyMove';
             });
@@ -725,7 +762,7 @@ class SkillsManager {
                 cat.style.borderRadius = on ? '6px' : '';
             };
             cat.addEventListener('dragover', (e) => {
-                if (!e.dataTransfer.types.includes('application/x-skill')) return;
+                if (!e.dataTransfer.types.includes('application/x-skill-movable')) return;
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'move';
                 lit(true);
@@ -738,6 +775,15 @@ class SkillsManager {
                 e.preventDefault();
                 lit(false);
                 this.handleSkillDropOnFolder(e, folderName);
+            });
+        });
+
+        this.treeContainer.querySelectorAll('.skills-item-visibility').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const skill = this.findSkillByDatasetId(btn.dataset.skillId);
+                if (skill) this.toggleVisibility(skill);
             });
         });
 
@@ -767,7 +813,7 @@ class SkillsManager {
         } catch {
             return;
         }
-        if (!payload || payload.source !== 'local' || !payload.dir_name) return;
+        if (!payload || payload.source !== 'local' || !payload.dir_name || payload.mine === false) return;
 
         const slash = payload.dir_name.indexOf('/');
         const currentGroup = slash === -1 ? null : payload.dir_name.slice(0, slash);
@@ -895,17 +941,26 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
 
         modal.querySelector('#skills-import-folder-btn').addEventListener('click', async () => {
             showStatus('Opening folder picker…', 'info');
-            const result = await window.skillsImport.importFromFolder();
-            handleResult(result);
+            const result = await window.skillsImport.readFromFolder();
+            if (result.ok) this.showZipReview(modal, result.read, showStatus, handleResult);
+            else handleResult(result);
         });
         modal.querySelector('#skills-import-zip-btn').addEventListener('click', async () => {
             showStatus('Choose a .zip / .skill file…', 'info');
-            const result = await window.skillsImport.importFromZipPicker();
-            handleResult(result);
+            const file = await window.skillsImport.pickZipFile();
+            if (!file) { showStatus(this.t('skills.zip.noFile'), 'info'); return; }
+            let read;
+            try {
+                read = await window.skillsImport.readZipFile(file);
+            } catch (e) {
+                showStatus(this.t('skills.zip.failed', { message: e?.message || this.t('skills.zip.unreadable') }), 'error');
+                return;
+            }
+            this.showZipReview(modal, read, showStatus, handleResult);
         });
 
         // GitHub URL flow: reveal a small inline form to capture the URL,
-        // then run importFromGitHub. Two-step instead of a prompt() so
+        // then run readFromGitHub. Two-step instead of a prompt() so
         // we can keep the rest of the modal styling consistent and let
         // the user see the URL as they paste it.
         const githubForm = modal.querySelector('#skills-import-github-form');
@@ -926,12 +981,58 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
                 return;
             }
             showStatus('Downloading from GitHub…', 'info');
-            const result = await window.skillsImport.importFromGitHub(url);
-            handleResult(result);
+            const result = await window.skillsImport.readFromGitHub(url);
+            if (result.ok) {
+                githubForm.classList.add('hidden');
+                this.showZipReview(modal, result.read, showStatus, handleResult);
+            } else handleResult(result);
         };
         modal.querySelector('#skills-import-github-install').addEventListener('click', installFromGithub);
         githubUrlInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') { e.preventDefault(); installFromGithub(); }
+        });
+    }
+
+    /**
+     * Review a zip before installing it: name, file count, bundled libraries, and (corporate edition only)
+     * the Public/Private choice, Private preselected. Replaces the picker's buttons until the user decides.
+     */
+    async showZipReview(modal, read, showStatus, handleResult) {
+        const esc = (v) => String(v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        const wheels = [...Object.keys(read.pyodideWheels || {}), ...Object.keys(read.nativeWheels || {})];
+        const deps = (read.manifest && read.manifest.dependencies) || [];
+        const corporate = await window.skillsFs.edition() === 'corporate';
+        const t = this.t;
+        const box = document.createElement('div');
+        box.id = 'skills-import-review';
+        box.className = 'mt-4 border border-gray-200 rounded-lg p-3 text-xs text-gray-700 space-y-2';
+        box.innerHTML = `
+            <div class="text-sm font-semibold text-gray-800">${esc(read.name)}</div>
+            <div>${esc(t('skills.zip.files', { count: Object.keys(read.files).length }))}</div>
+            <div>${wheels.length
+                ? esc(t('skills.zip.bundled', { count: wheels.length })) + (deps.length ? ' (' + esc(deps.join(', ')) + ')' : '')
+                : esc(t('skills.zip.noBundled'))}</div>
+            ${corporate ? `
+            <div class="flex gap-4 pt-1">
+                <label class="flex items-center gap-1"><input type="radio" name="skills-zip-visibility" value="private" checked> ${esc(t('skills.zip.private'))}</label>
+                <label class="flex items-center gap-1"><input type="radio" name="skills-zip-visibility" value="public"> ${esc(t('skills.zip.public'))}</label>
+            </div>` : ''}
+            <div class="flex justify-end gap-2 pt-1">
+                <button type="button" data-review="cancel" class="px-3 py-1 text-gray-600 hover:bg-gray-100 rounded">${esc(t('common.cancel'))}</button>
+                <button type="button" data-review="install" class="px-3 py-1 text-white bg-blue-600 hover:bg-blue-700 rounded">${esc(t('skills.zip.install'))}</button>
+            </div>`;
+        modal.querySelector('#skills-import-review')?.remove();
+        modal.querySelector('#skills-import-status').before(box);
+        box.querySelector('[data-review="cancel"]').addEventListener('click', () => box.remove());
+        box.querySelector('[data-review="install"]').addEventListener('click', async () => {
+            const visibility = box.querySelector('input[name="skills-zip-visibility"]:checked')?.value || 'private';
+            box.remove();
+            const result = await window.skillsImport.installRead(read, { visibility });
+            if (result.ok && result.status === 'identical') {
+                showStatus(t('skills.zip.identical', { name: read.name }), 'ok');
+                return;
+            }
+            handleResult(result);
         });
     }
 
@@ -951,6 +1052,15 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         if (moveItem) moveItem.classList.toggle('hidden', type !== 'skill');
         if (renameItem) renameItem.classList.toggle('hidden', false);
         if (optimizeItem) optimizeItem.classList.toggle('hidden', type !== 'skill');
+        // Someone else's public skill: no rename / delete / move / optimize.
+        const target = type === 'skill' ? this.findSkillByDatasetId(this.contextTarget?.id) : null;
+        if (target && target.mine === false) {
+            for (const a of ['move', 'rename', 'delete', 'optimize']) {
+                this.contextMenu.querySelector(`[data-action="${a}"]`)?.classList.add('hidden');
+            }
+        } else {
+            this.contextMenu.querySelector('[data-action="delete"]')?.classList.remove('hidden');
+        }
 
         // Position then unhide so we can measure. If the menu would
         // overflow the viewport (typical when right-clicking near the
@@ -1089,6 +1199,115 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
             return;
         }
         await this.loadTree();
+    }
+
+    // ===================== Visibility (corporate skill store) =====================
+
+    notify(message) { alert(message); }
+
+    /** Flip one of my skills between Public and Private; a refusal is explained, not thrown. */
+    async toggleVisibility(skill) {
+        const to = skill.visibility === 'public' ? 'private' : 'public';
+        try {
+            await window.skillsFs.setVisibility(skill.dir_name, to);
+        } catch (e) {
+            // skillsFs.api() puts the whole body on e.data: {success, data:{message, robot_workflows | clash}, error}.
+            const d = e.data?.data ?? e.data ?? {};
+            const robots = Array.isArray(d.robot_workflows) && d.robot_workflows.length ? d.robot_workflows : null;
+            if (robots) {
+                this.notify(this.t('skills.visibility.robotBlocked', { names: robots.map(r => r.name ?? r.id ?? r).join(', ') }));
+            } else if (d.clash) {
+                this.notify(this.t('skills.visibility.clash', { name: skill.name }));
+            } else {
+                this.notify(this.t('skills.visibility.failed', { message: e.message }));
+            }
+            return;
+        }
+        await this.loadTree();
+    }
+
+    // ===================== One-time import of the user's own folder skills =====================
+
+    currentUserId() {
+        const u = window.authManager?.user;
+        return u?.id ?? u?.uid ?? null;
+    }
+
+    migrationKey() {
+        return `skills_migrate_done_${this.currentUserId()}`;
+    }
+
+    markMigrationDone() {
+        if (!this.currentUserId()) return;
+        try { localStorage.setItem(this.migrationKey(), '1'); } catch (e) { /* storage unavailable */ }
+    }
+
+    /** The folder skills to offer for import, or null when the offer does not apply. */
+    async migrationOffer() {
+        const fs = window.skillsFs;
+        if (!fs || !this.currentUserId() || localStorage.getItem(this.migrationKey())) return null;
+        if (await fs.mode() !== 'volume') return null;
+        if ((await fs.listSkills()).some(s => s.mine)) return null;
+        let list = [];
+        try { list = await fs.listFolderSkills(); } catch (e) { return null; }
+        return list.length ? list : null;
+    }
+
+    /** Import each folder skill privately. Returns [{ path, status: installed|exists|clash|failed, message? }]. */
+    async runMigration(list) {
+        const fs = window.skillsFs;
+        const out = [];
+        for (const s of list) {
+            const path = s.path || s.dirName;
+            try {
+                const files = await fs.readFolderSkillFiles(path);
+                const wheels = await window.SkillWheels.gather(s.dependencies || []);
+                const r = await fs.importSkill(
+                    { dir: path, name: path.split('/').pop(), files, pyodideWheels: wheels.pyodide, nativeWheels: wheels.native },
+                    { visibility: 'private' });
+                out.push({ path, status: r && r.status === 'identical' ? 'exists' : 'installed' });
+            } catch (e) {
+                out.push({ path, status: e.code === 'clash' ? 'clash' : 'failed', message: e.message });
+            }
+        }
+        this.markMigrationDone();
+        return out;
+    }
+
+    /** Startup task: show the offer card when it applies. Does not wait for the user. */
+    async offerMigration() {
+        const list = await this.migrationOffer();
+        if (!list) return;
+        document.getElementById('skills-migrate-card')?.remove();
+        const card = document.createElement('div');
+        card.id = 'skills-migrate-card';
+        card.className = 'fixed bottom-4 right-4 z-[300] w-80 bg-white rounded-xl shadow-xl border border-gray-200 p-4 text-sm';
+        card.innerHTML = `
+            <div class="font-semibold text-gray-800 mb-1">${this.escapeHtml(this.t('skills.migrate.title'))}</div>
+            <p class="text-xs text-gray-600 mb-3">${this.escapeHtml(this.t('skills.migrate.body', { count: list.length }))}</p>
+            <div id="skills-migrate-result" class="text-xs text-gray-700 mb-2 max-h-40 overflow-auto"></div>
+            <div class="flex gap-2 justify-end">
+                <button type="button" id="skills-migrate-later" class="px-3 py-1.5 text-xs border border-gray-300 rounded-lg hover:bg-gray-50">${this.escapeHtml(this.t('skills.migrate.later'))}</button>
+                <button type="button" id="skills-migrate-go" class="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">${this.escapeHtml(this.t('skills.migrate.import'))}</button>
+            </div>`;
+        document.body.appendChild(card);
+        card.querySelector('#skills-migrate-later').addEventListener('click', () => {
+            this.markMigrationDone();
+            card.remove();
+        });
+        card.querySelector('#skills-migrate-go').addEventListener('click', async () => {
+            const go = card.querySelector('#skills-migrate-go');
+            const later = card.querySelector('#skills-migrate-later');
+            go.disabled = true; later.disabled = true;
+            card.querySelector('#skills-migrate-result').textContent = this.t('skills.migrate.running');
+            const res = await this.runMigration(list);
+            card.querySelector('#skills-migrate-result').innerHTML = res.map(r =>
+                `<div>${this.escapeHtml(r.path)}: ${this.escapeHtml(this.t('skills.migrate.' + r.status))}${r.message && r.status === 'failed' ? ' (' + this.escapeHtml(r.message) + ')' : ''}</div>`).join('');
+            go.remove();
+            later.disabled = false;
+            later.textContent = this.t('skills.migrate.close');
+            await this.loadTree();
+        });
     }
 
     // ===================== Folders =====================
@@ -1629,4 +1848,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.skillsManager = new SkillsManager(window.APP_CONFIG?.API_BASE_URL || '/gpt/backend/api/v1', getHeaders, t);
     window.skillsManager.init();
+    // Docker app only (the offer checks the store mode itself); runs after login with the other startup tasks.
+    // Getters: the splash reads them after login, once the translations are loaded.
+    window.startupTasks?.register('skills-migrate', () => window.skillsManager.offerMigration(), {
+        get label() { return t('skills.startup.label'); },
+        icon: '🎯',
+        get desc() { return t('skills.startup.desc'); }
+    });
 });

@@ -12,7 +12,7 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends \
         libzip-dev libpng-dev libjpeg62-turbo-dev libfreetype6-dev \
         libicu-dev libxml2-dev libxslt1-dev libsodium-dev \
-        default-mysql-client curl unzip; \
+        default-mysql-client curl unzip python3 python3-pip; \
     docker-php-ext-configure gd --with-freetype --with-jpeg; \
     docker-php-ext-install -j"$(nproc)" pdo_mysql gd intl zip soap xsl sodium; \
     \
@@ -21,7 +21,7 @@ RUN set -eux; \
     # autoremove below drops only the build-time headers.
     apt-mark auto '.*' > /dev/null; \
     apt-mark manual $savedAptMark > /dev/null; \
-    apt-mark manual default-mysql-client curl > /dev/null; \
+    apt-mark manual default-mysql-client curl python3 python3-pip > /dev/null; \
     # readlink -f resolves each /lib/... path to the /usr/lib/... path dpkg
     # actually records: this base image's Debian release merges /lib into
     # /usr/lib via a symlink, and dpkg-query --search matches on the
@@ -56,6 +56,8 @@ RUN cd backend && composer install \
 
 COPY . .
 RUN cd backend && composer dump-autoload --optimize --no-dev --no-interaction
+# Pyodide is served from the app, not a CDN (needs curl + python3 from above).
+RUN scripts/vendor-pyodide.sh
 
 COPY docker/web/entrypoint.sh /usr/local/bin/gpt-entrypoint
 RUN chmod +x /usr/local/bin/gpt-entrypoint \

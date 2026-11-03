@@ -3407,7 +3407,7 @@ class ChatApp {
         return new window.PyodideWorkerPool({
             workerFactory: () => {
                 const wid = ++workerN;
-                const w = new Worker('assets/js/pyodide.worker.js?v=20260626-unwrap');
+                const w = new Worker('assets/js/pyodide.worker.js?v=20261103-finalfix');
                 console.log(`[pool] spawned worker w${wid} (each worker loads its own Pyodide — first use is a cold start)`);
                 let seq = 0;
                 const pending = new Map();
@@ -3448,7 +3448,9 @@ class ChatApp {
      */
     async _runViaPool(req) {
         if (!window.localFs) throw new Error('localFs unavailable for pool path');
-        // Memoize handle resolution. A parallel round fires N _runViaPool calls
+        // The skill side (folder handle or the store's files, deps, bundled
+        // wheels) comes from pyodideRunner.poolSkillPayload, which reads through
+        // skillsFs. Memoize the outputs handle resolution. A parallel round fires N _runViaPool calls
         // at once; if each independently does resolvePath('outputs',{create:true}),
         // concurrent get-or-create on the same dir can throw "could not be found".
         // Sharing one in-flight promise per path dedupes the race. Cached on the
@@ -3460,28 +3462,31 @@ class ChatApp {
             }
             return this._poolHandleCache.get(path);
         };
-        const skillHandle = await resolveCached(`skills/${req.dirName}`);
+        const skill = await window.pyodideRunner.poolSkillPayload(req.dirName, { asRobot: !!req.asRobot });
         const outputsHandle = await resolveCached('outputs', { create: true });
-        if (!skillHandle || !outputsHandle) throw new Error('could not resolve skill/outputs handles for pool path');
+        if (!outputsHandle) throw new Error('could not resolve outputs handle for pool path');
         // Permission must be granted on the main thread (a worker can't prompt).
         // In practice it's already granted from the skill's first main-thread run.
-        for (const h of [skillHandle, outputsHandle]) {
-            if ((await h.queryPermission({ mode: 'readwrite' })) !== 'granted') {
-                if ((await h.requestPermission({ mode: 'readwrite' })) !== 'granted') {
-                    throw new Error('readwrite permission denied for pool path');
-                }
+        if ((await outputsHandle.queryPermission({ mode: 'readwrite' })) !== 'granted') {
+            if ((await outputsHandle.requestPermission({ mode: 'readwrite' })) !== 'granted') {
+                throw new Error('readwrite permission denied for pool path');
             }
         }
-        const dependencies = await window.pyodideRunner.getSkillDependencies(req.dirName);
         // Skills fetch through the same-origin backend proxy and read the auth
         // token via `window.authManager.token`. Workers have no `window`, so
         // pass the token in and let the worker expose a minimal shim — without
         // it the proxy POST is unauthenticated (401) and the skill sees HTTP 0.
         const authToken = window.authManager?.token || null;
         const [r] = await this._pyodidePool.runBatch([{
-            ...req, dependencies, authToken, skillHandle, outputsHandle, prefetched: [],
+            ...req, ...skill, authToken, outputsHandle, prefetched: [],
         }]);
         if (!r || !r.ok) throw new Error(r ? r.error : 'pool returned no result');
+        // Skill store: what the script changed in its skill folder goes back (own skills, not on robot runs).
+        if (r.result?.skillChanges) {
+            const { skillChanges, ...result } = r.result;
+            await window.pyodideRunner.savePoolChanges(skill.dirName, skillChanges, { asRobot: !!req.asRobot });
+            return result;
+        }
         return r.result;
     }
 
@@ -3685,16 +3690,12 @@ class ChatApp {
                 };
             } else {
                 try {
-                    // Resolve agents/<subagent_type>.md inside the active
-                    // skill's folder. window.localFs.resolvePath gives the
-                    // FSA handle; we read the file as text.
-                    if (!window.localFs) throw new Error('window.localFs unavailable');
-                    const skillDir = await window.localFs.resolvePath(`skills/${dirName}`);
-                    if (!skillDir) throw new Error(`skill folder not found: ${dirName}`);
-                    const agentsDir = await skillDir.getDirectoryHandle('agents', { create: false });
-                    const agentFile = await agentsDir.getFileHandle(`${subagentType}.md`, { create: false });
-                    const fileObj = await agentFile.getFile();
-                    const systemPrompt = await fileObj.text();
+                    // Read agents/<subagent_type>.md inside the active skill
+                    // (folder or skill store) as text.
+                    if (!window.skillsFs) throw new Error('window.skillsFs unavailable');
+                    // ctx.asRobot: a robot-owned run reads skills as the robot sees them.
+                    const systemPrompt = await window.skillsFs.getSkillFile(dirName, `agents/${subagentType}.md`, { asRobot: !!ctx?.asRobot });
+                    if (systemPrompt === null) throw new Error(`agents/${subagentType}.md not found in skill ${dirName}`);
                     // Hand the work to the no-tools agent endpoint.
                     const headers = {
                         'Content-Type': 'application/json',
@@ -4774,6 +4775,8 @@ class ChatApp {
             inputFiles: finalInputFiles,
             readOutputs: mergedReadOutputs.length > 0 ? mergedReadOutputs : null,
             preInputFiles,
+            // A robot-owned run (ctx.asRobot) runs skills as the robot sees them; chat is the person's own.
+            asRobot: !!ctx?.asRobot,
         };
     }
 
@@ -5418,18 +5421,13 @@ class ChatApp {
     async _interceptUrlsInArgv(activeSkill, argv) {
         if (!activeSkill || !Array.isArray(argv) || argv.length === 0) return null;
         if (!window.skillsFs || typeof window.skillsFs.parseFrontmatter !== 'function') return null;
-        if (!window.localFs) return null;
 
         // Read fetches_urls from the skill's SKILL.md frontmatter.
         // Mirrors the pattern in pyodide-runner.js getSkillDependencies().
         let fetchesUrls = false;
         try {
-            const skillsDir = await window.localFs.resolvePath('skills');
-            if (!skillsDir) return null;
-            const skillDir = await skillsDir.getDirectoryHandle(activeSkill.dir_name, { create: false });
-            const skillMdHandle = await skillDir.getFileHandle('SKILL.md', { create: false });
-            const file = await skillMdHandle.getFile();
-            const text = await file.text();
+            const text = await window.skillsFs.getSkillFile(activeSkill.dir_name, 'SKILL.md');
+            if (text === null) return null;
             const { meta } = window.skillsFs.parseFrontmatter(text);
             // YAML booleans come through as strings from the lightweight parser.
             const v = meta && meta.fetches_urls;

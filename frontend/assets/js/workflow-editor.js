@@ -1966,6 +1966,7 @@ class WorkflowEditor {
             await this.loadWorkflow(id, { quiet: true });
         } catch (err) {
             const clashes = window.RobotOwner.clashLines(err?.body, t);
+            if (this._showPrivateSkills(err?.body, () => this._setOwnerRobot())) return;
             this.showNotification(clashes.length ? clashes.join('\n') : (err?.message || String(err)), 'error');
         } finally {
             this._ownerChanging = false;
@@ -3708,7 +3709,9 @@ class WorkflowEditor {
         const r = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/activate`, { method: 'POST', headers: this.getAuthHeaders() });
         const body = await r.json().catch(() => ({}));
         const activated = r.ok && body.success !== false;
-        if (!activated) {
+        if (!activated && this._showPrivateSkills(body, () => this._activate())) {
+            // the card retries the activation once every skill is public
+        } else if (!activated) {
             this.showNotification(this._activeError(r, body), 'error');
         } else {
             this.showNotification(this.t('workflow.active.activated'), 'success');
@@ -11288,6 +11291,15 @@ class WorkflowEditor {
         this._applyStartPorts(startId, window.CodeNode.remapExits(exits, row.exits, node.outputs), row);
     }
 
+    /** A 'private_skills' refusal (body or SSE event) -> the card; onResolved retries the action. True when it was one. */
+    _showPrivateSkills(body, retry) {
+        const skills = window.SkillVisibilityCard?.fromRefusal(body);
+        if (!skills) return false;
+        const u = window.authManager?.user;
+        window.SkillVisibilityCard.show({ skills, currentUserId: u?.id ?? u?.uid ?? null, onResolved: retry, t: (k, p) => this.t(k, p) });
+        return true;
+    }
+
     /** A warning listing the links about to be removed; resolves true on confirm. A null confirmLabel: only Cancel. */
     _confirmLinksDialog(title, intro, lines, confirmLabel) {
         const esc = (v) => this.escapeHtml(String(v ?? ''));
@@ -15108,9 +15120,12 @@ class WorkflowEditor {
 
     async _runSkillPooledOrMain(req) {
         req = this._timestampOutputPaths(req);
+        // A robot-owned workflow runs its skills as the robot sees them (skill store: public only in corporate,
+        // no write-back) — whichever skill the node calls, not only its bound one.
+        req = { ...req, asRobot: !!this.currentWorkflowIsRobot };
         try {
             let fetchesUrls = false;
-            try { fetchesUrls = await window.pyodideRunner.getSkillFetchesUrls(req.dirName); } catch (_) {}
+            try { fetchesUrls = await window.pyodideRunner.getSkillFetchesUrls(req.dirName, { asRobot: req.asRobot }); } catch (_) {}
             if (!fetchesUrls && typeof Worker !== 'undefined' && window.PyodideWorkerPool && window.localFs) {
                 if (!this._pyodidePool) this._pyodidePool = this._makePyodidePool();
                 return await this._runViaPool(req);
@@ -15127,7 +15142,7 @@ class WorkflowEditor {
         return new window.PyodideWorkerPool({
             workerFactory: () => {
                 const wid = ++workerN;
-                const w = new Worker('assets/js/pyodide.worker.js?v=20260626-unwrap');
+                const w = new Worker('assets/js/pyodide.worker.js?v=20261103-finalfix');
                 console.log(`[wf-pool] spawned worker w${wid} (each worker loads its own Pyodide — first use is a cold start)`);
                 let seq = 0;
                 const pending = new Map();
@@ -15169,22 +15184,26 @@ class WorkflowEditor {
             }
             return this._poolHandleCache.get(path);
         };
-        const skillHandle = await resolveCached(`skills/${req.dirName}`);
+        // The skill side (folder handle or the store's files, deps, bundled wheels) reads through skillsFs.
+        const skill = await window.pyodideRunner.poolSkillPayload(req.dirName, { asRobot: !!req.asRobot });
         const outputsHandle = await resolveCached('outputs', { create: true });
-        if (!skillHandle || !outputsHandle) throw new Error('could not resolve skill/outputs handles for pool path');
-        for (const h of [skillHandle, outputsHandle]) {
-            if ((await h.queryPermission({ mode: 'readwrite' })) !== 'granted') {
-                if ((await h.requestPermission({ mode: 'readwrite' })) !== 'granted') {
-                    throw new Error('readwrite permission denied for pool path');
-                }
+        if (!outputsHandle) throw new Error('could not resolve outputs handle for pool path');
+        if ((await outputsHandle.queryPermission({ mode: 'readwrite' })) !== 'granted') {
+            if ((await outputsHandle.requestPermission({ mode: 'readwrite' })) !== 'granted') {
+                throw new Error('readwrite permission denied for pool path');
             }
         }
-        const dependencies = await window.pyodideRunner.getSkillDependencies(req.dirName);
         const authToken = window.authManager?.token || null;
         const [r] = await this._pyodidePool.runBatch([{
-            ...req, dependencies, authToken, skillHandle, outputsHandle, prefetched: [],
+            ...req, ...skill, authToken, outputsHandle, prefetched: [],
         }]);
         if (!r || !r.ok) throw new Error(r ? r.error : 'pool returned no result');
+        // Skill store: what the script changed in its skill folder goes back (own skills, not on robot runs).
+        if (r.result?.skillChanges) {
+            const { skillChanges, ...result } = r.result;
+            await window.pyodideRunner.savePoolChanges(skill.dirName, skillChanges, { asRobot: !!req.asRobot });
+            return result;
+        }
         return r.result;
     }
 
@@ -15369,8 +15388,10 @@ class WorkflowEditor {
                 skillLoadError = `skill "${dirName}" requires the local skills folder, which isn't connected — the run_skill_script tool is unavailable, so this audit can't run. Connect the skills folder and re-run.`;
             } else {
                 try {
-                    skillContent = await window.skillsFs.getSkillContent(dirName);
-                    const scripts = await window.skillsFs.listSkillScripts(dirName);
+                    // A robot-owned workflow reads its skills as the robot sees them (skill store: public only in corporate).
+                    const asRobot = !!this.currentWorkflowIsRobot;
+                    skillContent = await window.skillsFs.getSkillContent(dirName, { asRobot });
+                    const scripts = await window.skillsFs.listSkillScripts(dirName, { asRobot });
                     skillMetadata = { dir_name: dirName, scripts };
                 } catch (e) {
                     skillLoadError = `skill "${dirName}" failed to load (${e?.message || e}) — the run_skill_script tool can't be offered, so this audit can't run.`;
@@ -15933,7 +15954,7 @@ class WorkflowEditor {
     _codeWorkerJob(verb, payload, limitMs, timeoutMsg) {
         const runOne = () => {
             const cold = !this._codeWorker || !this._codeWorkerWarm;
-            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261029-robot-run');
+            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261103-finalfix');
             const w = this._codeWorker;
             const id = (this._codeSeq = (this._codeSeq || 0) + 1);
             const limit = limitMs + (cold ? 90000 : 0);

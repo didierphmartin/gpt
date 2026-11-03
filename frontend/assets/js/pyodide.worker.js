@@ -5,8 +5,13 @@
 // MUST match pyodide-runner.js PYODIDE_VERSION so the worker behaves identically
 // to the main-thread runner (event-loop/asyncio semantics differ across versions)
 // and reuses the same cached Pyodide assets.
-const PYODIDE_INDEX_URL = 'https://cdn.jsdelivr.net/pyodide/v0.27.7/full/';
-importScripts(`${PYODIDE_INDEX_URL}pyodide.js`);
+// Served from this app (scripts/vendor-pyodide.sh), never from a CDN.
+const PYODIDE_INDEX_URL = new URL('../../vendor/pyodide/v0.27.7/', self.location).href;
+try {
+  importScripts(`${PYODIDE_INDEX_URL}pyodide.js`);
+} catch (e) {
+  throw new Error('Pyodide is not installed on this server (run scripts/vendor-pyodide.sh).');
+}
 
 let pyodide = null;
 const mountedSkills = new Map();   // dirName -> mountPath
@@ -47,7 +52,76 @@ async function ensureLoaded() {
   return pyodide;
 }
 
-async function mountSkill(dirName, skillHandle) {
+// Skill store (Docker app): no folder handle, the main thread sends the skill's
+// files; they are written into MEMFS at the mount path, fresh on every run (the
+// previous copy is removed first). What the script changes there goes back to
+// the main thread as result.skillChanges, which writes it to the store.
+function removeTree(dir) {
+  let names;
+  try { names = pyodide.FS.readdir(dir); } catch (_) { return; }
+  for (const n of names) {
+    if (n === '.' || n === '..') continue;
+    const abs = `${dir}/${n}`;
+    if (pyodide.FS.isDir(pyodide.FS.stat(abs).mode)) { removeTree(abs); pyodide.FS.rmdir(abs); }
+    else pyodide.FS.unlink(abs);
+  }
+}
+
+function readTree(root) {
+  const out = {};
+  const walk = (dir, rel) => {
+    let names;
+    try { names = pyodide.FS.readdir(dir); } catch (_) { return; }
+    for (const n of names) {
+      if (n === '.' || n === '..') continue;
+      const abs = `${dir}/${n}`;
+      const r = rel ? `${rel}/${n}` : n;
+      if (pyodide.FS.isDir(pyodide.FS.stat(abs).mode)) walk(abs, r);
+      else out[r] = pyodide.FS.readFile(abs);
+    }
+  };
+  walk(root, '');
+  return out;
+}
+
+// Python's bytecode cache (`__pycache__/`, `*.pyc`): never saved back to the store.
+function isPyCache(rel) {
+  return rel.split('/').includes('__pycache__') || rel.endsWith('.pyc');
+}
+
+// Mirror of pyodide-runner.js changedFiles: files of `after` that are new or differ from `before`,
+// minus Python's bytecode cache.
+function changedFiles(before, after) {
+  const out = {};
+  for (const [rel, b] of Object.entries(after)) {
+    if (isPyCache(rel)) continue;   // bytecode Python wrote on import: never part of the skill
+    const a = before[rel];
+    if (!a || a.length !== b.length || a.some((v, i) => v !== b[i])) out[rel] = b;
+  }
+  return out;
+}
+
+// Same message as pyodide-runner.js: a worker never has /skills-root.
+const SKILLS_ROOT_UNAVAILABLE = 'This skill wrote to the skills folder, which is not available for it here.';
+
+function exists(p) {
+  try { pyodide.FS.stat(p); return true; } catch (_) { return false; }
+}
+
+function copySkill(dirName, files) {
+  const mountPath = `/skill/${dirName}`;
+  pyodide.FS.mkdirTree(mountPath);
+  removeTree(mountPath);
+  for (const [rel, bytes] of Object.entries(files)) {
+    const abs = `${mountPath}/${rel}`;
+    ensureParentDir(abs);
+    pyodide.FS.writeFile(abs, bytes);
+  }
+  return mountPath;
+}
+
+async function mountSkill(dirName, skillHandle, skillFiles) {
+  if (skillFiles) return copySkill(dirName, skillFiles);
   if (mountedSkills.has(dirName)) return mountedSkills.get(dirName);
   const perm = await skillHandle.queryPermission({ mode: 'readwrite' });
   if (perm !== 'granted') throw new Error(`skill "${dirName}" not permitted in worker`);
@@ -68,30 +142,84 @@ async function mountOutputs(outputsHandle) {
   return '/outputs';
 }
 
-// Mirror of pyodide-runner.js ensureDeps: loadPackage for prebuilt names,
+// Mirror of pyodide-runner.js planBundle: distro files (same file name in this Pyodide's lock, shared
+// libraries included) load by name from the local index; other .whl files go through micropip; anything
+// else is unknown.
+function planBundle(files, lock) {
+  const byFile = new Map(Object.values(lock || {}).map(p => [p.file_name, p]));
+  const out = { distro: [], wheels: [], unknown: [] };
+  for (const f of [...files].sort()) {
+    const pkg = byFile.get(f);
+    if (pkg) out.distro.push({ file: f, name: pkg.name, installDir: pkg.install_dir });
+    else if (f.endsWith('.whl')) out.wheels.push(f);
+    else out.unknown.push(f);
+  }
+  return out;
+}
+
+// Mirror of pyodide-runner.js installBundle: offline install of a skill's bundled packages; a distro package
+// missing from the local index installs from its bundled bytes (shared libraries before the wheels).
+async function installBundle(wheels) {
+  const plan = planBundle(Object.keys(wheels), pyodide._api && pyodide._api.lockfile_packages);
+  if (plan.unknown.length) {
+    throw new Error(`This skill bundles files that are not Python packages for this Pyodide (0.27.7): ${plan.unknown.join(', ')}. Export the skill again.`);
+  }
+  const fromBytes = [...plan.wheels];
+  const archives = [];
+  if (plan.distro.length) {
+    await pyodide.loadPackage(plan.distro.map(d => d.name));
+    for (const d of plan.distro) {
+      if (pyodide.loadedPackages[d.name] !== undefined) continue;
+      if (d.file.endsWith('.whl')) fromBytes.push(d.file);
+      else archives.push(d);
+    }
+  }
+  for (const d of archives) {
+    await pyodide._api.install(wheels[d.file], d.file, pyodide._api.package_loader.get_install_dir(d.installDir),
+      'pyodide.loadPackage', 'skill bundle');
+  }
+  if (fromBytes.length) {
+    pyodide.FS.mkdirTree('/tmp/skill-wheels');
+    for (const f of fromBytes) pyodide.FS.writeFile(`/tmp/skill-wheels/${f}`, wheels[f]);
+    await pyodide.loadPackage('micropip');
+    pyodide.globals.set('_runner_wheel_urls', fromBytes.sort().map(f => `emfs:/tmp/skill-wheels/${f}`));
+    await pyodide.runPythonAsync(`
+import micropip
+await micropip.install(list(_runner_wheel_urls), deps=False)
+    `);
+  }
+}
+
+// Mirror of pyodide-runner.js ensureDeps: a skill's bundled packages
+// (.wheels/pyodide/, passed as { file: bytes }) install offline (installBundle); otherwise loadPackage for prebuilt names,
 // micropip for everything else (pinned wheels, anything not in the prebuilt
 // set). Split is by PREBUILT_PACKAGES membership — NOT by `==` presence.
-async function ensureDeps(deps) {
+async function ensureDeps(deps, wheels) {
   if (!Array.isArray(deps) || deps.length === 0) return;
   const fresh = deps.filter(d => !installedDeps.has(d));
   if (fresh.length === 0) return;
 
   const prebuilt = fresh.filter(d => PREBUILT_PACKAGES.has(d));
   const viaMicropip = fresh.filter(d => !PREBUILT_PACKAGES.has(d));
+  const bundled = Object.keys(wheels || {});
 
   const tDeps = Date.now();
   report(`installing deps [${fresh.join(', ')}] …`);
-  if (prebuilt.length) {
-    await pyodide.loadPackage(prebuilt);
-  }
-  if (viaMicropip.length) {
-    await pyodide.loadPackage('micropip');
-    pyodide.globals.set('_runner_micropip_deps', viaMicropip);
-    await pyodide.runPythonAsync(`
+  if (bundled.length) {
+    await installBundle(wheels);
+  } else {
+    if (prebuilt.length) {
+      await pyodide.loadPackage(prebuilt);
+    }
+    if (viaMicropip.length) {
+      await pyodide.loadPackage('micropip');
+      pyodide.globals.set('_runner_micropip_deps', viaMicropip);
+      await pyodide.runPythonAsync(`
 import micropip
 for _dep in list(_runner_micropip_deps):
     await micropip.install(_dep)
-    `);
+      `);
+    }
   }
   for (const d of fresh) installedDeps.add(d);
   report(`deps ready in ${Date.now() - tDeps}ms`);
@@ -321,7 +449,7 @@ _runner_stderr = _stderr_buf.getvalue()
 // payload: { dirName, script, argv, inputFiles, readOutputs, dependencies,
 //            persist } — the object produced by chat.js _buildSkillScriptRequest
 // and consumed by pyodide-runner.js _runOne — plus three transport extras the
-// main thread adds: { skillHandle, outputsHandle, prefetched }.
+// main thread adds: { skillHandle | skillFiles, wheels, outputsHandle, prefetched }.
 // `prefetched` is an optional array of { path, contents } the main thread
 // fetched via the backend proxy (workers do not call the URL proxy — keep
 // network on the main thread for one consistent fetch path).
@@ -338,7 +466,7 @@ async function runSkillScript(payload) {
   globalThis.window = globalThis.window || globalThis;
   globalThis.window.authManager = { token: payload.authToken || null };
 
-  const mount = await mountSkill(payload.dirName, payload.skillHandle);
+  const mount = await mountSkill(payload.dirName, payload.skillHandle, payload.skillFiles);
   await mountOutputs(payload.outputsHandle);
 
   // Materialize any prefetched URL content into /tmp (mirrors main-thread prefetch).
@@ -348,7 +476,7 @@ async function runSkillScript(payload) {
   }
 
   // Install deps (loadPackage for prebuilt; micropip for the rest).
-  await ensureDeps(payload.dependencies);
+  await ensureDeps(payload.dependencies, payload.wheels);
 
   // Resolve a caller-supplied path: absolute paths (starting with `/`) pass
   // through verbatim; relative paths resolve against the skill mount (the cwd
@@ -468,11 +596,22 @@ async function runSkillScript(payload) {
     }
   }
 
+  let exitCode = pyodide.globals.get('_runner_exit') ?? 0;
+  let stderrOut = pyodide.globals.get('_runner_stderr') ?? '';
+  // Writes under /skills-root would be lost here: fail the run instead.
+  if (exists('/skills-root')) {
+    removeTree('/skills-root');
+    try { pyodide.FS.rmdir('/skills-root'); } catch (_) {}
+    exitCode = 1;
+    stderrOut = (stderrOut ? stderrOut + '\n' : '') + SKILLS_ROOT_UNAVAILABLE;
+  }
   return {
     stdout: pyodide.globals.get('_runner_stdout') ?? '',
-    stderr: pyodide.globals.get('_runner_stderr') ?? '',
-    exitCode: pyodide.globals.get('_runner_exit') ?? 0,
+    stderr: stderrOut,
+    exitCode,
     outputs,
+    // Store mode: what the script changed in its skill folder, for the main thread to save.
+    ...(payload.skillFiles ? { skillChanges: changedFiles(payload.skillFiles, readTree(mount)) } : {}),
     durationMs: Date.now() - t0,
   };
 }

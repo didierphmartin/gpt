@@ -109,6 +109,38 @@
     }
 
     /**
+     * Put each bound skill into `files` as skills/<dir>.skill.zip (folder + libraries gathered fresh).
+     * Throws naming the node and the skill when one is missing or unreadable, and the library/platform message
+     * when its libraries cannot be gathered. Returns the dirs bundled.
+     */
+    async function bundleSkills({ dirs, nodes, readable, t, files, onProgress }) {
+        const out = [];
+        const wheelSession = {};   // one export Pyodide for all the skills of this package
+        const nodeLabel = (dir) => {
+            const n = (nodes || []).find((x) => x.node_type === 'agent' && x.config && x.config.bound_skill && x.config.bound_skill.dir_name === dir);
+            const c = (n && n.config) || {};
+            return (n && (n.name || n.label || c.name || c.title || n.id)) || '';
+        };
+        for (const dir of dirs) {
+            if (!readable) throw new Error(t('errSkillUnreadable', { node: nodeLabel(dir), name: dir }));
+            const found = window.skillsImport.filterSkillFiles(await window.skillsFs.readSkillFiles(dir));
+            if (!found['SKILL.md']) throw new Error(t('errSkillMissing', { node: nodeLabel(dir), name: dir }));
+            if (onProgress) onProgress(t('progressSkill', { name: dir, done: out.length + 1, total: dirs.length }));
+            let wheels = { pyodide: {}, native: {} };
+            const wheelDeps = window.SkillZip.skillDependencies(new TextDecoder().decode(found['SKILL.md']));
+            if (wheelDeps.length) {
+                try { wheels = await window.SkillWheels.gather(wheelDeps, { session: wheelSession }); }
+                catch (e) { console.error('[workflow-package] gathering wheels failed:', e); throw new Error(window.skillsImport.wheelsError(e)); }
+            }
+            files[WP().skillZipPath(dir)] = await window.SkillZip.build({
+                dir, name: dir.split('/').pop(), files: found, pyodideWheels: wheels.pyodide, nativeWheels: wheels.native,
+            });
+            out.push(dir);
+        }
+        return out;
+    }
+
+    /**
      * Collect the dependencies of the workflow on the canvas and zip them.
      * opts.playbookIds: extra playbooks to bundle (the workflow picks its playbook at run time).
      * Returns { bytes, summary }.
@@ -149,15 +181,8 @@
         const canRead = await folderReadable();
         if (!canRead) warn('folder-not-accessible', 'warnFolderNotAccessible');
 
-        // Skills: each bound folder, with the skill export's filter.
-        const skills = [];
-        for (const dir of deps.skills) {
-            if (!canRead) { warn('skill-unreadable', 'warnSkillUnreadable', { name: dir }); continue; }
-            const handle = await window.localFs.resolvePath(`skills/${dir}`);
-            if (!handle) { warn('skill-missing', 'warnSkillMissing', { name: dir }); continue; }
-            Object.assign(files, await window.skillsImport.readFolderFiles(handle, `skills/${dir}`));
-            skills.push(dir);
-        }
+        // Skills: each bound skill as a complete skill zip; one that can't be bundled stops the export.
+        const skills = await bundleSkills({ dirs: deps.skills, nodes, readable: canRead || (!!window.skillsFs && await window.skillsFs.mode() === 'volume'), t, files, onProgress: opts.onProgress });
 
         // MCP servers: every registration; a local one's source too (named in mcps/servers.json).
         let localMap = {};
@@ -305,8 +330,10 @@
         let cancelled = false;
         modal.querySelectorAll('[data-package-cancel]').forEach((b) => { b.onclick = () => { cancelled = true; waiting(false); modal.remove(); }; });
         let built;
+        const spinnerText = modal.querySelector('[data-package-body] div');
+        const onProgress = (msg) => { if (spinnerText) spinnerText.lastChild.textContent = ' ' + msg; };
         try {
-            built = await buildPackageBytes(editor, {});
+            built = await buildPackageBytes(editor, { onProgress });
         } catch (err) {
             waiting(false);
             console.error('[workflow-package] export failed:', err);
@@ -347,16 +374,17 @@
             }
             try {
                 const ticked = [...modal.querySelectorAll('[data-package-playbook]:checked')].map((c) => Number(c.dataset.packagePlaybook));
-                const { bytes } = ticked.length ? await buildPackageBytes(editor, { playbookIds: ticked }) : built;
+                const { bytes } = ticked.length ? await buildPackageBytes(editor, { playbookIds: ticked, onProgress: (m) => { status.style.color = '#475569'; status.textContent = m; } }) : built;
                 const savedAs = await saveBytes(handle, bytes, built.summary.fileName);
                 modal.remove();
                 notify(t('saved', { name: savedAs }), 'success');
             } catch (err) {
                 console.error('[workflow-package] export failed:', err);
+                status.style.color = '#dc2626';
                 status.textContent = t('failed', { error: err.message });
             }
         };
     }
 
-    window.WorkflowPackageUI = { buildPackageBytes, exportPackage, askFolderAccess, folderReadable, loadServers, esc };
+    window.WorkflowPackageUI = { buildPackageBytes, bundleSkills, exportPackage, askFolderAccess, folderReadable, loadServers, esc };
 })();

@@ -865,14 +865,12 @@ class GraphWorkflowRunner
         //      workflows saved before the picker UX.
         // (DB skills no longer exist; the SkillRepository indirection was
         //  retired when skills consolidated to the filesystem.)
+        self::assertBoundSkillRunnable($config, $this->clientSkills);
         $skillContent = '';
         if (!empty($config['bound_skill']) && is_array($config['bound_skill'])) {
             $dirName = (string) ($config['bound_skill']['dir_name'] ?? '');
             if ($dirName !== '' && isset($this->clientSkills[$dirName]) && is_array($this->clientSkills[$dirName])) {
                 $skillContent = (string) ($this->clientSkills[$dirName]['skill_content'] ?? '');
-            }
-            if ($skillContent === '') {
-                error_log("[GraphWorkflowRunner] bound_skill dir_name='{$dirName}' has no inline client_skills entry — node will run without skill content.");
             }
         }
         if ($skillContent === '') {
@@ -1375,6 +1373,22 @@ class GraphWorkflowRunner
         [$priceIn, $priceOut] = $this->getProviderPricing($provider);
         if ($priceIn === null && $priceOut === null) return null;
         return ($inputTokens * ($priceIn ?? 0) + $outputTokens * ($priceOut ?? 0)) / 1_000_000;
+    }
+
+    /**
+     * A node bound to a skill needs the browser that runs it: with no
+     * `client_skills` entry for its dir_name (scheduled, event-triggered,
+     * robot and API runs) the run stops here instead of silently running
+     * the node without its skill. Called before any LLM call.
+     */
+    public static function assertBoundSkillRunnable(array $config, array $clientSkills): void
+    {
+        $bs = $config['bound_skill'] ?? null;
+        $dir = is_array($bs) ? (string) ($bs['dir_name'] ?? '') : '';
+        if ($dir === '' || (isset($clientSkills[$dir]) && is_array($clientSkills[$dir]))) {
+            return;
+        }
+        throw new \RuntimeException("Skill \"{$dir}\" can only run from the editor or in a compiled program: this run has no browser to run it.");
     }
 
     /**
@@ -2175,6 +2189,8 @@ class GraphWorkflowRunner
                 $this->parallelEmitted[$nodeId] = true;
                 continue;
             }
+
+            self::assertBoundSkillRunnable($config, $this->clientSkills);
 
             // Build initial context and task BEFORE emitting node_start (with merge strategy from config)
             $mergeStrategy = $config['merge_strategy'] ?? 'labeled';

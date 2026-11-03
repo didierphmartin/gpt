@@ -400,7 +400,78 @@
     "fsaPrompt": "L’autorisation du navigateur pour lire votre dossier synergyAI doit être accordée à nouveau (Chrome la réinitialise entre les sessions).",
     "fsaDenied": "L’accès au dossier a été refusé. Réinitialisez l’autorisation dans les paramètres du site de Chrome, puis accordez-la à nouveau.",
     "fsaUnsupported": "Ce navigateur n’expose pas la File System Access API. Utilisez Chrome, Edge ou Brave.",
-    "fsaGrantBtn": "Autoriser l’accès au dossier"
+    "fsaGrantBtn": "Autoriser l’accès au dossier",
+    "zip": {
+      "files": "{{count}} fichier(s)",
+      "bundled": "{{count}} fichier(s) de bibliothèques inclus",
+      "noBundled": "Aucune bibliothèque incluse",
+      "private": "Privé (moi seul)",
+      "public": "Public (tout le monde)",
+      "install": "Importer",
+      "identical": "« {{name}} » est déjà installé, rien à faire.",
+      "clash": "Une skill nommée {{name}} existe déjà. Renommez-la ou supprimez-la d'abord.",
+      "failed": "Échec de l'importation : {{message}}",
+      "nativeMissing": "Aucune wheel compatible pour {{library}} sur {{platform}} : la skill ne peut pas être exportée avec ses bibliothèques.",
+      "nativeUnavailable": "Le serveur n'a pas Python : les bibliothèques natives ne peuvent pas être incluses.",
+      "nativeFailed": "Échec du téléchargement des bibliothèques natives : {{message}}",
+      "downloadFailed": "Échec du téléchargement des bibliothèques : {{message}}",
+      "gatherFailed": "Impossible de rassembler les bibliothèques : {{message}}",
+      "progress": {
+        "native": "Collecte des bibliothèques natives...",
+        "pyodide-load": "Chargement de Pyodide (environ 20 secondes)...",
+        "pyodide-install": "Installation des bibliothèques à inclure...",
+        "pack": "Écriture du zip..."
+      },
+      "noFile": "Aucun fichier sélectionné — réessayez.",
+      "unreadable": "le fichier n’a pas pu être lu comme une compétence."
+    },
+    "section": {
+      "public": "Publiques",
+      "private": "Privées"
+    },
+    "visibility": {
+      "public": "Publique",
+      "private": "Privée",
+      "makePublic": "Rendre publique (tout le monde peut l'utiliser)",
+      "makePrivate": "Rendre privée (moi seul)",
+      "robotBlocked": "Impossible de la rendre privée : ces workflows robot l'utilisent : {{names}}.",
+      "clash": "Une autre compétence publique nommée {{name}} existe déjà.",
+      "failed": "Impossible de changer la visibilité : {{message}}",
+      "by": "par {{name}}"
+    },
+    "migrate": {
+      "title": "Importer mes compétences existantes",
+      "body": "{{count}} compétence(s) trouvée(s) dans votre dossier local. Les importer dans le magasin partagé en tant que compétences privées ?",
+      "import": "Importer mes compétences existantes",
+      "later": "Pas maintenant",
+      "running": "Importation...",
+      "close": "Fermer",
+      "installed": "installée",
+      "exists": "déjà installée",
+      "clash": "une autre compétence porte ce nom",
+      "failed": "échec"
+    },
+    "visibilityCard": {
+      "title": "Compétences privées",
+      "intro": "Ce workflow du robot utilise des compétences privées. Un robot ne peut utiliser que des compétences publiques.",
+      "makePublic": "Rendre publique",
+      "ownedBy": "Appartient à {{owner}}",
+      "notFound": "Introuvable",
+      "nowPublic": "Publique",
+      "clash": "Une autre compétence publique porte déjà ce nom.",
+      "robotUse": "Utilisée par les workflows du robot : {{workflows}}"
+    },
+    "startup": {
+      "label": "Compétences",
+      "desc": "Vérification de vos compétences existantes"
+    },
+    "run": {
+      "skillsRootUnavailable": "Cette compétence a écrit dans le dossier des compétences, qui n’est pas disponible pour elle ici.",
+      "robotRefusal": "La compétence « {{name}} » n’est pas disponible pour le robot : un flux de travail robot n’utilise que des compétences publiques."
+    },
+    "bundle": {
+      "unknownFiles": "Cette compétence contient des fichiers qui ne sont pas des paquets Python pour ce Pyodide ({{version}}) : {{files}}. Exportez à nouveau la compétence."
+    }
   },
   "fileStorage": {
     "title": "Stockage de Fichiers",
@@ -1545,6 +1616,9 @@
       "saved": "Paquet enregistré sous {{name}}",
       "failed": "Échec de l’export du paquet : {{error}}",
       "warnSkillMissing": "La compétence « {{name}} » est absente ici — non exportée.",
+      "errSkillMissing": "La compétence « {{name}} » utilisée par « {{node}} » n'est pas installée ici, le paquet ne peut donc pas être exporté.",
+      "errSkillUnreadable": "La compétence « {{name}} » utilisée par « {{node}} » est illisible ici (pas d'accès au dossier des compétences), le paquet ne peut donc pas être exporté.",
+      "progressSkill": "Empaquetage de la compétence {{name}} avec ses bibliothèques ({{done}} sur {{total}})…",
       "warnServerMissing": "Le serveur MCP « {{name}} » n’est pas enregistré ici — non exporté.",
       "warnFolderUnreadable": "Le dossier local de « {{name}} » n’a pas pu être ouvert — enregistrement seulement.",
       "warnNoInstall": "« {{name}} » n’a pas d’instructions d’installation — voir son README.",

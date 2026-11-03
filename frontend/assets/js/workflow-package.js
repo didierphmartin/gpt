@@ -55,6 +55,37 @@
         return out;
     }
 
+    /** Where a package keeps one skill: a complete skill zip (folder + bundled libraries), named from the folder only. */
+    const skillZipPath = (dir) => `skills/${dir}.skill.zip`;
+
+    /** The skill zip reader: SkillZip is a browser global; in node it loads lazily (it requires this file). */
+    function skillZipLib() {
+        if (globalThis.SkillZip) return globalThis.SkillZip;
+        if (typeof require === 'function') return require('./skill-zip.js');
+        throw new Error('skill zip reader is not loaded');
+    }
+
+    /**
+     * One package skill as skillsFs.importSkill wants it: { dir, name, files, pyodideWheels, nativeWheels, legacy }.
+     * New packages carry skills/<dir>.skill.zip (manifest entry has `zip`); old ones a skills/<dir>/... folder.
+     * Throws when the zip cannot be read or names another folder than the manifest entry.
+     */
+    function readPackageSkill(pkg, dir) {
+        const files = pkg.files || {};
+        const dep = ((pkg.manifest && pkg.manifest.dependencies) || []).find((d) => d && d.kind === 'skill' && String(d.name) === dir);
+        if (dep && dep.zip) {
+            const bytes = own(files, skillZipPath(dir)) ? files[skillZipPath(dir)] : null;
+            if (!bytes) throw new Error('skill zip missing');
+            const read = skillZipLib().read(bytes, { fallbackName: dir, fflate: globalThis.fflate });
+            if (read.dir !== dir) throw new Error('skill zip names another folder');
+            return read;
+        }
+        const prefix = `skills/${dir}/`;
+        const tree = {};
+        for (const p of Object.keys(files)) if (p.startsWith(prefix) && !isEnvFile(p)) tree[p.slice(prefix.length)] = files[p];
+        return { dir, name: dir.split('/').pop(), files: tree, pyodideWheels: {}, nativeWheels: {}, legacy: true, manifest: null };
+    }
+
     /** A local server's folder under mcps/ (reader-side: the manifest's folder or the server name), or null when unsafe. */
     function serverFolder(s, dep) {
         const raw = dep && dep.folder !== undefined && dep.folder !== null ? String(dep.folder) : null;
@@ -428,7 +459,7 @@
         };
         const compFiles = new Set(), pbFiles = new Set();
         const dependencies = [
-            ...(skills || []).map((dir) => ({ kind: 'skill', name: dir, folder: `skills/${dir}/` })),
+            ...(skills || []).map((dir) => ({ kind: 'skill', name: dir, zip: skillZipPath(dir) })),
             ...(servers || []).map((s) => ({
                 kind: 'server', ...serverRegistration(s),
                 ...(s.local ? { folder: `mcps/${s.folder}/`, has_install_manifest: !!s.hasManifest } : {}),
@@ -491,16 +522,20 @@
         const base = (kind, name, destination) => ({ kind, name, status: 'install', destination, reasons: [], choice: null });
         const unsafe = (r) => { r.status = 'attention'; r.reasons.push('unsafe-path'); r.destination = null; rows.push(r); };
 
-        // skills: the manifest's kind:'skill' entries; every file of the folder must stay inside it
+        // skills: the manifest's kind:'skill' entries -- a skill zip each (old packages: a folder of files)
         for (const { dir, safe } of packageSkills(pkg.manifest)) {
             const r = base('skill', dir, `skills/${dir}`);
+            if (!safe) { unsafe(r); continue; }
+            const dep = deps.find((d) => d && d.kind === 'skill' && String(d.name) === dir);
             const prefix = `skills/${dir}/`;
-            const paths = safe ? Object.keys(files).filter((p) => p.startsWith(prefix)) : [];
-            if (!safe || paths.some((p) => !isEnvFile(p) && !isSafeWritePath(p, 'skills'))) { unsafe(r); continue; }
-            if (!files[`${prefix}SKILL.md`]) { r.status = 'attention'; r.reasons.push('unreadable'); rows.push(r); continue; }
-            const tree = {};
-            for (const p of paths) tree[p.slice(prefix.length)] = files[p];
-            r.status = classify('skill', { dir, hash: await filesHash(tree) }, h.skills).status;
+            if (!(dep && dep.zip)) {
+                const paths = Object.keys(files).filter((p) => p.startsWith(prefix));
+                if (paths.some((p) => !isEnvFile(p) && !isSafeWritePath(p, 'skills'))) { unsafe(r); continue; }
+                if (!files[`${prefix}SKILL.md`]) { r.status = 'attention'; r.reasons.push('unreadable'); rows.push(r); continue; }
+            }
+            let read;
+            try { read = readPackageSkill(pkg, dir); } catch (e) { r.status = 'attention'; r.reasons.push('unreadable'); rows.push(r); continue; }
+            r.status = classify('skill', { dir, hash: await filesHash(read.files) }, h.skills).status;
             rows.push(r);
         }
 
@@ -588,7 +623,7 @@
      * io (paths relative to the user's folder; writeFile creates parent folders):
      *   exists(path) -> boolean, ensureDir(path), writeFile(path, Uint8Array), readJson(path) -> obj|undefined, writeJson(path, obj),
      *   addServer({name,url,description,transport,is_mock,headers}) -> {id}, createPlaybook({pkey,title,text}) -> {id},
-     *   importComponents(bundle, nodes) -> nodes.
+     *   importComponents(bundle, nodes) -> nodes, importSkill(read, {visibility}) -> {status} (throws .code 'clash').
      * Skipped rows do nothing; use-existing / present rows write nothing but lend their existing id
      * (from `have`) to the re-link. Refuses (writing nothing) while a review item is unresolved or when a
      * skill folder, server folder or playbook file to install already exists, or when a path to write would leave its
@@ -638,7 +673,9 @@
         const plan = { skills: [], servers: [], playbooks: [], components: [] };
         for (const r of ofKind('skill').filter(toInstall)) {
             const dest = skillDirs.has(r.name) ? `skills/${r.name}` : null;
-            plan.skills.push({ r, dest, paths: dest ? treeOf(`${dest}/`) : [] });
+            let read = null;
+            if (dest) try { read = readPackageSkill(pkg, r.name); } catch (e) { throw new Error(`install refused: skill ${r.name} cannot be read (${e.message})`); }
+            plan.skills.push({ r, dest, read, paths: read && read.legacy ? Object.keys(read.files).map((f) => `${dest}/${f}`) : [] });
         }
         for (const r of ofKind('server').filter(toInstall)) {
             const s = serverOf(r);
@@ -665,16 +702,18 @@
 
         // Never overwrite: every destination of an item to install must be free before anything is written.
         // (a server going to the Docker app's volume is checked by the host: a taken folder answers 409.)
-        const targets = [...plan.skills.map((x) => x.dest), ...(h.host ? [] : plan.servers.map((x) => x.dest)), ...plan.playbooks.map((x) => x.dest)];
+        const targets = [...(h.host ? [] : plan.servers.map((x) => x.dest)), ...plan.playbooks.map((x) => x.dest)];
         const taken = [];
         for (const t of targets) if (await step(`check ${t}`, () => io.exists(t))) taken.push(t);
         if (taken.length) throw new Error('install refused: would overwrite ' + taken.join(', '));
 
         for (const dir of WRITE_ROOTS.filter((d) => !(h.host && d === 'mcps'))) await step(`create folder ${dir}`, () => io.ensureDir(guard(dir, dir)));
 
-        for (const { r, dest, paths } of plan.skills) {
-            for (const p of paths) await step(`write skill ${r.name}: ${p}`, () => writeFile(p, 'skills', files[p]));
-            installed.push({ kind: 'skill', name: r.name, destination: dest });
+        // Skills go through the skill store (a folder or the Docker app's store), private to the user.
+        for (const { r, dest, read } of plan.skills) {
+            if (typeof io.importSkill !== 'function') throw new Error('install refused: no skill installer');
+            const res = await step(`install skill ${r.name}`, () => io.importSkill(read, { visibility: 'private' }));
+            installed.push({ kind: 'skill', name: r.name, destination: dest, ...(res && res.status === 'identical' ? { alreadyInstalled: true } : {}) });
         }
 
         // Local server source + private settings, then the name -> folder map.
@@ -823,5 +862,5 @@
         return { installed, commands, nodes };
     }
 
-    return { WORKFLOW_KEYS, isSafeSegment, isSafeWritePath, packageSkills, mergeEnv, collectDependencies, missingByNode, serverFolder, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, hostFolderOf, hostSourceFiles, envFields, renderEnv, parseEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest, readPackage, matchComponent, reviewRows, canConfirm, installPackage };
+    return { WORKFLOW_KEYS, isSafeSegment, isSafeWritePath, packageSkills, skillZipPath, readPackageSkill, mergeEnv, collectDependencies, missingByNode, serverFolder, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, hostFolderOf, hostSourceFiles, envFields, renderEnv, parseEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest, readPackage, matchComponent, reviewRows, canConfirm, installPackage };
 });

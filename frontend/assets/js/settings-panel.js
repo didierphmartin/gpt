@@ -755,7 +755,9 @@ class SettingsPanel {
 
         this._skillExportStatus('Exporting…');
         try {
-            const result = await window.skillsImport?.exportSkillZip(state.dir);
+            const result = await window.skillsImport?.exportSkillZip(state.dir, {
+                onProgress: (stage) => this._skillExportStatus(window.i18n.t('skills.zip.progress.' + stage)),
+            });
             if (!result?.ok) throw new Error(result?.error || 'Skill export is not available.');
             const blob = new Blob([result.bytes], { type: 'application/zip' });
             let savedAs;

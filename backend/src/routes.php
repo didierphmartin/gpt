@@ -297,6 +297,18 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->put('/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/settings', ['McpHostController', 'putSettings']);
         $r->get('/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/source', ['McpHostController', 'source']);
         $r->delete('/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}', ['McpHostController', 'delete']);
+        // Docker app skill store (SKILLS_DIR volume; 404 'no skill store' in folder mode)
+        $r->get('/api/v1/skills/store', ['SkillStoreController', 'store']);
+        $r->get('/api/v1/skills', ['SkillStoreController', 'list']);
+        $r->get('/api/v1/skills/files', ['SkillStoreController', 'files']);
+        $r->get('/api/v1/skills/file', ['SkillStoreController', 'readFile']);
+        $r->put('/api/v1/skills/file', ['SkillStoreController', 'writeFile']);
+        // Native wheels for the skill export; works in folder mode too.
+        $r->post('/api/v1/skills/native-wheels', ['SkillStoreController', 'nativeWheels']);
+        $r->post('/api/v1/skills/import', ['SkillStoreController', 'import']);
+        $r->put('/api/v1/skills/visibility', ['SkillStoreController', 'visibility']);
+        $r->post('/api/v1/skills/move', ['SkillStoreController', 'move']);
+        $r->delete('/api/v1/skills', ['SkillStoreController', 'delete']);
         $r->put('/api/v1/me/mcp-settings', ['MCPServerController', 'setMasterSetting']);
         $r->get('/api/v1/me/mcp-servers', ['MCPServerController', 'listMine']);
         $r->put('/api/v1/me/mcp-servers/{serverId:\d+}/override', ['MCPServerController', 'setMyOverride']);

@@ -26,7 +26,7 @@ class ADKGenerator
         private WorkflowRepository $workflowRepo,
         private WorkflowGraphRepository $graphRepo,
         private AgentRepository $agentRepo,
-        private ?string $skillsRoot = null,                     // the package copies the used skills from here
+        private string|\Closure|null $skillsRoot = null,        // the package copies the used skills from here
         private ?StartDocumentStore $startDocuments = null      // the package copies the Start's documents from here
     ) {}
 
@@ -306,7 +306,7 @@ class ADKGenerator
     }
 
     /** The A2A package of an analysis (no database): servers/, orchestrator.py, api.py, the runtime, the package files. */
-    public static function a2aPackage(array $analyzed, array $documentFiles = [], ?string $skillsRoot = null): array
+    public static function a2aPackage(array $analyzed, array $documentFiles = [], string|\Closure|null $skillsRoot = null): array
     {
         CompiledA2AEmit::refuse($analyzed);
         $analyzed['package'] = true;

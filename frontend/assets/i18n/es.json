@@ -400,7 +400,78 @@
     "fsaPrompt": "Hay que volver a conceder el permiso del navegador para leer tu carpeta synergyAI (Chrome lo restablece entre sesiones).",
     "fsaDenied": "Se denegó el acceso a la carpeta. Restablece el permiso en la configuración del sitio en Chrome y concédelo de nuevo.",
     "fsaUnsupported": "Este navegador no expone la File System Access API. Usa Chrome, Edge o Brave.",
-    "fsaGrantBtn": "Conceder acceso a la carpeta"
+    "fsaGrantBtn": "Conceder acceso a la carpeta",
+    "zip": {
+      "files": "{{count}} archivo(s)",
+      "bundled": "{{count}} archivo(s) de bibliotecas incluidos",
+      "noBundled": "Sin bibliotecas incluidas",
+      "private": "Privado (solo yo)",
+      "public": "Público (todos)",
+      "install": "Importar",
+      "identical": "\"{{name}}\" ya está instalado, no hay nada que hacer.",
+      "clash": "Ya existe una skill llamada {{name}}. Cámbiale el nombre o elimínala primero.",
+      "failed": "La importación falló: {{message}}",
+      "nativeMissing": "No hay una wheel compatible para {{library}} en {{platform}}, así que la skill no se puede exportar con sus bibliotecas.",
+      "nativeUnavailable": "El servidor no tiene Python, por lo que no se pueden incluir las bibliotecas nativas.",
+      "nativeFailed": "Falló la descarga de las bibliotecas nativas: {{message}}",
+      "downloadFailed": "Falló la descarga de las bibliotecas: {{message}}",
+      "gatherFailed": "No se pudieron reunir las bibliotecas: {{message}}",
+      "progress": {
+        "native": "Reuniendo bibliotecas nativas...",
+        "pyodide-load": "Cargando Pyodide (puede tardar unos 20 segundos)...",
+        "pyodide-install": "Instalando las bibliotecas para incluirlas...",
+        "pack": "Escribiendo el zip..."
+      },
+      "noFile": "No se seleccionó ningún archivo; inténtelo de nuevo.",
+      "unreadable": "el archivo no se pudo leer como una habilidad."
+    },
+    "section": {
+      "public": "Públicas",
+      "private": "Privadas"
+    },
+    "visibility": {
+      "public": "Pública",
+      "private": "Privada",
+      "makePublic": "Hacer pública (todos pueden usarla)",
+      "makePrivate": "Hacer privada (solo yo)",
+      "robotBlocked": "No se puede hacer privada: la usan estos flujos de robot: {{names}}.",
+      "clash": "Ya existe otra habilidad pública llamada {{name}}.",
+      "failed": "No se pudo cambiar la visibilidad: {{message}}",
+      "by": "de {{name}}"
+    },
+    "migrate": {
+      "title": "Importar mis habilidades existentes",
+      "body": "Se encontraron {{count}} habilidad(es) en su carpeta local. ¿Importarlas al almacén compartido como habilidades privadas?",
+      "import": "Importar mis habilidades existentes",
+      "later": "Ahora no",
+      "running": "Importando...",
+      "close": "Cerrar",
+      "installed": "instalada",
+      "exists": "ya instalada",
+      "clash": "existe otra habilidad con este nombre",
+      "failed": "error"
+    },
+    "visibilityCard": {
+      "title": "Habilidades privadas",
+      "intro": "Este flujo de trabajo del robot usa habilidades privadas. Un robot solo puede usar habilidades públicas.",
+      "makePublic": "Hacer pública",
+      "ownedBy": "Propiedad de {{owner}}",
+      "notFound": "No encontrada",
+      "nowPublic": "Pública",
+      "clash": "Ya existe otra habilidad pública con este nombre.",
+      "robotUse": "Usada por flujos de trabajo del robot: {{workflows}}"
+    },
+    "startup": {
+      "label": "Habilidades",
+      "desc": "Comprobando sus habilidades existentes"
+    },
+    "run": {
+      "skillsRootUnavailable": "Esta habilidad escribió en la carpeta de habilidades, que no está disponible para ella aquí.",
+      "robotRefusal": "La habilidad \"{{name}}\" no está disponible para el robot: un flujo de trabajo de robot solo usa habilidades públicas."
+    },
+    "bundle": {
+      "unknownFiles": "Esta habilidad incluye archivos que no son paquetes de Python para este Pyodide ({{version}}): {{files}}. Exporte la habilidad de nuevo."
+    }
   },
   "fileStorage": {
     "title": "Almacenamiento de Archivos",
@@ -1545,6 +1616,9 @@
       "saved": "Paquete guardado como {{name}}",
       "failed": "Error al exportar el paquete: {{error}}",
       "warnSkillMissing": "La habilidad \"{{name}}\" no está aquí — no se exporta.",
+      "errSkillMissing": "La habilidad \"{{name}}\" que usa \"{{node}}\" no está instalada aquí, así que no se puede exportar el paquete.",
+      "errSkillUnreadable": "No se puede leer la habilidad \"{{name}}\" que usa \"{{node}}\" (sin acceso a la carpeta de habilidades), así que no se puede exportar el paquete.",
+      "progressSkill": "Empaquetando la habilidad {{name}} con sus librerías ({{done}} de {{total}})…",
       "warnServerMissing": "El servidor MCP \"{{name}}\" no está registrado aquí — no se exporta.",
       "warnFolderUnreadable": "No se pudo abrir la carpeta local de \"{{name}}\" — solo el registro.",
       "warnNoInstall": "\"{{name}}\" no tiene instrucciones de instalación — consulte su README.",

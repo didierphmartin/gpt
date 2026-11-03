@@ -400,7 +400,78 @@
     "fsaPrompt": "Browser permission to read your synergyAI folder needs to be re-granted (Chrome resets this between sessions).",
     "fsaDenied": "Folder access was denied. Reset the permission in Chrome’s site settings, then grant again.",
     "fsaUnsupported": "This browser does not expose the File System Access API. Use Chrome, Edge, or Brave.",
-    "fsaGrantBtn": "Grant folder access"
+    "fsaGrantBtn": "Grant folder access",
+    "zip": {
+      "files": "{{count}} file(s)",
+      "bundled": "{{count}} bundled library file(s)",
+      "noBundled": "No bundled libraries",
+      "private": "Private (only me)",
+      "public": "Public (everyone)",
+      "install": "Import",
+      "identical": "\"{{name}}\" is already installed, nothing to do.",
+      "clash": "A skill named {{name}} already exists. Rename or delete it first.",
+      "failed": "Import failed: {{message}}",
+      "nativeMissing": "No compatible wheel for {{library}} on {{platform}}, so the skill cannot be exported with its libraries.",
+      "nativeUnavailable": "The server has no Python, so native libraries cannot be bundled.",
+      "nativeFailed": "Downloading native libraries failed: {{message}}",
+      "downloadFailed": "Downloading libraries failed: {{message}}",
+      "gatherFailed": "Could not gather the libraries: {{message}}",
+      "progress": {
+        "native": "Collecting native libraries...",
+        "pyodide-load": "Loading Pyodide (this can take about 20 seconds)...",
+        "pyodide-install": "Installing libraries to bundle them...",
+        "pack": "Writing the zip..."
+      },
+      "noFile": "No file selected — try again.",
+      "unreadable": "the file could not be read as a skill."
+    },
+    "section": {
+      "public": "Public",
+      "private": "Private"
+    },
+    "visibility": {
+      "public": "Public",
+      "private": "Private",
+      "makePublic": "Make public (everyone can use it)",
+      "makePrivate": "Make private (only me)",
+      "robotBlocked": "Cannot make it private: these robot workflows use it: {{names}}.",
+      "clash": "A different public skill named {{name}} already exists.",
+      "failed": "Could not change the visibility: {{message}}",
+      "by": "by {{name}}"
+    },
+    "migrate": {
+      "title": "Import my existing skills",
+      "body": "Found {{count}} skill(s) in your local folder. Import them into the shared skill store as private skills?",
+      "import": "Import my existing skills",
+      "later": "Not now",
+      "running": "Importing...",
+      "close": "Close",
+      "installed": "installed",
+      "exists": "already installed",
+      "clash": "a different skill with this name exists",
+      "failed": "failed"
+    },
+    "visibilityCard": {
+      "title": "Private skills",
+      "intro": "This robot workflow uses skills that are private. A robot can only use public skills.",
+      "makePublic": "Make public",
+      "ownedBy": "Owned by {{owner}}",
+      "notFound": "Not found",
+      "nowPublic": "Public",
+      "clash": "A different public skill already has this name.",
+      "robotUse": "Used by robot workflows: {{workflows}}"
+    },
+    "startup": {
+      "label": "Skills",
+      "desc": "Checking your existing skills"
+    },
+    "run": {
+      "skillsRootUnavailable": "This skill wrote to the skills folder, which is not available for it here.",
+      "robotRefusal": "Skill \"{{name}}\" is not available to the robot: a robot workflow uses public skills only."
+    },
+    "bundle": {
+      "unknownFiles": "This skill bundles files that are not Python packages for this Pyodide ({{version}}): {{files}}. Export the skill again."
+    }
   },
   "fileStorage": {
     "title": "File Storage",
@@ -1545,6 +1616,9 @@
       "saved": "Package saved as {{name}}",
       "failed": "Package export failed: {{error}}",
       "warnSkillMissing": "Skill \"{{name}}\" is missing here — not exported.",
+      "errSkillMissing": "Skill \"{{name}}\" used by \"{{node}}\" is not installed here, so the package cannot be exported.",
+      "errSkillUnreadable": "Skill \"{{name}}\" used by \"{{node}}\" cannot be read here (no access to the skills folder), so the package cannot be exported.",
+      "progressSkill": "Packaging skill {{name}} with its libraries ({{done}} of {{total}})…",
       "warnServerMissing": "MCP server \"{{name}}\" is not registered here — not exported.",
       "warnFolderUnreadable": "The local folder of \"{{name}}\" could not be opened — registration only.",
       "warnNoInstall": "\"{{name}}\" has no install instructions — see its README.",

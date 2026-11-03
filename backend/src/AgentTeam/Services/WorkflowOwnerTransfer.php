@@ -5,7 +5,9 @@ namespace AgentTeam\Services;
 
 use PDO;
 use Quantis\AIPortfolioAssistant\CodeComponent\CodeComponentStore;
+use Quantis\AIPortfolioAssistant\Services\PrivateSkillsRefused;
 use Quantis\AIPortfolioAssistant\Services\RobotOwnership;
+use Quantis\AIPortfolioAssistant\Services\RobotSkillPolicy;
 
 /**
  * Owner -> Robot (one way): the workflow and everything it uses that its owner owns (code components incl. the Start
@@ -14,14 +16,24 @@ use Quantis\AIPortfolioAssistant\Services\RobotOwnership;
  */
 final class WorkflowOwnerTransfer
 {
-    public function __construct(private readonly PDO $db, private readonly RobotOwnership $ownership)
+    public function __construct(private readonly PDO $db, private readonly RobotOwnership $ownership,
+        private readonly ?RobotSkillPolicy $skills = null)
     {
+    }
+
+    /** The robot uses public skills only (corporate): a workflow binding a private one is not handed over. */
+    private function assertPublicSkills(int $workflowId): void
+    {
+        if ($this->skills !== null && ($private = $this->skills->privateSkills($workflowId)) !== []) {
+            throw new PrivateSkillsRefused($private);
+        }
     }
 
     /** @return array{needs_servers: string[], shared_with: array<array{id: int, name: string}>, clashes: array<array{kind: string, name: string}>} */
     public function preview(int $callerId, int $workflowId): array
     {
         [$robot, $owner, $name] = $this->load($callerId, $workflowId);
+        $this->assertPublicSkills($workflowId);
         $links = $this->links($workflowId);
         if ($owner === $robot) {
             return ['needs_servers' => $this->missingServers($robot, $links['servers']), 'shared_with' => [], 'clashes' => []];
@@ -39,6 +51,7 @@ final class WorkflowOwnerTransfer
     public function toRobot(int $callerId, int $workflowId): array
     {
         [$robot, $owner, $name] = $this->load($callerId, $workflowId);
+        $this->assertPublicSkills($workflowId);
         $moved = ['components' => [], 'playbooks' => [], 'agents' => []];
         if ($owner !== $robot) {
             $moved = $this->plan($owner, $this->links($workflowId));

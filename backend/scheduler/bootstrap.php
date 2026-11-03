@@ -16,6 +16,8 @@ use AgentTeam\Services\WorkflowRepository;
 use AgentTeam\Services\WorkflowRunner;
 use Quantis\AIPortfolioAssistant\AIPortfolioAssistant;
 use Quantis\AIPortfolioAssistant\Services\MCPToolsLoader;
+use Quantis\AIPortfolioAssistant\Services\RobotSkillPolicy;
+use Quantis\AIPortfolioAssistant\Services\SkillStore;
 
 $configPath = __DIR__ . '/../config/ai_config.php';
 if (!file_exists($configPath)) {
@@ -48,5 +50,6 @@ return [
     'schedules' => new ScheduledWorkflowService($pdo),
     'runSchedule' => ScheduleTick::workflowRunner($workflowRepository, $graphRepository,
         new GraphWorkflowRunner($pdo, $agentRepository, $agentRunner, $graphRepository, $config),
-        new WorkflowRunner($pdo, $agentRepository, $agentRunner, $config)),
+        new WorkflowRunner($pdo, $agentRepository, $agentRunner, $config),
+        new RobotSkillPolicy($pdo, $config, SkillStore::fromEnv($config))),
 ];

@@ -8,7 +8,10 @@ use AgentTeam\Services\ActiveWorkflowError;
 use AgentTeam\Services\ActiveWorkflowService;
 use AgentTeam\Services\WorkflowRepository;
 use PDO;
+use Quantis\AIPortfolioAssistant\Services\PrivateSkillsRefused;
 use Quantis\AIPortfolioAssistant\Services\RobotOwnership;
+use Quantis\AIPortfolioAssistant\Services\RobotSkillPolicy;
+use Quantis\AIPortfolioAssistant\Services\SkillStore;
 
 /**
  * ▶ on Start activates the workflow the event worker runs (spec 2026-10-14 event-worker §2). One per person; a robot
@@ -22,7 +25,7 @@ class ActiveWorkflowController
 
     public function __construct(PDO $db, array $config)
     {
-        $this->active = new ActiveWorkflowService($db);
+        $this->active = new ActiveWorkflowService($db, new RobotSkillPolicy($db, $config, SkillStore::fromEnv($config)));
         $this->ownership = new RobotOwnership($db, $config);
         $this->workflows = new WorkflowRepository($db);
     }
@@ -51,6 +54,8 @@ class ActiveWorkflowController
             try {
                 $data = $this->active->activate($this->ownership->runAs($userId, $workflowId), $workflowId);
                 return ['success' => true, 'data' => $data, 'status_code' => 200];
+            } catch (PrivateSkillsRefused $e) {
+                return RobotSkillPolicy::refusal($e->skills);
             } catch (ActiveWorkflowError $e) {
                 return ['success' => false, 'error' => $e->getMessage(), 'kind' => $e->kind, 'error_code' => $e->kind, 'status_code' => $e->status];
             }

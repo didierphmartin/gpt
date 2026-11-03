@@ -206,7 +206,7 @@ assert.strictEqual(srv[2].needs_auth, false);
 assert.ok(!('folder' in srv[1]));
 assert.deepStrictEqual(man.dependencies.find((x) => x.kind === 'component'), { kind: 'component', name: 'Make PDF', old_id: 12, file: 'components/Make_PDF.json' });
 assert.deepStrictEqual(man.dependencies.find((x) => x.kind === 'playbook'), { kind: 'playbook', name: 'Triage', pkey: 'triage', old_id: 3, file: 'playbooks/triage.md' });
-assert.deepStrictEqual(man.dependencies.find((x) => x.kind === 'skill'), { kind: 'skill', name: 'GEO/geo-compare', folder: 'skills/GEO/geo-compare/' });
+assert.deepStrictEqual(man.dependencies.find((x) => x.kind === 'skill'), { kind: 'skill', name: 'GEO/geo-compare', zip: 'skills/GEO/geo-compare.skill.zip' });
 assert.deepStrictEqual(man.strippedSecrets, [{ node: '5', field: 'api_key' }]);
 assert.deepStrictEqual(man.warnings, [{ kind: 'tool-missing', node: '9', message: 'x' }]);
 // mcps/servers.json in the zip: the same registrations
@@ -359,6 +359,7 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
                 exists: async (p) => Object.keys(fs).some((k) => k === p || k.startsWith(p + '/')),
                 ensureDir: async (p) => { calls.push(['ensureDir', p]); },
                 writeFile: async (p, b) => { calls.push(['writeFile', p]); assert.ok(b instanceof Uint8Array); fs[p] = new TextDecoder().decode(b); },
+                importSkill: async (read, o) => { calls.push(['importSkill', read.dir, read, o]); if (opts.skillClash) throw Object.assign(new Error('different'), { code: 'clash' }); return { status: 'installed' }; },
                 readJson: async (p) => (fs[p] === undefined ? undefined : JSON.parse(fs[p])),
                 writeJson: async (p, o) => { calls.push(['writeJson', p]); fs[p] = JSON.stringify(o); },
                 addServer: async (reg) => { calls.push(['addServer', reg]); if (opts.failServer === reg.name) throw new Error('boom'); return { id: nextId++ }; },
@@ -380,7 +381,11 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
         let res = await WP.installPackage(irows, ipkg, ivalues, io, ihave);
         const writes = io.calls.filter((c) => c[0] === 'writeFile').map((c) => c[1]);
         assert.deepStrictEqual(io.calls.slice(0, 4).map((c) => c[1]), ['skills', 'mcps', 'components', 'playbooks']);
-        for (const p of ['skills/pdf/SKILL.md', 'skills/pdf/scripts/a.py', 'mcps/outlook_mcp/server.py', 'mcps/outlook_mcp/synergyai-mcp.json',
+        const sk = io.calls.find((c) => c[0] === 'importSkill');
+        assert.ok(sk && sk[1] === 'pdf' && sk[3].visibility === 'private');
+        assert.deepStrictEqual(Object.keys(sk[2].files).sort(), ['SKILL.md', 'scripts/a.py']);
+        assert.ok(!writes.some((p) => p.startsWith('skills/')), 'skills go through importSkill, not writeFile');
+        for (const p of ['mcps/outlook_mcp/server.py', 'mcps/outlook_mcp/synergyai-mcp.json',
             'mcps/outlook_mcp/.env', 'playbooks/triage.md', 'components/Make_PDF.json']) assert.ok(writes.includes(p), p);
         assert.strictEqual(io.fs['mcps/outlook_mcp/.env'], WP.renderEnv({ TENANT_ID: 't 1', PORT: '9000' }));
         assert.ok(!io.fs['mcps/outlook_mcp/.env'].includes('LEAK'));
@@ -394,7 +399,7 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
         assert.deepStrictEqual(io.calls.find((c) => c[0] === 'importComponents')[1], [comp8]);
         // order: skills -> server files -> servers.json -> register -> playbooks -> components
         const at = (pred) => io.calls.findIndex(pred);
-        assert.ok(at((c) => c[1] === 'skills/pdf/SKILL.md') < at((c) => c[1] === 'mcps/outlook_mcp/server.py'));
+        assert.ok(at((c) => c[0] === 'importSkill') < at((c) => c[1] === 'mcps/outlook_mcp/server.py'));
         assert.ok(at((c) => c[1] === 'mcps/outlook_mcp/.env') < at((c) => c[0] === 'writeJson'));
         assert.ok(at((c) => c[0] === 'writeJson') < at((c) => c[0] === 'addServer'));
         assert.ok(at((c) => c[0] === 'addServer') < at((c) => c[0] === 'createPlaybook'));
@@ -460,10 +465,10 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
         await assert.rejects(WP.installPackage(irows, ipkg, {}, io, have2), { message: 'install refused: unresolved items in the review' });
         noWrites(io);
         irows = await WP.reviewRows(ipkg, ihave);
-        io = memIo({ fs: { 'skills/pdf/SKILL.md': 'mine' } });
-        await assert.rejects(WP.installPackage(irows, ipkg, { Outlook: { fillLater: true } }, io, ihave), { message: 'install refused: would overwrite skills/pdf' });
-        noWrites(io);
-        assert.strictEqual(io.fs['skills/pdf/SKILL.md'], 'mine');
+        // a different skill of that name: the skill installer refuses (clash), nothing else is written
+        io = memIo({ skillClash: true });
+        await assert.rejects(WP.installPackage(irows, ipkg, { Outlook: { fillLater: true } }, io, ihave), /install failed at "install skill pdf"/);
+        assert.ok(!io.calls.some((c) => ['writeFile', 'addServer', 'writeJson', 'createPlaybook'].includes(c[0])), 'nothing written after the clash');
         io = memIo({ fs: { 'mcps/outlook_mcp/server.py': 'mine', 'playbooks/triage.md': 'mine' } });
         await assert.rejects(WP.installPackage(irows, ipkg, { Outlook: { fillLater: true } }, io, ihave),
             { message: 'install refused: would overwrite mcps/outlook_mcp, playbooks/triage.md' });

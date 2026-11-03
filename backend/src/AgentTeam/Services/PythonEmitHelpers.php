@@ -253,6 +253,24 @@ _INSTALLED_DEPS = set()
 _DEPS_LOCK = threading.Lock()
 
 
+def _importable(dep: str) -> bool:
+    """Is a declared dependency (a pip requirement such as 'beautifulsoup4' or 'pypdf>=4') already
+    installed: a distribution of that name, or a module of that name?"""
+    import importlib.metadata, importlib.util, re
+    name = re.split(r"[\s<>=!~;\[]", dep.strip(), maxsplit=1)[0]
+    if not name:
+        return False
+    try:
+        importlib.metadata.distribution(name)
+        return True
+    except Exception:  # noqa: BLE001 -- PackageNotFoundError, or a bad name
+        pass
+    try:
+        return importlib.util.find_spec(name.replace("-", "_")) is not None
+    except Exception:  # noqa: BLE001 -- e.g. a dotted name whose parent is missing
+        return False
+
+
 def _ensure_skill_deps(skill_dir: str) -> None:
     md = os.path.join(skill_dir, "SKILL.md")
     if not os.path.isfile(md):
@@ -274,11 +292,32 @@ def _ensure_skill_deps(skill_dir: str) -> None:
             val = s.split(":", 1)[1].strip().strip("[]")
             deps = [d.strip().strip("'").strip('"') for d in val.split(",") if d.strip()]
             break
+    # A skill that carries its libraries (.wheels/native/, bundled at export) installs them from
+    # there, in one pip call, without the internet.
+    wheels = os.path.join(skill_dir, ".wheels", "native")
+    offline = os.path.isdir(wheels) and any(f.endswith(".whl") for f in os.listdir(wheels))
     with _DEPS_LOCK:
+        missing = []
         for d in deps:
             if d in _INSTALLED_DEPS:
                 continue
             _INSTALLED_DEPS.add(d)
+            if _importable(d):   # requirements.txt (or the runner's venv) already has it: no pip at all
+                continue
+            missing.append(d)
+        if offline and missing:
+            names = " ".join(missing)
+            try:
+                print(f"  [run_skill_script] installing {names} from the skill's own wheels", flush=True)
+                r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-index", "--find-links", wheels,
+                                    *missing], capture_output=True, text=True, timeout=600)
+                if r.returncode != 0:
+                    print(f"  [run_skill_script] pip install {names} FAILED: "
+                          f"{(r.stderr or '')[-300:]}", flush=True)
+            except Exception as e:
+                print(f"  [run_skill_script] pip install {names} error: {e}", flush=True)
+            return
+        for d in missing:
             try:
                 print(f"  [run_skill_script] ensuring dependency: {d}", flush=True)
                 r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", d],

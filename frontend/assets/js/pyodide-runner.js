@@ -34,7 +34,8 @@
     'use strict';
 
     const PYODIDE_VERSION = '0.27.7';
-    const PYODIDE_INDEX_URL = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+    // Served from this app (scripts/vendor-pyodide.sh), never from a CDN.
+    const PYODIDE_INDEX_URL = new URL('vendor/pyodide/v0.27.7/', document.baseURI).href;
     const PYODIDE_SCRIPT_URL = `${PYODIDE_INDEX_URL}pyodide.js`;
 
     // Pre-built (compiled-to-WASM) Pyodide packages. Anything not in this set
@@ -73,7 +74,7 @@
             tag.src = PYODIDE_SCRIPT_URL;
             tag.async = true;
             tag.onload = () => resolve(window.loadPyodide);
-            tag.onerror = () => reject(new Error('Failed to load pyodide.js'));
+            tag.onerror = () => reject(new Error('Pyodide is not installed on this server (run scripts/vendor-pyodide.sh).'));
             document.head.appendChild(tag);
         });
     }
@@ -114,47 +115,185 @@
      * folders for "<group>/<name>/SKILL.md". Falls back to the original name
      * so the caller still throws a clear "not found".
      */
-    async function resolveSkillDir(dirName) {
-        if (!dirName || dirName.includes('/') || !window.localFs) return dirName;
+    async function resolveSkillDir(dirName, { asRobot = false } = {}) {
+        if (!dirName || dirName.includes('/') || !window.skillsFs) return dirName;
         // Top-level skill folder? (e.g. "docx")
-        const direct = await window.localFs.resolvePath(`skills/${dirName}/SKILL.md`, { kind: 'file' });
-        if (direct) return dirName;
-        // Otherwise look one level down inside group folders.
-        const skillsDir = await window.localFs.resolvePath('skills');
-        if (!skillsDir) return dirName;
-        for await (const entry of skillsDir.values()) {
-            if (entry.kind !== 'directory') continue;
-            const md = await window.localFs.resolvePath(
-                `skills/${entry.name}/${dirName}/SKILL.md`, { kind: 'file' }
-            );
-            if (md) return `${entry.name}/${dirName}`;
-        }
-        return dirName;
+        if (await window.skillsFs.getSkillFile(dirName, 'SKILL.md', { asRobot }) !== null) return dirName;
+        // Otherwise a skill inside a group folder with that leaf name (among what the robot may see, on a robot run).
+        const hit = (await window.skillsFs.listSkills({ asRobot })).find(s => s.leafName === dirName);
+        return hit ? hit.dirName : dirName;
     }
 
-    async function ensureMounted(dirName) {
-        if (mountedSkills.has(dirName)) return mountedSkills.get(dirName);
-        if (!window.localFs) {
-            throw new Error('window.localFs is not available — cannot resolve skill folder.');
+    // ── Skill store (Docker app): MEMFS copies instead of native-FS mounts ──
+    //
+    // In the store there is no local folder to mount, so a skill's files are
+    // written into MEMFS at the same path a mount would use, and after the run
+    // what the script changed there is written back to the store. `memCopies`
+    // keeps, per MEMFS root, the files as copied (to diff against) and how to
+    // write changes back.
+    const memCopies = new Map();   // root → { files, save(changed) }
+
+    // A robot-owned workflow's run reads skills as the robot sees them (skill
+    // store: public only in corporate) and never writes back. Set for the
+    // length of one runSkillScript so a script's own ensureMounted() of a
+    // sibling skill (from Python) gets the same view.
+    let runAsRobot = false;
+
+    const skillsRootUnavailable = () => i18nText('skills.run.skillsRootUnavailable',
+        'This skill wrote to the skills folder, which is not available for it here.');
+
+    function exists(p) {
+        try { pyodide.FS.stat(p); return true; } catch { return false; }
+    }
+
+    /** Store mode: the robot may not use this skill (private, or not there): a clear refusal. */
+    function robotRefusal(dirName) {
+        return new Error(i18nText('skills.run.robotRefusal',
+            'Skill "{{name}}" is not available to the robot: a robot workflow uses public skills only.', { name: dirName }));
+    }
+
+    function writeTree(root, files) {
+        for (const [rel, bytes] of Object.entries(files)) {
+            const abs = `${root}/${rel}`;
+            ensureParentDir(abs);
+            pyodide.FS.writeFile(abs, bytes);
         }
-        const dirHandle = await window.localFs.resolvePath(`skills/${dirName}`);
+    }
+
+    function readTree(root) {
+        const out = {};
+        const walk = (dir, rel) => {
+            let names;
+            try { names = pyodide.FS.readdir(dir); } catch { return; }
+            for (const n of names) {
+                if (n === '.' || n === '..') continue;
+                const abs = `${dir}/${n}`;
+                const r = rel ? `${rel}/${n}` : n;
+                const st = pyodide.FS.stat(abs);
+                if (pyodide.FS.isDir(st.mode)) walk(abs, r);
+                else out[r] = pyodide.FS.readFile(abs);
+            }
+        };
+        walk(root, '');
+        return out;
+    }
+
+    function removeTree(dir) {
+        let names;
+        try { names = pyodide.FS.readdir(dir); } catch { return; }
+        for (const n of names) {
+            if (n === '.' || n === '..') continue;
+            const abs = `${dir}/${n}`;
+            if (pyodide.FS.isDir(pyodide.FS.stat(abs).mode)) { removeTree(abs); pyodide.FS.rmdir(abs); }
+            else pyodide.FS.unlink(abs);
+        }
+    }
+
+    /** Python's bytecode cache (`__pycache__/`, `*.pyc`): never saved back to the store. */
+    function isPyCache(rel) {
+        return rel.split('/').includes('__pycache__') || rel.endsWith('.pyc');
+    }
+
+    /** Files of `after` that are new or differ from `before`, minus Python's bytecode cache (pure). */
+    function changedFiles(before, after) {
+        const out = {};
+        for (const [rel, b] of Object.entries(after)) {
+            if (isPyCache(rel)) continue;   // bytecode Python wrote on import: never part of the skill
+            const a = before[rel];
+            if (!a || a.length !== b.length || a.some((v, i) => v !== b[i])) out[rel] = b;
+        }
+        return out;
+    }
+
+    /** Fresh MEMFS copy of `files` at `root` (old contents removed). */
+    function memCopy(root, files, save) {
+        pyodide.FS.mkdirTree(root);
+        removeTree(root);
+        writeTree(root, files);
+        memCopies.set(root, { files, save });
+    }
+
+    /** After a run: send what the script changed in each MEMFS copy back to the store. */
+    async function saveMemCopies() {
+        for (const [root, copy] of memCopies) {
+            const changed = changedFiles(copy.files, readTree(root));
+            if (!Object.keys(changed).length) continue;
+            try {
+                await copy.save(changed);
+                Object.assign(copy.files, changed);
+            } catch (e) {
+                console.warn(`[pyodide-runner] could not save the changes under ${root} to the skill store:`, e);
+            }
+        }
+    }
+
+    /** Re-confirm readwrite permission on a native handle (Chromium keeps the grant per origin). */
+    async function ensurePermission(handle, what) {
+        const status = await handle.queryPermission({ mode: 'readwrite' });
+        if (status !== 'granted') {
+            const req = await handle.requestPermission({ mode: 'readwrite' });
+            if (req !== 'granted') throw new Error(`Permission to read/write ${what} was denied.`);
+        }
+    }
+
+    /** Store mode: the skill's files, read as the robot on a robot run (refused when it may not see it). */
+    async function storeSkillFiles(dirName, asRobot) {
+        let files = {};
+        try {
+            files = await window.skillsFs.readSkillFiles(dirName, { asRobot });
+        } catch (e) {
+            if (asRobot && (e.status === 403 || e.status === 404)) throw robotRefusal(dirName);
+            throw e;
+        }
+        if (!Object.keys(files).length) throw asRobot ? robotRefusal(dirName) : new Error(`Skill "${dirName}" not found.`);
+        return files;
+    }
+
+    /** Store mode: write a run's changes to a skill folder back — my own skills only, never on a robot run. */
+    async function saveSkillChanges(dirName, changed, { asRobot = false } = {}) {
+        if (asRobot || !changed || !Object.keys(changed).length) return;
+        if (!(await window.skillsFs.listSkills()).some(s => s.path === dirName && s.mine)) return;
+        for (const [rel, b] of Object.entries(changed)) await window.skillsFs.writeSkillFile(dirName, rel, b);
+    }
+
+    async function ensureMounted(dirName, { asRobot = runAsRobot } = {}) {
+        if (mountedSkills.has(dirName)) return mountedSkills.get(dirName);
+        if (!window.skillsFs) {
+            throw new Error('window.skillsFs is not available — cannot resolve skill folder.');
+        }
+        const mountPath = `/skill/${dirName}`;
+        if (await window.skillsFs.mode() === 'volume') {
+            const files = await storeSkillFiles(dirName, asRobot);
+            memCopy(mountPath, files, (changed) => saveSkillChanges(dirName, changed, { asRobot }));
+            mountedSkills.set(dirName, mountPath);   // cleared at the start of every run (fresh copy per run)
+            return mountPath;
+        }
+        const dirHandle = await window.skillsFs.folderHandle(dirName);
         if (!dirHandle) {
             throw new Error(`Skill folder not found at skills/${dirName}.`);
         }
-        // Re-confirm permission silently; Chromium retains the grant per
-        // origin so this is normally a no-op after first install.
-        const status = await dirHandle.queryPermission({ mode: 'readwrite' });
-        if (status !== 'granted') {
-            const req = await dirHandle.requestPermission({ mode: 'readwrite' });
-            if (req !== 'granted') {
-                throw new Error(`Permission to read/write skill folder "${dirName}" was denied.`);
-            }
-        }
-        const mountPath = `/skill/${dirName}`;
+        await ensurePermission(dirHandle, `skill folder "${dirName}"`);
         pyodide.FS.mkdirTree(mountPath);
         await pyodide.mountNativeFS(mountPath, dirHandle);
         mountedSkills.set(dirName, mountPath);
         return mountPath;
+    }
+
+    function scriptNamesSkillsRoot(absPath) {
+        try { return pyodide.FS.readFile(absPath, { encoding: 'utf8' }).includes('skills-root'); }
+        catch { return false; }
+    }
+
+    /** Before a run in the store: drop last run's copies so every run reads the skill as it is now. */
+    function freshMemCopies() {
+        if (!memCopies.size) return;
+        for (const root of memCopies.keys()) {
+            for (const [d, m] of mountedSkills) if (m === root) mountedSkills.delete(d);
+            removeTree(root);
+            try { pyodide.FS.rmdir(root); } catch { /* not empty or gone */ }
+        }
+        memCopies.clear();
+        skillsRootMountPath = null;
     }
 
     /**
@@ -206,21 +345,21 @@
     let skillsRootMountPath = null;
     async function ensureSkillsRootMounted() {
         if (skillsRootMountPath) return skillsRootMountPath;
-        if (!window.localFs) {
-            throw new Error('window.localFs is not available — cannot resolve skills folder.');
+        if (!window.skillsFs) {
+            throw new Error('window.skillsFs is not available — cannot resolve skills folder.');
         }
-        const skillsHandle = await window.localFs.resolvePath('skills', { create: true });
+        const path = '/skills-root';
+        if (await window.skillsFs.mode() === 'volume') {
+            // A copy of my own skills; new skills the script writes there become private ones.
+            memCopy(path, await window.skillsFs.skillsRootFiles(), (changed) => window.skillsFs.writeSkillsRoot(changed));
+            skillsRootMountPath = path;
+            return path;
+        }
+        const skillsHandle = await window.skillsFs.folderHandle('');
         if (!skillsHandle) {
             throw new Error('Could not resolve skills/ directory.');
         }
-        const status = await skillsHandle.queryPermission({ mode: 'readwrite' });
-        if (status !== 'granted') {
-            const req = await skillsHandle.requestPermission({ mode: 'readwrite' });
-            if (req !== 'granted') {
-                throw new Error('Permission to write to skills/ was denied.');
-            }
-        }
-        const path = '/skills-root';
+        await ensurePermission(skillsHandle, 'skills/');
         pyodide.FS.mkdirTree(path);
         await pyodide.mountNativeFS(path, skillsHandle);
         skillsRootMountPath = path;
@@ -246,19 +385,13 @@
      * isn't declared — the runner installs nothing in that case and lets the
      * script's import error surface to the caller.
      */
-    async function getSkillDependencies(dirName) {
+    async function getSkillDependencies(dirName, { asRobot = false } = {}) {
         if (!window.skillsFs || typeof window.skillsFs.parseFrontmatter !== 'function') {
             return [];
         }
-        // resolvePath splits on "/", so a group-folder prefix in dirName
-        // (e.g. "SEO/ai-search-audit") resolves correctly — a single
-        // getDirectoryHandle(dirName) call cannot traverse a nested path.
-        const skillMd = await window.localFs?.resolvePath(
-            `skills/${dirName}/SKILL.md`, { kind: 'file' }
-        );
-        if (!skillMd) return [];
-        const file = await skillMd.getFile();
-        const text = await file.text();
+        // A group-folder prefix in dirName (e.g. "SEO/ai-search-audit") resolves as a path.
+        const text = await window.skillsFs.getSkillFile(dirName, 'SKILL.md', { asRobot });
+        if (!text) return [];
         const { meta } = window.skillsFs.parseFrontmatter(text);
         return parseDepsField(meta.dependencies);
     }
@@ -270,18 +403,13 @@
      * by the PHP backend (POST /gpt/backend/api/v1/fetch-url) before the
      * script runs. Returns false if the flag is absent, false, or unparseable.
      */
-    async function getSkillFetchesUrls(dirName) {
+    async function getSkillFetchesUrls(dirName, { asRobot = false } = {}) {
         if (!window.skillsFs || typeof window.skillsFs.parseFrontmatter !== 'function') {
             return false;
         }
-        // resolvePath handles a group-folder prefix in dirName (e.g.
-        // "SEO/ai-search-audit"); getDirectoryHandle would not.
-        const skillMd = await window.localFs?.resolvePath(
-            `skills/${dirName}/SKILL.md`, { kind: 'file' }
-        );
-        if (!skillMd) return false;
-        const file = await skillMd.getFile();
-        const text = await file.text();
+        // A group-folder prefix in dirName (e.g. "SEO/ai-search-audit") resolves as a path.
+        const text = await window.skillsFs.getSkillFile(dirName, 'SKILL.md', { asRobot });
+        if (!text) return false;
         const { meta } = window.skillsFs.parseFrontmatter(text);
         const v = meta.fetches_urls;
         if (v === true) return true;
@@ -465,32 +593,134 @@
     }
 
     /**
-     * Install the given Python packages into the running Pyodide. Pre-built
-     * names go through loadPackage (fast, WASM); the rest fall through to
-     * micropip. Already-installed names are skipped — Pyodide's loadPackage
-     * is idempotent but micropip's install isn't always, so the cache matters.
+     * What ensureDeps does (pure): null when every dep is installed already;
+     * { wheels: [files] } when the skill bundles Pyodide packages (install
+     * every bundled file, nothing online); else today's split
+     * { prebuilt, viaMicropip }.
      */
-    async function ensureDeps(deps) {
-        if (!deps || deps.length === 0) return;
-        const fresh = deps.filter(d => !installedDeps.has(d));
-        if (fresh.length === 0) return;
+    function planDeps(deps, installed, wheelFiles) {
+        const fresh = (deps || []).filter(d => !installed.has(d));
+        if (fresh.length === 0) return null;
+        const wheels = [...(wheelFiles || [])].sort();
+        if (wheels.length) return { fresh, wheels };
+        return {
+            fresh,
+            prebuilt: fresh.filter(d => PREBUILT_PACKAGES.has(d)),
+            viaMicropip: fresh.filter(d => !PREBUILT_PACKAGES.has(d)),
+        };
+    }
 
-        const prebuilt = fresh.filter(d => PREBUILT_PACKAGES.has(d));
-        const viaMicropip = fresh.filter(d => !PREBUILT_PACKAGES.has(d));
-
-        if (prebuilt.length) {
-            await pyodide.loadPackage(prebuilt);
+    /**
+     * How the files of a skill bundle install (pure). `lock` is this Pyodide's
+     * lock (`packages`: name → { name, file_name, install_dir }).
+     *   distro:   files that are this Pyodide's own builds (same file name in
+     *             the lock; shared libraries such as openblas-*.zip included):
+     *             loaded by name from the local index, offline;
+     *   wheels:   other .whl files: micropip from MEMFS with deps=False;
+     *   unknown:  anything else (a non-wheel archive the lock does not know).
+     */
+    function planBundle(files, lock) {
+        const byFile = new Map(Object.values(lock || {}).map(p => [p.file_name, p]));
+        const out = { distro: [], wheels: [], unknown: [] };
+        for (const f of [...files].sort()) {
+            const pkg = byFile.get(f);
+            if (pkg) out.distro.push({ file: f, name: pkg.name, installDir: pkg.install_dir });
+            else if (f.endsWith('.whl')) out.wheels.push(f);
+            else out.unknown.push(f);
         }
-        if (viaMicropip.length) {
-            await pyodide.loadPackage('micropip');
-            pyodide.globals.set('_runner_micropip_deps', viaMicropip);
-            await pyodide.runPythonAsync(`
+        return out;
+    }
+
+    function i18nText(key, fallback, params) {
+        const t = window.i18n && typeof window.i18n.t === 'function' ? window.i18n.t(key, params) : null;
+        let text = t && t !== key ? t : fallback;
+        for (const [k, v] of Object.entries(params || {})) text = text.split(`{{${k}}}`).join(String(v));
+        return text;
+    }
+
+    /**
+     * Install a skill's bundled Pyodide packages ({ file: bytes }) into `py`,
+     * offline. Distro packages load by name from the vendored index; one the
+     * index does not have (vendor-pyodide.sh vendors only PREBUILT_PACKAGES'
+     * closure) installs from its bundled bytes instead — a wheel with the
+     * others through micropip, a shared library (.zip/.tar) through Pyodide's
+     * own installer, before the wheels that link it. A file of unknown type
+     * stops the run with a clear error: nothing is dropped silently.
+     */
+    async function installBundle(py, wheels) {
+        const plan = planBundle(Object.keys(wheels), py._api && py._api.lockfile_packages);
+        if (plan.unknown.length) {
+            throw new Error(i18nText('skills.bundle.unknownFiles',
+                'This skill bundles files that are not Python packages for this Pyodide ({{version}}): {{files}}. Export the skill again.',
+                { version: PYODIDE_VERSION, files: plan.unknown.join(', ') }));
+        }
+        const fromBytes = [...plan.wheels];
+        const archives = [];
+        if (plan.distro.length) {
+            await py.loadPackage(plan.distro.map(d => d.name));
+            for (const d of plan.distro) {
+                if (py.loadedPackages[d.name] !== undefined) continue;   // loaded from the local index
+                if (d.file.endsWith('.whl')) fromBytes.push(d.file);
+                else archives.push(d);
+            }
+        }
+        for (const d of archives) {
+            await py._api.install(wheels[d.file], d.file, py._api.package_loader.get_install_dir(d.installDir),
+                'pyodide.loadPackage', 'skill bundle');
+        }
+        if (fromBytes.length) {
+            py.FS.mkdirTree('/tmp/skill-wheels');
+            for (const f of fromBytes) py.FS.writeFile(`/tmp/skill-wheels/${f}`, wheels[f]);
+            await py.loadPackage('micropip');
+            py.globals.set('_runner_wheel_urls', fromBytes.sort().map(f => `emfs:/tmp/skill-wheels/${f}`));
+            await py.runPythonAsync(`
+import micropip
+await micropip.install(list(_runner_wheel_urls), deps=False)
+            `);
+        }
+    }
+
+    /**
+     * The Pyodide wheels a skill bundles (.wheels/pyodide/), as { file: bytes }; {} when none.
+     */
+    async function getSkillWheels(dirName, { asRobot = false } = {}) {
+        if (!window.skillsFs || !dirName) return {};
+        const files = await window.skillsFs.readSkillFiles(dirName, { asRobot, withWheels: true, under: '.wheels/pyodide' });
+        const out = {};
+        for (const [rel, b] of Object.entries(files)) out[rel.slice('.wheels/pyodide/'.length)] = b;
+        return out;
+    }
+
+    /**
+     * Install the given Python packages into the running Pyodide. When the
+     * skill bundles wheels (`wheels`: { file: bytes } from .wheels/pyodide/),
+     * those are installed offline by installBundle and nothing is fetched online.
+     * Otherwise pre-built names go through loadPackage (fast, WASM) and the
+     * rest fall through to micropip. Already-installed names are skipped —
+     * Pyodide's loadPackage is idempotent but micropip's install isn't
+     * always, so the cache matters.
+     */
+    async function ensureDeps(deps, { wheels = null } = {}) {
+        const plan = planDeps(deps, installedDeps, Object.keys(wheels || {}));
+        if (!plan) return;
+
+        if (plan.wheels) {
+            await installBundle(pyodide, wheels);
+        } else {
+            if (plan.prebuilt.length) {
+                await pyodide.loadPackage(plan.prebuilt);
+            }
+            if (plan.viaMicropip.length) {
+                await pyodide.loadPackage('micropip');
+                pyodide.globals.set('_runner_micropip_deps', plan.viaMicropip);
+                await pyodide.runPythonAsync(`
 import micropip
 for _dep in list(_runner_micropip_deps):
     await micropip.install(_dep)
-            `);
+                `);
+            }
         }
-        for (const d of fresh) installedDeps.add(d);
+        for (const d of plan.fresh) installedDeps.add(d);
     }
 
     /**
@@ -947,6 +1177,33 @@ _runner_stderr = _stderr_buf.getvalue()
 `;
 
     async function _runOne(opts) {
+        const script = opts?.script;
+
+        // Normalize the requested skill name to its real on-disk path BEFORE
+        // any helper touches it (mount, deps, fetches_urls, output bucketing
+        // all assume the full group-prefixed form). A bare leaf like
+        // "geo-report" becomes "GEO/geo-report"; an already-pathed or
+        // top-level name is unchanged.
+        // asRobot: the run belongs to a robot-owned workflow (see runAsRobot).
+        const asRobot = !!opts?.asRobot;
+        const dirName = await resolveSkillDir(opts?.dirName, { asRobot });
+
+        if (!dirName) throw new Error('runSkillScript: dirName is required');
+        if (!script) throw new Error('runSkillScript: script is required');
+
+        const t0 = performance.now();
+        await ensureLoaded();
+        const store = window.skillsFs && await window.skillsFs.mode() === 'volume';
+        if (store) freshMemCopies();
+        runAsRobot = asRobot;
+        try {
+            return await _runMounted(opts, dirName, asRobot, store, t0);
+        } finally {
+            runAsRobot = false;
+        }
+    }
+
+    async function _runMounted(opts, dirName, asRobot, store, t0) {
         const {
             script,
             argv = [],
@@ -955,20 +1212,7 @@ _runner_stderr = _stderr_buf.getvalue()
             dependencies = null,
             persist = true,
         } = opts || {};
-
-        // Normalize the requested skill name to its real on-disk path BEFORE
-        // any helper touches it (mount, deps, fetches_urls, output bucketing
-        // all assume the full group-prefixed form). A bare leaf like
-        // "geo-report" becomes "GEO/geo-report"; an already-pathed or
-        // top-level name is unchanged.
-        const dirName = await resolveSkillDir(opts?.dirName);
-
-        if (!dirName) throw new Error('runSkillScript: dirName is required');
-        if (!script) throw new Error('runSkillScript: script is required');
-
-        const t0 = performance.now();
-        await ensureLoaded();
-        const mount = await ensureMounted(dirName);
+        const mount = await ensureMounted(dirName, { asRobot });
         // Outputs folder is sibling-mounted at `/outputs/` on every run so
         // skill scripts can write generated documents there via absolute
         // paths (e.g. `-o /outputs/result.html`).
@@ -977,12 +1221,18 @@ _runner_stderr = _stderr_buf.getvalue()
         // (e.g. skill-creator/scripts/create_skill.py) can create new skill
         // folders in place and have them be immediately live. Mounted on
         // every run for consistency with /outputs/; cached after first call.
-        await ensureSkillsRootMounted();
+        // In the skill store it is a copy of all my skills, so it is made only
+        // for a script that names /skills-root.
+        // A robot run never gets it there (it holds the person's own skills).
+        const rootThisRun = !store || (!asRobot && scriptNamesSkillsRoot(`${mount}/${script}`));
+        if (rootThisRun) await ensureSkillsRootMounted();
 
         const deps = Array.isArray(dependencies)
             ? dependencies
-            : await getSkillDependencies(dirName);
-        await ensureDeps(deps);
+            : await getSkillDependencies(dirName, { asRobot });
+        // Bundled wheels are read only while something is still to install.
+        const needsInstall = !!planDeps(deps, installedDeps, []);
+        await ensureDeps(deps, { wheels: needsInstall ? await getSkillWheels(dirName, { asRobot }) : null });
 
         // pyodide.toPy() rejects undefined/null/non-cloneable values with
         // "Unsupported data type". Validate argv before handing it off so we
@@ -1006,7 +1256,7 @@ _runner_stderr = _stderr_buf.getvalue()
         // the hardened SKILL.md prevents fabricated reports in that case.
         let effectiveArgv = argv;
         try {
-            const fetchesUrls = await getSkillFetchesUrls(dirName);
+            const fetchesUrls = await getSkillFetchesUrls(dirName, { asRobot });
             if (fetchesUrls) {
                 effectiveArgv = await prefetchUrlArgs(argv, dirName);
             }
@@ -1119,6 +1369,15 @@ _runner_stderr = _stderr_buf.getvalue()
             exitCode = 1;
             stderr = String(e && e.message ? e.message : e);
         }
+        // Skill store: /skills-root was not given to this run (heuristic, or a
+        // robot run), so anything the script wrote there would be lost — fail
+        // the run instead (and drop what it wrote).
+        if (store && !rootThisRun && exists('/skills-root')) {
+            removeTree('/skills-root');
+            try { pyodide.FS.rmdir('/skills-root'); } catch { /* gone */ }
+            exitCode = 1;
+            stderr = (stderr ? stderr + '\n' : '') + skillsRootUnavailable();
+        }
 
         const outputs = {};
         if (Array.isArray(readOutputs)) {
@@ -1153,6 +1412,7 @@ _runner_stderr = _stderr_buf.getvalue()
             await new Promise((resolve, reject) => {
                 pyodide.FS.syncfs(false, err => err ? reject(err) : resolve());
             });
+            if (store) await saveMemCopies();
         }
 
         return {
@@ -1284,6 +1544,8 @@ _inline_stderr_str = _inline_stderr.getvalue()
         pyodide = null;
         pyodideLoadPromise = null;
         mountedSkills.clear();
+        memCopies.clear();
+        skillsRootMountPath = null;
         installedDeps.clear();
         runQueue = Promise.resolve();
     }
@@ -1297,6 +1559,31 @@ _inline_stderr_str = _inline_stderr.getvalue()
     function cleanupPath(absPath) {
         if (!pyodide || !absPath || typeof absPath !== 'string') return;
         try { pyodide.FS.unlink(absPath); } catch (_) { /* tolerate */ }
+    }
+
+    /**
+     * What a pool worker needs to run a skill (it cannot read the skill itself):
+     * the resolved dirName, its dependencies and bundled wheels, and either the
+     * folder handle (readwrite granted here — a worker cannot prompt) or, in
+     * the skill store, the skill's files for a MEMFS copy.
+     */
+    const poolHandles = new Map();   // dirName → Promise<handle> (one in-flight resolve per path)
+    async function poolSkillPayload(rawDirName, { asRobot = false } = {}) {
+        if (!window.skillsFs) throw new Error('skillsFs unavailable for pool path');
+        const dirName = await resolveSkillDir(rawDirName, { asRobot });
+        if (await window.skillsFs.mode() === 'volume') {
+            const skillFiles = await storeSkillFiles(dirName, asRobot);
+            const dependencies = await getSkillDependencies(dirName, { asRobot });
+            const wheels = dependencies.length ? await getSkillWheels(dirName, { asRobot }) : {};
+            return { dirName, dependencies, wheels, skillFiles };
+        }
+        const dependencies = await getSkillDependencies(dirName);
+        const wheels = dependencies.length ? await getSkillWheels(dirName) : {};
+        if (!poolHandles.has(dirName)) poolHandles.set(dirName, window.skillsFs.folderHandle(dirName));
+        const skillHandle = await poolHandles.get(dirName);
+        if (!skillHandle) { poolHandles.delete(dirName); throw new Error('could not resolve the skill handle for pool path'); }
+        await ensurePermission(skillHandle, `skill folder "${dirName}"`);
+        return { dirName, dependencies, wheels, skillHandle };
     }
 
     window.pyodideRunner = {
@@ -1313,6 +1600,24 @@ _inline_stderr_str = _inline_stderr.getvalue()
         // resolves these here and passes the results in the worker payload.
         getSkillDependencies,
         getSkillFetchesUrls,
+        poolSkillPayload,
+        // After a pool run in the store: save result.skillChanges (own skills only, never on a robot run).
+        // Never throws: the script already ran, and a caller that falls back to the main thread on any
+        // error would run it a second time. A failed save is a warning, as in saveMemCopies.
+        savePoolChanges: async (dirName, changes, opts) => {
+            try {
+                await saveSkillChanges(dirName, changes, opts);
+                return true;
+            } catch (e) {
+                console.warn(`[pyodide-runner] could not save the changes of ${dirName} to the skill store:`, e);
+                return false;
+            }
+        },
+        ensureDeps,
+        _planDeps: planDeps,         // pure, for tests
+        _planBundle: planBundle,     // pure, for tests
+        _installBundle: installBundle, // (py, { file: bytes }), for tests against a real Pyodide
+        _changedFiles: changedFiles, // pure, for tests
         // exposed for tests / introspection
         _state: () => ({
             loaded: !!pyodide,
