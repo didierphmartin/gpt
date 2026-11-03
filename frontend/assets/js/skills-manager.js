@@ -649,7 +649,7 @@ class SkillsManager {
             : '';
         return `
             <div class="skills-item flex items-center gap-1 px-2 py-1.5 text-xs text-gray-700 cursor-pointer hover:bg-blue-50 rounded select-none"
-                 draggable="${skill.mine === false ? 'false' : 'true'}"
+                 draggable="true"
                  data-skill-id="${skill.id}" title="${this.escapeHtml(skill.description || '')}">
                 <span>${icon}</span>
                 <span class="flex-1 truncate">${this.escapeHtml(skill.name)}</span>
@@ -740,6 +740,8 @@ class SkillsManager {
                     mine: skill.mine !== false,
                 };
                 e.dataTransfer.setData('application/x-skill', JSON.stringify(payload));
+                // Folder drop targets accept only this marker: others' public skills can go to the chat, not into a folder.
+                if (skill.mine !== false) e.dataTransfer.setData('application/x-skill-movable', '1');
                 // copy → dropping onto the chat input; move → onto a folder.
                 e.dataTransfer.effectAllowed = 'copyMove';
             });
@@ -757,7 +759,7 @@ class SkillsManager {
                 cat.style.borderRadius = on ? '6px' : '';
             };
             cat.addEventListener('dragover', (e) => {
-                if (!e.dataTransfer.types.includes('application/x-skill')) return;
+                if (!e.dataTransfer.types.includes('application/x-skill-movable')) return;
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'move';
                 lit(true);

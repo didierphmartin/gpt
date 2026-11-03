@@ -139,12 +139,12 @@ test('declining the offer is remembered per user', () => {
   assert.equal(store.skills_migrate_done_7, '1');
 });
 
-test('others\' public skills show their owner and are not draggable; mine are draggable', () => {
+test('others\' public skills show their owner and stay draggable (to chat)', () => {
   const { mgr } = load();
   mgr.edition = 'corporate';
   const theirs = mgr.renderSkillItem({ ...SKILLS[2], owner_name: 'Ada' });
   assert.match(theirs, /skills\.visibility\.by\{"name":"Ada"\}/);
-  assert.match(theirs, /draggable="false"/);
+  assert.match(theirs, /draggable="true"/);
   const mine = mgr.renderSkillItem({ ...SKILLS[1], owner_name: 'Ada' });
   assert.doesNotMatch(mine, /skills\.visibility\.by/);
   assert.match(mine, /draggable="true"/);
