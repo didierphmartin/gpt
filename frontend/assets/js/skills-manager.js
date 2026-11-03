@@ -895,8 +895,9 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
 
         modal.querySelector('#skills-import-folder-btn').addEventListener('click', async () => {
             showStatus('Opening folder picker…', 'info');
-            const result = await window.skillsImport.importFromFolder();
-            handleResult(result);
+            const result = await window.skillsImport.readFromFolder();
+            if (result.ok) this.showZipReview(modal, result.read, showStatus, handleResult);
+            else handleResult(result);
         });
         modal.querySelector('#skills-import-zip-btn').addEventListener('click', async () => {
             showStatus('Choose a .zip / .skill file…', 'info');
@@ -913,7 +914,7 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         });
 
         // GitHub URL flow: reveal a small inline form to capture the URL,
-        // then run importFromGitHub. Two-step instead of a prompt() so
+        // then run readFromGitHub. Two-step instead of a prompt() so
         // we can keep the rest of the modal styling consistent and let
         // the user see the URL as they paste it.
         const githubForm = modal.querySelector('#skills-import-github-form');
@@ -934,8 +935,11 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
                 return;
             }
             showStatus('Downloading from GitHub…', 'info');
-            const result = await window.skillsImport.importFromGitHub(url);
-            handleResult(result);
+            const result = await window.skillsImport.readFromGitHub(url);
+            if (result.ok) {
+                githubForm.classList.add('hidden');
+                this.showZipReview(modal, result.read, showStatus, handleResult);
+            } else handleResult(result);
         };
         modal.querySelector('#skills-import-github-install').addEventListener('click', installFromGithub);
         githubUrlInput.addEventListener('keydown', (e) => {

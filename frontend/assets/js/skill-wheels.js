@@ -53,14 +53,18 @@
         if (o.onProgress) o.onProgress('pyodide-load');
         const pyodide = await (o.loadPyodide || defaultLoadPyodide)({ indexURL });
         await pyodide.loadPackage('micropip');
-        const baseline = new Set(Object.keys(pyodide.loadedPackages).map(norm));
+        const baseline = new Set(Object.keys(pyodide.loadedPackages));
         if (o.onProgress) o.onProgress('pyodide-install');
         pyodide.globals.set('_skill_deps', deps);
-        const frozen = JSON.parse(await pyodide.runPythonAsync(
-            'import micropip\nawait micropip.install(list(_skill_deps))\nmicropip.freeze()'));
+        // freeze() is the WHOLE lock (distro + what micropip added); loadedPackages says what the install pulled in.
+        const lock = JSON.parse(await pyodide.runPythonAsync(
+            'import micropip\nawait micropip.install(list(_skill_deps))\nmicropip.freeze()')).packages || {};
+        const byName = {};
+        for (const [key, pkg] of Object.entries(lock)) byName[norm(pkg.name || key)] = pkg;
         const out = {};
-        for (const [key, pkg] of Object.entries(frozen.packages || {})) {
-            if (baseline.has(norm(pkg.name || key))) continue;
+        for (const name of Object.keys(pyodide.loadedPackages).filter((n) => !baseline.has(n))) {
+            const pkg = byName[norm(name)];
+            if (!pkg || !pkg.file_name) throw fail('download', `No wheel file known for ${name}`);
             const url = /^https?:\/\//.test(pkg.file_name) ? pkg.file_name : indexURL + pkg.file_name;
             const file = url.split('?')[0].split('#')[0].split('/').pop();
             const res = await doFetch(url);

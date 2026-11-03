@@ -60,3 +60,8 @@ test('unsafe paths rejected', async () => {
     const bad = fflate.zipSync({ 'manifest.json': enc.encode('{"format":1,"dir":"../x"}') });
     assert.throws(() => SkillZip.read(bad, o));
 });
+
+test('toStoreFiles omits .wheels/wheels.json when there are no wheels', () => {
+    const out = SkillZip.toStoreFiles({ files: { 'SKILL.md': enc.encode('x') }, pyodideWheels: {}, nativeWheels: {} });
+    assert.deepEqual(Object.keys(out), ['SKILL.md']);
+});

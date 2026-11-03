@@ -5,13 +5,15 @@ const require = createRequire(import.meta.url);
 const SkillWheels = require('../assets/js/skill-wheels.js');
 
 const INDEX = 'https://cdn.example/pyodide/';
-function fakePyodide(frozen, calls) {
-    return {
+function fakePyodide(lock, gained, calls) {
+    const py = {
         loadedPackages: { numpy: 'default channel' },
-        async loadPackage(n) { calls.push(['loadPackage', n]); if (n === 'micropip') this.loadedPackages.micropip = 'x'; },
+        async loadPackage(n) { calls.push(['loadPackage', n]); if (n === 'micropip') py.loadedPackages.micropip = 'default channel'; },
         globals: { set: (k, v) => calls.push(['set', k, v]) },
-        async runPythonAsync(code) { calls.push(['py']); return JSON.stringify({ packages: frozen }); },
+        // the install gains packages (loadedPackages keys keep their own case); freeze() is the whole lock
+        async runPythonAsync() { calls.push(['py']); Object.assign(py.loadedPackages, gained); return JSON.stringify({ packages: lock }); },
     };
+    return py;
 }
 const bytes = (s) => new TextEncoder().encode(s).buffer;
 
@@ -22,31 +24,34 @@ test('no dependencies: nothing is loaded or called', async () => {
     assert.equal(touched, 0);
 });
 
-test('freeze diff picks only packages beyond the baseline; absolute and relative file_name', async () => {
+test('only packages the install gained are fetched, not the whole lock', async () => {
     const calls = [], fetched = [];
-    const frozen = {
-        numpy: { name: 'numpy', file_name: 'numpy-2.0.whl' },                       // baseline: skipped
-        micropip: { name: 'micropip', file_name: 'micropip-0.whl' },                // loaded by us: skipped
-        pillow: { name: 'pillow', file_name: 'pillow-11.0-cp312-pyodide.whl' },      // relative, from the lock
-        fpdf2: { name: 'fpdf2', file_name: 'https://files.pythonhosted.org/x/fpdf2-2.8-py3-none-any.whl?sha=1' },
+    const lock = {
+        numpy: { name: 'numpy', file_name: 'numpy-2.0.whl' },
+        scipy: { name: 'scipy', file_name: 'scipy-1.whl' },
+        micropip: { name: 'micropip', file_name: 'micropip-0.whl' },
+        pillow: { name: 'pillow', file_name: 'pillow-10.2.0-cp312-cp312-pyodide_2024_0_wasm32.whl' },   // relative, distro
+        fonttools: { name: 'fonttools', file_name: 'fonttools-4.51.0-py3-none-any.whl' },
+        fpdf2: { name: 'fpdf2', file_name: 'https://files.pythonhosted.org/x/fpdf2-2.9.0-py3-none-any.whl' },
     };
-    const r = await SkillWheels.gather(['fpdf2', 'pillow'], {
+    const gained = { fpdf2: 'pypi', fonttools: 'default channel', Pillow: 'default channel' };
+    const r = await SkillWheels.gather(['fpdf2'], {
         indexURL: INDEX,
-        loadPyodide: async (o) => { calls.push(['load', o.indexURL]); return fakePyodide(frozen, calls); },
+        loadPyodide: async (o) => { calls.push(['load', o.indexURL]); return fakePyodide(lock, gained, calls); },
         fetch: async (u) => { fetched.push(u); return { ok: true, arrayBuffer: async () => bytes(u) }; },
-        nativeWheels: async () => ({ 'fpdf2-2.8-py3-none-any.whl': new Uint8Array([1]) }),
+        nativeWheels: async () => ({ 'fpdf2-2.9.0-py3-none-any.whl': new Uint8Array([1]) }),
     });
-    assert.deepEqual(Object.keys(r.pyodide).sort(), ['fpdf2-2.8-py3-none-any.whl', 'pillow-11.0-cp312-pyodide.whl']);
-    assert.deepEqual(fetched.sort(), [INDEX + 'pillow-11.0-cp312-pyodide.whl', 'https://files.pythonhosted.org/x/fpdf2-2.8-py3-none-any.whl?sha=1']);
+    assert.deepEqual(Object.keys(r.pyodide).sort(), ['fonttools-4.51.0-py3-none-any.whl', 'fpdf2-2.9.0-py3-none-any.whl', 'pillow-10.2.0-cp312-cp312-pyodide_2024_0_wasm32.whl']);
+    assert.deepEqual(fetched.sort(), [INDEX + 'fonttools-4.51.0-py3-none-any.whl', INDEX + 'pillow-10.2.0-cp312-cp312-pyodide_2024_0_wasm32.whl', 'https://files.pythonhosted.org/x/fpdf2-2.9.0-py3-none-any.whl']);
     assert.deepEqual(calls.find((c) => c[0] === 'load'), ['load', INDEX]);
-    assert.deepEqual(calls.find((c) => c[0] === 'set'), ['set', '_skill_deps', ['fpdf2', 'pillow']]);
-    assert.deepEqual(Object.keys(r.native), ['fpdf2-2.8-py3-none-any.whl']);
+    assert.deepEqual(calls.find((c) => c[0] === 'set'), ['set', '_skill_deps', ['fpdf2']]);
+    assert.deepEqual(Object.keys(r.native), ['fpdf2-2.9.0-py3-none-any.whl']);
 });
 
 test('a failed wheel download names the file', async () => {
     const frozen = { a: { name: 'a', file_name: 'a-1.whl' } };
     await assert.rejects(SkillWheels.gather(['a'], {
-        indexURL: INDEX, loadPyodide: async () => fakePyodide(frozen, []),
+        indexURL: INDEX, loadPyodide: async () => fakePyodide(frozen, { a: 'x' }, []),
         fetch: async () => ({ ok: false, status: 404 }), nativeWheels: async () => ({}),
     }), (e) => e.code === 'download' && /a-1\.whl/.test(e.message));
 });
@@ -64,7 +69,7 @@ test('progress reports the stages', async () => {
     const seen = [];
     await SkillWheels.gather(['a'], {
         indexURL: INDEX, onProgress: (s) => seen.push(s),
-        loadPyodide: async () => fakePyodide({}, []), fetch: async () => ({}), nativeWheels: async () => ({}),
+        loadPyodide: async () => fakePyodide({}, {}, []), fetch: async () => ({}), nativeWheels: async () => ({}),
     });
     assert.deepEqual(seen, ['native', 'pyodide-load', 'pyodide-install']);
 });

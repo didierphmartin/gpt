@@ -102,7 +102,8 @@
         const out = { ...r.files };
         for (const [f, b] of Object.entries(r.pyodideWheels || {})) out[`.wheels/pyodide/${f}`] = b;
         for (const [f, b] of Object.entries(r.nativeWheels || {})) out[`.wheels/native/${f}`] = b;
-        out['.wheels/wheels.json'] = enc.encode(JSON.stringify({ pyodide: Object.keys(r.pyodideWheels || {}), native: Object.keys(r.nativeWheels || {}) }));
+        const py = Object.keys(r.pyodideWheels || {}), nat = Object.keys(r.nativeWheels || {});
+        if (py.length || nat.length) out['.wheels/wheels.json'] = enc.encode(JSON.stringify({ pyodide: py, native: nat }));
         return out;
     }
 

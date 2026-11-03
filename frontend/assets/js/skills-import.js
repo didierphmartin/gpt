@@ -2,17 +2,15 @@
  * Skill import (and zip export) service.
  *
  * Import paths:
- *   1. importFromFolder() — opens a folder picker, copies the source folder
- *      tree into <root>/skills/<name>/.
- *   2. importFromZipPicker() — opens a file picker for a .zip, extracts it
- *      via fflate, writes the contents into <root>/skills/<name>/.
+ *   1. readFromFolder() — opens a folder picker and reads the source folder.
+ *   2. pickZipFile() + readZipFile() — a .zip via SkillZip.read.
+ *   3. readFromGitHub() — downloads a repo path.
+ * Folder and GitHub reads return { ok: true, read }; all three go through installRead (skillsFs.importSkill).
  *
  * exportSkillZip() builds the self-contained SkillZip (skill + wheels); zip imports read it with SkillZip.read
  * and install through skillsFs.importSkill (clash/identical handling lives there).
  *
- * Both imports validate that the source contains a SKILL.md at its root and that
- * the destination name doesn't already exist under <root>/skills/. Failure
- * modes return { ok: false, error: ... } so the caller can surface them.
+ * Failure modes return { ok: false, error: ... } so the caller can surface them.
  *
  * Depends on:
  *   - window.skillsFs (the skills folder, or the skill store in the Docker app)
@@ -25,41 +23,8 @@
     const isJunk = (name) => SKIP_PREFIXES.some(p => name === p || name.startsWith(p + '/'));
     const tr = (key, params) => (window.i18n && window.i18n.t ? window.i18n.t(key, params || {}) : key);
 
-    /**
-     * Verify skills can be written (the folder exists, or the skill store is
-     * used) and that no skill named `name` is already there.
-     */
-    async function ensureSkillsDir(name) {
-        if (!window.skillsFs) {
-            return { ok: false, error: 'Local filesystem not available — pick your data folder in Settings first.' };
-        }
-        if (await window.skillsFs.mode() !== 'volume') {
-            if (!window.localFs) {
-                return { ok: false, error: 'Local filesystem not available — pick your data folder in Settings first.' };
-            }
-            if (!(await window.skillsFs.folderHandle(''))) {
-                return { ok: false, error: 'Could not open or create the skills folder under your data root.' };
-            }
-        }
-        if (await window.skillsFs.skillExists(name)) {
-            return { ok: false, error: `A skill folder named "${name}" already exists. Rename or remove it first.` };
-        }
-        return { ok: true };
-    }
-
-    /** Write the collected { rel: bytes } of a new skill through skillsFs. */
-    async function installFiles(name, files) {
-        try {
-            await window.skillsFs.writeSkillFiles(name, files);
-        } catch (e) {
-            if (e?.code === 'clash') {
-                return { ok: false, error: `A skill folder named "${name}" already exists. Rename or remove it first.` };
-            }
-            console.error('[skillsImport] write failed:', e);
-            return { ok: false, error: 'Copy failed: ' + (e?.message || e) };
-        }
-        return { ok: true, name, fileCount: Object.keys(files).length };
-    }
+    /** A read-shaped result ({dir, name, files, pyodideWheels, nativeWheels}) for a plain folder of files. */
+    const plainRead = (name, files) => ({ dir: name, name, files, pyodideWheels: {}, nativeWheels: {}, legacy: true, manifest: null });
 
     /**
      * Look at the immediate contents of a directory handle and decide if
@@ -78,7 +43,7 @@
      * Import a skill from a folder picked via showDirectoryPicker. The
      * picked folder's name becomes the slug under <root>/skills/.
      */
-    async function importFromFolder() {
+    async function readFromFolder() {
         if (typeof window.showDirectoryPicker !== 'function') {
             return { ok: false, error: 'File System Access API not supported in this browser.' };
         }
@@ -97,8 +62,6 @@
                 error: `Folder "${srcDir.name}" doesn't contain a SKILL.md at its root. Pick the folder that contains SKILL.md (not its parent).`
             };
         }
-        const ensured = await ensureSkillsDir(srcDir.name);
-        if (!ensured.ok) return ensured;
         let files;
         try {
             files = await readFolderFiles(srcDir, '', (entry) => !isJunk(entry.name));
@@ -106,9 +69,7 @@
             console.error('[skillsImport] copy failed:', e);
             return { ok: false, error: 'Copy failed: ' + (e?.message || e) };
         }
-        const result = await installFiles(srcDir.name, files);
-        if (result.ok) console.log(`[skillsImport] copied ${result.fileCount} files to skills/${srcDir.name}/`);
-        return result;
+        return { ok: true, read: plainRead(srcDir.name, files) };
     }
 
     /**
@@ -129,6 +90,9 @@
      */
     async function installRead(read, { visibility = 'private' } = {}) {
         if (!window.skillsFs) return { ok: false, error: 'Local filesystem not available — pick your data folder in Settings first.' };
+        if (await window.skillsFs.mode() !== 'volume' && !window.localFs) {
+            return { ok: false, error: 'Local filesystem not available — pick your data folder in Settings first.' };
+        }
         try {
             const r = await window.skillsFs.importSkill(read, { visibility });
             return { ok: true, name: read.name, status: (r && r.status) || 'installed', fileCount: Object.keys(read.files).length };
@@ -273,7 +237,7 @@
      * folder name under <root>/skills/. Validates SKILL.md presence at
      * the target path before writing anything.
      */
-    async function importFromGitHub(url) {
+    async function readFromGitHub(url) {
         const parsed = parseGitHubUrl(url);
         if (!parsed) {
             return { ok: false, error: 'Could not parse GitHub URL. Expected forms: https://github.com/owner/repo[/tree/branch[/path]] or owner/repo.' };
@@ -305,15 +269,13 @@
             return { ok: false, error: 'Could not reach GitHub API: ' + (e?.message || e) };
         }
 
-        const ensured = await ensureSkillsDir(safeName);
-        if (!ensured.ok) return ensured;
         const files = {};
         try {
             await fetchGitHubTree(owner, repo, ref, path, files);
         } catch (e) {
             return { ok: false, error: 'Download failed: ' + (e?.message || e) };
         }
-        return installFiles(safeName, files);
+        return { ok: true, read: plainRead(safeName, files) };
     }
 
     /** The skill filter: junk, dotfiles (may hold secrets) and __pycache__ are left out. */
@@ -388,13 +350,13 @@
     }
 
     window.skillsImport = {
-        importFromFolder,
+        readFromFolder,
         importFromZipPicker,
         pickZipFile,
         readZipFile,
         installRead,
         importFromZipFile,    // exposed for drag-drop later
-        importFromGitHub,
+        readFromGitHub,
         exportSkillZip,
         readFolderFiles,
         filterSkillFiles,
