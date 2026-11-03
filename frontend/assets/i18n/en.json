@@ -471,6 +471,23 @@
     },
     "bundle": {
       "unknownFiles": "This skill bundles files that are not Python packages for this Pyodide ({{version}}): {{files}}. Export the skill again."
+    },
+    "import": {
+      "introStore": "Adds the skill to this app's skill storage. The skill must contain a SKILL.md at its root (Anthropic-spec).",
+      "source": "Source",
+      "fromFolder": "From a folder",
+      "fromZip": "From a .zip / .skill",
+      "fromGithub": "From GitHub",
+      "contents": "Contents",
+      "looseFiles": "{{count}} other file(s)",
+      "libraries": "Libraries",
+      "noLibraries": "None declared",
+      "librariesBundled": "{{list}} — bundled ({{count}} file(s)), installed offline",
+      "librariesOnline": "{{list}} — not bundled: downloaded the first time the skill runs (needs internet)",
+      "destination": "Installs into",
+      "destFolder": "your skills folder (skills/{{dir}})",
+      "destStore": "this app's skill storage, as one of your skills",
+      "visibility": "Visibility"
     }
   },
   "fileStorage": {

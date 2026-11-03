@@ -189,3 +189,15 @@ test('folder-permission notice only in folder mode (an empty Docker store is not
     assert.equal(mgr.treeContainer.innerHTML.includes('skills.fsaPrompt'), expected, mode);
   }
 });
+
+test('import review summarizes the skill folder: SKILL.md first, folders with counts, loose files, total size', () => {
+  const { mgr } = load();
+  const b = (n) => new Uint8Array(n);
+  const s = mgr.constructor.summarizeSkillFiles({
+    'SKILL.md': b(100), 'scripts/a.py': b(10), 'scripts/b.py': b(10), 'references/r.md': b(30), 'LICENSE': b(50),
+  });
+  assert.equal(s.total, 5);
+  assert.equal(s.bytes, 200);
+  assert.equal(JSON.stringify(s.groups.map((g) => [g.kind, g.name, g.count])),
+    JSON.stringify([['skillmd', 'SKILL.md', 1], ['folder', 'references/', 1], ['folder', 'scripts/', 2], ['loose', '', 1]]));
+});

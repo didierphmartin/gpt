@@ -471,6 +471,23 @@
     },
     "bundle": {
       "unknownFiles": "Esta habilidad incluye archivos que no son paquetes de Python para este Pyodide ({{version}}): {{files}}. Exporte la habilidad de nuevo."
+    },
+    "import": {
+      "introStore": "Añade la habilidad al almacenamiento de habilidades de la aplicación. Debe contener un SKILL.md en su raíz (especificación Anthropic).",
+      "source": "Origen",
+      "fromFolder": "Desde una carpeta",
+      "fromZip": "Desde un .zip / .skill",
+      "fromGithub": "Desde GitHub",
+      "contents": "Contenido",
+      "looseFiles": "{{count}} archivo(s) más",
+      "libraries": "Bibliotecas",
+      "noLibraries": "Ninguna declarada",
+      "librariesBundled": "{{list}} — incluidas ({{count}} archivo(s)), se instalan sin conexión",
+      "librariesOnline": "{{list}} — no incluidas: se descargan la primera vez que se ejecuta (requiere Internet)",
+      "destination": "Se instala en",
+      "destFolder": "tu carpeta de habilidades (skills/{{dir}})",
+      "destStore": "el almacenamiento de habilidades de la aplicación, como una de tus habilidades",
+      "visibility": "Visibilidad"
     }
   },
   "fileStorage": {

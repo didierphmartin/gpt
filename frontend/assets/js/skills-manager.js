@@ -856,7 +856,8 @@ class SkillsManager {
                     <h3 class="text-base font-semibold text-gray-800">Import Skill</h3>
                     <button id="skills-import-close" class="p-1.5 text-gray-500 hover:text-gray-700 rounded">&#10005;</button>
                 </div>
-                <p class="text-xs text-gray-500 mb-4">
+                <div id="skills-import-choose">
+                <p id="skills-import-intro" class="text-xs text-gray-500 mb-4">
                     Adds a new folder under your local skills directory. The skill must contain a <code class="bg-gray-100 px-1 rounded">SKILL.md</code> at its root (Anthropic-spec).
                 </p>
                 <div class="flex flex-col gap-2">
@@ -890,7 +891,6 @@ class SkillsManager {
                         <button id="skills-import-github-install" type="button" class="px-3 py-1 text-xs text-white bg-blue-600 hover:bg-blue-700 rounded">Install</button>
                     </div>
                 </div>
-                <div id="skills-import-status" class="hidden mt-4 text-xs"></div>
                 <details class="mt-4 text-xs text-gray-600">
                     <summary class="cursor-pointer hover:text-gray-800">Already have skills installed for Claude Code or another tool?</summary>
                     <div class="mt-2 pl-2 border-l-2 border-gray-200 space-y-1.5">
@@ -903,9 +903,16 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
                         <p class="text-gray-500">Symlinks are read-only from this app's perspective — edits in the source folder show up here on next reload.</p>
                     </div>
                 </details>
+                </div>
+                <div id="skills-import-status" class="hidden mt-4 text-xs"></div>
             </div>
         `;
         document.body.appendChild(modal);
+        // The Docker app installs into its own skill storage, not the local folder.
+        window.skillsFs?.mode?.().then((mode) => {
+            const intro = modal.querySelector('#skills-import-intro');
+            if (mode !== 'folder' && intro) intro.textContent = this.t('skills.import.introStore');
+        }).catch(() => {});
 
         const status = modal.querySelector('#skills-import-status');
         const showStatus = (text, kind /* 'info' | 'error' | 'ok' */) => {
@@ -942,7 +949,8 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         modal.querySelector('#skills-import-folder-btn').addEventListener('click', async () => {
             showStatus('Opening folder picker…', 'info');
             const result = await window.skillsImport.readFromFolder();
-            if (result.ok) this.showZipReview(modal, result.read, showStatus, handleResult);
+            if (result.ok) this.showZipReview(modal, result.read, showStatus, handleResult,
+                { kind: 'folder', label: result.read.dir });
             else handleResult(result);
         });
         modal.querySelector('#skills-import-zip-btn').addEventListener('click', async () => {
@@ -956,7 +964,7 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
                 showStatus(this.t('skills.zip.failed', { message: e?.message || this.t('skills.zip.unreadable') }), 'error');
                 return;
             }
-            this.showZipReview(modal, read, showStatus, handleResult);
+            this.showZipReview(modal, read, showStatus, handleResult, { kind: 'zip', label: file.name });
         });
 
         // GitHub URL flow: reveal a small inline form to capture the URL,
@@ -984,7 +992,7 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
             const result = await window.skillsImport.readFromGitHub(url);
             if (result.ok) {
                 githubForm.classList.add('hidden');
-                this.showZipReview(modal, result.read, showStatus, handleResult);
+                this.showZipReview(modal, result.read, showStatus, handleResult, { kind: 'github', label: url });
             } else handleResult(result);
         };
         modal.querySelector('#skills-import-github-install').addEventListener('click', installFromGithub);
@@ -994,44 +1002,98 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
     }
 
     /**
-     * Review a zip before installing it: name, file count, bundled libraries, and (corporate edition only)
-     * the Public/Private choice, Private preselected. Replaces the picker's buttons until the user decides.
+     * What a skill folder holds, for the import review: total files and bytes, and one row per top-level
+     * entry — SKILL.md first, then each folder with its file count, then the loose files as one row.
      */
-    async showZipReview(modal, read, showStatus, handleResult) {
+    static summarizeSkillFiles(files) {
+        const rels = Object.keys(files || {});
+        const folders = new Map();
+        let loose = 0, bytes = 0;
+        for (const rel of rels) {
+            bytes += (files[rel] && files[rel].length) || 0;
+            const slash = rel.indexOf('/');
+            if (slash > 0) folders.set(rel.slice(0, slash), (folders.get(rel.slice(0, slash)) || 0) + 1);
+            else if (rel !== 'SKILL.md') loose++;
+        }
+        const groups = [];
+        if (rels.includes('SKILL.md')) groups.push({ kind: 'skillmd', name: 'SKILL.md', count: 1 });
+        for (const name of [...folders.keys()].sort()) groups.push({ kind: 'folder', name: name + '/', count: folders.get(name) });
+        if (loose) groups.push({ kind: 'loose', name: '', count: loose });
+        return { total: rels.length, bytes, groups };
+    }
+
+    /**
+     * Review a skill before installing it. Replaces the source choices (they are done) with: where the skill
+     * came from, its name and description, what the folder holds, its libraries, where it will be installed,
+     * the Public/Private choice (corporate edition only, Private preselected), and Cancel / Import.
+     * source = { kind: 'folder' | 'zip' | 'github', label }.
+     */
+    async showZipReview(modal, read, showStatus, handleResult, source = {}) {
         const esc = (v) => String(v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-        const wheels = [...Object.keys(read.pyodideWheels || {}), ...Object.keys(read.nativeWheels || {})];
-        const deps = (read.manifest && read.manifest.dependencies) || [];
-        const corporate = await window.skillsFs.edition() === 'corporate';
         const t = this.t;
+        const sizeText = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+        const md = read.files && read.files['SKILL.md'] ? new TextDecoder().decode(read.files['SKILL.md']) : '';
+        const meta = (md && window.skillsFs?.parseFrontmatter) ? (window.skillsFs.parseFrontmatter(md).meta || {}) : {};
+        const deps = (read.manifest && read.manifest.dependencies)
+            || (md && window.SkillZip?.skillDependencies ? window.SkillZip.skillDependencies(md) : []);
+        const wheels = [...Object.keys(read.pyodideWheels || {}), ...Object.keys(read.nativeWheels || {})];
+        const summary = SkillsManager.summarizeSkillFiles(read.files);
+        const [mode, edition] = await Promise.all([
+            window.skillsFs?.mode ? window.skillsFs.mode() : 'folder',
+            window.skillsFs?.edition ? window.skillsFs.edition() : '',
+        ]);
+        const sourceKey = { folder: 'skills.import.fromFolder', zip: 'skills.import.fromZip', github: 'skills.import.fromGithub' }[source.kind];
+        const groupText = (g) => g.kind === 'loose'
+            ? t('skills.import.looseFiles', { count: g.count })
+            : g.kind === 'skillmd' ? 'SKILL.md' : `${g.name} — ${t('skills.zip.files', { count: g.count })}`;
+        const libraries = !deps.length && !wheels.length ? t('skills.import.noLibraries')
+            : wheels.length ? t('skills.import.librariesBundled', { list: deps.join(', ') || '—', count: wheels.length })
+            : t('skills.import.librariesOnline', { list: deps.join(', ') });
+        const destination = mode === 'folder'
+            ? t('skills.import.destFolder', { dir: read.dir })
+            : t('skills.import.destStore');
+
+        // The choices and any "Opening folder picker…" line belong to the step that is now over.
+        modal.querySelector('#skills-import-choose')?.classList.add('hidden');
+        modal.querySelector('#skills-import-status')?.classList.add('hidden');
+        modal.querySelector('#skills-import-review')?.remove();
+
+        const row = (label, value) => `
+            <div class="flex gap-2"><span class="w-24 shrink-0 text-gray-500">${esc(label)}</span><span class="min-w-0 break-words">${value}</span></div>`;
         const box = document.createElement('div');
         box.id = 'skills-import-review';
-        box.className = 'mt-4 border border-gray-200 rounded-lg p-3 text-xs text-gray-700 space-y-2';
+        box.className = 'text-xs text-gray-700 space-y-2';
         box.innerHTML = `
-            <div class="text-sm font-semibold text-gray-800">${esc(read.name)}</div>
-            <div>${esc(t('skills.zip.files', { count: Object.keys(read.files).length }))}</div>
-            <div>${wheels.length
-                ? esc(t('skills.zip.bundled', { count: wheels.length })) + (deps.length ? ' (' + esc(deps.join(', ')) + ')' : '')
-                : esc(t('skills.zip.noBundled'))}</div>
-            ${corporate ? `
-            <div class="flex gap-4 pt-1">
-                <label class="flex items-center gap-1"><input type="radio" name="skills-zip-visibility" value="private" checked> ${esc(t('skills.zip.private'))}</label>
-                <label class="flex items-center gap-1"><input type="radio" name="skills-zip-visibility" value="public"> ${esc(t('skills.zip.public'))}</label>
-            </div>` : ''}
+            ${sourceKey ? row(t('skills.import.source'), `${esc(t(sourceKey))}: <code class="bg-gray-100 px-1 rounded">${esc(source.label || '')}</code>`) : ''}
+            <div class="border border-gray-200 rounded-lg p-3 space-y-2">
+                <div class="text-sm font-semibold text-gray-800">${esc(meta.name || read.name)}</div>
+                ${meta.description ? `<div class="text-gray-600">${esc(meta.description)}</div>` : ''}
+                ${row(t('skills.import.contents'), `${esc(t('skills.zip.files', { count: summary.total }))}, ${esc(sizeText(summary.bytes))}
+                    <ul class="mt-1 space-y-0.5">${summary.groups.map((g) => `<li>${esc(groupText(g))}</li>`).join('')}</ul>`)}
+                ${row(t('skills.import.libraries'), esc(libraries))}
+                ${row(t('skills.import.destination'), esc(destination))}
+                ${edition === 'corporate' ? row(t('skills.import.visibility'), `
+                    <span class="flex gap-4">
+                        <label class="flex items-center gap-1"><input type="radio" name="skills-zip-visibility" value="private" checked> ${esc(t('skills.zip.private'))}</label>
+                        <label class="flex items-center gap-1"><input type="radio" name="skills-zip-visibility" value="public"> ${esc(t('skills.zip.public'))}</label>
+                    </span>`) : ''}
+            </div>
             <div class="flex justify-end gap-2 pt-1">
-                <button type="button" data-review="cancel" class="px-3 py-1 text-gray-600 hover:bg-gray-100 rounded">${esc(t('common.cancel'))}</button>
-                <button type="button" data-review="install" class="px-3 py-1 text-white bg-blue-600 hover:bg-blue-700 rounded">${esc(t('skills.zip.install'))}</button>
+                <button type="button" data-review="cancel" class="px-3 py-1.5 text-gray-600 border border-gray-300 hover:bg-gray-100 rounded">${esc(t('common.cancel'))}</button>
+                <button type="button" data-review="install" class="px-3 py-1.5 text-white bg-blue-600 hover:bg-blue-700 rounded">${esc(t('skills.zip.install'))}</button>
             </div>`;
-        modal.querySelector('#skills-import-review')?.remove();
         modal.querySelector('#skills-import-status').before(box);
-        box.querySelector('[data-review="cancel"]').addEventListener('click', () => box.remove());
+        box.querySelector('[data-review="cancel"]').addEventListener('click', () => modal.remove());
         box.querySelector('[data-review="install"]').addEventListener('click', async () => {
             const visibility = box.querySelector('input[name="skills-zip-visibility"]:checked')?.value || 'private';
-            box.remove();
+            box.querySelectorAll('button').forEach((b) => { b.disabled = true; });
             const result = await window.skillsImport.installRead(read, { visibility });
+            box.querySelectorAll('button').forEach((b) => { b.disabled = false; });
             if (result.ok && result.status === 'identical') {
                 showStatus(t('skills.zip.identical', { name: read.name }), 'ok');
                 return;
             }
+            if (result.ok) box.remove();
             handleResult(result);
         });
     }

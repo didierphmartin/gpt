@@ -471,6 +471,23 @@
     },
     "bundle": {
       "unknownFiles": "Cette compétence contient des fichiers qui ne sont pas des paquets Python pour ce Pyodide ({{version}}) : {{files}}. Exportez à nouveau la compétence."
+    },
+    "import": {
+      "introStore": "Ajoute la compétence au stockage de compétences de l'application. Elle doit contenir un SKILL.md à sa racine (spécification Anthropic).",
+      "source": "Source",
+      "fromFolder": "Depuis un dossier",
+      "fromZip": "Depuis un .zip / .skill",
+      "fromGithub": "Depuis GitHub",
+      "contents": "Contenu",
+      "looseFiles": "{{count}} autre(s) fichier(s)",
+      "libraries": "Bibliothèques",
+      "noLibraries": "Aucune déclarée",
+      "librariesBundled": "{{list}} — incluses ({{count}} fichier(s)), installées hors ligne",
+      "librariesOnline": "{{list}} — non incluses : téléchargées à la première exécution (Internet requis)",
+      "destination": "Installée dans",
+      "destFolder": "votre dossier de compétences (skills/{{dir}})",
+      "destStore": "le stockage de compétences de l'application, parmi vos compétences",
+      "visibility": "Visibilité"
     }
   },
   "fileStorage": {
