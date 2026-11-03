@@ -208,6 +208,30 @@ final class LangGraphPackage
         return $found;
     }
 
+    /**
+     * The SKILL.md dependencies a package's requirements.txt lists: those of each skill without bundled wheels.
+     * A skill that carries .wheels/native/*.whl installs its libraries from there, offline, at its first use.
+     *
+     * @param list<array{dir:string,rel:string,bytes:string}> $skillFiles skillFiles()
+     * @return list<string>
+     */
+    public static function skillRequirementNames(array $skillFiles): array
+    {
+        $bundled = [];
+        foreach ($skillFiles as $f) {
+            if (str_starts_with($f['rel'], '.wheels/native/') && str_ends_with($f['rel'], '.whl')) {
+                $bundled[$f['dir']] = true;
+            }
+        }
+        $req = [];
+        foreach ($skillFiles as $f) {
+            if ($f['rel'] === 'SKILL.md' && !isset($bundled[$f['dir']])) {
+                array_push($req, ...self::skillDependencies($f['bytes']));
+            }
+        }
+        return $req;
+    }
+
     /** `dependencies:` of a SKILL.md's frontmatter, parsed as SkillRuntime.ensure_deps parses it. */
     public static function skillDependencies(string $skillMd): array
     {
@@ -249,7 +273,7 @@ final class LangGraphPackage
     /**
      * The packages a LangGraph program of $layout ('single' | 'modular' | 'a2a') imports: the one list its
      * requirements.txt, its TO RUN install line and its README come from. $skillFiles: the skills the package
-     * carries (their SKILL.md dependencies); a program that reads its skills from the editor's folder installs
+     * carries (the SKILL.md dependencies of those without bundled wheels); a program that reads its skills from the editor's folder installs
      * their dependencies at the first run instead.
      *
      * @return list<string>
@@ -271,11 +295,7 @@ final class LangGraphPackage
                 $req[] = self::PROVIDER_REQUIREMENTS[$p];
             }
         }
-        foreach ($skillFiles as $f) {
-            if ($f['rel'] === 'SKILL.md') {
-                array_push($req, ...self::skillDependencies($f['bytes']));
-            }
-        }
+        array_push($req, ...self::skillRequirementNames($skillFiles));
         array_push($req, ...PythonRequirements::documentNames($facts['startDocuments'] ?? []));
         return $req;
     }

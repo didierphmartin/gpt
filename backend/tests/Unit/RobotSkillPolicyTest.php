@@ -179,8 +179,8 @@ final class RobotSkillPolicyTest extends TestCase
         }
     }
 
-    /** Task 13: in the Docker app a compile reads each skill from the store, with the workflow owner's visibility. */
-    public function test_compile_reads_skills_from_the_store(): void
+    /** The tables and rows the compile path reads, and the two skill-bound nodes as agents between the Start and the Output. */
+    private function compilable(): void
     {
         $this->db->exec('ALTER TABLE users ADD COLUMN storage_folder TEXT');   // the Start documents' store reads it
         $this->db->exec('CREATE TABLE IF NOT EXISTS mcp_server_tools (id INTEGER PRIMARY KEY, server_id INTEGER, tool_name TEXT,
@@ -203,6 +203,24 @@ final class RobotSkillPolicyTest extends TestCase
             $edge->execute([$ids('start')[0], $id]);
             $edge->execute([$id, $ids('output')[0]]);
         }
+    }
+
+    /** Task 13: a robot workflow in the individual edition sees every skill, a user's private one included. */
+    public function test_individual_robot_compile_reads_a_users_skill(): void
+    {
+        $this->compilable();
+        $this->toRobot();
+        $_ENV['SKILLS_DIR'] = $this->root;
+        $r = (new WorkflowController($this->db, ['edition' => 'individual']))
+            ->generateAdk(['user_id' => self::OWNER, 'params' => ['id' => self::WF], 'query' => ['modular' => '1']]);
+        $this->assertTrue($r['success'], $r['error'] ?? '');
+        $this->assertContains('skills/tools/secret/SKILL.md', array_column($r['data']['files'], 'path'));   // user 2's private area
+    }
+
+    /** Task 13: in the Docker app a compile reads each skill from the store, with the workflow owner's visibility. */
+    public function test_compile_reads_skills_from_the_store(): void
+    {
+        $this->compilable();
         $_ENV['SKILLS_DIR'] = $this->root;
         $c = new WorkflowController($this->db, ['edition' => 'corporate']);
         $req = ['user_id' => self::OWNER, 'params' => ['id' => self::WF], 'query' => ['modular' => '1']];

@@ -13,9 +13,15 @@ trait CompiledSkillWheelsTests
 {
     abstract protected static function generatorClass(): string;
 
-    private function wheelPackage(string|\Closure $skillsRoot, string $mode = 'modular'): array
+    #[\PHPUnit\Framework\Attributes\After]
+    public function removeWheelSkillRoots(): void
     {
-        $gen = DispatcherDemoFixture::generator(static::generatorClass(), DispatcherDemoFixture::pdoWithSkill(), $skillsRoot);
+        DispatcherDemoFixture::removeTempRoots();
+    }
+
+    private function wheelPackage(string|\Closure $skillsRoot, string $mode = 'modular', ?string $second = null): array
+    {
+        $gen = DispatcherDemoFixture::generator(static::generatorClass(), DispatcherDemoFixture::pdoWithSkill('pdf-report', $second), $skillsRoot);
         return $mode === 'a2a' ? $gen->generateA2A(DispatcherDemoFixture::WORKFLOW_ID) : $gen->generatePackage(DispatcherDemoFixture::WORKFLOW_ID);
     }
 
@@ -55,5 +61,16 @@ trait CompiledSkillWheelsTests
         $code = implode("\n", array_column($this->wheelPackage(DispatcherDemoFixture::wheelSkillsRoot())['files'], 'code'));
         $this->assertStringContainsString('"--no-index", "--find-links"', $code);
         $this->assertStringContainsString('os.path.join(skill_dir, ".wheels", "native")', $code);
+    }
+
+    /** A skill with bundled wheels installs offline at its first use: requirements.txt leaves its libraries out. */
+    public function testRequirementsLeaveOutTheLibrariesOfASkillWithWheels(): void
+    {
+        $root = DispatcherDemoFixture::wheelSkillsRoot();
+        foreach (['modular', 'a2a'] as $mode) {
+            $req = array_column($this->wheelPackage($root, $mode, 'plain-skill')['files'], 'code', 'path')['requirements.txt'];
+            $this->assertStringNotContainsString('fpdf2', $req, $mode);
+            $this->assertStringContainsString("zz-plain-dep\n", $req, $mode);   // a skill without wheels: as before
+        }
     }
 }

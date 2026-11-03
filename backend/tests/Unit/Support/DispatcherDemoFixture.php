@@ -95,31 +95,51 @@ final class DispatcherDemoFixture
         );
     }
 
-    /** The fixture with "IT claims" (node 3) bound to the skill $dir. */
-    public static function pdoWithSkill(string $dir = 'pdf-report'): \PDO
+    /** The fixture with "IT claims" (node 3) bound to the skill $dir and, when given, "Human resources" (node 4) to $second. */
+    public static function pdoWithSkill(string $dir = 'pdf-report', ?string $second = null): \PDO
     {
         $db = self::pdo();
-        $cfg = json_decode((string) $db->query('SELECT config FROM workflow_nodes WHERE id = 3')->fetchColumn(), true);
-        $cfg['bound_skill'] = ['dir_name' => $dir];
-        $db->prepare('UPDATE workflow_nodes SET config = ? WHERE id = 3')->execute([json_encode($cfg)]);
+        foreach ([3 => $dir, 4 => $second] as $node => $skill) {
+            if ($skill === null) {
+                continue;
+            }
+            $cfg = json_decode((string) $db->query("SELECT config FROM workflow_nodes WHERE id = $node")->fetchColumn(), true);
+            $cfg['bound_skill'] = ['dir_name' => $skill];
+            $db->prepare('UPDATE workflow_nodes SET config = ? WHERE id = ?')->execute([json_encode($cfg), $node]);
+        }
         return $db;
     }
 
+    /** @var list<string> the temp skill roots wheelSkillsRoot() made; removeTempRoots() deletes them */
+    private static array $tempRoots = [];
+
     /**
      * A temp skills root holding pdf-report, whose libraries were bundled: .wheels/native/ (regular Python),
-     * .wheels/pyodide/ (the browser's) and .wheels/wheels.json.
+     * .wheels/pyodide/ (the browser's) and .wheels/wheels.json; and plain-skill, with no bundled libraries.
+     * Call removeTempRoots() after the test.
      */
     public static function wheelSkillsRoot(): string
     {
         $root = sys_get_temp_dir() . '/wheelskills_' . bin2hex(random_bytes(4));
+        self::$tempRoots[] = $root;
         mkdir("$root/pdf-report/.wheels/native", 0777, true);
         mkdir("$root/pdf-report/.wheels/pyodide", 0777, true);
+        mkdir("$root/plain-skill", 0777, true);
         file_put_contents("$root/pdf-report/SKILL.md", "---\nname: pdf-report\ndependencies: [fpdf2]\n---\nRender a PDF.\n");
         file_put_contents("$root/pdf-report/run.py", "print('pdf')\n");
         file_put_contents("$root/pdf-report/.wheels/native/fpdf2-2.8.1-py3-none-any.whl", "PK\x03\x04\xffnative");
         file_put_contents("$root/pdf-report/.wheels/pyodide/fpdf2-2.8.1-py3-none-any.whl", "PK\x03\x04pyodide");
         file_put_contents("$root/pdf-report/.wheels/wheels.json", '{"format":1}');
+        file_put_contents("$root/plain-skill/SKILL.md", "---\nname: plain-skill\ndependencies: [zz-plain-dep]\n---\nPlain.\n");
         return $root;
+    }
+
+    public static function removeTempRoots(): void
+    {
+        foreach (self::$tempRoots as $root) {
+            exec('rm -rf ' . escapeshellarg($root));
+        }
+        self::$tempRoots = [];
     }
 
     /** The skill files (skills/...) of a package, sorted. */

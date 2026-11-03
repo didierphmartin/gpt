@@ -24,6 +24,11 @@ final class LangGraphPackageTest extends TestCase
 
     private const PNG = "\x89PNG\r\n\x1a\n\x00\xff";
 
+    protected function tearDown(): void
+    {
+        DispatcherDemoFixture::removeTempRoots();
+    }
+
     private static function tempDir(string $prefix): string
     {
         $dir = sys_get_temp_dir() . '/' . $prefix . bin2hex(random_bytes(4));
@@ -544,6 +549,16 @@ PY;
             'skills/pdf-report/run.py'], DispatcherDemoFixture::skillPaths($files));
         $whl = array_column($files, null, 'path')['skills/pdf-report/.wheels/native/fpdf2-2.8.1-py3-none-any.whl'];
         self::assertSame("PK\x03\x04\xffnative", base64_decode($whl['code']));
+    }
+
+    /** A skill with bundled wheels installs offline at its first use: requirements.txt leaves its libraries out. */
+    public function testRequirementsLeaveOutTheLibrariesOfASkillWithWheels(): void
+    {
+        $root = DispatcherDemoFixture::wheelSkillsRoot();
+        $req = fn(string $dir) => array_column($this->generator($this->graph($dir), $root)->generate(44, '3', ['modular' => true])['files'],
+            'code', 'path')['requirements.txt'];
+        self::assertStringNotContainsString('fpdf2', $req('pdf-report'));
+        self::assertStringContainsString("zz-plain-dep\n", $req('plain-skill'));   // a skill without wheels: as before
     }
 
     /** In the Docker app each skill folder is resolved by the store (the owner's visibility), not under one root. */

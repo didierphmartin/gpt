@@ -69,6 +69,7 @@ print(json.dumps(calls))
 PY;
         file_put_contents("$dir/probe.py", $py);
         exec('python3 ' . escapeshellarg("$dir/probe.py") . ' ' . escapeshellarg($dir) . ' 2>&1', $out, $rc);
+        exec('rm -rf ' . escapeshellarg($dir));
         $this->assertSame(0, $rc, implode("\n", $out));
         $calls = array_values(array_filter($out, fn(string $l) => str_starts_with($l, '[[')));
         $this->assertSame(['[["install", "-q", "--no-index", "--find-links", "<root>/wheels/.wheels/native", "zz-a", "zz-b>=1.0"]]',
