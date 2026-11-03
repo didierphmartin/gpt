@@ -4374,10 +4374,12 @@
     <script src="assets/js/gemini-realtime-adapter.js?v=20261026-voicetoken"></script>
     <script src="assets/js/voice-dictation.js?v=20261026-voicetoken"></script>
     <script src="assets/js/workflow-realtime-runner.js"></script>
+    <script src="assets/js/workflow-package.js?v=20261103-host-gateway"></script>
+    <script src="assets/js/skill-zip.js?v=1"></script>
     <!-- Folder-backed Skills service. Reads <root>/skills/*/SKILL.md.
          Must load after local-fs.js (uses window.localFs) and before
          skills-manager.js (which calls window.skillsFs). -->
-    <script src="assets/js/skills-fs.js?v=20260625-inputfiles"></script>
+    <script src="assets/js/skills-fs.js?v=20261103-store"></script>
     <!-- Pyodide skill-script runner. Lazy-loads Pyodide on first call;
          depends on window.localFs (skill folder resolution) and
          window.skillsFs (frontmatter parsing for declared deps). -->
@@ -4412,8 +4414,6 @@
     <script src="assets/js/decision-routing.js?v=20261008-unclear"></script>
     <script src="assets/js/cron-text.js?v=20261007-cron"></script>
     <script src="assets/js/robot-owner.js?v=20261029-others"></script>
-    <script src="assets/js/workflow-package.js?v=20261103-host-gateway"></script>
-    <script src="assets/js/skill-zip.js?v=1"></script>
     <script src="assets/js/workflow-package-ui.js?v=20261103-host-export"></script>
     <script src="assets/js/workflow-package-import.js?v=20261103-host-restarting"></script>
     <script src="assets/js/workflow-editor.js?v=20261103-pyodide-local"></script>

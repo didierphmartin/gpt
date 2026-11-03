@@ -152,8 +152,11 @@
     async function buildSkillEntry(dirHandle, group) {
         const skillMd = await dirHandle.getFileHandle('SKILL.md', { create: false });
         let meta = {};
+        let dependencies = [];
         try {
-            meta = parseFrontmatter(await readText(skillMd)).meta;
+            const text = await readText(skillMd);
+            meta = parseFrontmatter(text).meta;
+            dependencies = window.SkillZip ? window.SkillZip.skillDependencies(text) : [];
         } catch (e) {
             console.warn(`[skillsFs] Failed to read ${dirHandle.name}/SKILL.md:`, e);
         }
@@ -169,6 +172,10 @@
             dirHandle,
             skillMdHandle: skillMd,
             source: 'local',
+            visibility: 'private',
+            mine: true,
+            ownerId: null,
+            dependencies,
             meta,                          // raw frontmatter for downstream consumers
             spec_compliant: compliance.compliant,
             spec_issues: compliance.issues,
@@ -185,7 +192,7 @@
      * Recursion is intentionally one level deep — a group folder holds
      * skills, not other groups.
      */
-    async function listSkills() {
+    async function folderListSkills() {
         if (!window.localFs) return [];
         const skillsDir = await window.localFs.resolvePath('skills');
         if (!skillsDir) return [];
@@ -215,7 +222,7 @@
      * NOT themselves contain a SKILL.md. Returned even when empty, so a
      * freshly created folder shows up in the tree before any skill is in it.
      */
-    async function listFolders() {
+    async function folder_listFolders() {
         if (!window.localFs) return [];
         const skillsDir = await window.localFs.resolvePath('skills');
         if (!skillsDir) return [];
@@ -235,7 +242,7 @@
      * grouped skill). This is exactly the string the chat backend accepts as
      * `skill_content`.
      */
-    async function getSkillContent(skillPath) {
+    async function folder_getSkillContent(skillPath) {
         if (!skillPath || !window.localFs) return '';
         const skillMd = await window.localFs.resolvePath(
             `skills/${skillPath}/SKILL.md`, { kind: 'file' }
@@ -251,7 +258,7 @@
      * Returns the file text or null if missing. Useful for "load this on
      * demand" levels described in Anthropic's progressive-disclosure model.
      */
-    async function getSkillFile(dirName, relativePath) {
+    async function folder_getSkillFile(dirName, relativePath) {
         if (!dirName || !relativePath || !window.localFs) return null;
         const handle = await window.localFs.resolvePath(`skills/${dirName}/${relativePath}`, { kind: 'file' });
         if (!handle) return null;
@@ -286,7 +293,7 @@
      * Returns skill-relative paths (e.g. ['scripts/transform.py']) sorted
      * alphabetically. Returns [] if the skill has no `scripts/` folder.
      */
-    async function listSkillScripts(dirName) {
+    async function folder_listSkillScripts(dirName) {
         if (!dirName || !window.localFs) return [];
         const scriptsDir = await window.localFs.resolvePath(`skills/${dirName}/scripts`);
         if (!scriptsDir) return [];
@@ -310,7 +317,7 @@
      * ['references/second.md']) sorted alphabetically, or [] when the skill
      * has no `references/` folder.
      */
-    async function listSkillReferences(dirName) {
+    async function folder_listSkillReferences(dirName) {
         if (!dirName || !window.localFs) return [];
         const refsDir = await window.localFs.resolvePath(`skills/${dirName}/references`);
         if (!refsDir) return [];
@@ -373,7 +380,7 @@
      * Create an empty group folder directly under `skills/`.
      * Returns { ok, name } or { ok:false, error }.
      */
-    async function createFolder(name) {
+    async function folder_createFolder(name) {
         const safe = sanitizeFolderName(name);
         if (!safe) return { ok: false, error: 'Please enter a valid folder name.' };
         try {
@@ -393,7 +400,7 @@
      * Delete a group folder (recursive — anything still inside goes with it).
      * The caller is responsible for confirming a non-empty delete.
      */
-    async function deleteFolder(name) {
+    async function folder_deleteFolder(name) {
         try {
             const root = await skillsRoot();
             await root.removeEntry(name, { recursive: true });
@@ -404,7 +411,7 @@
     }
 
     /** Rename a group folder (copy to the new name, then remove the old). */
-    async function renameFolder(oldName, newName) {
+    async function folder_renameFolder(oldName, newName) {
         const safe = sanitizeFolderName(newName);
         if (!safe) return { ok: false, error: 'Please enter a valid folder name.' };
         if (safe === oldName) return { ok: true, name: safe };
@@ -429,7 +436,7 @@
      * path relative to `skills/`; `targetGroup` is a folder name, or '' / null
      * to move it back to the top level. Returns the new path on success.
      */
-    async function moveSkill(skillPath, targetGroup) {
+    async function folder_moveSkill(skillPath, targetGroup) {
         try {
             const root = await skillsRoot();
             const leaf = skillPath.split('/').pop();
@@ -457,7 +464,7 @@
     }
 
     /** Delete a skill folder by its path relative to `skills/`. */
-    async function deleteSkill(skillPath) {
+    async function folder_deleteSkill(skillPath) {
         try {
             const leaf = skillPath.split('/').pop();
             const slash = skillPath.lastIndexOf('/');
@@ -478,7 +485,7 @@
      * source of truth for the display name and is left untouched, so a
      * renamed skill may flag a spec mismatch until SKILL.md is edited too.
      */
-    async function renameSkill(skillPath, newLeafName) {
+    async function folder_renameSkill(skillPath, newLeafName) {
         const safe = sanitizeFolderName(newLeafName);
         if (!safe) return { ok: false, error: 'Please enter a valid name.' };
         try {
@@ -504,6 +511,325 @@
         }
     }
 
+
+    // ───────────────────────── Folder or skill store ───────────────────────
+    //
+    // One module, two backends. `mode()` asks the server once whether skills
+    // live in the Docker skill store ('volume') or in the user's own folder
+    // ('folder'). Every public method below dispatches on it; the folder_*
+    // functions above are the original local-folder implementations.
+
+    const dec = new TextDecoder();
+    const enc = new TextEncoder();
+
+    function toB64(bytes) {
+        let bin = '';
+        for (let i = 0; i < bytes.length; i += 0x8000) {
+            bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        }
+        return btoa(bin);
+    }
+    function fromB64(b64) {
+        const bin = atob(b64);
+        const out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        return out;
+    }
+    const asBytes = (v) => (typeof v === 'string' ? enc.encode(v) : v);
+
+    function authToken() {
+        if (window.authManager) return window.authManager.token || '';
+        return (typeof localStorage !== 'undefined' && localStorage.getItem('token')) || '';
+    }
+
+    /** Same auth path as the MCP client: Bearer token against APP_CONFIG.API_BASE_URL. */
+    async function api(method, path, body) {
+        const base = (window.APP_CONFIG && window.APP_CONFIG.API_BASE_URL) || '/gpt/backend/api/v1';
+        const res = await fetch(base + path, {
+            method,
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken()}` },
+            body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        const raw = await res.text();
+        let data = null;
+        try { data = raw ? JSON.parse(raw) : null; } catch { /* non-JSON body */ }
+        if (!res.ok) {
+            const err = new Error(`HTTP ${res.status}: ${(data && (data.error || data.message)) || raw || res.statusText}`);
+            err.status = res.status;
+            err.data = data;
+            throw err;
+        }
+        return data;
+    }
+
+    const enqPath = (p) => encodeURIComponent(p);
+
+    let storePromise = null;
+    function storeInfo() {
+        if (!storePromise) {
+            storePromise = api('GET', '/skills/store')
+                .then((d) => ({ mode: d && d.mode === 'volume' ? 'volume' : 'folder', edition: (d && d.edition) || '' }))
+                .catch(() => ({ mode: 'folder', edition: '' }));
+        }
+        return storePromise;
+    }
+    async function mode() { return (await storeInfo()).mode; }
+    async function edition() { return (await storeInfo()).edition; }
+
+    async function listSkills({ asRobot = false } = {}) {
+        if (await mode() !== 'volume') return folderListSkills();
+        const rows = await api('GET', '/skills' + (asRobot ? '?as=robot' : ''));
+        const out = (rows || []).map((r) => {
+            const parts = r.path.split('/');
+            return {
+                name: r.name || parts[parts.length - 1],
+                description: r.description || '',
+                dirName: r.path,
+                path: r.path,
+                leafName: parts[parts.length - 1],
+                group: parts.length === 2 ? parts[0] : null,
+                visibility: r.visibility,
+                mine: !!r.mine,
+                ownerId: r.owner_id ?? null,
+                dependencies: r.dependencies || [],
+                source: 'store',
+            };
+        });
+        out.sort((a, b) => (a.name || a.dirName).localeCompare(b.name || b.dirName));
+        return out;
+    }
+
+    async function listFolders() {
+        if (await mode() !== 'volume') return folder_listFolders();
+        const groups = new Set();
+        for (const s of await listSkills()) if (s.group) groups.add(s.group);
+        return [...groups].sort().map((name) => ({ name }));
+    }
+
+    async function volumeFile(path, rel) {
+        try {
+            const d = await api('GET', `/skills/file?path=${enqPath(path)}&rel=${enqPath(rel)}`);
+            return d && typeof d.content === 'string' ? fromB64(d.content) : null;
+        } catch (e) {
+            if (e.status === 404) return null;
+            throw e;
+        }
+    }
+
+    async function getSkillContent(skillPath) {
+        if (!skillPath) return '';
+        if (await mode() !== 'volume') return folder_getSkillContent(skillPath);
+        const b = await volumeFile(skillPath, 'SKILL.md');
+        return b ? parseFrontmatter(dec.decode(b)).body : '';
+    }
+
+    async function getSkillFile(dirName, relativePath) {
+        if (!dirName || !relativePath) return null;
+        if (await mode() !== 'volume') return folder_getSkillFile(dirName, relativePath);
+        const b = await volumeFile(dirName, relativePath);
+        return b ? dec.decode(b) : null;
+    }
+
+    async function listUnder(dirName, prefix, ext) {
+        const files = await readSkillFiles(dirName);
+        return Object.keys(files)
+            .filter((r) => r.startsWith(prefix + '/') && r.toLowerCase().endsWith(ext))
+            .sort();
+    }
+    async function listSkillScripts(dirName) {
+        if (!dirName) return [];
+        if (await mode() !== 'volume') return folder_listSkillScripts(dirName);
+        return listUnder(dirName, 'scripts', '.py');
+    }
+    async function listSkillReferences(dirName) {
+        if (!dirName) return [];
+        if (await mode() !== 'volume') return folder_listSkillReferences(dirName);
+        return listUnder(dirName, 'references', '.md');
+    }
+
+    const failure = (e) => ({ ok: false, error: e?.message || String(e) });
+
+    // Groups exist implicitly in the store (a group is the first segment of a skill path).
+    async function createFolder(name) {
+        if (await mode() !== 'volume') return folder_createFolder(name);
+        const safe = sanitizeFolderName(name);
+        return safe ? { ok: true, name: safe } : { ok: false, error: 'Please enter a valid folder name.' };
+    }
+    async function deleteFolder(name) {
+        if (await mode() !== 'volume') return folder_deleteFolder(name);
+        try {
+            for (const s of await listSkills()) {
+                if (s.group === name && s.mine) await api('DELETE', `/skills?path=${enqPath(s.path)}`);
+            }
+            return { ok: true };
+        } catch (e) { return failure(e); }
+    }
+    async function renameFolder(oldName, newName) {
+        if (await mode() !== 'volume') return folder_renameFolder(oldName, newName);
+        const safe = sanitizeFolderName(newName);
+        if (!safe) return { ok: false, error: 'Please enter a valid folder name.' };
+        if (safe === oldName) return { ok: true, name: safe };
+        try {
+            for (const s of await listSkills()) {
+                if (s.group === oldName && s.mine) {
+                    await api('POST', '/skills/move', { from: s.path, to: `${safe}/${s.leafName}` });
+                }
+            }
+            return { ok: true, name: safe };
+        } catch (e) { return failure(e); }
+    }
+    async function volumeMove(from, to) {
+        try {
+            await api('POST', '/skills/move', { from, to });
+            return { ok: true, path: to };
+        } catch (e) { return failure(e); }
+    }
+    async function moveSkill(skillPath, targetGroup) {
+        if (await mode() !== 'volume') return folder_moveSkill(skillPath, targetGroup);
+        const leaf = skillPath.split('/').pop();
+        return volumeMove(skillPath, targetGroup ? `${targetGroup}/${leaf}` : leaf);
+    }
+    async function deleteSkill(skillPath) {
+        if (await mode() !== 'volume') return folder_deleteSkill(skillPath);
+        try {
+            await api('DELETE', `/skills?path=${enqPath(skillPath)}`);
+            return { ok: true };
+        } catch (e) { return failure(e); }
+    }
+    async function renameSkill(skillPath, newLeafName) {
+        if (await mode() !== 'volume') return folder_renameSkill(skillPath, newLeafName);
+        const safe = sanitizeFolderName(newLeafName);
+        if (!safe) return { ok: false, error: 'Please enter a valid name.' };
+        const slash = skillPath.lastIndexOf('/');
+        if (safe === skillPath.slice(slash + 1)) return { ok: true, path: skillPath };
+        return volumeMove(skillPath, (slash === -1 ? '' : skillPath.slice(0, slash + 1)) + safe);
+    }
+
+    // ───────────────────────── Whole-skill read / write ────────────────────
+
+    /** Every file under a local directory, as { 'a/b.txt': Uint8Array }. */
+    async function walkBytes(dirHandle, prefix, out, skip) {
+        for await (const entry of dirHandle.values()) {
+            const p = prefix ? `${prefix}/${entry.name}` : entry.name;
+            if (skip(p, entry)) continue;
+            if (entry.kind === 'directory') await walkBytes(entry, p, out, skip);
+            else out[p] = new Uint8Array(await (await entry.getFile()).arrayBuffer());
+        }
+        return out;
+    }
+
+    async function writeLocalFile(relPath, bytes) {
+        const parts = relPath.split('/').filter(Boolean);
+        const leaf = parts.pop();
+        const dir = await window.localFs.resolvePath(parts.length ? `skills/${parts.join('/')}` : 'skills', { create: true });
+        if (!dir) throw new Error('Local skills folder not accessible.');
+        const fh = await dir.getFileHandle(leaf, { create: true });
+        const w = await fh.createWritable();
+        await w.write(asBytes(bytes));
+        await w.close();
+    }
+
+    /** { rel: Uint8Array } for one skill. Wheels (.wheels/...) only when asked. */
+    async function readSkillFiles(path, { asRobot = false, withWheels = false } = {}) {
+        let files;
+        if (await mode() === 'volume') {
+            const d = await api('GET', `/skills/files?path=${enqPath(path)}${asRobot ? '&as=robot' : ''}`);
+            files = {};
+            for (const [rel, b64] of Object.entries((d && d.files) || {})) files[rel] = fromB64(b64);
+        } else {
+            const dir = await window.localFs?.resolvePath(`skills/${path}`);
+            if (!dir) return {};
+            files = await walkBytes(dir, '', {}, () => false);
+        }
+        if (!withWheels) {
+            for (const rel of Object.keys(files)) if (rel.startsWith('.wheels/')) delete files[rel];
+        }
+        return files;
+    }
+
+    async function writeSkillFile(path, rel, bytes) {
+        const data = asBytes(bytes);
+        if (await mode() === 'volume') {
+            await api('PUT', '/skills/file', { path, rel, content: toB64(data) });
+        } else {
+            await writeLocalFile(`${path}/${rel}`, data);
+        }
+        return { ok: true };
+    }
+
+    /** Install a SkillZip.read() result. Throws an Error with .code = 'clash' when a different skill is there. */
+    async function importSkill(read, { visibility = 'private' } = {}) {
+        const all = window.SkillZip.toStoreFiles(read);
+        if (await mode() === 'volume') {
+            const files = {};
+            for (const [rel, b] of Object.entries(all)) files[rel] = toB64(asBytes(b));
+            try {
+                return await api('POST', '/skills/import', { path: read.dir, visibility, files });
+            } catch (e) {
+                if (e.status === 409) {
+                    const err = new Error('A different skill with this name already exists.');
+                    err.code = 'clash';
+                    throw err;
+                }
+                throw e;
+            }
+        }
+        for (const [rel, b] of Object.entries(all)) await writeLocalFile(`${read.dir}/${rel}`, b);
+        return { status: 'created' };
+    }
+
+    async function setVisibility(path, visibility) {
+        if (await mode() !== 'volume') return { ok: true };   // a folder is always private
+        return api('PUT', '/skills/visibility', { path, visibility });
+    }
+
+    /** The caller's own skills, flat: { '<path>/<rel>': Uint8Array } (what skill-creator edits). */
+    async function skillsRootFiles() {
+        if (await mode() !== 'volume') {
+            const dir = await window.localFs?.resolvePath('skills');
+            if (!dir) return {};
+            return walkBytes(dir, '', {}, (p, e) => e.name === '.git' || e.name === 'node_modules' || e.name === '__pycache__');
+        }
+        const out = {};
+        for (const s of await listSkills()) {
+            if (!s.mine) continue;
+            const files = await readSkillFiles(s.path, { withWheels: true });
+            for (const [rel, b] of Object.entries(files)) out[`${s.path}/${rel}`] = b;
+        }
+        return out;
+    }
+
+    /** Write back a skillsRootFiles()-shaped map: new skills are imported, existing ones updated file by file. */
+    async function writeSkillsRoot(files) {
+        if (await mode() !== 'volume') {
+            for (const [p, b] of Object.entries(files)) await writeLocalFile(p, b);
+            return { ok: true };
+        }
+        const known = new Set((await listSkills()).filter((s) => s.mine).map((s) => s.path));
+        const dirs = new Set(known);
+        for (const p of Object.keys(files)) {
+            if (p.endsWith('/SKILL.md')) dirs.add(p.slice(0, -'/SKILL.md'.length));
+        }
+        const byDir = new Map();
+        for (const [p, b] of Object.entries(files)) {
+            const segs = p.split('/');
+            // A skill dir is one or two segments; the longest match wins.
+            const dir = [2, 1].map((n) => segs.slice(0, n).join('/')).find((c) => dirs.has(c) && p.length > c.length);
+            if (dir === undefined) continue;
+            if (!byDir.has(dir)) byDir.set(dir, {});
+            byDir.get(dir)[p.slice(dir.length + 1)] = b;
+        }
+        for (const [dir, fl] of byDir) {
+            if (known.has(dir)) {
+                for (const [rel, b] of Object.entries(fl)) await writeSkillFile(dir, rel, b);
+            } else {
+                const read = window.SkillZip.fromStoreFiles(fl);
+                await importSkill({ dir, name: dir.split('/').pop(), ...read }, { visibility: 'private' });
+            }
+        }
+        return { ok: true };
+    }
+
     window.skillsFs = {
         listSkills,
         listFolders,
@@ -517,6 +843,14 @@
         moveSkill,
         deleteSkill,
         renameSkill,
+        mode,
+        edition,
+        readSkillFiles,
+        writeSkillFile,
+        importSkill,
+        setVisibility,
+        skillsRootFiles,
+        writeSkillsRoot,
         parseFrontmatter,    // exported for testing
     };
 })();
