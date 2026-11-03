@@ -38,7 +38,23 @@ final class McpHostClient
         return ['status' => $status, 'body' => is_array($decoded) ? $decoded : []];
     }
 
-    /** Install can run for minutes (dependency downloads); everything else is quick. */
+    /**
+     * Seconds to wait for the supervisor: install can run for minutes (dependency downloads); a call that
+     * stops a server (restart, enabled, delete, settings save) waits out its 10 s stop grace; the rest is quick.
+     */
+    public static function timeoutFor(string $method, string $url): int
+    {
+        $path = (string) parse_url($url, PHP_URL_PATH);
+        if (str_ends_with($path, '/install')) {
+            return 900;
+        }
+        if ($method === 'DELETE' || str_ends_with($path, '/restart') || str_ends_with($path, '/enabled')
+            || ($method === 'PUT' && str_ends_with($path, '/settings'))) {
+            return 30;
+        }
+        return 15;
+    }
+
     private static function curl(string $method, string $url, array $headers, ?string $body): array
     {
         $ch = curl_init($url);
@@ -47,7 +63,7 @@ final class McpHostClient
             CURLOPT_HTTPHEADER => $headers,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_CONNECTTIMEOUT => 5,
-            CURLOPT_TIMEOUT => str_ends_with($url, '/install') ? 900 : 15,
+            CURLOPT_TIMEOUT => self::timeoutFor($method, $url),
         ]);
         if ($body !== null) {
             curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
