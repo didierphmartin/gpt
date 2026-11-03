@@ -11,6 +11,7 @@ cd "$(dirname "$0")/../.."
 
 export COMPOSE_PROJECT_NAME=gpt-test
 export GPT_PORT=18080
+export MCPS_PORT=18790
 # Override any GPT_EDITION a developer's own gitignored .env sets (the
 # .env.example this repo ships now defaults it to "individual"). Without
 # this, every phase below -- including no-keys-test.sh and
@@ -58,6 +59,7 @@ done
 ./docker/tests/no-keys-test.sh
 ./docker/tests/runner-source-test.sh
 ./docker/tests/persistence-test.sh
+./docker/tests/mcps-test.sh
 
 echo
 echo "== editions =="

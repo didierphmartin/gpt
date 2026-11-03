@@ -59,6 +59,11 @@ grep -q '^LOGIN_APP_KEY_SECRET=' "$SECRETS" || \
 # on the login service. gpt only needs this one to verify tokens in sso_exchange.
 grep -q '^LOGIN_JWT_SECRET=' "$SECRETS" || \
     echo "LOGIN_JWT_SECRET=$(openssl rand -hex 32)" >> "$SECRETS"
+# Also written ALONE to its own volume for the mcps container. That container
+# runs imported third-party code, so it must never see secrets.env (JWT_SECRET
+# and friends would let a server forge sessions): it mounts only this file.
+grep -q '^MCPS_TOKEN=' "$SECRETS" || \
+    echo "MCPS_TOKEN=$(openssl rand -hex 32)" >> "$SECRETS"
 
 # shellcheck disable=SC1090
 . "$SECRETS"
@@ -82,7 +87,7 @@ set_env() {
     # 'p&ss\w/rd') would silently corrupt the line instead of erroring --
     # escape both before substituting. Every key this function writes
     # (DB_*, CTX_DB_*, JWT_SECRET, APP_KEY_SECRET, STORAGE_PROVIDER, GPT_EDITION,
-    # LOGIN_JWT_SECRET, LOGIN_DB_*) already
+    # LOGIN_JWT_SECRET, LOGIN_DB_*, MCPS_*) already
     # exists in backend/.env.example, which is copied to $ENV_FILE above, so
     # the grep always matches and there is no append path to fall back to.
     value=${value//\\/\\\\}
@@ -105,6 +110,16 @@ set_env JWT_SECRET "$JWT_SECRET"
 set_env APP_KEY_SECRET "$APP_KEY_SECRET"
 set_env STORAGE_PROVIDER local
 set_env GPT_EDITION "${GPT_EDITION:-}"
+set_env MCPS_URL "${MCPS_URL:-}"
+set_env MCPS_GATEWAY "${MCPS_GATEWAY:-}"
+set_env MCPS_PUBLIC_GATEWAY "${MCPS_PUBLIC_GATEWAY:-}"
+set_env MCPS_TOKEN "$MCPS_TOKEN"
+# Rewritten every boot, so it can never drift from secrets.env. Group 1000 is
+# the mcps container's user; read-only for it, nobody else needs it.
+mkdir -p /run/mcps-token
+printf '%s\n' "$MCPS_TOKEN" > /run/mcps-token/token
+chown root:1000 /run/mcps-token/token
+chmod 0440 /run/mcps-token/token
 if [ "${GPT_EDITION:-}" = "corporate" ]; then
     # gpt verifies the login service's tokens in sso_exchange (with the login
     # service's own secret, distinct from JWT_SECRET) and reads its users table

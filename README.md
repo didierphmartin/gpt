@@ -292,6 +292,9 @@ Docker Engine + Compose v2, and either your own LLM provider keys or an account 
 4. **Optional: install the local runner** if you want to run compiled
    workflows. See *First run* below.
 
+MCP servers you import in the Docker app are kept in the `gpt-mcps` volume
+and start by themselves, also after a restart or a rebuild of the stack.
+
 ### Using Rancher Desktop
 
 Rancher Desktop runs both Docker installs above, once it is set up for the

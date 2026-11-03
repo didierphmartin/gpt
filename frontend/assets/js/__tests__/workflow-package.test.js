@@ -363,6 +363,7 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
                 writeJson: async (p, o) => { calls.push(['writeJson', p]); fs[p] = JSON.stringify(o); },
                 addServer: async (reg) => { calls.push(['addServer', reg]); if (opts.failServer === reg.name) throw new Error('boom'); return { id: nextId++ }; },
                 createPlaybook: async (pb) => { calls.push(['createPlaybook', pb]); return { id: 55 }; },
+                installServer: async (folder, body) => { calls.push(['installServer', folder, body]); if (opts.failInstall === folder) throw new Error('no good'); return { state: 'running' }; },
                 importComponents: async (bundle, nodes) => { calls.push(['importComponents', bundle]);
                     const ids = new Set(bundle.map((c) => Number(c.id)));
                     return nodes.map((n) => (n.node_type === 'code' && ids.has(Number(n.config.code_component_id)) ? { ...n, config: { ...n.config, code_component_id: 77 } } : n)); },
@@ -489,6 +490,53 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
             assert.strictEqual(fres.nodes.find((n) => n.id === '1').config.store, 'mcp:100');
             assert.deepStrictEqual(fres.installed.map((x) => [x.kind, x.name, x.destination]), [['server', 'Outlook', 'mcps/outlook_mcp']]);
             assert.deepStrictEqual(fres.commands, [{ server: 'Outlook', install: srvMan.install, start: srvMan.start }]);
+        }
+
+        // host mode: files go to installServer, not writeFile; the address is the gateway's
+        {
+            const hhave = { ...ihave, host: { gateway: 'http://localhost:8790' }, hostFolders: [] };
+            const hrows = await WP.reviewRows(ipkg, hhave);
+            assert.ok(!hrows.find((r) => r.name === 'Outlook').reasons.includes('localhost-url'));
+            const hio = memIo();
+            const hres = await WP.installPackage(hrows, ipkg, { Outlook: { TENANT_ID: 't' } }, hio, hhave);
+            assert.ok(!hio.calls.some((c) => (c[0] === 'writeFile' && c[1].startsWith('mcps/')) || c[0] === 'writeJson'));
+            const inst = hio.calls.find((c) => c[0] === 'installServer');
+            assert.strictEqual(inst[1], 'outlook_mcp');
+            assert.ok('server.py' in inst[2].files && !('.env' in inst[2].files));
+            assert.deepStrictEqual({ ...inst[2].env }, { TENANT_ID: 't', PORT: '8765' });
+            assert.strictEqual(hio.calls.find((c) => c[0] === 'addServer')[1].url, 'http://localhost:8790/outlook_mcp/mcp');
+            assert.ok(hres.installed.some((x) => x.kind === 'server' && x.destination === 'volume: outlook_mcp' && x.state === 'running'));
+            assert.deepStrictEqual(hres.commands, []);
+            assert.ok(!hio.calls.some((c) => c[0] === 'ensureDir' && c[1] === 'mcps'));
+            // a non-local server with a localhost address keeps its warning in host mode
+            const nl = { ...ipkg, servers: ipkg.servers.map((x) => (x.name === 'Hosted' ? { ...x, url: 'http://localhost:1/mcp' } : x)) };
+            assert.ok((await WP.reviewRows(nl, hhave)).find((r) => r.name === 'Hosted').reasons.includes('localhost-url'));
+            // use-existing on a volume folder registers the gateway address, no commands
+            {
+                const uh = { ...hhave, hostFolders: ['outlook_mcp'] };
+                const urows = await WP.reviewRows(ipkg, uh);
+                for (const r of urows) r.choice = r.name === 'Outlook' ? 'use-existing' : (r.kind === 'server' && r.status === 'present') ? r.choice : 'skip';
+                const uio = memIo();
+                const ures = await WP.installPackage(urows, ipkg, {}, uio, uh);
+                assert.strictEqual(uio.calls.find((c) => c[0] === 'addServer')[1].url, 'http://localhost:8790/outlook_mcp/mcp');
+                assert.ok(!uio.calls.some((c) => c[0] === 'installServer'));
+                assert.deepStrictEqual(ures.commands, []);
+            }
+            // fill later: no env
+            const lio = memIo();
+            await WP.installPackage(hrows, ipkg, { Outlook: { fillLater: true } }, lio, hhave);
+            assert.deepStrictEqual({ ...lio.calls.find((c) => c[0] === 'installServer')[2].env }, {});
+            // a folder already in the volume is a clash
+            const crow = (await WP.reviewRows(ipkg, { ...hhave, hostFolders: ['outlook_mcp'] })).find((r) => r.name === 'Outlook');
+            assert.strictEqual(crow.status, 'clash');
+            // a host without a gateway address is refused before anything is installed or registered
+            const gio = memIo();
+            await assert.rejects(WP.installPackage(hrows, ipkg, { Outlook: { fillLater: true } }, gio, { ...hhave, host: { gateway: '' } }), /no gateway address/);
+            assert.ok(!gio.calls.some((c) => c[0] === 'installServer' || c[0] === 'addServer'));
+            // install failure stops before registering
+            const fio2 = memIo({ failInstall: 'outlook_mcp' });
+            await assert.rejects(WP.installPackage(hrows, ipkg, { Outlook: { fillLater: true } }, fio2, hhave), /install failed at "install server Outlook"/);
+            assert.ok(!fio2.calls.some((c) => c[0] === 'addServer'));
         }
 
         // a component folder copy takes the next free name
@@ -702,4 +750,22 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
     const none = WP.missingByNode(ns, { skills: null, servers: null, tools: null, playbookIds: null });
     assert.deepStrictEqual(none, {});
     console.log('missingByNode: ok');
+}
+
+{
+  const b64 = (s) => Buffer.from(s).toString('base64');
+  assert.strictEqual(WP.hostFolderOf('http://localhost:8790/outlook_mcp/mcp', 'http://localhost:8790/'), 'outlook_mcp');
+  assert.strictEqual(WP.hostFolderOf('http://localhost:9000/x/mcp', 'http://localhost:8790'), null);
+  assert.strictEqual(WP.hostFolderOf('http://localhost:8790/.git/mcp', 'http://localhost:8790'), null);
+  assert.strictEqual(WP.hostFolderOf('http://localhost:8790/a/mcp', ''), null);
+  const r = WP.hostSourceFiles('outlook_mcp', { files: {
+    'server.py': b64('print(1)'), 'sub/a.txt': b64('x'), 'synergyai-mcp.json': b64('{"exclude":["x"]}'), '../evil': b64('no') } });
+  assert.deepStrictEqual(Object.keys(r.files).sort(),
+    ['mcps/outlook_mcp/server.py', 'mcps/outlook_mcp/sub/a.txt', 'mcps/outlook_mcp/synergyai-mcp.json']);
+  assert.strictEqual(Buffer.from(r.files['mcps/outlook_mcp/server.py']).toString(), 'print(1)');
+  assert.deepStrictEqual(r.manifest, { exclude: ['x'] });
+  assert.strictEqual(WP.hostSourceFiles('f', { files: {} }).manifest, null);
+  const e = WP.hostSourceFiles('f', { files: { '.env.example': b64('A=1'), '.env': b64('S=1'), 'd/.env': b64('S'), '.hidden/x': b64('x') } });
+  assert.deepStrictEqual(Object.keys(e.files), ['mcps/f/.env.example']);
+  console.log('hostSourceFiles: ok');
 }

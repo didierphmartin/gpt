@@ -3,6 +3,8 @@ declare(strict_types=1);
 
 namespace AgentTeam\Services;
 
+use Quantis\AIPortfolioAssistant\Services\McpEndpoint;
+
 /**
  * Runs one code node server-side: backend/scripts/code_node_run.py in a short-lived python3 process,
  * the same harness the editor and compiled LangGraph use. The node reaches the user's MCP servers it
@@ -42,7 +44,10 @@ final class CodeNodeExecutor
         return ['data' => $data, 'result' => $this->spawn($request, $data['timeout_s'] + self::KILL_GRACE_S)];
     }
 
-    /** slug => {url, headers}: enabled global servers plus the user's own; the user's row wins a name clash. */
+    /**
+     * slug => {url, headers}: enabled global servers plus the user's own; the user's row wins a name clash.
+     * The url is the one this backend can reach (McpEndpoint::internal: the Docker gateway rewrite).
+     */
     private function servers(string $userId): array
     {
         $stmt = $this->db->prepare('SELECT name, url, headers, user_id FROM mcp_servers WHERE enabled = 1 AND (user_id IS NULL OR user_id = ?)');
@@ -52,7 +57,7 @@ final class CodeNodeExecutor
         $out = [];
         foreach ($rows as $r) {
             $headers = is_string($r['headers'] ?? null) ? (json_decode($r['headers'], true) ?: []) : [];
-            $out[CodeNodeEmit::slug((string) $r['name'])] = ['url' => (string) $r['url'], 'headers' => (object) $headers];
+            $out[CodeNodeEmit::slug((string) $r['name'])] = ['url' => McpEndpoint::internal((string) $r['url']), 'headers' => (object) $headers];
         }
         return $out;
     }

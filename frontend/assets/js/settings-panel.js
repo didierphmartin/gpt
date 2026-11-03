@@ -1091,7 +1091,7 @@ class SettingsPanel {
         if (descInput) descInput.value = server?.description || '';
         if (authInput) authInput.value = '';
         this._mcpEditOrigName = server?.name || null;
-        this.prefillMCPLocalFolder(this.editingServerId, server?.name || null);
+        this.prefillMCPLocalFolder(this.editingServerId, server?.name || null, server?.url || '');
 
         this.setMCPTestStatus('', null);
         urlInput?.addEventListener('input', () => this.setMCPTestStatus('', null), { once: true });
@@ -1143,6 +1143,7 @@ class SettingsPanel {
         if (mockInput) mockInput.checked = false;
         const folderInput = document.getElementById('mcp-server-local-folder');
         if (folderInput) folderInput.value = '';
+        folderInput?.closest('.mcp-form-row')?.classList.remove('hidden');
         this._mcpEditOrigName = null;
 
         this.setMCPTestStatus('', null);
@@ -1636,12 +1637,16 @@ class SettingsPanel {
     }
 
     /** The edit form's Local folder field: enabled only with folder access, prefilled from the map. */
-    async prefillMCPLocalFolder(serverId, name) {
+    async prefillMCPLocalFolder(serverId, name, url) {
         const input = document.getElementById('mcp-server-local-folder');
         const hint = document.getElementById('mcp-server-local-folder-hint');
         if (!input) return;
         input.value = '';
         input.disabled = true;
+        const row = input.closest('.mcp-form-row');
+        const volume = !!this._hostFolder(url);   // a volume server has no user folder
+        row?.classList.toggle('hidden', volume);
+        if (volume) { hint?.classList.add('hidden'); return; }
         const granted = await this._mcpFolderGranted();
         if (this.editingServerId !== serverId) return;   // the form moved on meanwhile
         hint?.classList.toggle('hidden', granted);
@@ -1696,20 +1701,169 @@ class SettingsPanel {
     async refreshMCPLocal(servers) {
         const token = this._mcpLocalToken = (this._mcpLocalToken || 0) + 1;
         this.mcpLocal = new Map();
+        await this._refreshMCPHost(servers, token);
+        if (token !== this._mcpLocalToken) return;
+        await this._refreshMCPFolders(servers, token);
+        if (token !== this._mcpLocalToken) return;   // re-rendered meanwhile
+        if (this.localServerId != null) {
+            if (this.mcpLocal.has(this.localServerId)) this.showMCPLocalPanel(this.localServerId);
+            else this.localServerId = null;
+        }
+    }
+
+    /** The user-folder servers (mcps/servers.json); any failure leaves the list as rendered. */
+    async _refreshMCPFolders(servers, token) {
         if (!window.localFs || !window.WorkflowPackage || !(await this._mcpFolderGranted())) return;
         let map;
         try { map = await this._readMCPServerMap(); } catch (_) { return; }
         const folderOf = (s) => this._ownEntry(map, s.name);
-        const local = (servers || []).filter(s => typeof folderOf(s) === 'string' && this.isValidMCPLocalFolder(folderOf(s)));
+        const local = (servers || []).filter(s => !this.mcpLocal.has(Number(s.id))
+            && typeof folderOf(s) === 'string' && this.isValidMCPLocalFolder(folderOf(s)));
         const infos = await Promise.all(local.map(s => this._readMCPLocalInfo(folderOf(s))));
-        if (token !== this._mcpLocalToken) return;   // re-rendered meanwhile
+        if (token !== this._mcpLocalToken) return;
         local.forEach((s, i) => {
             this.mcpLocal.set(Number(s.id), infos[i]);
             this._decorateMCPLocalRow(Number(s.id));
         });
-        if (this.localServerId != null) {
-            if (this.mcpLocal.has(this.localServerId)) this.showMCPLocalPanel(this.localServerId);
-            else this.localServerId = null;
+    }
+
+    // ---- Volume servers: installed in the Docker app's /mcps volume, run by its supervisor ----
+
+    /** The volume folder a registered URL points at (gateway + "/" + folder + ...), else null. */
+    _hostFolder(url) {
+        const gw = this._mcpHostGateway;
+        if (!gw || typeof url !== 'string' || !url.startsWith(gw + '/')) return null;
+        const seg = url.slice(gw.length + 1).split(/[/?#]/)[0];
+        return /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(seg) ? seg : null;
+    }
+
+    /** The owner of a volume server's process: the user who installed it (supervisor's installed_by), or an admin. */
+    _isMCPHostOwner(installedBy) {
+        if (window.accountStore?.getActiveUser?.()?.role === 'admin') return true;
+        return installedBy != null && String(installedBy) === String(window.mcpClient?.getUserId?.());
+    }
+
+    /** Ownership of the volume server behind registration `id`; asks the host when the list has not read it. */
+    async _ownsMCPHost(id, folder) {
+        let info = this.mcpLocal?.get(Number(id));
+        if (!info?.host) {
+            try { info = { installedBy: (await window.mcpClient.hostServers()).find(h => h.folder === folder)?.installed_by }; }
+            catch (_) { info = null; }   // unknown owner: treated as not ours, the registration alone is touched
+        }
+        return this._isMCPHostOwner(info?.installedBy);
+    }
+
+    /** A 403 from the host: someone else owns the server; `registration` = only this user's registration changed. */
+    _mcpHostNotOwner(registration = true) {
+        this.showNotification(this.t(registration ? 'settings.mcpHostNotOwner' : 'settings.mcpHostOwnerOnly'), 'info');
+    }
+
+    /** One volume server: its declared settings (no secret values) and its supervisor state. */
+    async _readMCPHostInfo(folder, host) {
+        const info = { host: true, folder, fields: [], shown: {}, missing: [], manifest: null,
+            state: host?.state || '', enabled: host ? host.enabled !== false : true,
+            installedBy: host?.installed_by ?? host?.installedBy ?? null, error: false };
+        try {
+            const data = await window.mcpClient.hostSettings(folder);
+            const all = data?.fields || [];
+            // The host and port the supervisor sets itself are hidden: a value saved for them does nothing.
+            const over = Array.isArray(data?.overridden) ? data.overridden
+                : ['_HOST', '_PORT'].map(sfx => all.find(f => f.name?.endsWith(sfx))?.name).filter(Boolean);
+            info.fields = all.filter(f => !over.includes(f.name));
+            // Secrets show empty (their placeholder says they are set); the rest show value or default.
+            info.shown = Object.fromEntries(info.fields.map(f => [f.name, f.secret ? '' : (f.filled ? (f.value ?? '') : (f.default ?? ''))]));   // default shows while unset (display only)
+            info.missing = info.fields.filter(f => f.required && !f.filled).map(f => f.name);
+        } catch (e) {
+            console.warn('[settings:mcp] host settings unreadable:', e.message);
+            info.error = true;
+        }
+        return info;
+    }
+
+    /** Volume servers among the registered ones; a host that cannot be asked is treated as no host. */
+    async _refreshMCPHost(servers, token) {
+        let status;
+        try { status = await window.mcpClient?.hostStatus(); } catch (e) {
+            console.warn('[settings:mcp] server host status failed:', e.message);
+            this._mcpHostGateway = null;
+            return;
+        }
+        if (!status?.available || !status.gateway) { this._mcpHostGateway = null; return; }
+        this._mcpHostGateway = String(status.gateway).replace(/\/+$/, '');
+        const vol = (servers || []).map(s => ({ s, folder: this._hostFolder(s.url) })).filter(x => x.folder);
+        if (!vol.length) return;
+        let hosted = [];
+        try { hosted = await window.mcpClient.hostServers(); } catch (e) { console.warn('[settings:mcp] host servers failed:', e.message); }
+        const infos = await Promise.all(vol.map(x => this._readMCPHostInfo(x.folder, hosted.find(h => h.folder === x.folder))));
+        if (token !== this._mcpLocalToken) return;
+        vol.forEach((x, i) => {
+            this.mcpLocal.set(Number(x.s.id), infos[i]);
+            this._decorateMCPLocalRow(Number(x.s.id));
+        });
+    }
+
+    /** Panel body of a volume server: state line, Restart (enabled servers only), settings form. */
+    _hostPanelBody(info, UI, tp) {
+        const esc = (x) => this._escAttr(x);
+        const known = ['running', 'starting', 'stopped', 'crashed', 'installing'];
+        const state = known.includes(info.state) ? this._tp(`settings.mcpHostState_${info.state}`) : (info.state || this._tp('settings.mcpHostState_unknown'));
+        const stateLine = `<div class="text-sm" data-host-state>${esc(this._tp('settings.mcpHostState', { state }))}
+            ${info.enabled ? `<button type="button" class="mcp-btn" data-host-restart>${esc(this.t('settings.mcpHostRestart'))}</button>` : ''}</div>`;
+        if (info.error) return stateLine + `<div class="text-sm text-gray-500">${esc(this.t('settings.mcpLocalUnreadable'))}</div>`;
+        const form = info.fields.length
+            ? `<div class="mcp-local-form">${UI.settingsFieldsHtml(tp, info.fields, info.shown)}</div>
+               <div class="mcp-local-actions"><button type="button" class="mcp-btn mcp-btn-primary" data-local-save>${esc(this.t('settings.mcpLocalSave'))}</button></div>`
+            : `<div class="text-sm text-gray-500">${esc(this.t('settings.mcpLocalNoSettings'))}</div>`;
+        return `<div class="mcp-server-functions-title">${esc(this._tp('settings.mcpHostPanelTitle', { folder: info.folder }))}</div>
+            ${stateLine}<strong class="mcp-local-subtitle">${tp('settingsTitle')}</strong>${form}`;
+    }
+
+    async _restartMCPHost(id, info, btn) {
+        if (btn) btn.disabled = true;
+        try {
+            await window.mcpClient.hostRestart(info.folder);
+            this.showNotification(this.t('settings.mcpHostRestarted'), 'success');
+        } catch (e) {
+            if (e.status === 403) this._mcpHostNotOwner(false);
+            else this.showNotification(this._tp('settings.mcpHostRestartFailed', { error: e.message }), 'error');
+        }
+        await this._reloadMCPHostInfo(id, info);
+    }
+
+    /** Re-read a volume server's state and settings, then redraw its row badge and open panel. */
+    async _reloadMCPHostInfo(id, info) {
+        let hosted = [];
+        try { hosted = await window.mcpClient.hostServers(); } catch (_) { /* state stays as shown */ }
+        const fresh = await this._readMCPHostInfo(info.folder, hosted.find(h => h.folder === info.folder) || info);
+        if (!this.mcpLocal?.has(id)) return;
+        this.mcpLocal.set(id, fresh);
+        this._decorateMCPLocalRow(id);
+        if (this.localServerId === id) this.showMCPLocalPanel(id);
+    }
+
+    /** Send only what the user changed; a blank secret keeps the stored one. */
+    async _saveMCPHostSettings(id, panel, info) {
+        const values = {};
+        for (const f of info.fields) {
+            const input = Array.from(panel.querySelectorAll('[data-value]')).find(el => el.dataset.value === f.name);
+            if (input && input.value !== (info.shown[f.name] ?? '')) values[f.name] = input.value;
+        }
+        if (!Object.keys(values).length) {
+            this.showNotification(this.t('settings.mcpHostNothingChanged'), 'info');
+            return;
+        }
+        const btn = panel.querySelector('[data-local-save]');
+        if (btn) btn.disabled = true;
+        try {
+            await window.mcpClient.hostSaveSettings(info.folder, values);
+            this.showNotification(this.t('settings.mcpLocalSaved'), 'success');
+            await this._reloadMCPHostInfo(id, info);
+        } catch (e) {
+            console.warn('[settings:mcp] host settings save failed:', e.message);
+            if (e.status === 403) this._mcpHostNotOwner(false);
+            else this.showNotification(this.t('settings.mcpLocalSaveFailed'), 'error');
+        } finally {
+            if (btn) btn.disabled = false;
         }
     }
 
@@ -1758,7 +1912,9 @@ class SettingsPanel {
         const tp = (key, params) => esc(this._tp(`workflow.package.${key}`, params));   // reused import-form text
         const tPlain = (key) => this._tp(`workflow.package.${key}`);
         let body;
-        if (info.error) {
+        if (info.host) {
+            body = this._hostPanelBody(info, UI, tp);
+        } else if (info.error) {
             body = `<div class="text-sm text-gray-500">${esc(this.t('settings.mcpLocalUnreadable'))}</div>`;
         } else {
             // Defaults fill what the server's folder has no value for yet (display only; the badge uses saved values).
@@ -1790,6 +1946,15 @@ class SettingsPanel {
             if (toggle) UI.toggleSecret(toggle, tPlain);
         });
         UI.wireCopyButtons(panel, tPlain);
+        if (info.host) {
+            // A stored secret is never shown: its empty field says it is set.
+            const filled = new Set(info.fields.filter(f => f.secret && f.filled).map(f => f.name));
+            panel.querySelectorAll('[data-value]').forEach(el => {
+                if (filled.has(el.dataset.value)) el.placeholder = this.t('settings.mcpHostSecretSet');
+            });
+            const restart = panel.querySelector('[data-host-restart]');
+            restart?.addEventListener('click', () => this._restartMCPHost(id, info, restart));
+        }
         panel.querySelector('[data-local-save]')?.addEventListener('click', () => this.saveMCPLocalSettings(id, panel));
     }
 
@@ -1797,6 +1962,7 @@ class SettingsPanel {
     async saveMCPLocalSettings(id, panel) {
         const info = this.mcpLocal?.get(id);
         if (!info) return;
+        if (info.host) return this._saveMCPHostSettings(id, panel, info);
         const values = Object.create(null);
         for (const f of info.fields) {
             const input = Array.from(panel.querySelectorAll('[data-value]')).find(el => el.dataset.value === f.name);
@@ -1859,8 +2025,7 @@ class SettingsPanel {
             result = await window.mcpClient?.toggleServer(id, newOn);
         }
 
-        if (!result?.success) {
-            // Revert the optimistic change.
+        const revert = () => {
             if (eff) this.myMcpEffective.set(id, eff); else this.myMcpEffective.delete(id);
             if (listEntry) listEntry.effective_on = currentlyOn;
             if (!isGlobal && server) server.enabled = currentlyOn;
@@ -1868,9 +2033,38 @@ class SettingsPanel {
                 toggleEl.classList.toggle('active', currentlyOn);
                 toggleEl.title = currentlyOn ? 'Disable for me' : 'Enable for me';
             }
+        };
+        if (!result?.success) {
+            revert();
             this.showNotification(result?.error || 'Failed to toggle server', 'error');
+        } else {
+            // Only the owner's switch drives a volume server's process (R19); a global row's "for me" switch never does.
+            const url = listEntry?.url || server?.url;
+            const folder = this._hostFolder(url);
+            const owned = !isGlobal && !!folder && (await this._ownsMCPHost(id, folder));
+            if (owned && !(await this._syncMCPHostEnabled(id, url, newOn))) {
+                revert();
+                try { await window.mcpClient.toggleServer(id, currentlyOn); } catch (_) { /* the host error is already shown */ }
+            }
         }
         this._refreshMcpMaster(); // keep the select-all master checkbox tri-state in sync
+    }
+
+    /** A volume server follows its switch: the supervisor starts or stops it. True when nothing failed. */
+    async _syncMCPHostEnabled(id, url, on) {
+        const folder = this._hostFolder(url);
+        if (!folder) return true;
+        try {
+            await window.mcpClient.hostSetEnabled(folder, on);
+        } catch (e) {
+            if (e.status === 403) { this._mcpHostNotOwner(); return true; }   // the registration switch stands
+            console.warn('[settings:mcp] host enable failed:', e.message);
+            this.showNotification(this._tp('settings.mcpHostEnableFailed', { error: e.message }), 'error');
+            return false;
+        }
+        const info = this.mcpLocal?.get(id);
+        if (info?.host) await this._reloadMCPHostInfo(id, { ...info, enabled: on });
+        return true;
     }
 
     /**
@@ -1924,10 +2118,28 @@ class SettingsPanel {
      * Delete MCP server
      */
     async deleteMCPServer(serverId) {
-        if (!confirm('Are you sure you want to delete this MCP server?')) {
+        const entry = (this.myMcpServers || []).find(s => String(s.id) === String(serverId))
+            || window.mcpClient?.servers?.get(parseInt(serverId, 10));
+        // The owner's delete also uninstalls the volume server (R15, R19); anyone else deletes the registration only.
+        const folder = this._hostFolder(entry?.url);
+        const hostFolder = folder && (await this._ownsMCPHost(serverId, folder)) ? folder : null;
+        const question = 'Are you sure you want to delete this MCP server?';
+        if (!confirm(hostFolder ? `${question}\n\n${this.t('settings.mcpHostDeleteNote')}` : question)) {
             return;
         }
 
+        if (hostFolder) {
+            // Uninstall first: on failure the registration stays, so the row is still there to retry.
+            try { await window.mcpClient.hostDelete(hostFolder); } catch (e) {
+                if (e.status === 403) {
+                    this._mcpHostNotOwner();   // not ours after all: delete the registration only
+                } else if (e.status !== 404) {   // 404 = already gone
+                    console.warn('[settings:mcp] host delete failed:', e.message);
+                    this.showNotification(this._tp('settings.mcpHostDeleteFailed', { error: e.message }), 'error');
+                    return;
+                }
+            }
+        }
         const result = await window.mcpClient?.deleteServer(serverId);
 
         if (result?.success) {
