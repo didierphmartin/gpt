@@ -448,6 +448,16 @@
       "exists": "already installed",
       "clash": "a different skill with this name exists",
       "failed": "failed"
+    },
+    "visibilityCard": {
+      "title": "Private skills",
+      "intro": "This robot workflow uses skills that are private. A robot can only use public skills.",
+      "makePublic": "Make public",
+      "ownedBy": "Owned by {{owner}}",
+      "notFound": "Not found",
+      "nowPublic": "Public",
+      "clash": "A different public skill already has this name.",
+      "robotUse": "Used by robot workflows: {{workflows}}"
     }
   },
   "fileStorage": {

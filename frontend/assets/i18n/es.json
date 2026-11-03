@@ -448,6 +448,16 @@
       "exists": "ya instalada",
       "clash": "existe otra habilidad con este nombre",
       "failed": "error"
+    },
+    "visibilityCard": {
+      "title": "Habilidades privadas",
+      "intro": "Este flujo de trabajo del robot usa habilidades privadas. Un robot solo puede usar habilidades públicas.",
+      "makePublic": "Hacer pública",
+      "ownedBy": "Propiedad de {{owner}}",
+      "notFound": "No encontrada",
+      "nowPublic": "Pública",
+      "clash": "Ya existe otra habilidad pública con este nombre.",
+      "robotUse": "Usada por flujos de trabajo del robot: {{workflows}}"
     }
   },
   "fileStorage": {

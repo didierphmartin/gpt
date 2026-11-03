@@ -1966,6 +1966,7 @@ class WorkflowEditor {
             await this.loadWorkflow(id, { quiet: true });
         } catch (err) {
             const clashes = window.RobotOwner.clashLines(err?.body, t);
+            if (this._showPrivateSkills(err?.body, () => this._setOwnerRobot())) return;
             this.showNotification(clashes.length ? clashes.join('\n') : (err?.message || String(err)), 'error');
         } finally {
             this._ownerChanging = false;
@@ -3708,7 +3709,9 @@ class WorkflowEditor {
         const r = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/activate`, { method: 'POST', headers: this.getAuthHeaders() });
         const body = await r.json().catch(() => ({}));
         const activated = r.ok && body.success !== false;
-        if (!activated) {
+        if (!activated && this._showPrivateSkills(body, () => this._activate())) {
+            // the card retries the activation once every skill is public
+        } else if (!activated) {
             this.showNotification(this._activeError(r, body), 'error');
         } else {
             this.showNotification(this.t('workflow.active.activated'), 'success');
@@ -11284,6 +11287,15 @@ class WorkflowEditor {
             return;
         }
         this._applyStartPorts(startId, window.CodeNode.remapExits(exits, row.exits, node.outputs), row);
+    }
+
+    /** A 'private_skills' refusal (body or SSE event) -> the card; onResolved retries the action. True when it was one. */
+    _showPrivateSkills(body, retry) {
+        const skills = window.SkillVisibilityCard?.fromRefusal(body);
+        if (!skills) return false;
+        const u = window.authManager?.user;
+        window.SkillVisibilityCard.show({ skills, currentUserId: u?.id ?? u?.uid ?? null, onResolved: retry, t: (k, p) => this.t(k, p) });
+        return true;
     }
 
     /** A warning listing the links about to be removed; resolves true on confirm. A null confirmLabel: only Cancel. */

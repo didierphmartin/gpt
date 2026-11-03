@@ -448,6 +448,16 @@
       "exists": "déjà installée",
       "clash": "une autre compétence porte ce nom",
       "failed": "échec"
+    },
+    "visibilityCard": {
+      "title": "Compétences privées",
+      "intro": "Ce workflow du robot utilise des compétences privées. Un robot ne peut utiliser que des compétences publiques.",
+      "makePublic": "Rendre publique",
+      "ownedBy": "Appartient à {{owner}}",
+      "notFound": "Introuvable",
+      "nowPublic": "Publique",
+      "clash": "Une autre compétence publique porte déjà ce nom.",
+      "robotUse": "Utilisée par les workflows du robot : {{workflows}}"
     }
   },
   "fileStorage": {
