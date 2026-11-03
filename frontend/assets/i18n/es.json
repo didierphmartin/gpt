@@ -438,7 +438,9 @@
       "robotBlocked": "No se puede hacer privada: la usan estos flujos de robot: {{names}}.",
       "clash": "Ya existe otra habilidad pública llamada {{name}}.",
       "failed": "No se pudo cambiar la visibilidad: {{message}}",
-      "by": "de {{name}}"
+      "by": "de {{name}}",
+      "confirmAlso": "Al hacer pública \"{{name}}\" también se harán públicas las habilidades que necesita: {{list}}.",
+      "confirmTitle": "Hacer pública"
     },
     "migrate": {
       "title": "Importar mis habilidades existentes",
@@ -494,6 +496,12 @@
       "alreadyInstalled": "ya instalada",
       "requiredClash": "hay instalada otra habilidad con este nombre",
       "alsoInstalled": "También se instaló: {{list}}."
+    },
+    "requiredBy": {
+      "delete": "No se puede eliminar \"{{name}}\": {{dependents}} la necesita(n) para ejecutarse (figura en sus habilidades requeridas). Elimina primero {{dependents}}, o quita \"{{name}}\" de sus habilidades requeridas.",
+      "rename": "No se puede renombrar \"{{name}}\": {{dependents}} la necesita(n) para ejecutarse (figura en sus habilidades requeridas).",
+      "private": "No se puede hacer privada \"{{name}}\": la(s) habilidad(es) pública(s) {{dependents}} la necesita(n) para ejecutarse.",
+      "public": "\"{{name}}\" necesita \"{{dep}}\", que no puedes hacer pública."
     }
   },
   "fileStorage": {

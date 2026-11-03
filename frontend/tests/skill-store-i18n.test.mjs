@@ -11,6 +11,8 @@ const KEYS = [
   'skills.run.skillsRootUnavailable', 'skills.run.robotRefusal', 'skills.bundle.unknownFiles',
   'skills.import.alsoInstalls', 'skills.import.alreadyInstalled', 'skills.import.requiredClash', 'skills.import.alsoInstalled',
   'skills.zip.requiresMissing', 'skills.run.skillsRootReadOnly', 'workflow.package.alsoInstalls',
+  'skills.requiredBy.delete', 'skills.requiredBy.rename', 'skills.requiredBy.private', 'skills.requiredBy.public',
+  'skills.visibility.confirmAlso', 'skills.visibility.confirmTitle',
 ];
 
 test('skill-store i18n keys exist in en, es and fr with the same placeholders', () => {

@@ -7,6 +7,7 @@ use Quantis\AIPortfolioAssistant\Services\SkillClashException;
 use Quantis\AIPortfolioAssistant\Services\RobotSkillPolicy;
 use Quantis\AIPortfolioAssistant\Services\SkillForbidden;
 use Quantis\AIPortfolioAssistant\Services\SkillInUse;
+use Quantis\AIPortfolioAssistant\Services\SkillRequiredBy;
 use Quantis\AIPortfolioAssistant\Services\SkillNotFound;
 use Quantis\AIPortfolioAssistant\Services\SkillPathInvalid;
 use Quantis\AIPortfolioAssistant\Services\SkillStore;
@@ -118,8 +119,7 @@ final class SkillStoreController
     {
         return $this->run(function (SkillStore $s) use ($request) {
             $b = self::body($request);
-            $s->setVisibility(self::uid($request), (string) ($b['path'] ?? ''), (string) ($b['visibility'] ?? ''));
-            return [];
+            return $s->setVisibility(self::uid($request), (string) ($b['path'] ?? ''), (string) ($b['visibility'] ?? ''), ($b['dry_run'] ?? false) === true);
         });
     }
 
@@ -164,6 +164,8 @@ final class SkillStoreController
         }
         try {
             return ['success' => true, 'data' => $fn($s), 'status_code' => 200];
+        } catch (SkillRequiredBy $e) {
+            return ['success' => false, 'data' => $e->data(), 'error' => $e->getMessage(), 'status_code' => $e->statusCode()];
         } catch (SkillInUse $e) {
             return ['success' => false, 'data' => ['message' => $e->getMessage(), 'robot_workflows' => $e->workflows()], 'error' => $e->getMessage(), 'status_code' => $e->statusCode()];
         } catch (SkillClashException $e) {

@@ -146,26 +146,58 @@ final class SkillStore
         });
     }
 
-    public function setVisibility(int $userId, string $path, string $visibility): void
+    /**
+     * Make one of my skills public or private. Public takes along every skill it requires (closure) that is still my
+     * own private skill, all or nothing (a leaf clash in public for any of them changes nothing); a required skill I
+     * cannot make public refuses it. Private is refused while a public skill requires it.
+     * $dryRun: only say what would be made public.
+     *
+     * @return array{made_public: list<string>}
+     */
+    public function setVisibility(int $userId, string $path, string $visibility, bool $dryRun = false): array
     {
         $this->checkPath($path);
         $this->checkVisibility($visibility);
-        $this->locked(function () use ($userId, $path, $visibility) {
+        return $this->locked(function () use ($userId, $path, $visibility, $dryRun) {
             [$area, $entry] = $this->owned($userId, $path);
             $to = $this->areaFor($userId, $visibility);
-            if ($to === $area) {
-                return;
-            }
             $index = $this->index();
             if ($visibility === 'public') {
-                $this->assertLeafFree($index, $userId, $path, false);
-            } elseif ($area === 'public') {
+                $along = $this->privateRequired($index, $userId, $path);
+                $moves = $to === $area ? $along : array_merge([$path], $along);
+                foreach ($moves as $p) {
+                    $this->assertLeafFree($index, $userId, $p, false);
+                }
+                if (!$dryRun) {
+                    $own = $this->areaFor($userId, 'private');
+                    foreach ($moves as $p) {
+                        $this->relocate($own, $p, 'public', $p);
+                        unset($index["$own/$p"]);
+                        $index["public/$p"] = ['owner' => $userId, 'visibility' => 'public'];
+                    }
+                    if ($moves !== []) {
+                        $this->saveIndex($index);
+                    }
+                }
+                return ['made_public' => $along];
+            }
+            if ($to === $area || $dryRun) {
+                return ['made_public' => []];
+            }
+            if ($area === 'public') {
                 $this->assertNotBoundByRobot($path);
+                $publicDeps = $this->dependents($index, $userId, $path, true);
+                if ($publicDeps !== []) {
+                    $list = implode(', ', $publicDeps);
+                    throw new SkillRequiredBy("\"{$this->leaf($path)}\" can't be made private: the public skill(s) $list need it to run.",
+                        'private', $path, $publicDeps);
+                }
             }
             $this->relocate($area, $path, $to, $path);
             unset($index["$area/$path"]);
             $index["$to/$path"] = ['owner' => $userId, 'visibility' => $visibility];
             $this->saveIndex($index);
+            return ['made_public' => []];
         });
     }
 
@@ -177,6 +209,7 @@ final class SkillStore
             if ($area === 'public') {
                 $this->assertNotBoundByRobot($path);
             }
+            $this->assertNotRequired($userId, $path, 'delete');
             $this->rmtree($this->dir($area, $path));
             $this->pruneGroup($area, $path);
             $index = $this->index();
@@ -197,6 +230,9 @@ final class SkillStore
             if ($area === 'public' && $this->leaf($from) !== $this->leaf($to)) {
                 $this->assertNotBoundByRobot($from);
             }
+            if ($this->leaf($from) !== $this->leaf($to)) {   // regrouping keeps the leaf: the skills that need it still find it
+                $this->assertNotRequired($userId, $from, 'rename');
+            }
             $index = $this->index();
             if (isset($index["$area/$to"])) {
                 throw new SkillClashException("A skill already exists at '$to'.");
@@ -214,6 +250,95 @@ final class SkillStore
         $this->checkPath($path);
         $r = $this->resolve($ownerId, $path, $asRobot);
         return $r === null ? null : $this->dir($r[0], $path);
+    }
+
+    // ---- required skills (LangGraphPackage::requiredSkills over the skills the caller sees) ----------------
+
+    /** @return list<array{0:string,1:string}> [area, path] of every skill $userId sees (own + public), existing folders */
+    private function visibleEntries(array $index, int $userId): array
+    {
+        $out = [];
+        foreach ($index as $key => $e) {
+            [$area, $p] = $this->splitKey($key);
+            if ($this->visible($e, $userId, false) && is_dir($this->dir($area, $p))) {
+                $out[] = [$area, $p];
+            }
+        }
+        return $out;
+    }
+
+    /** SKILL.md and scripts/** of a skill: what the requires rule reads. */
+    private function requiresFiles(string $area, string $path): array
+    {
+        return array_filter($this->readTree($this->dir($area, $path), false),
+            fn($rel) => $rel === 'SKILL.md' || str_starts_with((string) $rel, 'scripts/'), ARRAY_FILTER_USE_KEY);
+    }
+
+    /** The skills $userId sees that require $path (only public ones when $publicOnly), sorted. */
+    private function dependents(array $index, int $userId, string $path, bool $publicOnly = false): array
+    {
+        $vis = $this->visibleEntries($index, $userId);
+        $paths = array_column($vis, 1);
+        $out = [];
+        foreach ($vis as [$area, $p]) {
+            if ($p === $path || ($publicOnly && $area !== 'public')) {
+                continue;
+            }
+            if (in_array($path, LangGraphPackage::requiredSkills($p, $this->requiresFiles($area, $p), $paths)['requires'], true)) {
+                $out[] = $p;
+            }
+        }
+        sort($out, SORT_STRING);
+        return $out;
+    }
+
+    private function assertNotRequired(int $userId, string $path, string $reason): void
+    {
+        $deps = $this->dependents($this->index(), $userId, $path);
+        if ($deps === []) {
+            return;
+        }
+        $name = $this->leaf($path);
+        $list = implode(', ', $deps);
+        throw new SkillRequiredBy($reason === 'delete'
+            ? "\"$name\" can't be deleted: $list need(s) it to run (listed in its required skills). Delete $list first, or remove \"$name\" from its required skills."
+            : "\"$name\" can't be renamed: $list need(s) it to run (listed in its required skills).", $reason, $path, $deps);
+    }
+
+    /**
+     * The skills $path requires, transitively, that are still $userId's own private skills (what making it public takes
+     * along), in discovery order. A required skill that is neither mine nor public refuses it.
+     */
+    private function privateRequired(array $index, int $userId, string $path): array
+    {
+        $vis = $this->visibleEntries($index, $userId);
+        $paths = array_column($vis, 1);
+        $areaOf = [];
+        foreach ($vis as [$a, $p]) {
+            $areaOf[$p] ??= $a;   // own first? index order; an own private skill and a public one never share a path
+        }
+        $own = $this->areaFor($userId, 'private');
+        $along = [];
+        $seen = [$path => true];
+        $queue = [$path];
+        while ($queue !== []) {
+            $p = array_shift($queue);
+            $req = LangGraphPackage::requiredSkills($p, $this->requiresFiles($areaOf[$p], $p), $paths);
+            foreach ($req['missing'] as $m) {
+                throw new SkillRequiredBy("\"{$this->leaf($p)}\" needs \"$m\", which you can't make public.", 'public', $p, [], $m);
+            }
+            foreach ($req['requires'] as $q) {
+                if (isset($seen[$q])) {
+                    continue;
+                }
+                $seen[$q] = true;
+                if ($areaOf[$q] === $own) {
+                    $along[] = $q;
+                    $queue[] = $q;
+                }
+            }
+        }
+        return $along;
     }
 
     // ---- internals -------------------------------------------------------------------------------

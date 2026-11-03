@@ -56,13 +56,13 @@ test('Make public only on own skills; others show the owner; missing shows not f
   assert.match(r[2].textContent, /notFound/);
 });
 
-test('clicking Make public calls setVisibility(path, public)', async () => {
+test('clicking Make public asks what goes along, then calls setVisibility(path, public)', async () => {
   const calls = [];
-  const { card, body } = load(async (p, v) => { calls.push([p, v]); return {}; });
+  const { card, body } = load(async (p, v, o) => { calls.push([p, v, !!(o && o.dryRun)]); return {}; });
   card.show({ skills, currentUserId: 7, onResolved() {}, t });
   buttons(body.children[0])[0].click();
   await flush();
-  assert.deepEqual(calls, [['mine', 'public']]);
+  assert.deepEqual(calls, [['mine', 'public', true], ['mine', 'public', false]]);   // dry run (what goes along), then the change
 });
 
 test('a clash error is shown on that row and the button stays', async () => {
@@ -111,4 +111,37 @@ test('fromRefusal reads the skills of an HTTP body or an SSE event', () => {
   assert.equal(card.fromRefusal({ code: 'private_skills', skills: [1, 2] }).length, 2);
   assert.equal(card.fromRefusal({ code: 'other', skills: [1] }), null);
   assert.equal(card.fromRefusal(null), null);
+});
+
+test('Make public with required private skills: the confirmation lists them; Make public sends the real call, Cancel none', async () => {
+  const calls = [];
+  const set = async (p, v, o) => { calls.push([p, v, !!(o && o.dryRun)]); return { made_public: ['flow', 'pb'] }; };
+  const { card, body } = load(set);
+  card.show({ skills: [{ path: 'auto', owner_id: 7 }], currentUserId: 7, onResolved() {}, t });
+  buttons(body.children[0])[0].click();
+  await flush();
+  const confirm = body.children.find((c) => c.dataset.role === 'confirm-public');
+  assert.ok(confirm, 'confirmation card shown');
+  assert.match(confirm.textContent, /skills\.visibility\.confirmAlso\{"name":"auto","list":"flow, pb"\}/);
+  confirm.find((e) => e.dataset.act === 'cancel').click();
+  await flush();
+  assert.deepEqual(calls, [['auto', 'public', true]]);
+  assert.equal(confirm.removed, true);
+
+  calls.length = 0;
+  const r = card.makePublic('auto', { setVisibility: set, t });
+  await flush();
+  const c2 = body.children.filter((c) => c.dataset.role === 'confirm-public').pop();
+  c2.find((e) => e.dataset.act === 'confirm').click();
+  assert.deepEqual(JSON.parse(JSON.stringify(await r)), { done: true, madePublic: ['flow', 'pb'] });
+  assert.deepEqual(calls, [['auto', 'public', true], ['auto', 'public', false]]);
+});
+
+test('Make public with nothing else to change: no confirmation card', async () => {
+  const calls = [];
+  const { card, body } = load(async (p, v, o) => { calls.push(!!(o && o.dryRun)); return { made_public: [] }; });
+  const r = await card.makePublic('solo', { t });
+  assert.equal(r.done, true);
+  assert.deepEqual(calls, [true, false]);
+  assert.equal(body.children.filter((c) => c.dataset.role === 'confirm-public').length, 0);
 });

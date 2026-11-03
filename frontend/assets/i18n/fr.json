@@ -438,7 +438,9 @@
       "robotBlocked": "Impossible de la rendre privée : ces workflows robot l'utilisent : {{names}}.",
       "clash": "Une autre compétence publique nommée {{name}} existe déjà.",
       "failed": "Impossible de changer la visibilité : {{message}}",
-      "by": "par {{name}}"
+      "by": "par {{name}}",
+      "confirmAlso": "Rendre « {{name}} » publique rendra aussi publiques les compétences dont elle a besoin : {{list}}.",
+      "confirmTitle": "Rendre publique"
     },
     "migrate": {
       "title": "Importer mes compétences existantes",
@@ -494,6 +496,12 @@
       "alreadyInstalled": "déjà installée",
       "requiredClash": "une autre compétence de ce nom est installée",
       "alsoInstalled": "Également installé : {{list}}."
+    },
+    "requiredBy": {
+      "delete": "Impossible de supprimer « {{name}} » : {{dependents}} en a/ont besoin pour fonctionner (elle figure dans ses compétences requises). Supprimez d’abord {{dependents}}, ou retirez « {{name}} » de ses compétences requises.",
+      "rename": "Impossible de renommer « {{name}} » : {{dependents}} en a/ont besoin pour fonctionner (elle figure dans ses compétences requises).",
+      "private": "Impossible de rendre « {{name}} » privée : la/les compétence(s) publique(s) {{dependents}} en a/ont besoin pour fonctionner.",
+      "public": "« {{name}} » a besoin de « {{dep}} », que vous ne pouvez pas rendre publique."
     }
   },
   "fileStorage": {

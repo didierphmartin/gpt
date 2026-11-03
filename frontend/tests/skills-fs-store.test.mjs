@@ -7,10 +7,13 @@ import { createRequire } from 'node:module';
 
 const SRC = readFileSync(fileURLToPath(new URL('../assets/js/skills-fs.js', import.meta.url)), 'utf8');
 const SkillZip = createRequire(import.meta.url)('../assets/js/skill-zip.js');
+const SkillRequires = createRequire(import.meta.url)('../assets/js/skill-requires.js');
+const EN = JSON.parse(readFileSync(fileURLToPath(new URL('../assets/i18n/en.json', import.meta.url)), 'utf8'));
+const i18n = { t: (k, p = {}) => { const v = k.split('.').reduce((a, x) => (a ? a[x] : undefined), EN); return typeof v === 'string' ? v.replace(/\{\{(\w+)\}\}/g, (_, n) => p[n] ?? '') : k; } };
 const b64 = (s) => Buffer.from(s).toString('base64');
 
 /** routes: { 'GET /skills/store': (body, url) => [status, json] } */
-function load({ routes = {}, localFs } = {}) {
+function load({ routes = {}, localFs, extra = {} } = {}) {
   const calls = [];
   const fetch = async (url, init = {}) => {
     const path = url.replace('http://x/api/v1', '');
@@ -22,7 +25,7 @@ function load({ routes = {}, localFs } = {}) {
     const [status, json] = h(body, path);
     return { ok: status < 400, status, statusText: '', text: async () => JSON.stringify(json) };
   };
-  const window = { APP_CONFIG: { API_BASE_URL: 'http://x/api/v1' }, authManager: { token: 'tok' }, SkillZip, localFs };
+  const window = { APP_CONFIG: { API_BASE_URL: 'http://x/api/v1' }, authManager: { token: 'tok' }, SkillZip, SkillRequires, i18n, localFs, ...extra };
   const ctx = vm.createContext({ window, fetch, console, TextEncoder, TextDecoder, btoa, atob, Uint8Array, encodeURIComponent });
   vm.runInContext(SRC, ctx);
   return { fs: window.skillsFs, calls };
@@ -316,4 +319,65 @@ test('folder importSkill with required skills: a clash in a required skill write
   const r = await fs.importSkill(sk('auto', 'A', [sk('pb', 'P'), sk('flow', 'F')]));
   assert.deepEqual(JSON.parse(JSON.stringify(r.requires.map((x) => x.status))), ['identical', 'installed']);
   assert.equal(writes.length, 2);   // flow/SKILL.md and auto/SKILL.md
+});
+
+/** A folder skills root (fake FSA tree) that records deletes. */
+function folderRoot(tree) {
+  const removed = [];
+  const dirAt = (p) => p.split('/').filter(Boolean).reduce((t, x) => (t && typeof t[x] === 'object' ? t[x] : undefined), tree);
+  const mk = (t, name) => {
+    const d = writableDir(t, name);
+    d.removeEntry = async (n) => { removed.push(n); delete t[n]; };
+    d.getDirectoryHandle = async (n, o) => { if (typeof t[n] !== 'object') { if (o && o.create) { t[n] = {}; } else throw new Error('nf'); } return mk(t[n], n); };
+    return d;
+  };
+  const localFs = { resolvePath: async (p, o) => {
+    if (o && o.kind === 'file') {
+      const parts = p.replace(/^skills\//, '').split('/');
+      const leaf = parts.pop();
+      const d = dirAt(parts.join('/'));
+      return d && typeof d[leaf] === 'string' ? { getFile: async () => ({ text: async () => d[leaf] }) } : null;
+    }
+    const d = p === 'skills' ? tree : dirAt(p.replace(/^skills\//, ''));
+    return d ? mk(d, p.split('/').pop()) : null;
+  } };
+  return { localFs, removed };
+}
+
+test('folder: delete / rename of a skill another one requires is refused naming it; regroup is allowed', async () => {
+  const tree = {
+    flow: { 'SKILL.md': '---\nname: flow\n---\n', scripts: { 'c.py': 'print(1)' } },
+    auto: { 'SKILL.md': '---\nname: auto\n---\n', scripts: { 'a.py': "load_script('flow', 'c.py')" } },
+    grp: {},
+  };
+  const { localFs, removed } = folderRoot(tree);
+  const { fs } = load({ localFs });
+  const del = await fs.deleteSkill('flow');
+  assert.equal(del.ok, false);
+  assert.equal(del.error, '"flow" can\'t be deleted: auto need(s) it to run (listed in its required skills). Delete auto first, or remove "flow" from its required skills.');
+  assert.deepEqual(removed, []);
+  const ren = await fs.renameSkill('flow', 'flow2');
+  assert.equal(ren.error, '"flow" can\'t be renamed: auto need(s) it to run (listed in its required skills).');
+  assert.equal((await fs.renameSkill('flow', 'flow')).ok, true);   // same leaf: nothing to refuse
+  // auto itself is needed by nobody: it can go.
+  assert.equal((await fs.deleteSkill('auto')).ok, true);
+  assert.equal((await fs.deleteSkill('flow')).ok, true);
+});
+
+test('store: a SkillRequiredBy refusal is shown translated, naming the dependents', async () => {
+  const body = (reason) => [409, { success: false, data: { message: 'x', reason, skill: 'g/flow', required_by: ['auto'] }, error: 'x' }];
+  const { fs } = load({ routes: { ...volume, 'DELETE /skills': () => body('delete'), 'POST /skills/move': () => body('rename') } });
+  const d = await fs.deleteSkill('g/flow');
+  assert.match(d.error, /^"flow" can't be deleted: auto need\(s\) it to run/);
+  assert.deepEqual([...d.requiredBy], ['auto']);
+  assert.match((await fs.renameSkill('g/flow', 'x')).error, /^"flow" can't be renamed: auto/);
+});
+
+test('store setVisibility: dryRun asks which required skills go public along', async () => {
+  const sent = [];
+  const { fs } = load({ routes: { ...volume, 'PUT /skills/visibility': (b) => { sent.push(b); return [200, { made_public: ['flow'] }]; } } });
+  assert.deepEqual([...(await fs.setVisibility('auto', 'public', { dryRun: true })).made_public], ['flow']);
+  assert.equal(sent[0].dry_run, true);
+  await fs.setVisibility('auto', 'public');
+  assert.equal(sent[1].dry_run, undefined);
 });

@@ -656,8 +656,52 @@
         return listUnder(dirName, 'references', '.md', asRobot);
     }
 
-    // The backend's own message (e.g. which path a rename/move clashes with) beats "HTTP 409: clash".
-    const failure = (e) => ({ ok: false, error: e?.data?.data?.message || e?.message || String(e) });
+    const tr = (key, params, fallback) => {
+        const v = window.i18n && window.i18n.t ? window.i18n.t(key, params || {}) : key;
+        return v === key && fallback ? fallback : v;
+    };
+    const leafOf = (p) => String(p || '').split('/').pop();
+
+    /**
+     * The refusal text for a skill other skills need ({ reason, skill, required_by, needs } from SkillRequiredBy, or
+     * the folder check): delete | rename | private | public. t: the caller's translator (default window.i18n).
+     */
+    function requiredByMessage(d, t) {
+        const tt = t || ((k, p) => tr(k, p));
+        const params = { name: leafOf(d.skill), dependents: (d.required_by || []).join(', '), dep: d.needs || '' };
+        return tt(`skills.requiredBy.${d.reason}`, params);
+    }
+
+    // The backend's own message (e.g. which path a rename/move clashes with) beats "HTTP 409: clash";
+    // a skill other skills need is explained in the user's language.
+    const failure = (e) => {
+        const d = e?.data?.data;
+        if (d && Array.isArray(d.required_by) && d.reason) return { ok: false, error: requiredByMessage(d), requiredBy: d.required_by };
+        return { ok: false, error: d?.message || e?.message || String(e) };
+    };
+
+    /**
+     * Folder mode: the skills of the folder that require `path` (skill-requires.js over SKILL.md + scripts/**).
+     * The store checks this itself (SkillStore, only the skills the caller sees).
+     */
+    async function folderDependents(path) {
+        if (!window.SkillRequires) return [];
+        const all = (await folderListSkills()).map((x) => x.dirName);
+        const out = [];
+        for (const p of all) {
+            if (p === path) continue;
+            const files = await readSkillFiles(p, { under: 'scripts' });
+            const md = await folder_getSkillFile(p, 'SKILL.md');
+            if (md !== null && md !== undefined) files['SKILL.md'] = enc.encode(md);
+            if (window.SkillRequires.direct(p, files, all).requires.includes(path)) out.push(p);
+        }
+        return out.sort();
+    }
+
+    async function folderRefusal(path, reason) {
+        const deps = await folderDependents(path);
+        return deps.length ? { ok: false, error: requiredByMessage({ reason, skill: path, required_by: deps }), requiredBy: deps } : null;
+    }
 
     // Groups exist implicitly in the store (a group is the first segment of a skill path).
     async function createFolder(name) {
@@ -700,14 +744,17 @@
         return volumeMove(skillPath, targetGroup ? `${targetGroup}/${leaf}` : leaf);
     }
     async function deleteSkill(skillPath) {
-        if (await mode() !== 'volume') return folder_deleteSkill(skillPath);
+        if (await mode() !== 'volume') return (await folderRefusal(skillPath, 'delete')) || folder_deleteSkill(skillPath);
         try {
             await api('DELETE', `/skills?path=${enqPath(skillPath)}`);
             return { ok: true };
         } catch (e) { return failure(e); }
     }
     async function renameSkill(skillPath, newLeafName) {
-        if (await mode() !== 'volume') return folder_renameSkill(skillPath, newLeafName);
+        if (await mode() !== 'volume') {
+            const same = sanitizeFolderName(newLeafName) === leafOf(skillPath);
+            return (!same && (await folderRefusal(skillPath, 'rename'))) || folder_renameSkill(skillPath, newLeafName);
+        }
         const safe = sanitizeFolderName(newLeafName);
         if (!safe) return { ok: false, error: 'Please enter a valid name.' };
         const slash = skillPath.lastIndexOf('/');
@@ -898,9 +945,14 @@
         return { ...main, requires };
     }
 
-    async function setVisibility(path, visibility) {
-        if (await mode() !== 'volume') return { ok: true };   // a folder is always private
-        return api('PUT', '/skills/visibility', { path, visibility });
+    /**
+     * Public takes along the skills it requires that are still my own private ones (the server does it all or
+     * nothing); dryRun: only ask which (made_public). Returns { made_public: [path] }.
+     */
+    async function setVisibility(path, visibility, { dryRun = false } = {}) {
+        if (await mode() !== 'volume') return { ok: true, made_public: [] };   // a folder is always private
+        const r = await api('PUT', '/skills/visibility', { path, visibility, ...(dryRun ? { dry_run: true } : {}) });
+        return { made_public: [], ...(r || {}) };
     }
 
     /** The caller's own skills, flat: { '<path>/<rel>': Uint8Array } (what skill-creator edits). */
@@ -991,6 +1043,7 @@
         setVisibility,
         skillsRootFiles,
         writeSkillsRoot,
+        requiredByMessage,
         parseFrontmatter,    // exported for testing
     };
 })();

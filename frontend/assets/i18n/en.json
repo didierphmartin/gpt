@@ -438,7 +438,9 @@
       "robotBlocked": "Cannot make it private: these robot workflows use it: {{names}}.",
       "clash": "A different public skill named {{name}} already exists.",
       "failed": "Could not change the visibility: {{message}}",
-      "by": "by {{name}}"
+      "by": "by {{name}}",
+      "confirmAlso": "Making \"{{name}}\" public will also make public the skills it needs: {{list}}.",
+      "confirmTitle": "Make public"
     },
     "migrate": {
       "title": "Import my existing skills",
@@ -494,6 +496,12 @@
       "alreadyInstalled": "already installed",
       "requiredClash": "a different skill with this name is installed",
       "alsoInstalled": "Also installed: {{list}}."
+    },
+    "requiredBy": {
+      "delete": "\"{{name}}\" can't be deleted: {{dependents}} need(s) it to run (listed in its required skills). Delete {{dependents}} first, or remove \"{{name}}\" from its required skills.",
+      "rename": "\"{{name}}\" can't be renamed: {{dependents}} need(s) it to run (listed in its required skills).",
+      "private": "\"{{name}}\" can't be made private: the public skill(s) {{dependents}} need it to run.",
+      "public": "\"{{name}}\" needs \"{{dep}}\", which you can't make public."
     }
   },
   "fileStorage": {

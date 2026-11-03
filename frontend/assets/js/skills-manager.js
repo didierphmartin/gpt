@@ -1253,6 +1253,8 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         }
         const res = await window.skillsFs.deleteSkill(skill.dir_name);
         if (!res.ok) {
+            // A skill other skills need: the refusal says why and what to do.
+            if (res.requiredBy) { this.notify(res.error); return; }
             alert('Could not delete the skill folder: ' + (res.error || 'unknown error'));
             return;
         }
@@ -1272,6 +1274,7 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         }
         const res = await window.skillsFs.renameSkill(skill.dir_name, newName);
         if (!res.ok) {
+            if (res.requiredBy) { this.notify(res.error); return; }
             alert('Could not rename the skill folder: ' + (res.error || 'unknown error'));
             return;
         }
@@ -1286,15 +1289,25 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
     async toggleVisibility(skill) {
         const to = skill.visibility === 'public' ? 'private' : 'public';
         try {
-            await window.skillsFs.setVisibility(skill.dir_name, to);
+            if (to === 'public' && window.SkillVisibilityCard?.makePublic) {
+                // The skills it needs go public along (confirmed first); Cancel changes nothing.
+                const r = await window.SkillVisibilityCard.makePublic(skill.dir_name, { t: this.t });
+                if (!r.done) return;
+            } else {
+                await window.skillsFs.setVisibility(skill.dir_name, to);
+            }
         } catch (e) {
-            // skillsFs.api() puts the whole body on e.data: {success, data:{message, robot_workflows | clash}, error}.
+            // skillsFs.api() puts the whole body on e.data: {success, data:{message, robot_workflows | clash | required_by}, error}.
             const d = e.data?.data ?? e.data ?? {};
             const robots = Array.isArray(d.robot_workflows) && d.robot_workflows.length ? d.robot_workflows : null;
-            if (robots) {
+            if (d.reason && Array.isArray(d.required_by) && window.skillsFs?.requiredByMessage) {
+                this.notify(window.skillsFs.requiredByMessage(d, this.t));
+            } else if (robots) {
                 this.notify(this.t('skills.visibility.robotBlocked', { names: robots.map(r => r.name ?? r.id ?? r).join(', ') }));
             } else if (d.clash) {
-                this.notify(this.t('skills.visibility.clash', { name: skill.name }));
+                // Making it public may move a skill it needs too: the server names the one that clashes.
+                const clashing = (/'([^']+)'/.exec(String(d.message || '')) || [])[1];
+                this.notify(this.t('skills.visibility.clash', { name: clashing || skill.name }));
             } else {
                 this.notify(this.t('skills.visibility.failed', { message: e.message }));
             }

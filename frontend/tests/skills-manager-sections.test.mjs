@@ -102,6 +102,28 @@ test('toggling flips public to private and back', async () => {
   assert.deepEqual(calls, [['mine-pub', 'private'], ['mine-priv', 'public']]);
 });
 
+test('making public goes through SkillVisibilityCard.makePublic; a cancelled confirmation changes nothing', async () => {
+  const asked = [];
+  let loads = 0;
+  const { mgr, window } = load({ fs: { setVisibility: async () => { throw new Error('not direct'); } } });
+  window.SkillVisibilityCard = { makePublic: async (p) => { asked.push(p); return { done: false }; } };
+  mgr.loadTree = async () => { loads++; };
+  await mgr.toggleVisibility(SKILLS[0]);
+  assert.deepEqual(asked, ['mine-priv']);
+  assert.equal(loads, 0);
+});
+
+test('making private refused because public skills need it: the translated reason names them', async () => {
+  const alerts = [];
+  const err = Object.assign(new Error('409'), { status: 409, data: { success: false, data: { reason: 'private', skill: 'mine-pub', required_by: ['auto'] } } });
+  const { mgr, window } = load({ fs: { setVisibility: async () => { throw err; } } });
+  window.skillsFs.requiredByMessage = (d, t) => t(`skills.requiredBy.${d.reason}`, { name: d.skill, dependents: d.required_by.join(', ') });
+  mgr.loadTree = async () => {};
+  mgr.notify = (m) => alerts.push(m);
+  await mgr.toggleVisibility(SKILLS[1]);
+  assert.deepEqual(alerts, ['skills.requiredBy.private{"name":"mine-pub","dependents":"auto"}']);
+});
+
 const folderSkills = [{ dirName: 'a', path: 'a' }];
 const offerFs = (o = {}) => ({
   mode: async () => 'volume',
