@@ -66,6 +66,7 @@
         unpublish(robotId) { return this.request('DELETE', `/robot/playbooks/${robotId}`); }
         // The robot's own MCP connections (responses carry header NAMES only).
         robotServers() { return this.request('GET', '/robot/mcp-servers'); }
+        robotCompileEnv() { return this.request('GET', '/robot/mcp-servers/compile-env'); }
         saveRobotServer(data) {
             const { id, ...fields } = data || {};
             return id ? this.request('POST', `/robot/mcp-servers/${id}`, fields) : this.request('POST', '/robot/mcp-servers', fields);
