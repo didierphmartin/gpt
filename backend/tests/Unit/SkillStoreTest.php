@@ -229,4 +229,66 @@ final class SkillStoreTest extends TestCase
         ksort($a);
         return $a;
     }
+
+    public function test_identical_copy_under_other_group_or_of_public_is_identical(): void
+    {
+        $s = $this->store();
+        $s->import(1, 'docx', $this->skill());
+        $this->assertSame('identical', $s->import(1, 'g/docx', $this->skill())['status']);
+        $s->setVisibility(1, 'docx', 'public');
+        $this->assertSame('identical', $s->import(2, 'docx', $this->skill())['status']);
+        $this->expectException(SkillClashException::class);
+        $s->import(2, 'docx', $this->skill('docx', 'changed'));
+    }
+
+    public function test_individual_robot_grouped_path_does_not_match_leaf(): void
+    {
+        $s = $this->store('individual');
+        $s->import(1, 'g/docx', $this->skill());
+        $this->assertNull($s->absolutePath(99, 'docx', true));
+        $this->assertNotNull($s->absolutePath(99, 'g/docx', true));
+    }
+
+    public function test_write_failures_throw(): void
+    {
+        $s = $this->store();
+        $s->import(1, 'docx', $this->skill());
+        chmod($this->root, 0555);
+        try {
+            $s->import(1, 'pdf', $this->skill('pdf'));
+            $this->fail('expected failure');
+        } catch (\RuntimeException $e) {
+            $this->assertNotInstanceOf(SkillClashException::class, $e);
+        } finally {
+            chmod($this->root, 0755);
+        }
+    }
+
+    public function test_corporate_robot_ignores_its_own_private_skills(): void
+    {
+        $s = $this->store('corporate');
+        $s->import(99, 'mine', $this->skill('mine'));
+        $this->assertSame([], $s->list(99, true));
+        $this->assertNull($s->absolutePath(99, 'mine', true));
+        $this->assertCount(1, $s->list(99));
+    }
+
+    public function test_move_public_checks_owner_private_leaf(): void
+    {
+        $s = $this->store();
+        $s->import(1, 'docx', $this->skill());
+        $s->setVisibility(1, 'docx', 'public');
+        $s->import(1, 'pdf', $this->skill('pdf'));
+        $this->expectException(SkillClashException::class);
+        $s->move(1, 'docx', 'g/pdf');
+    }
+
+    public function test_import_clears_stale_folder_without_index_entry(): void
+    {
+        $s = $this->store();
+        mkdir($this->root . '/users/1/docx', 0775, true);
+        file_put_contents($this->root . '/users/1/docx/stale.txt', 'old');
+        $s->import(1, 'docx', $this->skill());
+        $this->assertArrayNotHasKey('stale.txt', $s->files(1, 'docx'));
+    }
 }

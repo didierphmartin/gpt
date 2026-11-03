@@ -77,7 +77,7 @@ final class SkillStore
             [$area] = $this->owned($userId, $path);
             $file = $this->dir($area, $path) . '/' . $rel;
             $this->mkdir(dirname($file));
-            file_put_contents($file, $bytes);
+            $this->put($file, $bytes);
         });
     }
 
@@ -102,14 +102,23 @@ final class SkillStore
                     throw new SkillClashException("A different skill is already installed at '$path'.");
                 }
             }
+            $incoming = $this->fingerprint($this->withoutWheels($files));
+            foreach ($index as $key => $e) {
+                [$a, $p] = $this->splitKey($key);
+                if (($a === 'public' || $a === "users/$userId") && $this->leaf($p) === $this->leaf($path)
+                    && $this->fingerprint($this->readTree($this->dir($a, $p), false)) === $incoming) {
+                    return ['status' => 'identical'];
+                }
+            }
             $this->assertLeafFree($index, $userId, $path, true);
             $area = $this->areaFor($userId, $visibility);
             $dir = $this->dir($area, $path);
+            $this->rmtree($dir); // a folder with no index entry has no owner: never merge into it
             $this->mkdir($dir);
             foreach ($files as $rel => $bytes) {
                 $file = $dir . '/' . $rel;
                 $this->mkdir(dirname($file));
-                file_put_contents($file, $bytes);
+                $this->put($file, $bytes);
             }
             $index["$area/$path"] = ['owner' => $userId, 'visibility' => $visibility];
             $this->saveIndex($index);
@@ -165,7 +174,7 @@ final class SkillStore
                 throw new SkillClashException("A skill already exists at '$to'.");
             }
             unset($index["$area/$from"]);
-            $this->assertLeafFree($index, $userId, $to, $area !== 'public');
+            $this->assertLeafFree($index, $userId, $to, true);
             $this->relocate($area, $from, $area, $to);
             $index["$area/$to"] = $entry;
             $this->saveIndex($index);
@@ -201,10 +210,10 @@ final class SkillStore
 
     private function visible(array $e, int $userId, bool $asRobot): bool
     {
-        if ((int) $e['owner'] === $userId || $e['visibility'] === 'public') {
-            return true;
+        if ($asRobot) {
+            return $e['visibility'] === 'public' || $this->edition === 'individual';
         }
-        return $asRobot && $this->edition === 'individual';
+        return (int) $e['owner'] === $userId || $e['visibility'] === 'public';
     }
 
     /** @return array{0:string,1:array}|null [area, entry] of the skill $userId sees at $path: own, then public, then (robot) any */
@@ -212,9 +221,12 @@ final class SkillStore
     {
         $index = $this->index();
         $candidates = ["users/$userId/$path", "public/$path"];
+        if ($asRobot && $this->edition !== 'individual') {
+            $candidates = ["public/$path"]; // a corporate robot sees public skills only
+        }
         if ($asRobot && $this->edition === 'individual') {
             foreach (array_keys($index) as $key) {
-                if (str_starts_with($key, 'users/') && str_ends_with($key, "/$path")) {
+                if (str_starts_with($key, 'users/') && $this->splitKey($key)[1] === $path) {
                     $candidates[] = $key;
                 }
             }
@@ -410,15 +422,27 @@ final class SkillStore
     private function saveIndex(array $index): void
     {
         $tmp = $this->root . '/index.json.' . bin2hex(random_bytes(4)) . '.tmp';
-        file_put_contents($tmp, json_encode($index, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
-        rename($tmp, $this->root . '/index.json');
+        $this->put($tmp, (string) json_encode($index, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
+        if (!@rename($tmp, $this->root . '/index.json')) {
+            @unlink($tmp);
+            throw new \RuntimeException('Cannot update the skills index.');
+        }
+    }
+
+    private function put(string $file, string $bytes): void
+    {
+        if (@file_put_contents($file, $bytes) === false) {
+            throw new \RuntimeException("Cannot write $file");
+        }
     }
 
     private function locked(callable $fn): mixed
     {
         $this->mkdir($this->root);
-        $h = fopen($this->root . '/.lock', 'c');
-        flock($h, LOCK_EX);
+        $h = @fopen($this->root . '/.lock', 'c');
+        if ($h === false || !flock($h, LOCK_EX)) {
+            throw new \RuntimeException('Cannot lock the skills folder.');
+        }
         try {
             return $fn();
         } finally {
