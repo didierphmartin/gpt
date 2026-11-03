@@ -15,7 +15,7 @@ SECRETS = "/run/gpt/secrets.env"
 TOKEN_WAIT = 120
 CONTROL_PORT = 9000
 GATEWAY_PORT = 8790
-TICK = 1.0
+TICK = 0.5
 
 
 def read_token(secrets=SECRETS, wait=TOKEN_WAIT) -> str:

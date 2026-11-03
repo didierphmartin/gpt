@@ -128,6 +128,7 @@ class GatewayTest(unittest.TestCase):
     def test_root_and_empty_segment_are_404(self):
         self.assertEqual(self.request("GET", "/")[0], 404)
         self.assertEqual(self.request("GET", "//mcp")[0], 404)
+        self.assertEqual(self.request("GET", "//ok_server/x")[0], 404)
 
     def test_server_installed_after_start_is_routable(self):
         self.registry.add("late", "late", None)

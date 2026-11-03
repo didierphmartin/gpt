@@ -1,8 +1,6 @@
 """Gateway: /<folder>/<rest> is forwarded to the hosted server listening on 127.0.0.1:<its port>."""
 import http.client
-import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
 
 HOP_BY_HOP = {"connection", "keep-alive", "te", "trailer", "transfer-encoding", "upgrade"}
 SKIP_RESPONSE = HOP_BY_HOP | {"server", "date"}   # the gateway sends its own
@@ -53,14 +51,16 @@ def make_server(registry, port=8790, host="0.0.0.0") -> ThreadingHTTPServer:
             return (self.rfile.read(n) if n > 0 else None), False
 
         def _forward(self):
-            parts = urlsplit(self.path)
-            folder, _, rest = parts.path.lstrip("/").partition("/")
-            entry = registry.get(folder) if folder and parts.path.startswith("/") else None
+            # the raw target: http.server collapses a leading "//" in self.path, and urlsplit reads "//host/x" as a network location
+            raw = self.raw_requestline.decode("latin-1").split()
+            path, _, query = (raw[1] if len(raw) > 1 else self.path).partition("?")
+            folder, _, rest = path[1:].partition("/")   # exactly one leading slash: "//x" has an empty first segment
+            entry = registry.get(folder) if folder and path.startswith("/") else None
             if not entry or not entry.get("port"):
                 self.close_connection = True   # the request body may be unread
                 return self._fail(404, "not found")
             body, chunked = self._body()
-            target = "/" + rest + ("?" + parts.query if parts.query else "")
+            target = "/" + rest + ("?" + query if query else "")
             headers = {k: v for k, v in self.headers.items() if not _hop(k) and k.lower() not in ("host", "content-length")}
             if isinstance(body, bytes):
                 headers["Content-Length"] = str(len(body))
@@ -101,10 +101,8 @@ def make_server(registry, port=8790, host="0.0.0.0") -> ThreadingHTTPServer:
                 if chunk_out:
                     self.wfile.write(b"0\r\n\r\n")
                     self.wfile.flush()
-            except (BrokenPipeError, ConnectionResetError, socket.timeout):
-                self.close_connection = True   # the client went away
             except (OSError, http.client.HTTPException):
-                self.close_connection = True   # the backend died mid-response
+                self.close_connection = True   # the client went away or the backend died mid-response
 
         def _route(self):
             try:
