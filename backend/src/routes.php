@@ -287,6 +287,16 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->post('/api/v1/mcp/servers/update', ['MCPServerController', 'update']);
         $r->post('/api/v1/mcp/servers/toggle', ['MCPServerController', 'toggle']);
         $r->delete('/api/v1/mcp/servers', ['MCPServerController', 'delete']);
+        // Docker app only: relay to the server supervisor (404 'no server host' elsewhere)
+        $r->get('/api/v1/mcp/host', ['McpHostController', 'info']);
+        $r->get('/api/v1/mcp/host/servers', ['McpHostController', 'list']);
+        $r->post('/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/install', ['McpHostController', 'install']);
+        $r->post('/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/restart', ['McpHostController', 'restart']);
+        $r->post('/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/enabled', ['McpHostController', 'enabled']);
+        $r->get('/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/settings', ['McpHostController', 'getSettings']);
+        $r->put('/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/settings', ['McpHostController', 'putSettings']);
+        $r->get('/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/source', ['McpHostController', 'source']);
+        $r->delete('/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}', ['McpHostController', 'delete']);
         $r->put('/api/v1/me/mcp-settings', ['MCPServerController', 'setMasterSetting']);
         $r->get('/api/v1/me/mcp-servers', ['MCPServerController', 'listMine']);
         $r->put('/api/v1/me/mcp-servers/{serverId:\d+}/override', ['MCPServerController', 'setMyOverride']);

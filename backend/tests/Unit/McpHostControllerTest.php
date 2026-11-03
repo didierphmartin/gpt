@@ -1,0 +1,116 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Quantis\AIPortfolioAssistant\Tests\Unit;
+
+use PDO;
+use PHPUnit\Framework\TestCase;
+use Quantis\AIPortfolioAssistant\Controllers\McpHostController;
+use Quantis\AIPortfolioAssistant\Services\McpHostClient;
+
+class McpHostControllerTest extends TestCase
+{
+    private PDO $db;
+    /** @var list<array{method:string,url:string,headers:array,body:?string}> */
+    private array $calls = [];
+    private array $reply = [];
+
+    protected function setUp(): void
+    {
+        $this->db = new PDO('sqlite::memory:');
+        $this->db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $this->db->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, role TEXT)');
+        $this->db->exec("INSERT INTO users VALUES (1, 'admin'), (3, 'user'), (4, 'user')");
+        $_ENV['MCPS_URL'] = 'http://mcps:8790';
+        $_ENV['MCPS_TOKEN'] = 'tok';
+        $_ENV['MCPS_PUBLIC_GATEWAY'] = 'http://localhost:8791';
+        $this->calls = [];
+        $this->reply = [200, json_encode([
+            ['folder' => 'a', 'installed_by' => 3, 'log' => 'x'],
+            ['folder' => 'b', 'installed_by' => 4, 'log' => 'y'],
+        ])];
+    }
+
+    protected function tearDown(): void
+    {
+        unset($_ENV['MCPS_URL'], $_ENV['MCPS_TOKEN'], $_ENV['MCPS_PUBLIC_GATEWAY']);
+    }
+
+    private function ctl(): McpHostController
+    {
+        $transport = function (string $method, string $url, array $headers, ?string $body): array {
+            $this->calls[] = compact('method', 'url', 'headers', 'body');
+            return $this->reply;
+        };
+        return new McpHostController($this->db, [], fn() => new McpHostClient('http://mcps:8790', 'tok', $transport));
+    }
+
+    private function req(int $uid, array $body = []): array
+    {
+        return ['user_id' => $uid, 'body' => $body];
+    }
+
+    public function testHostUnavailableWithoutMcpsUrl(): void
+    {
+        $_ENV['MCPS_URL'] = '';
+        $r = $this->ctl()->info($this->req(3));
+        $this->assertSame(['available' => false], $r['data']);
+        $r = $this->ctl()->install($this->req(3, ['files' => []]), 'a');
+        $this->assertSame(404, $r['status_code']);
+        $this->assertSame('no server host', $r['data']['error']);
+        $this->assertSame([], $this->calls);
+    }
+
+    public function testInstallSendsCallerAsOwner(): void
+    {
+        $this->reply = [200, '{"ok":true}'];
+        $r = $this->ctl()->install($this->req(3, ['files' => [], 'installed_by' => 999]), 'new');
+        $this->assertSame(200, $r['status_code']);
+        $this->assertSame('POST', $this->calls[0]['method']);
+        $this->assertStringEndsWith('/servers/new/install', $this->calls[0]['url']);
+        $this->assertSame(3, json_decode($this->calls[0]['body'], true)['installed_by']);
+    }
+
+    public function testOthersCannotTouchOrSeeLogs(): void
+    {
+        $c = $this->ctl();
+        $r = $c->restart($this->req(4), 'a');
+        $this->assertSame(403, $r['status_code']);
+        $this->assertCount(1, $this->calls); // only the list lookup
+        $list = $c->list($this->req(4))['data'];
+        $this->assertArrayNotHasKey('log', $list[0]);
+        $this->assertArrayHasKey('log', $list[1]);
+        $this->assertArrayHasKey('log', $c->list($this->req(1))['data'][0]);
+        $this->assertSame(200, $c->restart($this->req(1), 'a')['status_code']);
+        $this->assertSame(404, $c->restart($this->req(1), 'zzz')['status_code']);
+    }
+
+    public function testSupervisorDownIsA503WithText(): void
+    {
+        $this->reply = [0, ''];
+        $r = $this->ctl()->list($this->req(3));
+        $this->assertSame(503, $r['status_code']);
+        $this->assertSame('The server host is not reachable', $r['data']['error']);
+    }
+
+    public function testStatusPassesThrough(): void
+    {
+        $this->reply = [409, '{"error":"disabled"}'];
+        $r = $this->ctl()->restart($this->req(1), 'a');
+        $this->assertSame(409, $r['status_code']);
+        $this->assertSame('disabled', $r['data']['error']);
+    }
+
+    public function testBadFolderIs400(): void
+    {
+        $this->assertSame(400, $this->ctl()->install($this->req(3), '.hidden')['status_code']);
+    }
+
+    public function testTokenIsSentAndNeverReturned(): void
+    {
+        $r = $this->ctl()->list($this->req(1));
+        $this->assertContains('Authorization: Bearer tok', $this->calls[0]['headers']);
+        $this->assertStringNotContainsString('tok', json_encode($r));
+    }
+}
