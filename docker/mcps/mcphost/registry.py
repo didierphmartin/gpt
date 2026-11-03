@@ -14,19 +14,26 @@ class RegistryError(Exception):
     pass
 
 
+class NoFreePortError(RegistryError):
+    pass
+
+
 class Registry:
     def __init__(self, root: Path):
         self.root = Path(root)
         self.file = self.root / "servers.json"
         self._lock = threading.Lock()   # held across each load-modify-save
 
-    def load(self) -> dict:
-        """The registered servers; a corrupt file reads as none (logged) and stays as is until the next write."""
+    def load(self, strict: bool = False) -> dict:
+        """The registered servers; a corrupt file reads as none (logged) and stays as is until the next write.
+        strict: a corrupt file raises instead."""
         try:
             data = json.loads(self.file.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return {}
         except (ValueError, OSError) as e:   # JSONDecodeError and UnicodeDecodeError are ValueErrors
+            if strict:
+                raise
             print(f"[supervisor] cannot read {self.file}: {e}", file=sys.stderr)
             return {}
         if not isinstance(data, dict):
@@ -58,7 +65,7 @@ class Registry:
             used = {s.get("port") for s in data.values()}
             port = next((p for p in range(PORT_FIRST, PORT_LAST + 1) if p not in used), None)
             if port is None:
-                raise RegistryError("no free port")
+                raise NoFreePortError("no free port")
             data[folder] = {"name": name, "port": port, "enabled": True, "installed_by": installed_by}
             self._save(data)
             return data[folder]

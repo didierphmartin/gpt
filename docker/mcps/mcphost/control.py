@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 from . import envfile
 from .paths import is_safe_rel_path, is_safe_segment
 from .procs import LOG_NAME
+from .registry import NoFreePortError, RegistryError
 
 MAX_BODY = 50 * 1024 * 1024
 INSTALL_TIMEOUT = 900
@@ -91,6 +92,24 @@ class Control:
         self.root, self.registry, self.manager = Path(root), registry, manager
         self._lock = threading.Lock()
         self._installing = {}   # folder -> (display name, installed_by) while its install runs
+        self.remove_leftovers()
+
+    def remove_leftovers(self) -> None:
+        """Remove server-named folders servers.json does not list (an install cut short by a crash).
+        Nothing is removed while servers.json cannot be read: its folders would look unregistered."""
+        try:
+            known = self.registry.load(strict=True)
+        except (ValueError, OSError):
+            return
+        if not self.root.is_dir():
+            return
+        with self._lock:
+            installing = set(self._installing)
+        for p in self.root.iterdir():
+            name = p.name
+            if (p.is_dir() and not p.is_symlink() and FOLDER_RE.match(name) and is_safe_segment(name)
+                    and name not in known and name not in installing):
+                shutil.rmtree(p, ignore_errors=True)
 
     # ---- helpers ----
     def _folder(self, folder: str) -> Path:
@@ -176,6 +195,9 @@ class Control:
             entry = self.registry.add(folder, name, body.get("installed_by"))
         except ApiError:
             raise
+        except RegistryError as e:
+            shutil.rmtree(d, ignore_errors=True)
+            raise ApiError(507 if isinstance(e, NoFreePortError) else 409, str(e))
         except BaseException:
             shutil.rmtree(d, ignore_errors=True)
             raise

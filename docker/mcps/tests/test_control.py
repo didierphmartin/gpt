@@ -200,3 +200,46 @@ class ControlTest(unittest.TestCase):
         c.request("POST", "/servers/x/install", None, {"Authorization": "Bearer " + TOKEN, "Content-Length": str(51 * 1024 * 1024)})
         self.assertEqual(c.getresponse().status, 413)
         self.assertEqual(self.call("POST", "/servers/x/install", raw="not json").status, 400)
+
+    def test_no_free_port_is_507_and_leaves_nothing(self):
+        from unittest import mock
+        import mcphost.registry as registry
+        with mock.patch.object(registry, "PORT_LAST", registry.PORT_FIRST):
+            self.assertEqual(self.install("a").status, 201)
+            r = self.install("b")
+        self.assertEqual((r.status, r.json()), (507, {"error": "no free port"}))
+        self.assertFalse((self.root / "b").exists())
+        self.assertIsNone(self.registry.get("b"))
+
+
+class LeftoverTest(unittest.TestCase):
+    def setUp(self):
+        self._d = tempfile.TemporaryDirectory()
+        self.addCleanup(self._d.cleanup)
+        self.root = Path(self._d.name)
+        self.registry = Registry(self.root)
+
+    def control(self):
+        return control.Control(self.root, self.registry, Manager(self.root, self.registry))
+
+    def test_unregistered_folders_are_removed_at_start(self):
+        (self.root / "kept").mkdir()
+        self.registry.add("kept", "Kept", 1)
+        (self.root / "half_installed" / "sub").mkdir(parents=True)
+        (self.root / ".hidden").mkdir()
+        (self.root / "note.txt").write_text("x")
+        self.control()
+        self.assertTrue((self.root / "kept").is_dir())
+        self.assertFalse((self.root / "half_installed").exists())
+        self.assertTrue((self.root / ".hidden").is_dir())       # not a server folder name: left alone
+        self.assertTrue((self.root / "note.txt").exists())
+        self.assertTrue((self.root / "servers.json").exists())
+
+    def test_corrupt_registry_removes_nothing(self):
+        import contextlib
+        import io
+        (self.root / "srv").mkdir()
+        (self.root / "servers.json").write_text("{broken")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.control()
+        self.assertTrue((self.root / "srv").is_dir())
