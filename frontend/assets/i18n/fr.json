@@ -400,7 +400,29 @@
     "fsaPrompt": "L’autorisation du navigateur pour lire votre dossier synergyAI doit être accordée à nouveau (Chrome la réinitialise entre les sessions).",
     "fsaDenied": "L’accès au dossier a été refusé. Réinitialisez l’autorisation dans les paramètres du site de Chrome, puis accordez-la à nouveau.",
     "fsaUnsupported": "Ce navigateur n’expose pas la File System Access API. Utilisez Chrome, Edge ou Brave.",
-    "fsaGrantBtn": "Autoriser l’accès au dossier"
+    "fsaGrantBtn": "Autoriser l’accès au dossier",
+    "zip": {
+      "files": "{{count}} fichier(s)",
+      "bundled": "{{count}} fichier(s) de bibliothèques inclus",
+      "noBundled": "Aucune bibliothèque incluse",
+      "private": "Privé (moi seul)",
+      "public": "Public (tout le monde)",
+      "install": "Importer",
+      "identical": "« {{name}} » est déjà installé, rien à faire.",
+      "clash": "Une skill nommée {{name}} existe déjà. Renommez-la ou supprimez-la d'abord.",
+      "failed": "Échec de l'importation : {{message}}",
+      "nativeMissing": "Aucune wheel compatible pour {{library}} sur {{platform}} : la skill ne peut pas être exportée avec ses bibliothèques.",
+      "nativeUnavailable": "Le serveur n'a pas Python : les bibliothèques natives ne peuvent pas être incluses.",
+      "nativeFailed": "Échec du téléchargement des bibliothèques natives : {{message}}",
+      "downloadFailed": "Échec du téléchargement des bibliothèques : {{message}}",
+      "gatherFailed": "Impossible de rassembler les bibliothèques : {{message}}",
+      "progress": {
+        "native": "Collecte des bibliothèques natives...",
+        "pyodide-load": "Chargement de Pyodide (environ 20 secondes)...",
+        "pyodide-install": "Installation des bibliothèques à inclure...",
+        "pack": "Écriture du zip..."
+      }
+    }
   },
   "fileStorage": {
     "title": "Stockage de Fichiers",

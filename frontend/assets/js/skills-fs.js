@@ -921,6 +921,7 @@
         renameSkill,
         mode,
         edition,
+        api,                 // authenticated backend call, unwraps {success,data}
         readSkillFiles,
         writeSkillFile,
         writeSkillFiles,

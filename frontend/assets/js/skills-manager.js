@@ -900,8 +900,16 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         });
         modal.querySelector('#skills-import-zip-btn').addEventListener('click', async () => {
             showStatus('Choose a .zip / .skill file…', 'info');
-            const result = await window.skillsImport.importFromZipPicker();
-            handleResult(result);
+            const file = await window.skillsImport.pickZipFile();
+            if (!file) { showStatus('No file selected — try again.', 'info'); return; }
+            let read;
+            try {
+                read = await window.skillsImport.readZipFile(file);
+            } catch (e) {
+                showStatus(e.message || this.t('skills.zip.failed', { message: '' }), 'error');
+                return;
+            }
+            this.showZipReview(modal, read, showStatus, handleResult);
         });
 
         // GitHub URL flow: reveal a small inline form to capture the URL,
@@ -932,6 +940,49 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         modal.querySelector('#skills-import-github-install').addEventListener('click', installFromGithub);
         githubUrlInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') { e.preventDefault(); installFromGithub(); }
+        });
+    }
+
+    /**
+     * Review a zip before installing it: name, file count, bundled libraries, and (corporate edition only)
+     * the Public/Private choice, Private preselected. Replaces the picker's buttons until the user decides.
+     */
+    async showZipReview(modal, read, showStatus, handleResult) {
+        const esc = (v) => String(v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        const wheels = [...Object.keys(read.pyodideWheels || {}), ...Object.keys(read.nativeWheels || {})];
+        const deps = (read.manifest && read.manifest.dependencies) || [];
+        const corporate = await window.skillsFs.edition() === 'corporate';
+        const t = this.t;
+        const box = document.createElement('div');
+        box.id = 'skills-import-review';
+        box.className = 'mt-4 border border-gray-200 rounded-lg p-3 text-xs text-gray-700 space-y-2';
+        box.innerHTML = `
+            <div class="text-sm font-semibold text-gray-800">${esc(read.name)}</div>
+            <div>${esc(t('skills.zip.files', { count: Object.keys(read.files).length }))}</div>
+            <div>${wheels.length
+                ? esc(t('skills.zip.bundled', { count: wheels.length })) + (deps.length ? ' (' + esc(deps.join(', ')) + ')' : '')
+                : esc(t('skills.zip.noBundled'))}</div>
+            ${corporate ? `
+            <div class="flex gap-4 pt-1">
+                <label class="flex items-center gap-1"><input type="radio" name="skills-zip-visibility" value="private" checked> ${esc(t('skills.zip.private'))}</label>
+                <label class="flex items-center gap-1"><input type="radio" name="skills-zip-visibility" value="public"> ${esc(t('skills.zip.public'))}</label>
+            </div>` : ''}
+            <div class="flex justify-end gap-2 pt-1">
+                <button type="button" data-review="cancel" class="px-3 py-1 text-gray-600 hover:bg-gray-100 rounded">${esc(t('common.cancel'))}</button>
+                <button type="button" data-review="install" class="px-3 py-1 text-white bg-blue-600 hover:bg-blue-700 rounded">${esc(t('skills.zip.install'))}</button>
+            </div>`;
+        modal.querySelector('#skills-import-review')?.remove();
+        modal.querySelector('#skills-import-status').before(box);
+        box.querySelector('[data-review="cancel"]').addEventListener('click', () => box.remove());
+        box.querySelector('[data-review="install"]').addEventListener('click', async () => {
+            const visibility = box.querySelector('input[name="skills-zip-visibility"]:checked')?.value || 'private';
+            box.remove();
+            const result = await window.skillsImport.installRead(read, { visibility });
+            if (result.ok && result.status === 'identical') {
+                showStatus(t('skills.zip.identical', { name: read.name }), 'ok');
+                return;
+            }
+            handleResult(result);
         });
     }
 

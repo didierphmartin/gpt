@@ -4366,7 +4366,7 @@
     <!-- Local File System bootstrap — exposes window.localFs for skills,
          workflows, artifacts. Must load before settings-panel uses it. -->
     <script src="assets/js/local-fs.js?v=20261029-folder-path"></script>
-    <script src="assets/js/settings-panel.js?v=20261103-mcp-host-owner"></script>
+    <script src="assets/js/settings-panel.js?v=20261103-zip-progress"></script>
     <script src="assets/js/agent-teams-panel.js?v=20261005-flush-on-clear"></script>
     <!-- Drawflow workflow editor -->
     <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.js"></script>
@@ -4376,10 +4376,11 @@
     <script src="assets/js/workflow-realtime-runner.js"></script>
     <script src="assets/js/workflow-package.js?v=20261103-host-gateway"></script>
     <script src="assets/js/skill-zip.js?v=1"></script>
+    <script src="assets/js/skill-wheels.js?v=1"></script>
     <!-- Folder-backed Skills service. Reads <root>/skills/*/SKILL.md.
          Must load after local-fs.js (uses window.localFs) and before
          skills-manager.js (which calls window.skillsFs). -->
-    <script src="assets/js/skills-fs.js?v=20261103-skillsfs-fix1"></script>
+    <script src="assets/js/skills-fs.js?v=20261103-api-exposed"></script>
     <!-- Pyodide skill-script runner. Lazy-loads Pyodide on first call;
          depends on window.localFs (skill folder resolution) and
          window.skillsFs (frontmatter parsing for declared deps). -->
@@ -4395,8 +4396,8 @@
     <!-- fflate: tiny WebAssembly-free zip lib for unpacking .skill / .zip
          imports. Loaded from jsDelivr; ~8KB gzipped. -->
     <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
-    <script src="assets/js/skills-import.js?v=20261103-skillsfs-callers"></script>
-    <script src="assets/js/skills-manager.js?v=20260818-fsa-notice"></script>
+    <script src="assets/js/skills-import.js?v=20261103-zip-export"></script>
+    <script src="assets/js/skills-manager.js?v=20261103-zip-review"></script>
     <script src="assets/js/skillopt-panel.js?v=20261103-skillsfs-fix1"></script>
     <script src="assets/js/heal-panel.js?v=20260929-catalog-ids"></script>
     <script src="assets/js/genesis-panel.js?v=20261103-skillsfs-callers"></script>

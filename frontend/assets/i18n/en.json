@@ -400,7 +400,29 @@
     "fsaPrompt": "Browser permission to read your synergyAI folder needs to be re-granted (Chrome resets this between sessions).",
     "fsaDenied": "Folder access was denied. Reset the permission in Chrome’s site settings, then grant again.",
     "fsaUnsupported": "This browser does not expose the File System Access API. Use Chrome, Edge, or Brave.",
-    "fsaGrantBtn": "Grant folder access"
+    "fsaGrantBtn": "Grant folder access",
+    "zip": {
+      "files": "{{count}} file(s)",
+      "bundled": "{{count}} bundled library file(s)",
+      "noBundled": "No bundled libraries",
+      "private": "Private (only me)",
+      "public": "Public (everyone)",
+      "install": "Import",
+      "identical": "\"{{name}}\" is already installed, nothing to do.",
+      "clash": "A skill named {{name}} already exists. Rename or delete it first.",
+      "failed": "Import failed: {{message}}",
+      "nativeMissing": "No compatible wheel for {{library}} on {{platform}}, so the skill cannot be exported with its libraries.",
+      "nativeUnavailable": "The server has no Python, so native libraries cannot be bundled.",
+      "nativeFailed": "Downloading native libraries failed: {{message}}",
+      "downloadFailed": "Downloading libraries failed: {{message}}",
+      "gatherFailed": "Could not gather the libraries: {{message}}",
+      "progress": {
+        "native": "Collecting native libraries...",
+        "pyodide-load": "Loading Pyodide (this can take about 20 seconds)...",
+        "pyodide-install": "Installing libraries to bundle them...",
+        "pack": "Writing the zip..."
+      }
+    }
   },
   "fileStorage": {
     "title": "File Storage",

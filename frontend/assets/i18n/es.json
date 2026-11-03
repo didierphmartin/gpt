@@ -400,7 +400,29 @@
     "fsaPrompt": "Hay que volver a conceder el permiso del navegador para leer tu carpeta synergyAI (Chrome lo restablece entre sesiones).",
     "fsaDenied": "Se denegó el acceso a la carpeta. Restablece el permiso en la configuración del sitio en Chrome y concédelo de nuevo.",
     "fsaUnsupported": "Este navegador no expone la File System Access API. Usa Chrome, Edge o Brave.",
-    "fsaGrantBtn": "Conceder acceso a la carpeta"
+    "fsaGrantBtn": "Conceder acceso a la carpeta",
+    "zip": {
+      "files": "{{count}} archivo(s)",
+      "bundled": "{{count}} archivo(s) de bibliotecas incluidos",
+      "noBundled": "Sin bibliotecas incluidas",
+      "private": "Privado (solo yo)",
+      "public": "Público (todos)",
+      "install": "Importar",
+      "identical": "\"{{name}}\" ya está instalado, no hay nada que hacer.",
+      "clash": "Ya existe una skill llamada {{name}}. Cámbiale el nombre o elimínala primero.",
+      "failed": "La importación falló: {{message}}",
+      "nativeMissing": "No hay una wheel compatible para {{library}} en {{platform}}, así que la skill no se puede exportar con sus bibliotecas.",
+      "nativeUnavailable": "El servidor no tiene Python, por lo que no se pueden incluir las bibliotecas nativas.",
+      "nativeFailed": "Falló la descarga de las bibliotecas nativas: {{message}}",
+      "downloadFailed": "Falló la descarga de las bibliotecas: {{message}}",
+      "gatherFailed": "No se pudieron reunir las bibliotecas: {{message}}",
+      "progress": {
+        "native": "Reuniendo bibliotecas nativas...",
+        "pyodide-load": "Cargando Pyodide (puede tardar unos 20 segundos)...",
+        "pyodide-install": "Instalando las bibliotecas para incluirlas...",
+        "pack": "Escribiendo el zip..."
+      }
+    }
   },
   "fileStorage": {
     "title": "Almacenamiento de Archivos",
