@@ -148,7 +148,7 @@ final class LangGraphPackage
      * Every file of every used skill folder (skipping __pycache__, .DS_Store, *.pyc, .env*, dot-directories), sorted,
      * plus the skill's native wheels (.wheels/native/: the program installs its libraries from there, offline);
      * never the browser's (.wheels/pyodide/). Each used skill brings the skills it requires (requiredSkills(),
-     * transitively): they are copied the same way, after the bound ones.
+     * transitively): they are copied the same way, after the bound ones, at skills/<leaf>/ (a grouped one too).
      *
      * $skillsRoot: the folder holding the skills, or (the Docker app's skill store) a resolver
      * (string $dir): ?string giving each skill's own folder, null when the owner cannot see it.
@@ -159,15 +159,17 @@ final class LangGraphPackage
     {
         $out = [];
         $root = is_string($skillsRoot) ? realpath($skillsRoot) : null;
-        $queue = array_map(fn(string $d) => [$d, null], self::skillDirs($facts));
+        // [skill, who needs it, where it goes]: a bound skill at its own path; a required one at skills/<leaf>/, where
+        // the scripts that need it look (SKILLS_ROOT/<leaf>/...).
+        $queue = array_map(fn(string $d) => [$d, null, $d], self::skillDirs($facts));
         $done = [];
         $installed = null;   // the skill paths a folder root holds (read once, when a skill needs it)
         while ($queue !== []) {
-            [$d, $by] = array_shift($queue);
-            if (isset($done[$d])) {
+            [$d, $by, $as] = array_shift($queue);
+            if (isset($done[$as])) {
                 continue;
             }
-            $done[$d] = true;
+            $done[$as] = true;
             $base = self::skillBase($d, $skillsRoot, $root);
             if ($base === false) {
                 throw new RuntimeException($by === null
@@ -187,7 +189,7 @@ final class LangGraphPackage
             sort($found, SORT_STRING);
             foreach ($found as $rel) {
                 $bytes = (string) file_get_contents("{$base}/{$rel}");
-                $out[] = ['dir' => $d, 'rel' => $rel, 'bytes' => $bytes, 'entry' => self::entry("skills/{$d}/{$rel}", $bytes)];
+                $out[] = ['dir' => $as, 'rel' => $rel, 'bytes' => $bytes, 'entry' => self::entry("skills/{$as}/{$rel}", $bytes)];
             }
             $names = $root !== null
                 ? ($installed ??= ($root === false ? [] : self::installedSkills($root)))
@@ -197,7 +199,7 @@ final class LangGraphPackage
                 throw new RuntimeException("Skill \"{$d}\" needs skill \"{$m}\", which is not available on this server, so it can't be packaged.");
             }
             foreach ($req['requires'] as $q) {
-                $queue[] = [$q, $d];
+                $queue[] = [$q, $d, basename($q)];
             }
         }
         return $out;
@@ -247,18 +249,19 @@ final class LangGraphPackage
     }
 
     /**
-     * The store has no listing here, only the resolver: every name the skill could mean (its requires-skills,
-     * each quoted segment of its scripts and each "group/name" pair) that resolves to a skill the owner sees.
+     * The store has no listing here, only the resolver: every name the skill could mean (its requires-skills, else each
+     * exact quoted literal and each /segment/ of its scripts) that resolves to a skill the owner sees (the resolver
+     * also finds a grouped skill by its leaf).
      */
     private static function probedSkills(string $self, array $files, \Closure $resolve): array
     {
         $cands = self::declaredSkills($files['SKILL.md'] ?? '');
-        foreach (self::quotedLiterals($files) as $lit) {
-            $segs = array_values(array_filter(explode('/', $lit), fn($x) => $x !== ''));
-            foreach ($segs as $i => $seg) {
-                $cands[] = $seg;
-                if (isset($segs[$i + 1])) {
-                    $cands[] = $seg . '/' . $segs[$i + 1];
+        if ($cands === []) {
+            foreach (self::quotedLiterals($files) as $lit) {
+                $cands[] = $lit;                                  // an exact literal
+                $segs = explode('/', $lit);
+                for ($i = 1; $i < count($segs) - 1; $i++) {       // a /segment/ with a slash on both sides
+                    $cands[] = $segs[$i];
                 }
             }
         }
@@ -328,8 +331,9 @@ final class LangGraphPackage
 
     /**
      * The skills skill $path requires (one level; twin of SkillRequires.direct in frontend/assets/js/skill-requires.js):
-     * its `requires-skills:` ∪ every OTHER installed skill whose leaf folder name is a quoted string of its
-     * scripts/** text files or a '/'-segment of one. Unknown declared names are missing.
+     * its `requires-skills:` when declared (replaces scanning), else every OTHER installed skill whose leaf folder name
+     * is an exact quoted string of its scripts/** text files or a /leaf/ segment (slash on both sides) inside one.
+     * Unknown declared names are missing.
      *
      * @param array<string,string> $files rel => bytes of that skill
      * @param list<string> $installed skill paths
@@ -340,25 +344,30 @@ final class LangGraphPackage
         $list = array_values(array_filter($installed, fn(string $p) => $p !== $path));
         $out = [];
         $missing = [];
-        foreach (self::declaredSkills((string) ($files['SKILL.md'] ?? '')) as $name) {
-            $hit = self::resolveSkillName($name, $list, $path);
-            if ($hit === null) {
-                $missing[] = $name;
-            } else {
-                $out[$hit] = true;
-            }
-        }
-        $segments = [];
-        foreach (self::quotedLiterals($files) as $lit) {
-            foreach (explode('/', $lit) as $seg) {
-                if ($seg !== '') {
-                    $segments[$seg] = true;
+        $declared = self::declaredSkills((string) ($files['SKILL.md'] ?? ''));
+        if ($declared !== []) {   // a declared list replaces scanning
+            foreach ($declared as $name) {
+                $hit = self::resolveSkillName($name, $list, $path);
+                if ($hit === null) {
+                    $missing[] = $name;
+                } else {
+                    $out[$hit] = true;
                 }
             }
-        }
-        foreach (array_unique(array_map('basename', $list)) as $leaf) {
-            if (isset($segments[$leaf])) {
-                $out[self::resolveSkillName($leaf, $list, $path)] = true;
+        } else {
+            $lits = self::quotedLiterals($files);
+            $exact = array_flip($lits);
+            foreach (array_unique(array_map('basename', $list)) as $leaf) {
+                $hit = isset($exact[$leaf]);
+                foreach ($hit ? [] : $lits as $l) {
+                    if (str_contains($l, "/$leaf/")) {
+                        $hit = true;
+                        break;
+                    }
+                }
+                if ($hit) {
+                    $out[self::resolveSkillName($leaf, $list, $path)] = true;
+                }
             }
         }
         $req = array_map('strval', array_keys($out));

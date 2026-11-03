@@ -354,10 +354,10 @@
             // The running skill and the skills it requires, as the caller sees them (own + public; the robot's view
             // on a robot run). A person's run also gets a copy of all their own skills: what the script changes in
             // those, or new skills it writes there, is saved back. A robot run gets none of them and is read-only.
-            const required = await skillsRootOf(dirName, asRobot);
+            const required = (await skillsRootOf(dirName, asRobot)).files;
             const files = {};
             if (!asRobot) Object.assign(files, await window.skillsFs.skillsRootFiles());
-            const foreign = new Set();
+            const foreign = new Set();   // copies that are not my skill at that path: never saved back
             for (const [p, fl] of Object.entries(required)) {
                 if (Object.keys(files).some((k) => k.startsWith(p + '/'))) continue;   // one of mine: already there
                 foreign.add(p);
@@ -384,12 +384,24 @@
     }
 
     /**
-     * { path: { rel: bytes } } of the skill `dirName` and every skill it requires (SkillRequires closure over the
-     * skills the caller may see; the robot's on a robot run). A required skill that cannot be read is left out:
-     * the script then reports what it could not find.
+     * The skill `dirName` and every skill it requires (SkillRequires closure over the skills the caller may see; the
+     * robot's on a robot run), as { files: { place: { rel: bytes } }, required: [path] }: the skill at its own path,
+     * each required one at its LEAF (where SKILLS_ROOT/<leaf>/... looks, a grouped one too). A required skill that
+     * cannot be read is left out: the script then reports what it could not find.
      */
     async function skillsRootOf(dirName, asRobot) {
-        if (!dirName) return {};
+        const placed = await requiredClosure(dirName, asRobot);
+        const files = {};
+        if (placed.own) files[dirName] = placed.own;
+        for (const p of placed.required) {
+            const leaf = p.split('/').pop();
+            if (!(leaf in files)) files[leaf] = placed.cache.get(p);
+        }
+        return { files, required: placed.required };
+    }
+
+    async function requiredClosure(dirName, asRobot) {
+        if (!dirName) return { own: null, required: [], cache: new Map() };
         const cache = new Map();
         const read = async (p) => {
             if (!cache.has(p)) {
@@ -399,15 +411,23 @@
             }
             return cache.get(p);
         };
-        const out = {};
         const own = await read(dirName);
-        if (!own) return out;
-        out[dirName] = own;
-        if (!window.SkillRequires) return out;
+        if (!own || !window.SkillRequires) return { own, required: [], cache };
         const installed = (await window.skillsFs.listSkills({ asRobot })).map((x) => x.dirName || x.path);
         const r = await window.SkillRequires.closure(dirName, installed, read);
-        for (const p of r.requires) out[p] = cache.get(p);
-        return out;
+        return { own, required: r.requires.filter((p) => cache.get(p)), cache };
+    }
+
+    /** The Python dependencies and bundled Pyodide wheels of the required skills (their scripts are imported too). */
+    async function requiredDeps(required, asRobot) {
+        const deps = [];
+        const wheels = {};
+        for (const p of required) {
+            const d = await getSkillDependencies(p, { asRobot });
+            deps.push(...d);
+            if (d.length) Object.assign(wheels, await getSkillWheels(p, { asRobot }));
+        }
+        return { deps, wheels };
     }
 
     /** A read-only /skills-root (robot run): did the script change it? Then the run fails and nothing is kept. */
@@ -1278,12 +1298,17 @@ _runner_stderr = _stderr_buf.getvalue()
         const rootThisRun = !store || scriptNamesSkillsRoot(`${mount}/${script}`);
         if (rootThisRun) await ensureSkillsRootMounted({ dirName, asRobot: store && asRobot });
 
-        const deps = Array.isArray(dependencies)
+        const ownDeps = Array.isArray(dependencies)
             ? dependencies
             : await getSkillDependencies(dirName, { asRobot });
+        // A script that loads other skills (it names /skills-root) imports their code too: their libraries are installed as well.
+        const req = scriptNamesSkillsRoot(`${mount}/${script}`)
+            ? await requiredDeps((await requiredClosure(dirName, store && asRobot)).required, store && asRobot)
+            : { deps: [], wheels: {} };
+        const deps = [...new Set([...ownDeps, ...req.deps])];
         // Bundled wheels are read only while something is still to install.
         const needsInstall = !!planDeps(deps, installedDeps, []);
-        await ensureDeps(deps, { wheels: needsInstall ? await getSkillWheels(dirName, { asRobot }) : null });
+        await ensureDeps(deps, { wheels: needsInstall ? { ...req.wheels, ...(await getSkillWheels(dirName, { asRobot })) } : null });
 
         // pyodide.toPy() rejects undefined/null/non-cloneable values with
         // "Unsupported data type". Validate argv before handing it off so we
@@ -1628,23 +1653,32 @@ _inline_stderr_str = _inline_stderr.getvalue()
     async function poolSkillPayload(rawDirName, { asRobot = false, script = '' } = {}) {
         if (!window.skillsFs) throw new Error('skillsFs unavailable for pool path');
         const dirName = await resolveSkillDir(rawDirName, { asRobot });
-        // A script that names /skills-root gets the skill and the skills it requires there, read-only
-        // (skillsRoot: { '<path>/<rel>': bytes }); a worker cannot save anything written there.
+        // A script that names /skills-root gets the skill and the skills it requires there (each required one at its
+        // leaf), read-only, in BOTH modes: a pool worker never has the folder-mode native mount of the whole skills
+        // folder, and cannot save anything written there (skillsRoot: { '<path>/<rel>': bytes }). Their libraries are
+        // added to the payload's dependencies and wheels.
+        let reqDeps = { deps: [], wheels: {} };
         const rootFor = async (scriptText) => {
             if (!script || !scriptText || !scriptText.includes('skills-root')) return undefined;
+            const placed = await skillsRootOf(dirName, asRobot);
+            reqDeps = await requiredDeps(placed.required, asRobot);
             const flat = {};
-            for (const [p, fl] of Object.entries(await skillsRootOf(dirName, asRobot))) {
+            for (const [p, fl] of Object.entries(placed.files)) {
                 for (const [rel, b] of Object.entries(fl)) flat[`${p}/${rel}`] = b;
             }
             return flat;
         };
+        const withReq = (deps, wheels) => ({
+            dependencies: [...new Set([...deps, ...reqDeps.deps])],
+            wheels: reqDeps.deps.length ? { ...reqDeps.wheels, ...wheels } : wheels,
+        });
         const textOf = (b) => (b ? new TextDecoder().decode(b) : '');
         if (await window.skillsFs.mode() === 'volume') {
             const skillFiles = await storeSkillFiles(dirName, asRobot);
             const dependencies = await getSkillDependencies(dirName, { asRobot });
             const wheels = dependencies.length ? await getSkillWheels(dirName, { asRobot }) : {};
             const skillsRoot = await rootFor(textOf(skillFiles[script]));
-            return { dirName, dependencies, wheels, skillFiles, ...(skillsRoot ? { skillsRoot } : {}) };
+            return { dirName, ...withReq(dependencies, wheels), skillFiles, ...(skillsRoot ? { skillsRoot } : {}) };
         }
         const dependencies = await getSkillDependencies(dirName);
         const wheels = dependencies.length ? await getSkillWheels(dirName) : {};
@@ -1653,7 +1687,7 @@ _inline_stderr_str = _inline_stderr.getvalue()
         if (!skillHandle) { poolHandles.delete(dirName); throw new Error('could not resolve the skill handle for pool path'); }
         await ensurePermission(skillHandle, `skill folder "${dirName}"`);
         const skillsRoot = script ? await rootFor(await window.skillsFs.getSkillFile(dirName, script)) : undefined;
-        return { dirName, dependencies, wheels, skillHandle, ...(skillsRoot ? { skillsRoot } : {}) };
+        return { dirName, ...withReq(dependencies, wheels), skillHandle, ...(skillsRoot ? { skillsRoot } : {}) };
     }
 
     window.pyodideRunner = {

@@ -300,7 +300,7 @@ test('store importSkill: required skills install first with the same visibility;
   assert.deepEqual(JSON.parse(JSON.stringify(r.requires)), [{ dir: 'pb', name: 'pb', status: 'identical' }, { dir: 'flow', name: 'flow', status: 'installed' }]);
   assert.deepEqual(real, [['flow', 'public'], ['auto', 'public']]);
   const plan = await fs.importPlan(sk('auto', 'A', [sk('pb', 'P')]));
-  assert.deepEqual(JSON.parse(JSON.stringify(plan)), [{ dir: 'pb', name: 'pb', status: 'identical' }, { dir: 'auto', name: 'auto', status: 'new' }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(plan)), [{ dir: 'pb', name: 'pb', status: 'identical', madePublic: [] }, { dir: 'auto', name: 'auto', status: 'new', madePublic: [] }]);
 });
 
 test('folder importSkill with required skills: a clash in a required skill writes nothing; identical ones are kept', async () => {
@@ -378,6 +378,50 @@ test('store setVisibility: dryRun asks which required skills go public along', a
   const { fs } = load({ routes: { ...volume, 'PUT /skills/visibility': (b) => { sent.push(b); return [200, { made_public: ['flow'] }]; } } });
   assert.deepEqual([...(await fs.setVisibility('auto', 'public', { dryRun: true })).made_public], ['flow']);
   assert.equal(sent[0].dry_run, true);
-  await fs.setVisibility('auto', 'public');
+  await fs.setVisibility('auto', 'public', { expectPublic: ['flow'] });
   assert.equal(sent[1].dry_run, undefined);
+  assert.deepEqual(sent[1].expect_public, ['flow']);   // the server refuses when the closure is no longer what was confirmed
+});
+
+test('store public import: the plan says which of my private skills go public along; the confirmed list goes with each import', async () => {
+  const posts = [];
+  const { fs } = load({ routes: { ...volume, 'POST /skills/import': (b) => {
+    posts.push(b);
+    if (b.dry_run) return [200, b.path === 'auto' ? { status: 'new', made_public: ['flow'] } : { status: 'identical' }];
+    return [200, { status: 'installed', made_public: b.expect_public || [] }];
+  } } });
+  const read = sk('auto', 'A', [sk('flow', 'F')]);   // flow: already my identical PRIVATE skill
+  const plan = await fs.importPlan(read, { visibility: 'public' });
+  assert.deepEqual(JSON.parse(JSON.stringify(plan.map((x) => [x.dir, x.status, x.madePublic]))), [['flow', 'identical', []], ['auto', 'new', ['flow']]]);
+  posts.length = 0;
+  await fs.importSkill(read, { visibility: 'public', confirmed: { auto: ['flow'], flow: [] } });
+  const real = posts.filter((p) => !p.dry_run);
+  assert.deepEqual(real.map((p) => [p.path, p.visibility, p.expect_public]), [['auto', 'public', ['flow']]]);   // flow identical: not re-sent
+});
+
+test('store group delete: every skill is checked (dry run, with the rest of the group) before any is deleted', async () => {
+  const calls = [];
+  const { fs } = load({ routes: { ...volume,
+    'GET /skills': () => [200, [{ path: 'g/a', mine: true }, { path: 'g/b', mine: true }, { path: 'c', mine: true }]],
+    'DELETE /skills': (b, p) => { calls.push(p); return p.includes('g%2Fb') && p.includes('dry_run=1') ? [409, { data: { reason: 'delete', skill: 'g/b', required_by: ['c'] } }] : [200, {}]; },
+  } });
+  const r = await fs.deleteFolder('g');
+  assert.equal(r.ok, false);
+  assert.match(r.error, /^"b" can't be deleted: c need/);
+  assert.ok(calls.every((c) => c.includes('dry_run=1')), 'nothing deleted');
+  assert.ok(calls[0].includes('with=g%2Fb'));
+});
+
+test('folder group delete: a skill outside the group that needs one inside refuses it; needs inside the group do not', async () => {
+  const tree = { g: { flow: { 'SKILL.md': 'x', scripts: { 'c.py': '1' } }, auto: { 'SKILL.md': 'x', scripts: { 'a.py': "'flow'" } } } };
+  const { localFs, removed } = folderRoot(tree);
+  const { fs } = load({ localFs });
+  assert.equal((await fs.deleteFolder('g')).ok, true);
+  assert.deepEqual(removed, ['g']);
+  const tree2 = { g: { flow: { 'SKILL.md': 'x' } }, out: { 'SKILL.md': 'x', scripts: { 'a.py': "'flow'" } } };
+  const f2 = folderRoot(tree2);
+  const r = await load({ localFs: f2.localFs }).fs.deleteFolder('g');
+  assert.equal(r.ok, false);
+  assert.deepEqual([...r.requiredBy], ['out']);
+  assert.deepEqual(f2.removed, []);
 });

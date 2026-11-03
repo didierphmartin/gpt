@@ -709,12 +709,21 @@
         const safe = sanitizeFolderName(name);
         return safe ? { ok: true, name: safe } : { ok: false, error: 'Please enter a valid folder name.' };
     }
+    /** A group goes with all its skills: none may be needed by a skill outside it (checked for every one first). */
     async function deleteFolder(name) {
-        if (await mode() !== 'volume') return folder_deleteFolder(name);
-        try {
-            for (const s of await listSkills()) {
-                if (s.group === name && s.mine) await api('DELETE', `/skills?path=${enqPath(s.path)}`);
+        if (await mode() !== 'volume') {
+            const members = (await folderListSkills()).filter((x) => x.group === name).map((x) => x.dirName);
+            for (const p of members) {
+                const deps = (await folderDependents(p)).filter((d) => !members.includes(d));
+                if (deps.length) return { ok: false, error: requiredByMessage({ reason: 'delete', skill: p, required_by: deps }), requiredBy: deps };
             }
+            return folder_deleteFolder(name);
+        }
+        try {
+            const mine = (await listSkills()).filter((x) => x.group === name && x.mine).map((x) => x.path);
+            const del = (p, dry) => api('DELETE', `/skills?path=${enqPath(p)}&with=${enqPath(mine.filter((x) => x !== p).join(','))}${dry ? '&dry_run=1' : ''}`);
+            for (const p of mine) await del(p, true);    // every skill checked before any is deleted
+            for (const p of mine) await del(p, false);
             return { ok: true };
         } catch (e) { return failure(e); }
     }
@@ -873,41 +882,45 @@
     const clashError = (read) => Object.assign(new Error(`A different skill named "${read.name || read.dir}" already exists.`), { code: 'clash', skill: read.name || read.dir });
     const sameBytes = (a, b) => a && a.length === b.length && a.every((v, i) => v === b[i]);
 
-    /** What installing this one skill would do, writing nothing: 'new' | 'identical' | 'clash'. */
-    async function skillStatus(read, { visibility = 'private' } = {}) {
+    /**
+     * What installing this one skill would do, writing nothing: 'new' | 'identical' | 'clash', plus (store, public)
+     * madePublic: my own private skills it requires that would go public with it.
+     */
+    async function skillPlan(read, { visibility = 'private' } = {}) {
         const all = window.SkillZip.toStoreFiles(read);
         if (await mode() === 'volume') {
             const files = {};
             for (const [rel, b] of Object.entries(all)) if (!rel.startsWith('.wheels/')) files[rel] = toB64(asBytes(b));
             try {
                 const r = await api('POST', '/skills/import', { path: read.dir, visibility, files, dry_run: true });
-                return r && r.status === 'identical' ? 'identical' : 'new';
+                return { status: r && r.status === 'identical' ? 'identical' : 'new', madePublic: (r && r.made_public) || [] };
             } catch (e) {
-                if (e.status === 409) return 'clash';
+                if (e.status === 409 && e.data?.data?.reason) throw e;   // a required skill it cannot take public along
+                if (e.status === 409) return { status: 'clash', madePublic: [] };
                 throw e;
             }
         }
         const existing = await readSkillFiles(read.dir);
-        if (!Object.keys(existing).length) return 'new';
+        if (!Object.keys(existing).length) return { status: 'new', madePublic: [] };
         const incoming = Object.keys(all).filter((r) => !r.startsWith('.wheels/'));
         const same = incoming.length === Object.keys(existing).length && incoming.every((r) => sameBytes(existing[r], asBytes(all[r])));
-        return same ? 'identical' : 'clash';
+        return { status: same ? 'identical' : 'clash', madePublic: [] };
     }
 
     /** Install one skill (no required skills). Throws .code 'clash' when a different skill is there. */
-    async function importOne(read, { visibility = 'private' } = {}) {
+    async function importOne(read, { visibility = 'private', expectPublic = null } = {}) {
         const all = window.SkillZip.toStoreFiles(read);
         if (await mode() === 'volume') {
             const files = {};
             for (const [rel, b] of Object.entries(all)) files[rel] = toB64(asBytes(b));
             try {
-                return await api('POST', '/skills/import', { path: read.dir, visibility, files });
+                return await api('POST', '/skills/import', { path: read.dir, visibility, files, ...(expectPublic ? { expect_public: expectPublic } : {}) });
             } catch (e) {
                 if (e.status === 409) throw clashError(read);
                 throw e;
             }
         }
-        const st = await skillStatus(read);
+        const st = (await skillPlan(read)).status;
         if (st === 'identical') return { status: 'identical' };
         if (st === 'clash') throw clashError(read);
         for (const [rel, b] of Object.entries(all)) await writeLocalFile(`${read.dir}/${rel}`, b);
@@ -916,11 +929,15 @@
 
     /**
      * What importing a read (and the skills it requires, read.requires) would do, writing nothing:
-     * [{ dir, name, status: 'new'|'identical'|'clash' }], required skills first, the read itself last.
+     * [{ dir, name, status: 'new'|'identical'|'clash', madePublic: [path] }], required skills first, the read itself last.
+     * madePublic (store, visibility public): my own private skills that go public with that one.
      */
     async function importPlan(read, opts = {}) {
         const out = [];
-        for (const r of [...(read.requires || []), read]) out.push({ dir: r.dir, name: r.name || r.dir.split('/').pop(), status: await skillStatus(r, opts) });
+        for (const r of [...(read.requires || []), read]) {
+            const p = await skillPlan(r, opts);
+            out.push({ dir: r.dir, name: r.name || r.dir.split('/').pop(), status: p.status, madePublic: p.madePublic });
+        }
         return out;
     }
 
@@ -928,20 +945,23 @@
      * Install a SkillZip.read() result and the skills it requires (read.requires), all with the same visibility.
      * Every skill is checked before anything is written: a clash in any of them throws (.code 'clash', .skill)
      * and writes nothing. Required skills install first; an identical one is already installed.
+     * A public import also takes my own private required skills public (the server, all or nothing); opts.confirmed
+     * ({ dir: [path] }, from importPlan's madePublic the user confirmed) is checked by the server for each skill.
      * Returns { status, requires: [{ dir, name, status }] } ('installed' | 'identical').
      */
     async function importSkill(read, opts = {}) {
         const reqs = read.requires || [];
-        if (!reqs.length) return importOne(read, opts);
+        const one = (r) => importOne(r, { ...opts, expectPublic: opts.confirmed ? (opts.confirmed[r.dir] || []) : null });
+        if (!reqs.length) return one(read);
         const plan = await importPlan(read, opts);
         const clash = plan.find((x) => x.status === 'clash');
         if (clash) throw clashError(clash);
         const requires = [];
         for (let i = 0; i < reqs.length; i++) {
-            const res = plan[i].status === 'identical' ? { status: 'identical' } : await importOne(reqs[i], opts);
+            const res = plan[i].status === 'identical' ? { status: 'identical' } : await one(reqs[i]);
             requires.push({ dir: reqs[i].dir, name: plan[i].name, status: (res && res.status) || 'installed' });
         }
-        const main = await importOne(read, opts);
+        const main = await one(read);
         return { ...main, requires };
     }
 
@@ -949,9 +969,10 @@
      * Public takes along the skills it requires that are still my own private ones (the server does it all or
      * nothing); dryRun: only ask which (made_public). Returns { made_public: [path] }.
      */
-    async function setVisibility(path, visibility, { dryRun = false } = {}) {
+    async function setVisibility(path, visibility, { dryRun = false, expectPublic = null } = {}) {
         if (await mode() !== 'volume') return { ok: true, made_public: [] };   // a folder is always private
-        const r = await api('PUT', '/skills/visibility', { path, visibility, ...(dryRun ? { dry_run: true } : {}) });
+        // expectPublic: what the user confirmed goes along; the server refuses (reason 'changed') when that is no longer so.
+        const r = await api('PUT', '/skills/visibility', { path, visibility, ...(dryRun ? { dry_run: true } : {}), ...(expectPublic ? { expect_public: expectPublic } : {}) });
         return { made_public: [], ...(r || {}) };
     }
 

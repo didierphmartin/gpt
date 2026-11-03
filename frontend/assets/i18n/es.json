@@ -501,7 +501,8 @@
       "delete": "No se puede eliminar \"{{name}}\": {{dependents}} la necesita(n) para ejecutarse (figura en sus habilidades requeridas). Elimina primero {{dependents}}, o quita \"{{name}}\" de sus habilidades requeridas.",
       "rename": "No se puede renombrar \"{{name}}\": {{dependents}} la necesita(n) para ejecutarse (figura en sus habilidades requeridas).",
       "private": "No se puede hacer privada \"{{name}}\": la(s) habilidad(es) pública(s) {{dependents}} la necesita(n) para ejecutarse.",
-      "public": "\"{{name}}\" necesita \"{{dep}}\", que no puedes hacer pública."
+      "public": "\"{{name}}\" necesita \"{{dep}}\", que no puedes hacer pública.",
+      "changed": "Cambiaron las habilidades que se hacen públicas con \"{{name}}\": {{dependents}}. Inténtalo de nuevo."
     }
   },
   "fileStorage": {
@@ -1738,7 +1739,8 @@
       "copyFailed": "Error al copiar",
       "importFailed": "Error al importar el paquete: {{error}}",
       "importStopped": "Importación detenida: no se seleccionó ninguna carpeta SynergyAI.",
-      "alsoInstalls": "También instala las habilidades que necesita: {{list}}"
+      "alsoInstalls": "También instala las habilidades que necesita: {{list}}",
+      "reasonRequiredClash": "Ya hay instalada otra habilidad con el nombre de una que esta necesita: {{names}}. Renómbrala o elimínala primero, u omite esta habilidad."
     }
   },
   "robot": {

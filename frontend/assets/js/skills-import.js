@@ -89,17 +89,20 @@
      * Returns { ok, name, status: 'installed'|'identical', fileCount, requires: [{ dir, name, status }] } or { ok: false, error }.
      * 'identical' (also an identical public copy someone else owns) counts as already installed.
      */
-    async function installRead(read, { visibility = 'private' } = {}) {
+    async function installRead(read, { visibility = 'private', confirmed = null } = {}) {
         if (!window.skillsFs) return { ok: false, error: 'Local filesystem not available — pick your data folder in Settings first.' };
         if (await window.skillsFs.mode() !== 'volume' && !window.localFs) {
             return { ok: false, error: 'Local filesystem not available — pick your data folder in Settings first.' };
         }
         try {
             // Required skills (read.requires) are checked with it and installed first, same visibility (skillsFs).
-            const r = await window.skillsFs.importSkill(read, { visibility });
+            // confirmed: { dir: [path] } the user agreed go public along (public import); the server checks it.
+            const r = await window.skillsFs.importSkill(read, { visibility, ...(confirmed ? { confirmed } : {}) });
             return { ok: true, name: read.name, status: (r && r.status) || 'installed', fileCount: Object.keys(read.files).length, requires: (r && r.requires) || [] };
         } catch (e) {
             if (e?.code === 'clash') return { ok: false, error: tr('skills.zip.clash', { name: e.skill || read.name }) };
+            const d = e?.data?.data;
+            if (d && d.reason && window.skillsFs.requiredByMessage) return { ok: false, error: window.skillsFs.requiredByMessage(d) };
             console.error('[skillsImport] install failed:', e);
             return { ok: false, error: tr('skills.zip.failed', { message: e?.message || e }) };
         }

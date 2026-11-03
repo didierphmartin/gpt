@@ -75,7 +75,7 @@
         const plan = (await set(path, 'public', { dryRun: true })) || {};
         const along = plan.made_public || [];
         if (along.length && !(await confirmPublic({ name: String(path).split('/').pop(), list: along, t }))) return { done: false };
-        const r = (await set(path, 'public')) || {};
+        const r = (await set(path, 'public', { expectPublic: along })) || {};   // the server refuses if that changed
         return { done: true, madePublic: r.made_public || along };
     }
 

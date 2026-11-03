@@ -358,6 +358,27 @@ test('poolSkillPayload: a script that names /skills-root gets the skill and the 
   assert.equal((await runner.poolSkillPayload('auto', { script: 'scripts/b.py' })).skillsRoot, undefined);
 });
 
+test('store: a grouped required skill sits at its leaf in /skills-root; its libraries and wheels are installed too', async () => {
+  const fs = storeFs({
+    auto: { files: { 'SKILL.md': enc('---\nname: auto\n---\n'), 'scripts/a.py': enc("ROOT = '/skills-root'; load_script('geo', 'c.py')") }, mine: true },
+    'GEO/geo': { files: { 'SKILL.md': enc('---\nname: geo\ndependencies: fpdf2\n---\n'), 'scripts/c.py': enc('G'), '.wheels/pyodide/fpdf2-2.8-py3-none-any.whl': enc('W') }, public: true },
+  });
+  fs.parseFrontmatter = (t) => ({ meta: { dependencies: (/dependencies: (.*)/.exec(t) || [])[1] } });
+  fs.skillsRootFiles = async () => ({});
+  const { runner, py } = load({ skillsFs: fs });
+  let seen;
+  py.script = (FS) => { seen = new TextDecoder().decode(FS.readFile('/skills-root/geo/scripts/c.py')); };
+  const r = await runner.runSkillScript({ dirName: 'auto', script: 'scripts/a.py' });
+  assert.equal(r.exitCode, 0, r.stderr);
+  assert.equal(seen, 'G');
+  assert.ok(py.files.has('/tmp/skill-wheels/fpdf2-2.8-py3-none-any.whl'), 'the required skill\'s bundled wheel is installed');
+  // The pool payload carries the same: leaf placement, dependencies and wheels.
+  const p = await runner.poolSkillPayload('auto', { script: 'scripts/a.py' });
+  assert.ok(Object.keys(p.skillsRoot).includes('geo/scripts/c.py'));
+  assert.deepEqual([...p.dependencies], ['fpdf2']);
+  assert.deepEqual(Object.keys(p.wheels), ['fpdf2-2.8-py3-none-any.whl']);
+});
+
 const WORKER = readFileSync(fileURLToPath(new URL('../assets/js/pyodide.worker.js', import.meta.url)), 'utf8');
 
 /** Run the pool worker in a vm: returns call(payload) → the worker's reply for verb runSkillScript. */

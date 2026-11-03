@@ -109,3 +109,17 @@ test('a clash in any package skill (required ones included) is found before anyt
     assert.equal(imported, 0);
     assert.equal(dirs, 0);
 });
+
+test('a clash in a required skill shows on the review row (attention, names it) and blocks Install', async () => {
+    const pkg = await packageWithRequired();
+    const rows = await WP.reviewRows(pkg, { skills: [{ dir: 'flow', hash: 'different' }] });
+    assert.equal(rows[0].status, 'attention');
+    assert.deepEqual(rows[0].requiredClash, ['flow']);
+    assert.ok(rows[0].reasons.includes('required-clash'));
+    assert.equal(WP.canConfirm(rows, {}), false);
+    rows[0].choice = 'skip';
+    assert.equal(WP.canConfirm(rows, {}), true);
+    const ok = await WP.reviewRows(pkg, { skills: [] });
+    assert.deepEqual(ok[0].requiredClash, []);
+    assert.equal(ok[0].status, 'install');
+});

@@ -115,7 +115,7 @@ test('fromRefusal reads the skills of an HTTP body or an SSE event', () => {
 
 test('Make public with required private skills: the confirmation lists them; Make public sends the real call, Cancel none', async () => {
   const calls = [];
-  const set = async (p, v, o) => { calls.push([p, v, !!(o && o.dryRun)]); return { made_public: ['flow', 'pb'] }; };
+  const set = async (p, v, o) => { calls.push([p, v, !!(o && o.dryRun)]); if (o && o.expectPublic) calls.push(['expect', ...o.expectPublic]); return { made_public: ['flow', 'pb'] }; };
   const { card, body } = load(set);
   card.show({ skills: [{ path: 'auto', owner_id: 7 }], currentUserId: 7, onResolved() {}, t });
   buttons(body.children[0])[0].click();
@@ -134,7 +134,7 @@ test('Make public with required private skills: the confirmation lists them; Mak
   const c2 = body.children.filter((c) => c.dataset.role === 'confirm-public').pop();
   c2.find((e) => e.dataset.act === 'confirm').click();
   assert.deepEqual(JSON.parse(JSON.stringify(await r)), { done: true, madePublic: ['flow', 'pb'] });
-  assert.deepEqual(calls, [['auto', 'public', true], ['auto', 'public', false]]);
+  assert.deepEqual(calls, [['auto', 'public', true], ['auto', 'public', false], ['expect', 'flow', 'pb']]);
 });
 
 test('Make public with nothing else to change: no confirmation card', async () => {

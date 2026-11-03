@@ -537,6 +537,12 @@
             try { read = readPackageSkill(pkg, dir); } catch (e) { r.status = 'attention'; r.reasons.push('unreadable'); rows.push(r); continue; }
             r.status = classify('skill', { dir, hash: await filesHash(read.files) }, h.skills).status;
             r.requires = (read.requires || []).map((x) => x.dir);   // the skills it needs, carried in its zip
+            // A different skill already installed under the name of one it needs: shown here, before Install.
+            r.requiredClash = [];
+            for (const x of read.requires || []) {
+                if (classify('skill', { dir: x.dir, hash: await filesHash(x.files) }, h.skills).status === 'clash') r.requiredClash.push(x.dir);
+            }
+            if (r.requiredClash.length && r.status !== 'present') { r.status = 'attention'; r.reasons.push('required-clash'); }
             rows.push(r);
         }
 
@@ -610,7 +616,7 @@
             if ((r.reasons || []).includes('unsafe-path')) return false;
             if (r.status === 'present') return true;
             if (r.status === 'clash' && r.choice === null) return false;
-            if ((r.reasons || []).includes('unreadable')) return false;
+            if ((r.reasons || []).includes('unreadable') || (r.reasons || []).includes('required-clash')) return false;
             if (r.envFields && r.choice !== 'use-existing') {
                 const v = pick(vals, r.name) || {};
                 if (missingRequired(r.envFields, v).length && !pick(v, 'fillLater')) return false;

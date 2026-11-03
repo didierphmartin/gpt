@@ -33,12 +33,13 @@ test('detect: only scripts/** count; the skill never requires itself; unknown qu
     assert.deepEqual(plain(SR.direct('servicenow-automation-author', files, INSTALLED)), { requires: ['GEO/geo-report'], missing: [] });
 });
 
-test('frontmatter requires-skills: list or single form, union with detection, unknown → missing', () => {
+test('frontmatter requires-skills: list or single form; it replaces scanning; unknown → missing', () => {
     assert.deepEqual(plain(SR.declared('---\nname: x\nrequires-skills: [docx, "workflow-compile"]\n---\n')), ['docx', 'workflow-compile']);
     assert.deepEqual(plain(SR.declared('---\nrequires-skills: docx\n---\n')), ['docx']);
     assert.deepEqual(plain(SR.declared('no frontmatter')), []);
+    // A declared list REPLACES scanning: 'docx' in the script is not added.
     const files = { 'SKILL.md': enc('---\nname: x\nrequires-skills: [geo-report, ghost]\n---\n'), 'scripts/a.py': enc("load('docx')") };
-    assert.deepEqual(plain(SR.direct('me', files, INSTALLED)), { requires: ['GEO/geo-report', 'docx'], missing: ['ghost'] });
+    assert.deepEqual(plain(SR.direct('me', files, INSTALLED)), { requires: ['GEO/geo-report'], missing: ['ghost'] });
 });
 
 test('closure: follows requirements, dependencies first, cycle-safe', async () => {
@@ -73,4 +74,12 @@ test('resolveName: exact path, else the leaf (same group first, then top level, 
     assert.equal(SR.resolveName('y', inst, 'SEO/me'), 'SEO/y');
     assert.equal(SR.resolveName('y', inst, 'me'), 'GEO/y');
     assert.equal(SR.resolveName('z', inst, 'me'), null);
+});
+
+test('only exact quoted literals or /leaf/ segments count: "text/html", "docx/" and prefixes do not', () => {
+    const inst = ['html', 'docx', 'workflow-compile'];
+    const files = { 'scripts/a.py': enc('mime = "text/html"; p = "docx/out"; q = "my-workflow-compile"; r = "/x/workflow-compile.py"') };
+    assert.deepEqual(plain(SR.direct('me', files, inst)), { requires: [], missing: [] });
+    const ok = { 'scripts/a.py': enc("FORMAT = {'html': 'html', \"docx\": \"docx\"}; c = '/root/workflow-compile/compile.py'") };
+    assert.deepEqual(plain(SR.direct('me', ok, inst)), { requires: ['docx', 'html', 'workflow-compile'], missing: [] });
 });

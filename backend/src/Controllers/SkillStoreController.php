@@ -111,7 +111,8 @@ final class SkillStoreController
             foreach ($in as $rel => $content) {
                 $files[(string) $rel] = self::decode($content);
             }
-            return $s->import(self::uid($request), (string) ($b['path'] ?? ''), $files, (string) ($b['visibility'] ?? 'private'), ($b['dry_run'] ?? false) === true);
+            return $s->import(self::uid($request), (string) ($b['path'] ?? ''), $files, (string) ($b['visibility'] ?? 'private'), ($b['dry_run'] ?? false) === true,
+                is_array($b['expect_public'] ?? null) ? array_values(array_map('strval', $b['expect_public'])) : null);
         });
     }
 
@@ -119,7 +120,8 @@ final class SkillStoreController
     {
         return $this->run(function (SkillStore $s) use ($request) {
             $b = self::body($request);
-            return $s->setVisibility(self::uid($request), (string) ($b['path'] ?? ''), (string) ($b['visibility'] ?? ''), ($b['dry_run'] ?? false) === true);
+            return $s->setVisibility(self::uid($request), (string) ($b['path'] ?? ''), (string) ($b['visibility'] ?? ''), ($b['dry_run'] ?? false) === true,
+                is_array($b['expect_public'] ?? null) ? array_values(array_map('strval', $b['expect_public'])) : null);
         });
     }
 
@@ -135,7 +137,9 @@ final class SkillStoreController
     public function delete(array $request): array
     {
         return $this->run(function (SkillStore $s) use ($request) {
-            $s->delete(self::uid($request), self::q($request, 'path'));
+            // dry_run=1: only check; with=a,b: skills deleted together with it (a group) do not count as needing it.
+            $with = array_values(array_filter(explode(',', self::q($request, 'with')), fn($x) => $x !== ''));
+            $s->delete(self::uid($request), self::q($request, 'path'), self::q($request, 'dry_run') === '1', $with);
             return [];
         });
     }

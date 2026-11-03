@@ -1102,7 +1102,26 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         box.querySelector('[data-review="install"]').addEventListener('click', async () => {
             const visibility = box.querySelector('input[name="skills-zip-visibility"]:checked')?.value || 'private';
             box.querySelectorAll('button').forEach((b) => { b.disabled = true; });
-            const result = await window.skillsImport.installRead(read, { visibility });
+            // Public: my own private skills it needs go public too (a public skill never needs a private one) — confirmed first.
+            let confirmed = null;
+            if (visibility === 'public' && window.skillsFs?.importPlan) {
+                try {
+                    const plan = await window.skillsFs.importPlan(read, { visibility });
+                    confirmed = Object.fromEntries(plan.map((x) => [x.dir, x.madePublic || []]));
+                    const extra = [...new Set(plan.flatMap((x) => x.madePublic || []))];
+                    if (extra.length && window.SkillVisibilityCard?.confirmPublic
+                        && !(await window.SkillVisibilityCard.confirmPublic({ name: read.name, list: extra, t }))) {
+                        box.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+                        return;
+                    }
+                } catch (e) {
+                    box.querySelectorAll('button').forEach((b) => { b.disabled = false; });
+                    const d = e?.data?.data;
+                    showStatus(d && d.reason && window.skillsFs.requiredByMessage ? window.skillsFs.requiredByMessage(d, t) : t('skills.zip.failed', { message: e?.message || e }), 'error');
+                    return;
+                }
+            }
+            const result = await window.skillsImport.installRead(read, { visibility, ...(confirmed ? { confirmed } : {}) });
             box.querySelectorAll('button').forEach((b) => { b.disabled = false; });
             if (result.ok && result.status === 'identical') {
                 showStatus(t('skills.zip.identical', { name: read.name }), 'ok');

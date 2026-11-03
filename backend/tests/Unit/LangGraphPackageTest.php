@@ -541,6 +541,74 @@ PY;
         self::assertSame(['[warn] installing zz-not-installed-pkg>=1.0 (not in requirements.txt)', "pip ['zz-not-installed-pkg>=1.0']"], $out);
     }
 
+    public function testRequiredSkillsRulingsMatchTheBrief(): void
+    {
+        $inst = ['html', 'docx', 'workflow-compile'];
+        self::assertSame(['requires' => [], 'missing' => []], LangGraphPackage::requiredSkills('me',
+            ['scripts/a.py' => 'mime = "text/html"; p = "docx/out"; q = "my-workflow-compile"; r = "/x/workflow-compile.py"'], $inst));
+        self::assertSame(['requires' => ['docx', 'html', 'workflow-compile'], 'missing' => []], LangGraphPackage::requiredSkills('me',
+            ['scripts/a.py' => "F = {'html': 'html', \"docx\": \"docx\"}; c = '/root/workflow-compile/compile.py'"], $inst));
+        // A declared list replaces scanning.
+        self::assertSame(['requires' => ['docx'], 'missing' => []], LangGraphPackage::requiredSkills('me',
+            ['SKILL.md' => "---\nrequires-skills: docx\n---\n", 'scripts/a.py' => "'html'"], $inst));
+    }
+
+    /** A grouped required skill goes to skills/<leaf>/, where SKILLS_ROOT/<leaf>/ finds it (folder root and store resolver). */
+    public function testAGroupedRequiredSkillIsCopiedAtItsLeaf(): void
+    {
+        $root = $this->skillsRoot();
+        mkdir("$root/auto/scripts", 0777, true);
+        file_put_contents("$root/auto/SKILL.md", "---\nname: auto\n---\n");
+        file_put_contents("$root/auto/scripts/a.py", "load_script('geo-report', 'make.py')\n");
+        mkdir("$root/GEO/geo-report/scripts", 0777, true);
+        file_put_contents("$root/GEO/geo-report/SKILL.md", "---\nname: geo-report\n---\n");
+        file_put_contents("$root/GEO/geo-report/scripts/make.py", "print(1)\n");
+        $paths = fn($r) => DispatcherDemoFixture::skillPaths($this->generator($this->graph('auto'), $r)->generate(44, '3', ['modular' => true])['files']);
+        $want = ['skills/auto/SKILL.md', 'skills/auto/scripts/a.py', 'skills/geo-report/SKILL.md', 'skills/geo-report/scripts/make.py'];
+        self::assertSame($want, $paths($root));
+        // The store resolver finds a grouped skill by its leaf.
+        $store = self::tempDir('lgpkg_store_');
+        $s = new \Quantis\AIPortfolioAssistant\Services\SkillStore($store, 'individual');
+        $s->import(3, 'auto', ['SKILL.md' => "---\nname: auto\n---\n", 'scripts/a.py' => "load_script('geo-report', 'make.py')\n"]);
+        $s->import(3, 'GEO/geo-report', ['SKILL.md' => "---\nname: geo-report\n---\n", 'scripts/make.py' => "print(1)\n"]);
+        self::assertSame($want, $paths($s->compileResolver(3, false)));
+    }
+
+    /** A relative SYNERGYAI_SKILLS_DIR (the README's ./skills) reaches a skill script as an absolute path. */
+    public function testSkillScriptsGetAnAbsoluteSkillsDir(): void
+    {
+        exec('command -v python3', $o, $rc);
+        if ($rc !== 0) {
+            self::markTestSkipped('python3 missing');
+        }
+        $dir = self::tempDir('lgpkg_abs_');
+        mkdir("$dir/skills/s", 0777, true);
+        $py = "from __future__ import annotations\nimport os, sys, subprocess, threading, json, re, time, asyncio, shutil\nfrom functools import cached_property\n"
+            . "def node_print(line):\n    print(line, flush=True)\n"
+            . "PACKAGE_DIR = " . var_export($dir, true) . "\n"
+            . LangGraphRuntime::skillRuntimeBlock(true) . "\n"
+            . <<<'PY'
+seen = {}
+class R:
+    returncode, stdout, stderr = 0, "", ""
+def fake(argv, **kw):
+    seen.update(kw.get("env") or {})
+    return R()
+subprocess.run = fake
+SKILLS._exec("s", "a.py", os.path.join(SKILLS_DIR, "s"), "a.py", [], SKILLS.scratch_dir)
+print(SKILLS_DIR, seen["SYNERGYAI_SKILLS_DIR"])
+PY;
+        file_put_contents("$dir/probe.py", $py);
+        exec('cd ' . escapeshellarg($dir) . ' && SYNERGYAI_SKILLS_DIR=./skills python3 probe.py 2>&1', $out, $rc);
+        self::assertSame(0, $rc, implode("\n", $out));
+        $last = explode(' ', (string) end($out));
+        self::assertSame('./skills', $last[0]);
+        self::assertSame(realpath("$dir/skills"), realpath($last[1]));
+        self::assertStringStartsWith('/', $last[1]);
+        // The other targets' own runners do the same, each in its own code.
+        self::assertStringContainsString('SYNERGYAI_SKILLS_DIR=os.path.abspath(SKILLS_DIR)', \AgentTeam\Services\PythonEmitHelpers::skillFsSyncBlock());
+    }
+
     /** Skill-store Task 13: the skill's native wheels travel with it; the browser's (.wheels/pyodide/) never do. */
     public function testNativeWheelsTravelWithTheSkill(): void
     {

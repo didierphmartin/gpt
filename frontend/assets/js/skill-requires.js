@@ -4,10 +4,10 @@
  * Twin of PHP LangGraphPackage::requiredSkills.
  *
  * A skill requires:
- *   - every skill listed in `requires-skills:` of its SKILL.md frontmatter (list or single form, parsed as
- *     `dependencies:`), and
- *   - every OTHER installed skill whose leaf folder name appears in its own scripts/** text files as a quoted
- *     string ('name' / "name") or as a path segment of one ('/skill/name/references/x.md').
+ *   - when its SKILL.md frontmatter declares `requires-skills:` (list or single form, parsed as `dependencies:`):
+ *     exactly those, else
+ *   - every OTHER installed skill whose leaf folder name is an exact quoted string of its scripts/** text files
+ *     ('name' / "name") or a /name/ path segment (slashes on both sides) inside one ('/skill/name/references/x.md').
  * Names resolve against the installed skill paths (resolveName). The closure follows each required skill's
  * own requirements, cycle-safe, dependencies first.
  *
@@ -53,32 +53,38 @@
     const isText = (b) => { try { dec.decode(b); return true; } catch (e) { return false; } };
     const toText = (b) => (typeof b === 'string' ? b : dec.decode(b));
 
-    /** The skill's own requirements (one level). files: { rel: bytes } of that skill; installed: skill paths. */
+    /**
+     * The skill's own requirements (one level). files: { rel: bytes } of that skill; installed: skill paths.
+     * A skill that declares `requires-skills:` requires exactly those (no scanning). Otherwise: every other installed
+     * skill whose leaf name is an exact quoted literal ('x' / "x") of its scripts/** text files, or appears in one as
+     * a path segment with a slash on both sides ('/skill/x/references/a.md'); "text/html" does not name html.
+     */
     function direct(path, files, installed) {
         const list = (installed || []).filter((p) => p !== path);
         const out = new Set();
         const missing = [];
         const md = files && files['SKILL.md'] ? toText(files['SKILL.md']) : '';
-        for (const name of declared(md)) {
-            const hit = resolveName(name, list, path);
-            if (hit) out.add(hit); else missing.push(name);
+        const decl = declared(md);
+        if (decl.length) {
+            for (const name of decl) {
+                const hit = resolveName(name, list, path);
+                if (hit) out.add(hit); else missing.push(name);
+            }
+            return { requires: [...out].sort(), missing };
         }
-        // Quoted literals of the scripts; a literal names a skill when one of its '/'-segments is its leaf name.
-        const segments = new Set();
+        const literals = [];
         for (const [rel, b] of Object.entries(files || {})) {
             if (!rel.startsWith('scripts/') || rel.split('/').includes('__pycache__') || rel.endsWith('.pyc')) continue;
             if (typeof b !== 'string' && !isText(b)) continue;
             const re = /'([^'\n\\]*)'|"([^"\n\\]*)"/g;
             const text = toText(b);
             let m;
-            while ((m = re.exec(text)) !== null) {
-                for (const seg of (m[1] !== undefined ? m[1] : m[2]).split('/')) if (seg) segments.add(seg);
-            }
+            while ((m = re.exec(text)) !== null) literals.push(m[1] !== undefined ? m[1] : m[2]);
         }
-        const byLeaf = new Map();
-        for (const p of list) if (!byLeaf.has(leafOf(p))) byLeaf.set(leafOf(p), true);
-        for (const leaf of byLeaf.keys()) {
-            if (segments.has(leaf)) out.add(resolveName(leaf, list, path));
+        const exact = new Set(literals);
+        const leaves = new Set(list.map(leafOf));
+        for (const leaf of leaves) {
+            if (exact.has(leaf) || literals.some((l) => l.includes(`/${leaf}/`))) out.add(resolveName(leaf, list, path));
         }
         return { requires: [...out].sort(), missing };
     }
