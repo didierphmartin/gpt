@@ -480,6 +480,23 @@
         if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
     }
 
+    const DEC = new TextDecoder();
+
+    /**
+     * The run folders under the skill's <sub>/ (body-opt-results, desc-opt-results), read through
+     * skillsFs (folder or skill store): { '<run>': { '<path in run>': bytes } }.
+     */
+    async function readRuns(sub) {
+        const files = await window.skillsFs.readSkillFiles(state.skill.dir_name, { under: sub });
+        const runs = {};
+        for (const [rel, bytes] of Object.entries(files)) {
+            const [, run, ...rest] = rel.split('/');
+            if (!run || !rest.length) continue;
+            (runs[run] = runs[run] || {})[rest.join('/')] = bytes;
+        }
+        return runs;
+    }
+
     /**
      * Locate the latest run directory under the configured results dir and
      * read whatever incremental log files are present. Returns a snapshot:
@@ -487,55 +504,43 @@
      */
     async function readSnapshot() {
         if (!state.resultsDir || !state.skill) return;
-        // Resolve the host path through FSA so we read the live disk view.
+        // Read the skill's own files (folder: the live disk view).
         // /skill/<dir>/body-opt-results/ — the parent of timestamped run dirs.
         const parts = state.resultsDir.split('/').filter(Boolean);  // ["skill","<dir>","body-opt-results"]
         if (parts[0] !== 'skill') return;
         const subPath = parts.slice(2).join('/');                    // "body-opt-results"
-        const hostPath = `skills/${state.skill.dir_name}/${subPath}`;
-        const dirHandle = await window.localFs.resolvePath(hostPath);
-        if (!dirHandle) return;
-        // Find newest sub-folder (body-loop_*_<timestamp>)
-        let newest = null, newestName = '';
-        for await (const entry of dirHandle.values()) {
-            if (entry.kind !== 'directory') continue;
-            if (entry.name > newestName) { newest = entry; newestName = entry.name; }
-        }
-        if (!newest) { state.lastSnapshot = { phase: 'starting' }; return; }
+        const runs = await readRuns(subPath);
+        // Newest run folder (body-loop_*_<timestamp>)
+        const newestName = Object.keys(runs).sort().pop() || '';
+        if (!newestName) { state.lastSnapshot = { phase: 'starting' }; return; }
+        const newest = runs[newestName];   // { 'logs/00-baseline.json': bytes, 'results.json': bytes, ... }
         // Read logs/*.json + (if present) results.json
         const snap = { runDir: newestName, iterations: [] };
-        let logsDir = null;
-        try { logsDir = await newest.getDirectoryHandle('logs'); } catch { logsDir = null; }
-        if (logsDir) {
-            for await (const f of logsDir.values()) {
-                if (f.kind !== 'file' || !f.name.endsWith('.json')) continue;
-                try {
-                    const text = await (await f.getFile()).text();
-                    const json = JSON.parse(text);
-                    if (f.name === '00-baseline.json') {
-                        snap.baseline = json.summary?.overall_passed != null
-                            ? `${json.summary.overall_passed}/${json.summary.total_body_cases}`
-                            : null;
-                        snap.baselineRaw = json.summary || null;
-                    } else if (/^\d{2}-eval\.json$/.test(f.name)) {
-                        const n = parseInt(f.name.slice(0, 2), 10);
-                        snap.iterations.push({ n, kind: 'eval', summary: json.summary });
-                    } else if (/^\d{2}-patch\.json$/.test(f.name)) {
-                        const n = parseInt(f.name.slice(0, 2), 10);
-                        snap.iterations.push({ n, kind: 'patch',
-                            reasoning: json.reasoning || '',
-                            applied: json.applied, skipped: (json.skipped || []).length,
-                        });
-                    }
-                } catch {}
-            }
+        for (const [rel, bytes] of Object.entries(newest)) {
+            const m = rel.match(/^logs\/([^/]+\.json)$/);
+            if (!m) continue;
+            const name = m[1];
+            try {
+                const json = JSON.parse(DEC.decode(bytes));
+                if (name === '00-baseline.json') {
+                    snap.baseline = json.summary?.overall_passed != null
+                        ? `${json.summary.overall_passed}/${json.summary.total_body_cases}`
+                        : null;
+                    snap.baselineRaw = json.summary || null;
+                } else if (/^\d{2}-eval\.json$/.test(name)) {
+                    const n = parseInt(name.slice(0, 2), 10);
+                    snap.iterations.push({ n, kind: 'eval', summary: json.summary });
+                } else if (/^\d{2}-patch\.json$/.test(name)) {
+                    const n = parseInt(name.slice(0, 2), 10);
+                    snap.iterations.push({ n, kind: 'patch',
+                        reasoning: json.reasoning || '',
+                        applied: json.applied, skipped: (json.skipped || []).length,
+                    });
+                }
+            } catch {}
         }
         // Did the parent dir get a results.json (== run finished cleanly)?
-        try {
-            const rj = await newest.getFileHandle('results.json');
-            const txt = await (await rj.getFile()).text();
-            snap.results = JSON.parse(txt);
-        } catch {}
+        try { if (newest['results.json']) snap.results = JSON.parse(DEC.decode(newest['results.json'])); } catch {}
         state.lastSnapshot = snap;
     }
 
@@ -628,19 +633,13 @@
         // List both desc-opt-results/ and body-opt-results/ if present.
         const runs = [];
         for (const sub of ['body-opt-results', 'desc-opt-results']) {
-            const hostPath = `skills/${state.skill.dir_name}/${sub}`;
-            const dirHandle = await window.localFs.resolvePath(hostPath).catch(() => null);
-            if (!dirHandle) continue;
-            for await (const entry of dirHandle.values()) {
-                if (entry.kind !== 'directory') continue;
-                runs.push({ sub, name: entry.name, handle: entry });
-            }
+            const found = await readRuns(sub).catch(() => ({}));
+            for (const name of Object.keys(found)) runs.push({ sub, name });
         }
         runs.sort((a, b) => b.name.localeCompare(a.name));
 
         // Header + revert button
-        const backup = await window.localFs.resolvePath(`skills/${state.skill.dir_name}/SKILL.md.preopt.bak`,
-            { kind: 'file' }).catch(() => null);
+        const backup = (await window.skillsFs.getSkillFile(state.skill.dir_name, 'SKILL.md.preopt.bak').catch(() => null)) !== null;
         let html = `
             <div class="flex items-center justify-between mb-3">
                 <div class="text-xs text-gray-700">
@@ -685,13 +684,10 @@
         const detail = document.querySelector('#so-run-detail');
         if (!detail) return;
         detail.innerHTML = `<div class="text-xs text-gray-500">Loading ${escapeHtml(name)}…</div>`;
-        const runHandle = await window.localFs.resolvePath(`skills/${state.skill.dir_name}/${sub}/${name}`).catch(() => null);
-        if (!runHandle) { detail.innerHTML = `<div class="text-xs text-red-600">Run dir not found.</div>`; return; }
+        const run = (await readRuns(sub).catch(() => ({})))[name];
+        if (!run) { detail.innerHTML = `<div class="text-xs text-red-600">Run dir not found.</div>`; return; }
         let results = null;
-        try {
-            const fh = await runHandle.getFileHandle('results.json');
-            results = JSON.parse(await (await fh.getFile()).text());
-        } catch {}
+        try { if (run['results.json']) results = JSON.parse(DEC.decode(run['results.json'])); } catch {}
         if (!results) {
             detail.innerHTML = `<div class="text-xs text-amber-700">No results.json — run may have been interrupted. The logs/ dir may still have partial data.</div>`;
             return;
@@ -725,13 +721,9 @@
         if (!state.skill) return;
         if (!confirm('Restore SKILL.md from .preopt.bak? This overwrites the current SKILL.md.')) return;
         try {
-            const skillDir = await window.localFs.resolvePath(`skills/${state.skill.dir_name}`);
-            const bakHandle = await skillDir.getFileHandle('SKILL.md.preopt.bak');
-            const bakText = await (await bakHandle.getFile()).text();
-            const skillHandle = await skillDir.getFileHandle('SKILL.md');
-            const writable = await skillHandle.createWritable();
-            await writable.write(bakText);
-            await writable.close();
+            const bakText = await window.skillsFs.getSkillFile(state.skill.dir_name, 'SKILL.md.preopt.bak');
+            if (bakText === null) throw new Error('SKILL.md.preopt.bak not found.');
+            await window.skillsFs.writeSkillFile(state.skill.dir_name, 'SKILL.md', bakText);
             alert('SKILL.md restored from .preopt.bak.');
         } catch (e) {
             alert('Revert failed: ' + (e?.message || e));

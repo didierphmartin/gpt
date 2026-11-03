@@ -15125,7 +15125,7 @@ class WorkflowEditor {
         return new window.PyodideWorkerPool({
             workerFactory: () => {
                 const wid = ++workerN;
-                const w = new Worker('assets/js/pyodide.worker.js?v=20261103-local');
+                const w = new Worker('assets/js/pyodide.worker.js?v=20261103-skillstore');
                 console.log(`[wf-pool] spawned worker w${wid} (each worker loads its own Pyodide — first use is a cold start)`);
                 let seq = 0;
                 const pending = new Map();
@@ -15167,20 +15167,18 @@ class WorkflowEditor {
             }
             return this._poolHandleCache.get(path);
         };
-        const skillHandle = await resolveCached(`skills/${req.dirName}`);
+        // The skill side (folder handle or the store's files, deps, bundled wheels) reads through skillsFs.
+        const skill = await window.pyodideRunner.poolSkillPayload(req.dirName);
         const outputsHandle = await resolveCached('outputs', { create: true });
-        if (!skillHandle || !outputsHandle) throw new Error('could not resolve skill/outputs handles for pool path');
-        for (const h of [skillHandle, outputsHandle]) {
-            if ((await h.queryPermission({ mode: 'readwrite' })) !== 'granted') {
-                if ((await h.requestPermission({ mode: 'readwrite' })) !== 'granted') {
-                    throw new Error('readwrite permission denied for pool path');
-                }
+        if (!outputsHandle) throw new Error('could not resolve outputs handle for pool path');
+        if ((await outputsHandle.queryPermission({ mode: 'readwrite' })) !== 'granted') {
+            if ((await outputsHandle.requestPermission({ mode: 'readwrite' })) !== 'granted') {
+                throw new Error('readwrite permission denied for pool path');
             }
         }
-        const dependencies = await window.pyodideRunner.getSkillDependencies(req.dirName);
         const authToken = window.authManager?.token || null;
         const [r] = await this._pyodidePool.runBatch([{
-            ...req, dependencies, authToken, skillHandle, outputsHandle, prefetched: [],
+            ...req, ...skill, authToken, outputsHandle, prefetched: [],
         }]);
         if (!r || !r.ok) throw new Error(r ? r.error : 'pool returned no result');
         return r.result;
@@ -15367,8 +15365,10 @@ class WorkflowEditor {
                 skillLoadError = `skill "${dirName}" requires the local skills folder, which isn't connected — the run_skill_script tool is unavailable, so this audit can't run. Connect the skills folder and re-run.`;
             } else {
                 try {
-                    skillContent = await window.skillsFs.getSkillContent(dirName);
-                    const scripts = await window.skillsFs.listSkillScripts(dirName);
+                    // A robot-owned workflow reads its skills as the robot sees them (skill store: public only in corporate).
+                    const asRobot = !!this.currentWorkflowIsRobot;
+                    skillContent = await window.skillsFs.getSkillContent(dirName, { asRobot });
+                    const scripts = await window.skillsFs.listSkillScripts(dirName, { asRobot });
                     skillMetadata = { dir_name: dirName, scripts };
                 } catch (e) {
                     skillLoadError = `skill "${dirName}" failed to load (${e?.message || e}) — the run_skill_script tool can't be offered, so this audit can't run.`;
@@ -15931,7 +15931,7 @@ class WorkflowEditor {
     _codeWorkerJob(verb, payload, limitMs, timeoutMsg) {
         const runOne = () => {
             const cold = !this._codeWorker || !this._codeWorkerWarm;
-            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261029-robot-run');
+            if (!this._codeWorker) this._codeWorker = new Worker('assets/js/pyodide.worker.js?v=20261103-skillstore');
             const w = this._codeWorker;
             const id = (this._codeSeq = (this._codeSeq || 0) + 1);
             const limit = limitMs + (cold ? 90000 : 0);

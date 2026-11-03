@@ -191,3 +191,58 @@ test('folder-mode importSkill: installed, identical, clash', async () => {
   assert.equal(writes.length, 0);
   await assert.rejects(() => mk({ s: { 'SKILL.md': 'other' } }).importSkill(read), (e) => e.code === 'clash');
 });
+
+test('readSkillFiles under: store filters, folder walks only that folder (keys stay skill-relative)', async () => {
+  const files = { 'SKILL.md': b64('x'), 'runs/a/r.json': b64('1'), 'runsx/b': b64('2') };
+  const v = load({ routes: { ...volume, 'GET /skills/files': () => [200, { files }] } });
+  assert.deepEqual(Object.keys(await v.fs.readSkillFiles('s', { under: 'runs' })), ['runs/a/r.json']);
+
+  const asked = [];
+  const runs = fakeDir({ a: { 'r.json': '1' } }, 'runs');
+  const localFs = { resolvePath: async (p) => { asked.push(p); return p === 'skills/s/runs' ? runs : null; } };
+  const f = load({ localFs });
+  assert.deepEqual(Object.keys(await f.fs.readSkillFiles('s', { under: 'runs' })), ['runs/a/r.json']);
+  assert.deepEqual(asked, ['skills/s/runs']);
+});
+
+test('store: getSkillContent / listSkillScripts read as the robot when asked', async () => {
+  const { fs, calls } = load({ routes: {
+    ...volume,
+    'GET /skills/file': () => [200, { content: b64('---\nname: s\n---\nB') }],
+    'GET /skills/files': () => [200, { files: { 'scripts/a.py': b64('p'), 'SKILL.md': b64('x') } }],
+  } });
+  assert.equal(await fs.getSkillContent('s', { asRobot: true }), 'B');
+  assert.deepEqual([...await fs.listSkillScripts('s', { asRobot: true })], ['scripts/a.py']);
+  assert.ok(calls.some((c) => c.path === '/skills/file?path=s&rel=SKILL.md&as=robot'));
+  assert.ok(calls.some((c) => c.path === '/skills/files?path=s&as=robot'));
+});
+
+test('store writeSkillFiles: a new skill is imported private, my existing one is written file by file', async () => {
+  const puts = []; let imp;
+  const { fs } = load({ routes: {
+    ...volume,
+    'GET /skills': () => [200, [{ path: 'mine', name: 'm', visibility: 'private', owner_id: 1, mine: true }]],
+    'PUT /skills/file': (b) => { puts.push(b); return [200, {}]; },
+    'POST /skills/import': (b) => { imp = b; return [200, { status: 'installed' }]; },
+  } });
+  await fs.writeSkillFiles('mine', { 'SKILL.md': 'M', 'x.json': '{}' });
+  assert.deepEqual(puts.map((p) => p.rel), ['SKILL.md', 'x.json']);
+  await fs.writeSkillFiles('fresh', { 'SKILL.md': 'F' });
+  assert.equal(imp.path, 'fresh');
+  assert.equal(imp.visibility, 'private');
+  assert.equal(imp.files['SKILL.md'], b64('F'));
+  assert.equal(await fs.skillExists('mine'), true);
+  assert.equal(await fs.skillExists('g/mine'), true);   // same leaf name
+  assert.equal(await fs.skillExists('other'), false);
+  assert.equal(await fs.folderHandle('mine'), null);
+});
+
+test('the backend envelope { success, data } is unwrapped', async () => {
+  const { fs } = load({ routes: {
+    'GET /skills/store': () => [200, { success: true, data: { mode: 'volume', edition: 'individual' } }],
+    'GET /skills': () => [200, { success: true, data: [{ path: 'a', name: 'A', visibility: 'private', owner_id: 1, mine: true }] }],
+  } });
+  assert.equal(await fs.mode(), 'volume');
+  assert.equal(await fs.edition(), 'individual');
+  assert.deepEqual([...(await fs.listSkills()).map((s) => s.dirName)], ['a']);
+});

@@ -155,9 +155,9 @@
             // The same skill folders reviewRows sees: the manifest's skill entries with a safe folder name.
             const dirs = WP().packageSkills(pkg.manifest).filter((x) => x.safe).map((x) => x.dir);
             for (const dir of dirs) {
-                const handle = window.localFs && await window.localFs.resolvePath(`skills/${dir}`);
                 // Bare relative paths with the skill export's filter: the same convention reviewRows hashes.
-                if (handle) have.skills.push({ dir, hash: await WP().filesHash(await window.skillsImport.readFolderFiles(handle, '')) });
+                const files = window.skillsImport.filterSkillFiles(window.skillsFs ? await window.skillsFs.readSkillFiles(dir) : {});
+                if (Object.keys(files).length) have.skills.push({ dir, hash: await WP().filesHash(files) });
             }
         }
         return have;

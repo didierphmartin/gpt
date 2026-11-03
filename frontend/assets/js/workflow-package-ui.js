@@ -149,13 +149,14 @@
         const canRead = await folderReadable();
         if (!canRead) warn('folder-not-accessible', 'warnFolderNotAccessible');
 
-        // Skills: each bound folder, with the skill export's filter.
+        // Skills: each bound skill (folder or skill store), with the skill export's filter.
         const skills = [];
+        const skillsReadable = canRead || (!!window.skillsFs && await window.skillsFs.mode() === 'volume');
         for (const dir of deps.skills) {
-            if (!canRead) { warn('skill-unreadable', 'warnSkillUnreadable', { name: dir }); continue; }
-            const handle = await window.localFs.resolvePath(`skills/${dir}`);
-            if (!handle) { warn('skill-missing', 'warnSkillMissing', { name: dir }); continue; }
-            Object.assign(files, await window.skillsImport.readFolderFiles(handle, `skills/${dir}`));
+            if (!skillsReadable) { warn('skill-unreadable', 'warnSkillUnreadable', { name: dir }); continue; }
+            const found = window.skillsImport.filterSkillFiles(await window.skillsFs.readSkillFiles(dir));
+            if (!Object.keys(found).length) { warn('skill-missing', 'warnSkillMissing', { name: dir }); continue; }
+            for (const [rel, b] of Object.entries(found)) files[`skills/${dir}/${rel}`] = b;
             skills.push(dir);
         }
 

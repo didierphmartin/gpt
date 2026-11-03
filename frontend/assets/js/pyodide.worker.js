@@ -52,7 +52,22 @@ async function ensureLoaded() {
   return pyodide;
 }
 
-async function mountSkill(dirName, skillHandle) {
+// Skill store (Docker app): no folder handle, the main thread sends the skill's
+// files; they are written into MEMFS at the mount path, fresh on every run.
+// Changes the script makes there are not written back from a worker.
+function copySkill(dirName, files) {
+  const mountPath = `/skill/${dirName}`;
+  pyodide.FS.mkdirTree(mountPath);
+  for (const [rel, bytes] of Object.entries(files)) {
+    const abs = `${mountPath}/${rel}`;
+    ensureParentDir(abs);
+    pyodide.FS.writeFile(abs, bytes);
+  }
+  return mountPath;
+}
+
+async function mountSkill(dirName, skillHandle, skillFiles) {
+  if (skillFiles) return copySkill(dirName, skillFiles);
   if (mountedSkills.has(dirName)) return mountedSkills.get(dirName);
   const perm = await skillHandle.queryPermission({ mode: 'readwrite' });
   if (perm !== 'granted') throw new Error(`skill "${dirName}" not permitted in worker`);
@@ -73,30 +88,44 @@ async function mountOutputs(outputsHandle) {
   return '/outputs';
 }
 
-// Mirror of pyodide-runner.js ensureDeps: loadPackage for prebuilt names,
+// Mirror of pyodide-runner.js ensureDeps: a skill's bundled wheels
+// (.wheels/pyodide/, passed as { file: bytes }) install from MEMFS with
+// deps=False and nothing online; otherwise loadPackage for prebuilt names,
 // micropip for everything else (pinned wheels, anything not in the prebuilt
 // set). Split is by PREBUILT_PACKAGES membership — NOT by `==` presence.
-async function ensureDeps(deps) {
+async function ensureDeps(deps, wheels) {
   if (!Array.isArray(deps) || deps.length === 0) return;
   const fresh = deps.filter(d => !installedDeps.has(d));
   if (fresh.length === 0) return;
 
   const prebuilt = fresh.filter(d => PREBUILT_PACKAGES.has(d));
   const viaMicropip = fresh.filter(d => !PREBUILT_PACKAGES.has(d));
+  const wheelFiles = Object.keys(wheels || {}).filter(f => f.endsWith('.whl')).sort();
 
   const tDeps = Date.now();
   report(`installing deps [${fresh.join(', ')}] …`);
-  if (prebuilt.length) {
-    await pyodide.loadPackage(prebuilt);
-  }
-  if (viaMicropip.length) {
+  if (wheelFiles.length) {
+    pyodide.FS.mkdirTree('/tmp/skill-wheels');
+    for (const f of wheelFiles) pyodide.FS.writeFile(`/tmp/skill-wheels/${f}`, wheels[f]);
     await pyodide.loadPackage('micropip');
-    pyodide.globals.set('_runner_micropip_deps', viaMicropip);
+    pyodide.globals.set('_runner_wheel_urls', wheelFiles.map(f => `emfs:/tmp/skill-wheels/${f}`));
     await pyodide.runPythonAsync(`
+import micropip
+await micropip.install(list(_runner_wheel_urls), deps=False)
+    `);
+  } else {
+    if (prebuilt.length) {
+      await pyodide.loadPackage(prebuilt);
+    }
+    if (viaMicropip.length) {
+      await pyodide.loadPackage('micropip');
+      pyodide.globals.set('_runner_micropip_deps', viaMicropip);
+      await pyodide.runPythonAsync(`
 import micropip
 for _dep in list(_runner_micropip_deps):
     await micropip.install(_dep)
-    `);
+      `);
+    }
   }
   for (const d of fresh) installedDeps.add(d);
   report(`deps ready in ${Date.now() - tDeps}ms`);
@@ -326,7 +355,7 @@ _runner_stderr = _stderr_buf.getvalue()
 // payload: { dirName, script, argv, inputFiles, readOutputs, dependencies,
 //            persist } — the object produced by chat.js _buildSkillScriptRequest
 // and consumed by pyodide-runner.js _runOne — plus three transport extras the
-// main thread adds: { skillHandle, outputsHandle, prefetched }.
+// main thread adds: { skillHandle | skillFiles, wheels, outputsHandle, prefetched }.
 // `prefetched` is an optional array of { path, contents } the main thread
 // fetched via the backend proxy (workers do not call the URL proxy — keep
 // network on the main thread for one consistent fetch path).
@@ -343,7 +372,7 @@ async function runSkillScript(payload) {
   globalThis.window = globalThis.window || globalThis;
   globalThis.window.authManager = { token: payload.authToken || null };
 
-  const mount = await mountSkill(payload.dirName, payload.skillHandle);
+  const mount = await mountSkill(payload.dirName, payload.skillHandle, payload.skillFiles);
   await mountOutputs(payload.outputsHandle);
 
   // Materialize any prefetched URL content into /tmp (mirrors main-thread prefetch).
@@ -353,7 +382,7 @@ async function runSkillScript(payload) {
   }
 
   // Install deps (loadPackage for prebuilt; micropip for the rest).
-  await ensureDeps(payload.dependencies);
+  await ensureDeps(payload.dependencies, payload.wheels);
 
   // Resolve a caller-supplied path: absolute paths (starting with `/`) pass
   // through verbatim; relative paths resolve against the skill mount (the cwd

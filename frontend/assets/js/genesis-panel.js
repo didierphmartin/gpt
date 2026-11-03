@@ -7,7 +7,7 @@
  *   parameter table when present) → on approve: POST /genesis/authorize →
  *   buildOne() → POST /genesis/record.
  *
- * The BUILD is local: write skills/<name>/SKILL.md via window.localFs (the
+ * The BUILD is local: write skills/<name>/SKILL.md via window.skillsFs (the
  *   catalog lives in the user's local FS — the server never touches it).
  * The server gate (GenesisController) is authoritative for spend.
  *
@@ -589,6 +589,8 @@ if __name__ == "__main__":
     /** Local-FS connection check — getStatus() returns { state, handle, name },
      * NOT a `.connected` flag; 'granted' is the only usable state. */
     async function requireLocalFs() {
+        // The skill store (Docker app) needs no local folder.
+        if (window.skillsFs && await window.skillsFs.mode() === 'volume') return;
         if (!window.localFs) {
             throw new Error('Local skills folder is not connected (Skills panel → connect folder).');
         }
@@ -615,39 +617,27 @@ if __name__ == "__main__":
             snapshotPy = pyodideSnapshotRunPy(p, wfId, graph, skillScripts);
         }
 
-        const dir = await window.localFs.resolvePath(`skills/${p.skill_name}`, { create: true });
-        if (!dir) throw new Error(`Could not create skills/${p.skill_name}.`);
-        const fh = await dir.getFileHandle('SKILL.md', { create: true });
-        const w = await fh.createWritable();
-        await w.write(skillMd(p));
-        await w.close();
-        if (wfId !== null) {
-            const scriptsDir = await dir.getDirectoryHandle('scripts', { create: true });
-            const sfh = await scriptsDir.getFileHandle('run.py', { create: true });
-            const sw = await sfh.createWritable();
-            await sw.write(compiled ? snapshotPy : runPyTemplate(p, wfId));
-            await sw.close();
-        }
+        // Through skillsFs: the folder, or the skill store (a new skill there is private).
+        const files = { 'SKILL.md': skillMd(p) };
+        if (wfId !== null) files['scripts/run.py'] = compiled ? snapshotPy : runPyTemplate(p, wfId);
+        await window.skillsFs.writeSkillFiles(p.skill_name, files);
         return p.skill_name;
     }
 
     /**
      * Merge promotions target an EXISTING skill (skill_name === merge_target).
      * Never overwrite that skill's folder — just drop an eval-cases sidecar
-     * file into it. The directory must already exist (resolvePath WITHOUT
-     * {create:true}); a missing directory is a clear, surfaced failure.
+     * file into it. The skill must already exist; a missing one is a clear,
+     * surfaced failure.
      */
     async function writeMergeEvals(p) {
         await requireLocalFs();
-        const dir = await window.localFs.resolvePath(`skills/${p.merge_target}`);
-        if (!dir) {
+        if (!(await window.skillsFs.skillExists(p.merge_target))) {
             throw new Error(`Existing skill folder "skills/${p.merge_target}" was not found — cannot add eval cases.`);
         }
         const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, ''); // YYYYMMDD
-        const fh = await dir.getFileHandle(`genesis_evals_${stamp}.json`, { create: true });
-        const w = await fh.createWritable();
-        await w.write(JSON.stringify(p.eval_queries || [], null, 2));
-        await w.close();
+        await window.skillsFs.writeSkillFile(p.merge_target, `genesis_evals_${stamp}.json`,
+            JSON.stringify(p.eval_queries || [], null, 2));
         return p.merge_target;
     }
 

@@ -170,25 +170,27 @@ class StartupTasksRunner {
      * folder doesn't exist.
      */
     async _refreshWorkflowCompileCatalog(ctx) {
-        if (!window.localFs?.isSupported?.()) {
-            console.log('[StartupTasks] localFs not supported — skipping catalog refresh');
-            return;
+        const fs = window.skillsFs;
+        if (!fs) return;
+        const store = await fs.mode() === 'volume';
+        if (!store) {
+            if (!window.localFs?.isSupported?.()) {
+                console.log('[StartupTasks] localFs not supported — skipping catalog refresh');
+                return;
+            }
+            if (!(await window.localFs.getRootHandle())) {
+                console.log('[StartupTasks] no FSA root handle yet — skipping catalog refresh');
+                return;
+            }
         }
-        const root = await window.localFs.getRootHandle();
-        if (!root) {
-            console.log('[StartupTasks] no FSA root handle yet — skipping catalog refresh');
-            return;
-        }
-
-        let workflowCompileHandle;
-        try {
-            const skillsHandle = await root.getDirectoryHandle('skills', { create: false });
-            workflowCompileHandle = await skillsHandle.getDirectoryHandle('workflow-compile', { create: false });
-        } catch {
+        // Skills are read and written through skillsFs (the folder, or the skill store).
+        // In the store only my own copy of a skill takes the refreshed catalog.
+        const mine = store ? new Set((await fs.listSkills()).filter(s => s.mine).map(s => s.path)) : null;
+        const writable = async (skill) => (mine ? mine.has(skill) : await fs.skillExists(skill));
+        if (!(await writable('workflow-compile'))) {
             console.log('[StartupTasks] workflow-compile skill not installed — skipping catalog refresh');
             return;
         }
-        const referencesHandle = await workflowCompileHandle.getDirectoryHandle('references', { create: true });
 
         const headers = { 'Authorization': `Bearer ${ctx.token || ''}` };
         const userId = ctx.user?.id ?? '';
@@ -210,13 +212,10 @@ class StartupTasksRunner {
         }
 
         const mcpMd = this._formatMcpCatalog(servers, toolsByServer);
-        await this._writeIfChanged(referencesHandle, 'mcp-catalog.md', mcpMd);
+        await this._writeIfChanged('workflow-compile', 'references/mcp-catalog.md', mcpMd);
         // playbook-author binds #Actions against the same catalog.
         try {
-            const skillsHandle = await root.getDirectoryHandle('skills', { create: false });
-            const pbHandle = await skillsHandle.getDirectoryHandle('playbook-author', { create: false });
-            const pbRefs = await pbHandle.getDirectoryHandle('references', { create: true });
-            await this._writeIfChanged(pbRefs, 'mcp-catalog.md', mcpMd);
+            if (await writable('playbook-author')) await this._writeIfChanged('playbook-author', 'references/mcp-catalog.md', mcpMd);
         } catch { /* skill not installed — nothing to refresh */ }
 
         // Skills catalog now comes straight from the filesystem (single
@@ -226,7 +225,7 @@ class StartupTasksRunner {
             ? window.skillsManager.skills.filter(s => s?.source === 'local')
             : [];
         const skillsMd = this._formatSkillsCatalog(fsSkills);
-        await this._writeIfChanged(referencesHandle, 'skills-catalog.md', skillsMd);
+        await this._writeIfChanged('workflow-compile', 'references/skills-catalog.md', skillsMd);
     }
 
     _formatMcpCatalog(servers, toolsByServer) {
@@ -287,23 +286,16 @@ class StartupTasksRunner {
     }
 
     /**
-     * Write `content` to `filename` under `dirHandle` only if the file's
-     * current text differs. Avoids touching mtime on every reload (the
+     * Write `content` to the skill file `rel` of skill `skill` (through
+     * skillsFs) only if the file's current text differs. Avoids touching mtime on every reload (the
      * data is mostly static) and won't dirty the user's git tree if the
      * skill is version-controlled.
      */
-    async _writeIfChanged(dirHandle, filename, content) {
+    async _writeIfChanged(skill, rel, content) {
         try {
-            const existing = await dirHandle.getFileHandle(filename, { create: false });
-            const file = await existing.getFile();
-            const existingText = await file.text();
-            if (existingText === content) return;
+            if (await window.skillsFs.getSkillFile(skill, rel) === content) return;
         } catch { /* file doesn't exist yet — fall through to create */ }
-
-        const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
-        const writable = await fileHandle.createWritable();
-        await writable.write(content);
-        await writable.close();
+        await window.skillsFs.writeSkillFile(skill, rel, content);
     }
 }
 

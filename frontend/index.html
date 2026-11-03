@@ -2197,7 +2197,7 @@
          - On resumed sessions (no fresh-login flag) the splash hides
            immediately so the empty overlay never flashes.
          - On fresh logins the splash stays visible until StartupTasksRunner.
-           runAll() (in assets/js/startup-tasks.js?v=20260903-playbook-author) finishes its tasks and
+           runAll() (in assets/js/startup-tasks.js?v=20261103-skillsfs-callers) finishes its tasks and
            fades it out. The outer 10s setTimeout below is a safety net:
            if runAll never fires (stale-cached auth.js, network failure
            before authVerified, etc.) the user shouldn't be stuck on the
@@ -4351,7 +4351,7 @@
     <!-- Config and app scripts -->
     <!-- StartupTasksRunner must load before auth.js so window.startupTasks
          exists by the time checkAuth() succeeds and runAll() is invoked. -->
-    <script src="assets/js/startup-tasks.js?v=20260903-playbook-author"></script>
+    <script src="assets/js/startup-tasks.js?v=20261103-skillsfs-callers"></script>
     <script src="assets/js/account-store.js?v=20260529-account-store"></script>
     <script src="assets/js/auth.js?v=20260928-corporate-login"></script>
     <script src="assets/js/config.js?v=20261026-nokeys"></script>
@@ -4379,11 +4379,11 @@
     <!-- Folder-backed Skills service. Reads <root>/skills/*/SKILL.md.
          Must load after local-fs.js (uses window.localFs) and before
          skills-manager.js (which calls window.skillsFs). -->
-    <script src="assets/js/skills-fs.js?v=20261103-store2"></script>
+    <script src="assets/js/skills-fs.js?v=20261103-skillsfs-callers"></script>
     <!-- Pyodide skill-script runner. Lazy-loads Pyodide on first call;
          depends on window.localFs (skill folder resolution) and
          window.skillsFs (frontmatter parsing for declared deps). -->
-    <script src="assets/js/pyodide-runner.js?v=20261103-local"></script>
+    <script src="assets/js/pyodide-runner.js?v=20261103-skillsfs-callers"></script>
     <!-- Parallel skill execution: worker pool used by chat.js for rounds of 2+
          independent run_skill_script calls (the worker itself loads via new Worker). -->
     <script src="assets/js/pyodide-pool.js?v=20260608-parallel"></script>
@@ -4395,11 +4395,11 @@
     <!-- fflate: tiny WebAssembly-free zip lib for unpacking .skill / .zip
          imports. Loaded from jsDelivr; ~8KB gzipped. -->
     <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
-    <script src="assets/js/skills-import.js?v=20261030-package-export"></script>
+    <script src="assets/js/skills-import.js?v=20261103-skillsfs-callers"></script>
     <script src="assets/js/skills-manager.js?v=20260818-fsa-notice"></script>
-    <script src="assets/js/skillopt-panel.js?v=20260929-catalog-ids"></script>
+    <script src="assets/js/skillopt-panel.js?v=20261103-skillsfs-callers"></script>
     <script src="assets/js/heal-panel.js?v=20260929-catalog-ids"></script>
-    <script src="assets/js/genesis-panel.js?v=20260720-no-silent-dismiss"></script>
+    <script src="assets/js/genesis-panel.js?v=20261103-skillsfs-callers"></script>
     <script src="assets/js/agent-turn.js?v=20261022-start-args"></script>
     <script src="assets/js/swarm-rewrite.js?v=20260916-dupnames"></script>
     <script src="assets/js/code-node.js?v=20261029-robot-run"></script>
@@ -4414,14 +4414,14 @@
     <script src="assets/js/decision-routing.js?v=20261008-unclear"></script>
     <script src="assets/js/cron-text.js?v=20261007-cron"></script>
     <script src="assets/js/robot-owner.js?v=20261029-others"></script>
-    <script src="assets/js/workflow-package-ui.js?v=20261103-host-export"></script>
-    <script src="assets/js/workflow-package-import.js?v=20261103-host-restarting"></script>
-    <script src="assets/js/workflow-editor.js?v=20261103-pyodide-local"></script>
+    <script src="assets/js/workflow-package-ui.js?v=20261103-skillsfs-callers"></script>
+    <script src="assets/js/workflow-package-import.js?v=20261103-skillsfs-callers"></script>
+    <script src="assets/js/workflow-editor.js?v=20261103-skillsfs-callers"></script>
     <script src="assets/js/agents-library.js?v=20260903-playbook-agent"></script>
     <script src="assets/js/mcp-tool-tester.js?v=20260904-mcplib"></script>
     <script src="assets/js/mcp-library.js?v=20261005-is-mock"></script>
     <script src="assets/js/file-storage.js?v=20260610-fileselect2"></script>
-    <script src="assets/js/chat.js?v=20261103-pyodide-local"></script>
+    <script src="assets/js/chat.js?v=20261103-skillsfs-callers"></script>
     <script>
       (function initVoiceDictation() {
         const input = document.getElementById('user-input');

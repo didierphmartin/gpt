@@ -14,7 +14,7 @@
  * modes return { ok: false, error: ... } so the caller can surface them.
  *
  * Depends on:
- *   - window.localFs.resolvePath('skills', { create: true })
+ *   - window.skillsFs (the skills folder, or the skill store in the Docker app)
  *   - window.fflate.unzip  (loaded via CDN script tag)
  */
 (function () {
@@ -24,50 +24,39 @@
     const isJunk = (name) => SKIP_PREFIXES.some(p => name === p || name.startsWith(p + '/'));
 
     /**
-     * Verify the destination skills directory exists and that no folder
-     * named `name` already lives inside it. Returns the skills directory
-     * handle on success.
+     * Verify skills can be written (the folder exists, or the skill store is
+     * used) and that no skill named `name` is already there.
      */
     async function ensureSkillsDir(name) {
-        if (!window.localFs) {
+        if (!window.skillsFs) {
             return { ok: false, error: 'Local filesystem not available — pick your data folder in Settings first.' };
         }
-        const skillsDir = await window.localFs.resolvePath('skills', { create: true });
-        if (!skillsDir) {
-            return { ok: false, error: 'Could not open or create the skills folder under your data root.' };
-        }
-        // Collision check.
-        try {
-            await skillsDir.getDirectoryHandle(name, { create: false });
-            return { ok: false, error: `A skill folder named "${name}" already exists. Rename or remove it first.` };
-        } catch {
-            // Doesn't exist — good, continue.
-        }
-        return { ok: true, skillsDir };
-    }
-
-    /**
-     * Recursively copy a source directory handle into a destination
-     * directory handle, mirroring the tree. Skips macOS/Windows junk
-     * artifacts. Returns the count of files copied.
-     */
-    async function copyDirectory(srcDir, destDir) {
-        let files = 0;
-        for await (const entry of srcDir.values()) {
-            if (isJunk(entry.name)) continue;
-            if (entry.kind === 'file') {
-                const file = await entry.getFile();
-                const newHandle = await destDir.getFileHandle(entry.name, { create: true });
-                const writable = await newHandle.createWritable();
-                await writable.write(await file.arrayBuffer());
-                await writable.close();
-                files++;
-            } else if (entry.kind === 'directory') {
-                const subDest = await destDir.getDirectoryHandle(entry.name, { create: true });
-                files += await copyDirectory(entry, subDest);
+        if (await window.skillsFs.mode() !== 'volume') {
+            if (!window.localFs) {
+                return { ok: false, error: 'Local filesystem not available — pick your data folder in Settings first.' };
+            }
+            if (!(await window.skillsFs.folderHandle(''))) {
+                return { ok: false, error: 'Could not open or create the skills folder under your data root.' };
             }
         }
-        return files;
+        if (await window.skillsFs.skillExists(name)) {
+            return { ok: false, error: `A skill folder named "${name}" already exists. Rename or remove it first.` };
+        }
+        return { ok: true };
+    }
+
+    /** Write the collected { rel: bytes } of a new skill through skillsFs. */
+    async function installFiles(name, files) {
+        try {
+            await window.skillsFs.writeSkillFiles(name, files);
+        } catch (e) {
+            if (e?.code === 'clash') {
+                return { ok: false, error: `A skill folder named "${name}" already exists. Rename or remove it first.` };
+            }
+            console.error('[skillsImport] write failed:', e);
+            return { ok: false, error: 'Copy failed: ' + (e?.message || e) };
+        }
+        return { ok: true, name, fileCount: Object.keys(files).length };
     }
 
     /**
@@ -108,22 +97,16 @@
         }
         const ensured = await ensureSkillsDir(srcDir.name);
         if (!ensured.ok) return ensured;
-        let destDir;
+        let files;
         try {
-            destDir = await ensured.skillsDir.getDirectoryHandle(srcDir.name, { create: true });
-        } catch (e) {
-            console.error('[skillsImport] could not create destination:', e);
-            return { ok: false, error: 'Could not create destination folder: ' + (e?.message || e) };
-        }
-        let fileCount;
-        try {
-            fileCount = await copyDirectory(srcDir, destDir);
+            files = await readFolderFiles(srcDir, '', (entry) => !isJunk(entry.name));
         } catch (e) {
             console.error('[skillsImport] copy failed:', e);
             return { ok: false, error: 'Copy failed: ' + (e?.message || e) };
         }
-        console.log(`[skillsImport] copied ${fileCount} files to skills/${srcDir.name}/`);
-        return { ok: true, name: srcDir.name, fileCount };
+        const result = await installFiles(srcDir.name, files);
+        if (result.ok) console.log(`[skillsImport] copied ${result.fileCount} files to skills/${srcDir.name}/`);
+        return result;
     }
 
     /**
@@ -187,21 +170,8 @@
 
         const ensured = await ensureSkillsDir(name);
         if (!ensured.ok) return ensured;
-        const destDir = await ensured.skillsDir.getDirectoryHandle(name, { create: true });
 
-        // Helper: get-or-create nested directory handles for a path.
-        const dirCache = new Map(); // path -> handle, including '' -> destDir
-        dirCache.set('', destDir);
-        const ensureDir = async (relPath) => {
-            if (dirCache.has(relPath)) return dirCache.get(relPath);
-            const parts = relPath.split('/');
-            const parent = await ensureDir(parts.slice(0, -1).join('/'));
-            const handle = await parent.getDirectoryHandle(parts[parts.length - 1], { create: true });
-            dirCache.set(relPath, handle);
-            return handle;
-        };
-
-        let fileCount = 0;
+        const files = {};
         for (const [path, content] of Object.entries(entries)) {
             if (isJunk(path)) continue;
             // fflate flags directories with a trailing slash — skip them
@@ -214,20 +184,12 @@
             if (layout.topDir && rel.startsWith(layout.topDir + '/')) {
                 rel = rel.slice(layout.topDir.length + 1);
             }
-            const slash = rel.lastIndexOf('/');
-            const dirPart = slash >= 0 ? rel.slice(0, slash) : '';
-            const fileName = slash >= 0 ? rel.slice(slash + 1) : rel;
+            const fileName = rel.slice(rel.lastIndexOf('/') + 1);
             if (!fileName) continue;
-
-            const dir = await ensureDir(dirPart);
-            const fh = await dir.getFileHandle(fileName, { create: true });
-            const w = await fh.createWritable();
-            await w.write(content);
-            await w.close();
-            fileCount++;
+            files[rel] = content;
         }
 
-        return { ok: true, name, fileCount };
+        return installFiles(name, files);
     }
 
     /**
@@ -306,15 +268,16 @@
     }
 
     /**
-     * Walk a directory in a GitHub repo via the contents API and write
-     * everything into `destDir` preserving the tree. Returns file count.
+     * Walk a directory in a GitHub repo via the contents API and collect
+     * everything into `files` ({ rel: bytes }, rel under `prefix`) preserving
+     * the tree. Returns file count.
      * Throws on any unrecoverable error so the caller can surface it.
      *
      * Anonymous GitHub API has a 60 req/hour rate limit per IP. A typical
      * skill folder is ~5-15 files; the limit is plenty for normal use,
      * just noisy if a user spams installs.
      */
-    async function fetchGitHubTree(owner, repo, ref, path, destDir) {
+    async function fetchGitHubTree(owner, repo, ref, path, files, prefix = '') {
         const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`;
         const res = await fetch(apiUrl, {
             headers: { Accept: 'application/vnd.github+json' },
@@ -327,7 +290,7 @@
         if (!Array.isArray(items)) {
             throw new Error('GitHub contents API returned a non-array — expected a directory.');
         }
-        let files = 0;
+        let count = 0;
         for (const item of items) {
             if (isJunk(item.name)) continue;
             if (item.type === 'file') {
@@ -336,19 +299,14 @@
                 if (!fileRes.ok) {
                     throw new Error(`Could not download ${item.path}: ${fileRes.status}`);
                 }
-                const buf = await fileRes.arrayBuffer();
-                const fh = await destDir.getFileHandle(item.name, { create: true });
-                const w = await fh.createWritable();
-                await w.write(buf);
-                await w.close();
-                files++;
+                files[prefix + item.name] = new Uint8Array(await fileRes.arrayBuffer());
+                count++;
             } else if (item.type === 'dir') {
-                const sub = await destDir.getDirectoryHandle(item.name, { create: true });
-                files += await fetchGitHubTree(owner, repo, ref, item.path, sub);
+                count += await fetchGitHubTree(owner, repo, ref, item.path, files, `${prefix}${item.name}/`);
             }
             // Symlinks/submodules: skip silently.
         }
-        return files;
+        return count;
     }
 
     /**
@@ -391,24 +349,26 @@
 
         const ensured = await ensureSkillsDir(safeName);
         if (!ensured.ok) return ensured;
-        let destDir;
+        const files = {};
         try {
-            destDir = await ensured.skillsDir.getDirectoryHandle(safeName, { create: true });
-        } catch (e) {
-            return { ok: false, error: 'Could not create destination folder: ' + (e?.message || e) };
-        }
-
-        let fileCount;
-        try {
-            fileCount = await fetchGitHubTree(owner, repo, ref, path, destDir);
+            await fetchGitHubTree(owner, repo, ref, path, files);
         } catch (e) {
             return { ok: false, error: 'Download failed: ' + (e?.message || e) };
         }
-        return { ok: true, name: safeName, fileCount };
+        return installFiles(safeName, files);
     }
 
     /** The skill filter: junk, dotfiles (may hold secrets) and __pycache__ are left out. */
     const skillEntryFilter = (entry) => !(isJunk(entry.name) || entry.name.startsWith('.') || entry.name === '__pycache__');
+
+    /** The same filter over a { rel: bytes } map (e.g. skillsFs.readSkillFiles): a path is kept when every segment passes. */
+    function filterSkillFiles(files) {
+        const out = {};
+        for (const [rel, b] of Object.entries(files || {})) {
+            if (rel.split('/').every((name) => skillEntryFilter({ name }))) out[rel] = b;
+        }
+        return out;
+    }
 
     /**
      * Every file under dirHandle as { "<prefix>/<relative path>": bytes } (no prefix: bare relative paths).
@@ -442,15 +402,16 @@
         if (!window.fflate || typeof window.fflate.zip !== 'function') {
             return { ok: false, error: 'Zip library (fflate) is not loaded.' };
         }
-        const dir = window.localFs && await window.localFs.resolvePath(`skills/${dirName}`);
-        if (!dir) return { ok: false, error: `Skill folder "${dirName}" not found.` };
-
-        const files = await readFolderFiles(dir, dir.name);
+        const found = filterSkillFiles(window.skillsFs ? await window.skillsFs.readSkillFiles(dirName) : {});
+        if (!Object.keys(found).length) return { ok: false, error: `Skill folder "${dirName}" not found.` };
+        const leaf = dirName.split('/').pop();
+        const files = {};
+        for (const [rel, b] of Object.entries(found)) files[`${leaf}/${rel}`] = b;
 
         const bytes = await new Promise((resolve, reject) => {
             window.fflate.zip(files, { level: 6 }, (err, data) => err ? reject(err) : resolve(data));
         });
-        return { ok: true, name: dir.name, bytes };
+        return { ok: true, name: leaf, bytes };
     }
 
     window.skillsImport = {
@@ -460,5 +421,6 @@
         importFromGitHub,
         exportSkillZip,
         readFolderFiles,
+        filterSkillFiles,
     };
 })();

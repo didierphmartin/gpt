@@ -559,7 +559,8 @@
             err.data = data;
             throw err;
         }
-        return data;
+        // The backend answers { success, data, ... }: hand back the payload.
+        return data && typeof data === 'object' && 'success' in data && 'data' in data ? data.data : data;
     }
 
     const enqPath = (p) => encodeURIComponent(p);
@@ -612,9 +613,9 @@
         return [...groups].sort().map((name) => ({ name }));
     }
 
-    async function volumeFile(path, rel) {
+    async function volumeFile(path, rel, asRobot = false) {
         try {
-            const d = await api('GET', `/skills/file?path=${enqPath(path)}&rel=${enqPath(rel)}`);
+            const d = await api('GET', `/skills/file?path=${enqPath(path)}&rel=${enqPath(rel)}${asRobot ? '&as=robot' : ''}`);
             return d && typeof d.content === 'string' ? fromB64(d.content) : null;
         } catch (e) {
             if (e.status === 404) return null;
@@ -622,35 +623,36 @@
         }
     }
 
-    async function getSkillContent(skillPath) {
+    // asRobot (store only): read what the robot may see — a robot-owned workflow's skills.
+    async function getSkillContent(skillPath, { asRobot = false } = {}) {
         if (!skillPath) return '';
         if (await mode() !== 'volume') return folder_getSkillContent(skillPath);
-        const b = await volumeFile(skillPath, 'SKILL.md');
+        const b = await volumeFile(skillPath, 'SKILL.md', asRobot);
         return b ? parseFrontmatter(dec.decode(b)).body : '';
     }
 
-    async function getSkillFile(dirName, relativePath) {
+    async function getSkillFile(dirName, relativePath, { asRobot = false } = {}) {
         if (!dirName || !relativePath) return null;
         if (await mode() !== 'volume') return folder_getSkillFile(dirName, relativePath);
-        const b = await volumeFile(dirName, relativePath);
+        const b = await volumeFile(dirName, relativePath, asRobot);
         return b ? dec.decode(b) : null;
     }
 
-    async function listUnder(dirName, prefix, ext) {
-        const files = await readSkillFiles(dirName);
+    async function listUnder(dirName, prefix, ext, asRobot) {
+        const files = await readSkillFiles(dirName, { asRobot, under: prefix });
         return Object.keys(files)
             .filter((r) => r.startsWith(prefix + '/') && r.toLowerCase().endsWith(ext))
             .sort();
     }
-    async function listSkillScripts(dirName) {
+    async function listSkillScripts(dirName, { asRobot = false } = {}) {
         if (!dirName) return [];
         if (await mode() !== 'volume') return folder_listSkillScripts(dirName);
-        return listUnder(dirName, 'scripts', '.py');
+        return listUnder(dirName, 'scripts', '.py', asRobot);
     }
-    async function listSkillReferences(dirName) {
+    async function listSkillReferences(dirName, { asRobot = false } = {}) {
         if (!dirName) return [];
         if (await mode() !== 'volume') return folder_listSkillReferences(dirName);
-        return listUnder(dirName, 'references', '.md');
+        return listUnder(dirName, 'references', '.md', asRobot);
     }
 
     const failure = (e) => ({ ok: false, error: e?.message || String(e) });
@@ -735,22 +737,55 @@
         await w.close();
     }
 
-    /** { rel: Uint8Array } for one skill. Wheels (.wheels/...) only when asked. */
-    async function readSkillFiles(path, { asRobot = false, withWheels = false } = {}) {
+    /**
+     * { rel: Uint8Array } for one skill. Wheels (.wheels/...) only when asked.
+     * under: only the files below that skill-relative folder (keys stay skill-relative);
+     * in folder mode only that folder is walked.
+     */
+    async function readSkillFiles(path, { asRobot = false, withWheels = false, under = '' } = {}) {
         let files;
+        const sub = String(under || '').replace(/^\/+|\/+$/g, '');
         if (await mode() === 'volume') {
             const d = await api('GET', `/skills/files?path=${enqPath(path)}${asRobot ? '&as=robot' : ''}`);
             files = {};
-            for (const [rel, b64] of Object.entries((d && d.files) || {})) files[rel] = fromB64(b64);
+            for (const [rel, b64] of Object.entries((d && d.files) || {})) {
+                if (!sub || rel.startsWith(sub + '/')) files[rel] = fromB64(b64);
+            }
         } else {
-            const dir = await window.localFs?.resolvePath(`skills/${path}`);
+            const dir = await window.localFs?.resolvePath(sub ? `skills/${path}/${sub}` : `skills/${path}`);
             if (!dir) return {};
-            files = await walkBytes(dir, '', {}, () => false);
+            files = await walkBytes(dir, sub, {}, () => false);
         }
         if (!withWheels) {
             for (const rel of Object.keys(files)) if (rel.startsWith('.wheels/')) delete files[rel];
         }
         return files;
+    }
+
+    /** Folder mode: the skill's directory handle ('' = the skills root, created when missing). Store: null. */
+    async function folderHandle(path = '') {
+        if (await mode() === 'volume' || !window.localFs) return null;
+        return path ? window.localFs.resolvePath(`skills/${path}`) : window.localFs.resolvePath('skills', { create: true });
+    }
+
+    /** Is there a skill (folder) at this path? In the store a skill with the same leaf name counts too. */
+    async function skillExists(path) {
+        if (await mode() !== 'volume') return !!(await window.localFs?.resolvePath(`skills/${path}`));
+        const leaf = path.split('/').pop();
+        return (await listSkills()).some((s) => s.path === path || s.leafName === leaf);
+    }
+
+    /**
+     * Write several files of one skill ({ rel: string|Uint8Array }), creating the skill when it is new.
+     * Folder: file by file (as before). Store: a skill of mine is updated file by file; a new one is
+     * imported (private). Throws .code = 'clash' when the store holds a different skill of that name.
+     */
+    async function writeSkillFiles(path, files) {
+        if (await mode() === 'volume' && !(await listSkills()).some((s) => s.mine && s.path === path)) {
+            return importSkill({ dir: path, name: path.split('/').pop(), files, pyodideWheels: {}, nativeWheels: {} });
+        }
+        for (const [rel, b] of Object.entries(files)) await writeSkillFile(path, rel, b);
+        return { status: 'installed' };
     }
 
     async function writeSkillFile(path, rel, bytes) {
@@ -865,6 +900,9 @@
         edition,
         readSkillFiles,
         writeSkillFile,
+        writeSkillFiles,
+        skillExists,
+        folderHandle,
         importSkill,
         setVisibility,
         skillsRootFiles,
