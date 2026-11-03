@@ -564,14 +564,20 @@
 
     const enqPath = (p) => encodeURIComponent(p);
 
-    let storePromise = null;
-    function storeInfo() {
-        if (!storePromise) {
-            storePromise = api('GET', '/skills/store')
-                .then((d) => ({ mode: d && d.mode === 'volume' ? 'volume' : 'folder', edition: (d && d.edition) || '' }))
-                .catch(() => ({ mode: 'folder', edition: '' }));
+    // Cache a successful answer or a 404 (route absent -> folder). Any other failure
+    // (not logged in yet, network blip) answers 'folder' for this call only and retries next time.
+    let storeCache = null;
+    async function storeInfo() {
+        if (storeCache) return storeCache;
+        try {
+            const d = await api('GET', '/skills/store');
+            storeCache = { mode: d && d.mode === 'volume' ? 'volume' : 'folder', edition: (d && d.edition) || '' };
+            return storeCache;
+        } catch (e) {
+            const absent = { mode: 'folder', edition: '' };
+            if (e.status === 404) storeCache = absent;
+            return absent;
         }
-        return storePromise;
     }
     async function mode() { return (await storeInfo()).mode; }
     async function edition() { return (await storeInfo()).edition; }
@@ -774,8 +780,20 @@
                 throw e;
             }
         }
+        const existing = await readSkillFiles(read.dir);
+        if (Object.keys(existing).length) {
+            const incoming = Object.keys(all).filter((r) => !r.startsWith('.wheels/'));
+            const same = incoming.length === Object.keys(existing).length && incoming.every((r) => {
+                const a = existing[r], b = asBytes(all[r]);
+                return a && a.length === b.length && a.every((v, i) => v === b[i]);
+            });
+            if (same) return { status: 'identical' };
+            const err = new Error('A different skill with this name already exists.');
+            err.code = 'clash';
+            throw err;
+        }
         for (const [rel, b] of Object.entries(all)) await writeLocalFile(`${read.dir}/${rel}`, b);
-        return { status: 'created' };
+        return { status: 'installed' };
     }
 
     async function setVisibility(path, visibility) {

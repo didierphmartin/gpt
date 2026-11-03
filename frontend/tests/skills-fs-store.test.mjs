@@ -90,8 +90,8 @@ test('folder mode keeps the list shape and adds private/mine/dependencies', asyn
 test('importSkill posts base64 toStoreFiles at read.dir and maps 409 to code clash', async () => {
   let sent;
   const read = { dir: 'g/s', name: 's', files: { 'SKILL.md': new TextEncoder().encode('hi') }, pyodideWheels: { 'a.whl': new Uint8Array([1]) }, nativeWheels: {} };
-  const { fs } = load({ routes: { ...volume, 'POST /skills/import': (b) => { sent = b; return [200, { status: 'created' }]; } } });
-  assert.equal((await fs.importSkill(read, { visibility: 'public' })).status, 'created');
+  const { fs } = load({ routes: { ...volume, 'POST /skills/import': (b) => { sent = b; return [200, { status: 'installed' }]; } } });
+  assert.equal((await fs.importSkill(read, { visibility: 'public' })).status, 'installed');
   assert.equal(sent.path, 'g/s');
   assert.equal(sent.visibility, 'public');
   assert.equal(sent.files['SKILL.md'], b64('hi'));
@@ -142,7 +142,7 @@ test('volume skillsRootFiles lists own skills only; writeSkillsRoot imports new,
     'GET /skills': () => [200, [{ path: 'mine', name: 'm', visibility: 'private', owner_id: 1, mine: true }, { path: 'theirs', name: 't', visibility: 'public', owner_id: 2, mine: false }]],
     'GET /skills/files': (b, p) => [200, { files: { 'SKILL.md': b64(p.includes('mine') ? 'M' : 'T') } }],
     'PUT /skills/file': (b) => { puts.push(b); return [200, {}]; },
-    'POST /skills/import': (b) => { imp = b; return [200, { status: 'created' }]; },
+    'POST /skills/import': (b) => { imp = b; return [200, { status: 'installed' }]; },
   } });
   const root = await fs.skillsRootFiles();
   assert.equal(Object.keys(root).join(), 'mine/SKILL.md');
@@ -151,4 +151,43 @@ test('volume skillsRootFiles lists own skills only; writeSkillsRoot imports new,
   assert.equal(puts[0].path, 'mine');
   assert.equal(imp.path, 'fresh');
   assert.equal(imp.files['scripts/a.py'], b64('p'));
+});
+
+test('mode: a transient failure is not cached, a 404 is', async () => {
+  let n = 0;
+  const flaky = load({ routes: { 'GET /skills/store': () => (n++ ? [200, { mode: 'volume', edition: 'x' }] : [401, {}]) } });
+  assert.equal(await flaky.fs.mode(), 'folder');
+  assert.equal(await flaky.fs.mode(), 'volume');
+  assert.equal(await flaky.fs.mode(), 'volume');
+  assert.equal(n, 2);
+  const absent = load({ routes: {} });
+  await absent.fs.mode(); await absent.fs.mode();
+  assert.equal(absent.calls.length, 1);
+});
+
+function writableDir(tree, name = '') {
+  const d = fakeDir(tree, name);
+  d.getDirectoryHandle = async (n) => { if (typeof tree[n] !== 'object') throw new Error('nf'); return writableDir(tree[n], n); };
+  return d;
+}
+
+test('folder-mode importSkill: installed, identical, clash', async () => {
+  const read = { dir: 's', name: 's', files: { 'SKILL.md': new TextEncoder().encode('hi') }, pyodideWheels: {}, nativeWheels: {} };
+  const writes = [];
+  const mk = (tree) => {
+    const skills = writableDir(tree, 'skills');
+    const localFs = { resolvePath: async (p, o) => {
+      if (p === 'skills') return skills;
+      if (p === 'skills/s') return tree.s ? writableDir(tree.s, 's') : (o && o.create ? { async getFileHandle(n) { return { createWritable: async () => ({ write: async () => writes.push(n), close: async () => {} }) }; } } : null);
+      if (p === 'skills') return skills;
+      return { async getFileHandle(n) { return { createWritable: async () => ({ write: async () => writes.push(n), close: async () => {} }) }; } };
+    } };
+    return load({ localFs }).fs;
+  };
+  assert.equal((await mk({}).importSkill(read)).status, 'installed');
+  assert.ok(writes.length > 0);
+  writes.length = 0;
+  assert.equal((await mk({ s: { 'SKILL.md': 'hi' } }).importSkill(read)).status, 'identical');
+  assert.equal(writes.length, 0);
+  await assert.rejects(() => mk({ s: { 'SKILL.md': 'other' } }).importSkill(read), (e) => e.code === 'clash');
 });
