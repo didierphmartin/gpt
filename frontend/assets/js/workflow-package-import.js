@@ -31,6 +31,7 @@
     /** The per-row values object, created null-prototype on first use. */
     const rowValues = (values, name) => own(values, name) || (values[name] = Object.create(null));
 
+    const i18n = (key) => (window.i18n && window.i18n.t ? window.i18n.t(`workflow.package.${key}`) : key);
     const POLL_MS = 3000, POLL_MAX_MS = 15 * 60 * 1000;
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     const toBase64 = (bytes) => {
@@ -58,10 +59,10 @@
             let list;
             try { list = await mc.hostServers(); } catch (_) { continue; }
             const row = list.find((x) => x.folder === folder);
-            if (!row) throw new Error('the install did not finish');
-            if (['running', 'starting', 'crashed'].includes(row.state)) return { state: row.state, log: row.log };
+            if (!row) throw new Error(i18n('hostInstallUnfinished'));
+            if (row.state !== 'installing') return { state: row.state, log: row.log };
         }
-        throw new Error('the install is taking too long');
+        throw new Error(i18n('hostInstallTooLong'));
     }
 
     /** The io installPackage writes through: the user's folder, the server list, playbooks, components. */
@@ -123,8 +124,8 @@
             if (CC) await CC.cache.load(CC.api());
             have.components = CC ? CC.cache.all() : [];
         }
-        if (!have.host && !have.hostFolders && window.mcpClient && (await window.mcpClient.hostStatus()).available) {
-            const st = await window.mcpClient.hostStatus();
+        const st = !have.host && !have.hostFolders && window.mcpClient ? await window.mcpClient.hostStatus() : null;
+        if (st && st.available) {
             have.host = { gateway: st.gateway || '' };
             try {
                 have.hostFolders = (await window.mcpClient.hostServers()).map((x) => x.folder);
@@ -219,7 +220,7 @@
         if (skipped) status = t('statusSkipped');
         else if (r.choice === 'use-existing') status = t('statusUseExisting');
         else if (r.status === 'present') status = t('statusPresent');
-        else if (r.status === 'clash') status = r.folderExists ? t('statusFolderExists', { destination: r.destination }) : t('statusClash', { name: r.name });
+        else if (r.status === 'clash') status = r.folderExists ? t(r.volume ? 'statusVolumeFolderExists' : 'statusFolderExists', { destination: r.destination }) : t('statusClash', { name: r.name });
         else if (r.kind === 'secrets') status = t('statusKeys');
         else status = r.destination && !volume ? t('statusInstallTo', { destination: r.destination }) : t('statusInstall');
         const reasons = (r.reasons || []).filter((x) => REASON_KEY[x]);

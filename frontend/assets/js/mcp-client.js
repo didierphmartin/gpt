@@ -82,10 +82,9 @@ class MCPClient {
     }
 
     // The Docker app's server host (backend relay to the supervisor); every answer is {success, data}.
-    hostStatus() {
-        if (!this._hostStatus) {
-            this._hostStatus = this.request('/mcp/host').then((r) => r.data || { available: false }).catch(() => ({ available: false }));
-        }
+    async hostStatus() {
+        // Only an answer is cached; a failure throws, so a caller never mistakes it for "no host".
+        if (!this._hostStatus) this._hostStatus = (await this.request('/mcp/host')).data || { available: false };
         return this._hostStatus;
     }
     async hostServers() { return (await this.request('/mcp/host/servers')).data || []; }

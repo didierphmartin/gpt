@@ -500,7 +500,7 @@
                 const fields = envFields(man, ex ? dec(ex) : '');
                 if (fields.some((f) => f.required)) { r.reasons.push('settings-required'); r.envFields = fields; }
             }
-            if (!h.host && isLocalUrl(s.url)) { r.reasons.push('localhost-url'); r.url = s.url; }
+            if (!(h.host && s.local) && isLocalUrl(s.url)) { r.reasons.push('localhost-url'); r.url = s.url; }
             if (s.needs_auth) r.reasons.push('needs-key');
             if (s.global) r.reasons.push('global-server');
             r.status = r.folderExists ? 'clash' : cls !== 'install' ? cls : r.reasons.some((x) => x !== 'global-server') ? 'attention' : cls;
@@ -639,7 +639,7 @@
         for (const t of targets) if (await step(`check ${t}`, () => io.exists(t))) taken.push(t);
         if (taken.length) throw new Error('install refused: would overwrite ' + taken.join(', '));
 
-        for (const dir of WRITE_ROOTS) await step(`create folder ${dir}`, () => io.ensureDir(guard(dir, dir)));
+        for (const dir of WRITE_ROOTS.filter((d) => !(h.host && d === 'mcps'))) await step(`create folder ${dir}`, () => io.ensureDir(guard(dir, dir)));
 
         for (const { r, dest, paths } of plan.skills) {
             for (const p of paths) await step(`write skill ${r.name}: ${p}`, () => writeFile(p, 'skills', files[p]));

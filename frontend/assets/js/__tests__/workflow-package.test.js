@@ -507,6 +507,21 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
             assert.strictEqual(hio.calls.find((c) => c[0] === 'addServer')[1].url, 'http://localhost:8790/outlook_mcp/mcp');
             assert.ok(hres.installed.some((x) => x.kind === 'server' && x.destination === 'volume: outlook_mcp' && x.state === 'running'));
             assert.deepStrictEqual(hres.commands, []);
+            assert.ok(!hio.calls.some((c) => c[0] === 'ensureDir' && c[1] === 'mcps'));
+            // a non-local server with a localhost address keeps its warning in host mode
+            const nl = { ...ipkg, servers: ipkg.servers.map((x) => (x.name === 'Hosted' ? { ...x, url: 'http://localhost:1/mcp' } : x)) };
+            assert.ok((await WP.reviewRows(nl, hhave)).find((r) => r.name === 'Hosted').reasons.includes('localhost-url'));
+            // use-existing on a volume folder registers the gateway address, no commands
+            {
+                const uh = { ...hhave, hostFolders: ['outlook_mcp'] };
+                const urows = await WP.reviewRows(ipkg, uh);
+                for (const r of urows) r.choice = r.name === 'Outlook' ? 'use-existing' : (r.kind === 'server' && r.status === 'present') ? r.choice : 'skip';
+                const uio = memIo();
+                const ures = await WP.installPackage(urows, ipkg, {}, uio, uh);
+                assert.strictEqual(uio.calls.find((c) => c[0] === 'addServer')[1].url, 'http://localhost:8790/outlook_mcp/mcp');
+                assert.ok(!uio.calls.some((c) => c[0] === 'installServer'));
+                assert.deepStrictEqual(ures.commands, []);
+            }
             // fill later: no env
             const lio = memIo();
             await WP.installPackage(hrows, ipkg, { Outlook: { fillLater: true } }, lio, hhave);
