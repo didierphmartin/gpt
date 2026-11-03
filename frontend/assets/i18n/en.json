@@ -422,6 +422,31 @@
         "pyodide-install": "Installing libraries to bundle them...",
         "pack": "Writing the zip..."
       }
+    },
+    "section": {
+      "public": "Public",
+      "private": "Private"
+    },
+    "visibility": {
+      "public": "Public",
+      "private": "Private",
+      "makePublic": "Make public (everyone can use it)",
+      "makePrivate": "Make private (only me)",
+      "robotBlocked": "Cannot make it private: these robot workflows use it: {{names}}.",
+      "clash": "A different public skill named {{name}} already exists.",
+      "failed": "Could not change the visibility: {{message}}"
+    },
+    "migrate": {
+      "title": "Import my existing skills",
+      "body": "Found {{count}} skill(s) in your local folder. Import them into the shared skill store as private skills?",
+      "import": "Import my existing skills",
+      "later": "Not now",
+      "running": "Importing...",
+      "close": "Close",
+      "installed": "installed",
+      "exists": "already installed",
+      "clash": "a different skill with this name exists",
+      "failed": "failed"
     }
   },
   "fileStorage": {

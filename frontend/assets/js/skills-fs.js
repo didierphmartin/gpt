@@ -906,7 +906,21 @@
         return { ok: true };
     }
 
+    /** The skills in the user's own folder, whatever the mode (the source of the one-time import into the store). */
+    async function listFolderSkills() {
+        return folderListSkills();
+    }
+
+    /** One folder skill's files, whatever the mode; leaves out dotfiles/dot-folders (.wheels, .git...) and __pycache__. */
+    async function readFolderSkillFiles(path) {
+        const dir = await window.localFs?.resolvePath(`skills/${path}`);
+        if (!dir) return {};
+        return walkBytes(dir, '', {}, (p, e) => e.name.startsWith('.') || e.name === '__pycache__');
+    }
+
     window.skillsFs = {
+        listFolderSkills,
+        readFolderSkillFiles,
         listSkills,
         listFolders,
         listSkillScripts,

@@ -422,6 +422,31 @@
         "pyodide-install": "Installation des bibliothèques à inclure...",
         "pack": "Écriture du zip..."
       }
+    },
+    "section": {
+      "public": "Publiques",
+      "private": "Privées"
+    },
+    "visibility": {
+      "public": "Publique",
+      "private": "Privée",
+      "makePublic": "Rendre publique (tout le monde peut l'utiliser)",
+      "makePrivate": "Rendre privée (moi seul)",
+      "robotBlocked": "Impossible de la rendre privée : ces workflows robot l'utilisent : {{names}}.",
+      "clash": "Une autre compétence publique nommée {{name}} existe déjà.",
+      "failed": "Impossible de changer la visibilité : {{message}}"
+    },
+    "migrate": {
+      "title": "Importer mes compétences existantes",
+      "body": "{{count}} compétence(s) trouvée(s) dans votre dossier local. Les importer dans le magasin partagé en tant que compétences privées ?",
+      "import": "Importer mes compétences existantes",
+      "later": "Pas maintenant",
+      "running": "Importation...",
+      "close": "Fermer",
+      "installed": "installée",
+      "exists": "déjà installée",
+      "clash": "une autre compétence porte ce nom",
+      "failed": "échec"
     }
   },
   "fileStorage": {

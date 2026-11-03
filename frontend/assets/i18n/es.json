@@ -422,6 +422,31 @@
         "pyodide-install": "Instalando las bibliotecas para incluirlas...",
         "pack": "Escribiendo el zip..."
       }
+    },
+    "section": {
+      "public": "Públicas",
+      "private": "Privadas"
+    },
+    "visibility": {
+      "public": "Pública",
+      "private": "Privada",
+      "makePublic": "Hacer pública (todos pueden usarla)",
+      "makePrivate": "Hacer privada (solo yo)",
+      "robotBlocked": "No se puede hacer privada: la usan estos flujos de robot: {{names}}.",
+      "clash": "Ya existe otra habilidad pública llamada {{name}}.",
+      "failed": "No se pudo cambiar la visibilidad: {{message}}"
+    },
+    "migrate": {
+      "title": "Importar mis habilidades existentes",
+      "body": "Se encontraron {{count}} habilidad(es) en su carpeta local. ¿Importarlas al almacén compartido como habilidades privadas?",
+      "import": "Importar mis habilidades existentes",
+      "later": "Ahora no",
+      "running": "Importando...",
+      "close": "Cerrar",
+      "installed": "instalada",
+      "exists": "ya instalada",
+      "clash": "existe otra habilidad con este nombre",
+      "failed": "error"
     }
   },
   "fileStorage": {
