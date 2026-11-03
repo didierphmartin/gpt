@@ -88,7 +88,8 @@ def _norm(f: dict) -> dict:
 def fields(manifest: dict | None, env_example: str) -> list:
     """Settings a server needs: manifest["env"] wins, else parsed from its .env.example."""
     if isinstance(manifest, dict) and isinstance(manifest.get("env"), list):
-        return [_norm(f) for f in manifest["env"]]
+        # entries that are not {"name": "..."} objects are skipped: a bad manifest must not stop the server
+        return [_norm(f) for f in manifest["env"] if isinstance(f, dict) and isinstance(f.get("name"), str)]
     out, pending = [], []
     for raw in _LINES.split(env_example or ""):
         line = raw.strip()

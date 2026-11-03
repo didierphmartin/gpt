@@ -160,5 +160,30 @@ class ProcsTest(unittest.TestCase):
         self.assertTrue(any("start" in l for l in self.m.log_tail("dies")))
 
 
+    def test_malformed_manifest_values_are_crashed_not_raised(self):
+        for manifest in ('{"start": "./run.sh", "host_env": 5}',
+                         '{"start": "./run.sh", "data_env": [3]}',
+                         '[1, 2]'):
+            (self.root / "dies/synergyai-mcp.json").write_text(manifest)
+            self.m.start("dies")     # must not raise
+            self.assertEqual(self.m.state("dies"), "crashed", manifest)
+            self.assertTrue(any(l.startswith("[supervisor]") for l in self.m.log_tail("dies")), manifest)
+
+    def test_start_all_keeps_going_past_a_failing_server(self):
+        real = self.m.start
+
+        def start(folder):
+            if folder == "dies":
+                raise RuntimeError("boom")
+            real(folder)
+        self.m.start = start
+        self.reg.set_enabled("stubborn", False)
+        import contextlib
+        import io
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.m.start_all()
+        self.assertIn("boom", err.getvalue())
+        self.assertEqual(self.m.state("ok_server"), "running")
+
 if __name__ == "__main__":
     unittest.main()

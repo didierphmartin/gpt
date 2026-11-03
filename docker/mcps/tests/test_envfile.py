@@ -27,6 +27,10 @@ class EnvFileTest(unittest.TestCase):
         f = fields({"env": [{"name": "OUTLOOK_SECRET_KEY", "required": True}]}, "IGNORED=1\n")
         self.assertEqual(f, [{"name": "OUTLOOK_SECRET_KEY", "label": "", "required": True, "secret": True, "default": ""}])
 
+    def test_fields_skip_malformed_manifest_entries(self):
+        f = fields({"env": ["A", 3, None, {"label": "no name"}, {"name": 7}, {"name": "B"}]}, "")
+        self.assertEqual([x["name"] for x in f], ["B"])
+
     def test_fields_from_example(self):
         f = fields(None, "# Tenant id\n# of the app\nTENANT=abc\n\nAPI_TOKEN=\"x\"\n")
         self.assertEqual(f[0], {"name": "TENANT", "label": "Tenant id of the app", "required": False, "secret": False, "default": "abc"})

@@ -5,6 +5,7 @@ import signal
 import subprocess
 import threading
 import time
+import traceback
 from collections import deque
 from pathlib import Path
 
@@ -106,7 +107,10 @@ class Manager:
     def start_all(self) -> None:
         for folder, entry in self.registry.load().items():
             if entry.get("enabled", True):
-                self.start(folder)
+                try:
+                    self.start(folder)
+                except Exception:   # one bad server must not stop the supervisor (it runs on the main thread)
+                    traceback.print_exc()
 
     def tick(self) -> None:
         """One supervision pass: reap exited children, schedule or perform back-off restarts."""
@@ -178,8 +182,11 @@ class Manager:
             proc = subprocess.Popen(["bash", "-c", start], cwd=d, env=env, stdin=subprocess.DEVNULL,
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                     start_new_session=True)
-        except (ValueError, OSError) as e:
-            log.write(f"[supervisor] cannot start: {e}\n")
+        except Exception as e:   # any malformed manifest value: this server is crashed, the others go on
+            try:
+                log.write(f"[supervisor] cannot start: {e}\n")
+            except OSError:
+                pass
             self._wanted.discard(folder)
             self._crashed.add(folder)
             return

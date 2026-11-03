@@ -11,6 +11,20 @@ class RegistryTest(unittest.TestCase):
         self.addCleanup(self._d.cleanup)
         self.tmp = Path(self._d.name)
 
+    def test_corrupt_file_loads_empty_and_is_kept(self):
+        import contextlib
+        import io
+        (self.tmp / "servers.json").write_text("{not json")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(Registry(self.tmp).load(), {})
+        self.assertIn("servers.json", err.getvalue())
+        self.assertEqual((self.tmp / "servers.json").read_text(), "{not json")
+
+    def test_non_dict_entries_are_ignored(self):
+        (self.tmp / "servers.json").write_text('{"a": 5, "b": {"name": "B", "port": 9101}}')
+        self.assertEqual(list(Registry(self.tmp).load()), ["b"])
+
     def test_ports_are_lowest_free_and_kept(self):
         r = Registry(self.tmp)
         self.assertEqual(r.add("outlook_mcp", "Outlook", 3)["port"], 9101)

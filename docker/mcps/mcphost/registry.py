@@ -1,6 +1,7 @@
 """servers.json: which server folders are hosted, on which port, enabled or not."""
 import json
 import os
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -20,11 +21,17 @@ class Registry:
         self._lock = threading.Lock()   # held across each load-modify-save
 
     def load(self) -> dict:
+        """The registered servers; a corrupt file reads as none (logged) and stays as is until the next write."""
         try:
             data = json.loads(self.file.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return {}
-        return data if isinstance(data, dict) else {}
+        except (ValueError, OSError) as e:   # JSONDecodeError and UnicodeDecodeError are ValueErrors
+            print(f"[supervisor] cannot read {self.file}: {e}", file=sys.stderr)
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {k: v for k, v in data.items() if isinstance(v, dict)}
 
     def _save(self, data: dict) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
