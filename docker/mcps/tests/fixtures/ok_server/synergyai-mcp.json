@@ -1,0 +1,3 @@
+{"name": "ok_server", "start": "./run.sh", "env": [
+  {"name": "FAKE_HOST", "default": "127.0.0.1"}, {"name": "FAKE_PORT", "default": "8000"},
+  {"name": "FAKE_DB_PATH"}, {"name": "FAKE_TOKEN", "secret": true}]}
