@@ -4,7 +4,9 @@ declare(strict_types=1);
 namespace AgentTeam\Services;
 
 use PDO;
+use Quantis\AIPortfolioAssistant\Services\PrivateSkillsRefused;
 use Quantis\AIPortfolioAssistant\Services\RobotAccount;
+use Quantis\AIPortfolioAssistant\Services\RobotSkillPolicy;
 
 /**
  * The workflow each user activated with ▶ on Start (spec 2026-10-14 event-worker): the event worker runs it on its
@@ -15,7 +17,7 @@ final class ActiveWorkflowService
 {
     public const TIMED = ['none', 'hourly', 'daily', 'weekly', 'monthly', 'cron'];
 
-    public function __construct(private PDO $db)
+    public function __construct(private PDO $db, private readonly ?RobotSkillPolicy $skills = null)
     {
     }
 
@@ -70,6 +72,9 @@ final class ActiveWorkflowService
             throw new ActiveWorkflowError('no_links', 'Start has no links', 422);
         }
         $several = RobotAccount::id($this->db) === $userId;
+        if ($several && $this->skills !== null && ($private = $this->skills->privateSkills($workflowId)) !== []) {
+            throw new PrivateSkillsRefused($private);
+        }
         $before = $several ? null : $this->get($userId);
         $replaced = $before && (int) $before['workflow_id'] !== $workflowId
             ? ['workflow_id' => (int) $before['workflow_id'], 'workflow_name' => $before['workflow_name']] : null;

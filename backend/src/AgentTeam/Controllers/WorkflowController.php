@@ -18,7 +18,10 @@ use AgentTeam\Services\WorkflowRunLog;
 use AgentTeam\Services\WorkflowOwnerTransfer;
 use AgentTeam\Services\WorkflowTransferError;
 use Quantis\AIPortfolioAssistant\AIPortfolioAssistant;
+use Quantis\AIPortfolioAssistant\Services\PrivateSkillsRefused;
 use Quantis\AIPortfolioAssistant\Services\RobotAccount;
+use Quantis\AIPortfolioAssistant\Services\RobotSkillPolicy;
+use Quantis\AIPortfolioAssistant\Services\SkillStore;
 use Quantis\AIPortfolioAssistant\Services\RobotOwnership;
 use Quantis\AIPortfolioAssistant\Services\RobotPolicy;
 use Quantis\AIPortfolioAssistant\Services\MCPToolsLoader;
@@ -81,6 +84,20 @@ class WorkflowController
     }
 
     private ?RobotOwnership $ownership = null;
+
+    private function skillPolicy(): RobotSkillPolicy
+    {
+        return new RobotSkillPolicy($this->db, $this->config, SkillStore::fromEnv($this->config));
+    }
+
+    /** The private skills a robot-owned workflow binds (the robot can only use public ones), else []. */
+    private function robotPrivateSkills(int $workflowId): array
+    {
+        $st = $this->db->prepare('SELECT user_id FROM agent_workflows WHERE id = ?');
+        $st->execute([$workflowId]);
+        $owner = $st->fetchColumn();
+        return $owner !== false && (int) $owner === RobotAccount::id($this->db) ? $this->skillPolicy()->privateSkills($workflowId) : [];
+    }
 
     private function ownership(): RobotOwnership
     {
@@ -884,6 +901,9 @@ class WorkflowController
                     'status_code' => 404
                 ];
             }
+            if ($private = $this->robotPrivateSkills($workflowId)) {
+                return RobotSkillPolicy::refusal($private);
+            }
             if ($locked = $this->lockedGuard($workflowId)) {
                 return $locked;
             }
@@ -1051,6 +1071,12 @@ class WorkflowController
         try {
             if (!$this->workflowRepository->canUserAccess($userId, $workflowId, $this->ownership()->robotFor((int) $userId))) {
                 $sseCallback(['type' => 'error', 'error' => 'Workflow not found or access denied']);
+                echo "data: [DONE]\n\n";
+                flush();
+                return;
+            }
+            if ($private = $this->robotPrivateSkills($workflowId)) {
+                $sseCallback(['type' => 'error', 'error' => RobotSkillPolicy::MESSAGE, 'code' => 'private_skills', 'skills' => $private]);
                 echo "data: [DONE]\n\n";
                 flush();
                 return;
@@ -1523,13 +1549,15 @@ class WorkflowController
             RobotAccount::ensure($this->db);   // before ownership() reads the robot's id
         }
         try {
-            $transfer = new WorkflowOwnerTransfer($this->db, $this->ownership());
+            $transfer = new WorkflowOwnerTransfer($this->db, $this->ownership(), $this->skillPolicy());
             $preview = $transfer->preview($userId, $workflowId);
             if ($locked = $this->lockedGuard($workflowId)) {
                 return $locked;
             }
             $data = ($body['confirm'] ?? false) === true ? $transfer->toRobot($userId, $workflowId) : $preview;
             return ['success' => true, 'data' => $data, 'status_code' => 200];
+        } catch (PrivateSkillsRefused $e) {
+            return RobotSkillPolicy::refusal($e->skills);
         } catch (WorkflowTransferError $e) {
             return ['success' => false, 'error' => $e->getMessage(), 'error_code' => $e->kind, 'status_code' => $e->status]
                 + ($e->clashes !== [] ? ['clashes' => $e->clashes] : []);

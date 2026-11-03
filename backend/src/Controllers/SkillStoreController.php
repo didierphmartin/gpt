@@ -4,7 +4,9 @@ namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use PDO;
 use Quantis\AIPortfolioAssistant\Services\SkillClashException;
+use Quantis\AIPortfolioAssistant\Services\RobotSkillPolicy;
 use Quantis\AIPortfolioAssistant\Services\SkillForbidden;
+use Quantis\AIPortfolioAssistant\Services\SkillInUse;
 use Quantis\AIPortfolioAssistant\Services\SkillNotFound;
 use Quantis\AIPortfolioAssistant\Services\SkillPathInvalid;
 use Quantis\AIPortfolioAssistant\Services\SkillStore;
@@ -26,7 +28,10 @@ final class SkillStoreController
     public function __construct(private readonly PDO $db, private readonly array $config, ?\Closure $storeFactory = null, ?SkillWheelFetcher $wheels = null)
     {
         $this->wheels = $wheels ?? new SkillWheelFetcher();
-        $this->storeFactory = $storeFactory ?? fn() => SkillStore::fromEnv($this->config);
+        $this->storeFactory = $storeFactory ?? fn() => SkillStore::fromEnv(
+            $this->config,
+            fn(string $leaf) => (new RobotSkillPolicy($this->db, $this->config, null))->robotWorkflowsUsing($leaf)
+        );
     }
 
     public function store(array $request): array
@@ -133,6 +138,8 @@ final class SkillStoreController
         }
         try {
             return ['success' => true, 'data' => $fn($s), 'status_code' => 200];
+        } catch (SkillInUse $e) {
+            return ['success' => false, 'data' => ['message' => $e->getMessage(), 'robot_workflows' => $e->workflows()], 'error' => $e->getMessage(), 'status_code' => $e->statusCode()];
         } catch (SkillClashException) {
             return ['success' => false, 'data' => ['clash' => 'different'], 'error' => 'clash', 'status_code' => 409];
         } catch (SkillNotFound | SkillForbidden | SkillPathInvalid $e) {

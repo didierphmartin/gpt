@@ -14,14 +14,27 @@ use AgentTeam\Services\LangGraphPackage;
  */
 final class SkillStore
 {
-    public function __construct(private readonly string $root, private readonly string $edition)
+    /** @param ?\Closure(string): list<array{id:int,name:string}> $robotWorkflowsUsing the robot's workflows binding a leaf name */
+    public function __construct(private readonly string $root, private readonly string $edition, private readonly ?\Closure $robotWorkflowsUsing = null)
     {
     }
 
-    public static function fromEnv(array $config): ?self
+    public static function fromEnv(array $config, ?\Closure $robotWorkflowsUsing = null): ?self
     {
         $dir = trim((string) ($_ENV['SKILLS_DIR'] ?? ''));
-        return $dir === '' ? null : new self(rtrim($dir, '/'), Edition::current($config));
+        return $dir === '' ? null : new self(rtrim($dir, '/'), Edition::current($config), $robotWorkflowsUsing);
+    }
+
+    /** @return array{path:string,owner_id:int}|null the first skill named $leaf in some user's private area */
+    public function findPrivate(string $leaf): ?array
+    {
+        foreach ($this->index() as $key => $e) {
+            [$area, $path] = $this->splitKey($key);
+            if ($area !== 'public' && $this->leaf($path) === $leaf && is_dir($this->dir($area, $path))) {
+                return ['path' => $path, 'owner_id' => (int) $e['owner']];
+            }
+        }
+        return null;
     }
 
     /** @return list<array{path:string,name:string,description:string,visibility:string,owner_id:int,mine:bool,dependencies:list<string>}> */
@@ -139,6 +152,8 @@ final class SkillStore
             $index = $this->index();
             if ($visibility === 'public') {
                 $this->assertLeafFree($index, $userId, $path, false);
+            } elseif ($area === 'public') {
+                $this->assertNotBoundByRobot($path);
             }
             $this->relocate($area, $path, $to, $path);
             unset($index["$area/$path"]);
@@ -152,6 +167,9 @@ final class SkillStore
         $this->checkPath($path);
         $this->locked(function () use ($userId, $path) {
             [$area] = $this->owned($userId, $path);
+            if ($area === 'public') {
+                $this->assertNotBoundByRobot($path);
+            }
             $this->rmtree($this->dir($area, $path));
             $this->pruneGroup($area, $path);
             $index = $this->index();
@@ -168,6 +186,9 @@ final class SkillStore
             [$area, $entry] = $this->owned($userId, $from);
             if ($from === $to) {
                 return;
+            }
+            if ($area === 'public' && $this->leaf($from) !== $this->leaf($to)) {
+                $this->assertNotBoundByRobot($from);
             }
             $index = $this->index();
             if (isset($index["$area/$to"])) {
@@ -247,6 +268,15 @@ final class SkillStore
             throw new SkillForbidden('Only the owner can change this skill.');
         }
         return $r;
+    }
+
+    /** A public skill a robot workflow binds keeps its public name: the robot could no longer find it otherwise. */
+    private function assertNotBoundByRobot(string $path): void
+    {
+        if ($this->edition === 'corporate' && $this->robotWorkflowsUsing !== null
+            && ($workflows = ($this->robotWorkflowsUsing)($this->leaf($path))) !== []) {
+            throw new SkillInUse($workflows);
+        }
     }
 
     /** Leaf unique across public + the caller's area (or public only when $withOwn is false), ignoring the skill's own path. */

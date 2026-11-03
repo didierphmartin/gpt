@@ -1,0 +1,220 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Quantis\AIPortfolioAssistant\Tests\Unit;
+
+use AgentTeam\Controllers\ActiveWorkflowController;
+use AgentTeam\Controllers\WorkflowController;
+use AgentTeam\Services\ActiveWorkflowService;
+use AgentTeam\Services\WorkflowOwnerTransfer;
+use PDO;
+use PHPUnit\Framework\TestCase;
+use Quantis\AIPortfolioAssistant\Controllers\SkillStoreController;
+use Quantis\AIPortfolioAssistant\Services\PrivateSkillsRefused;
+use Quantis\AIPortfolioAssistant\Services\RobotAccount;
+use Quantis\AIPortfolioAssistant\Services\RobotOwnership;
+use Quantis\AIPortfolioAssistant\Services\RobotSkillPolicy;
+use Quantis\AIPortfolioAssistant\Services\SkillInUse;
+use Quantis\AIPortfolioAssistant\Services\SkillStore;
+use Quantis\AIPortfolioAssistant\Tests\Unit\AgentTeam\RobotSchema;
+
+/** The corporate robot uses public skills only: private bindings are refused, bound public skills are pinned. */
+final class RobotSkillPolicyTest extends TestCase
+{
+    private const WF = RobotSchema::WF;
+    private const OWNER = RobotSchema::OWNER;
+
+    private PDO $db;
+    private int $robot;
+    private string $root;
+
+    protected function setUp(): void
+    {
+        $this->root = sys_get_temp_dir() . '/robotskills_' . bin2hex(random_bytes(6));
+        mkdir($this->root);
+        $this->db = new PDO('sqlite::memory:');
+        RobotSchema::create($this->db);
+        RobotSchema::agentsAndPlaybooks($this->db);
+        $this->robot = RobotAccount::ensure($this->db);
+        $this->db->exec("UPDATE users SET first_name = 'Olga', last_name = 'Ops' WHERE id = 2");
+        // wf 75 binds the private skill "secret" (user 2's) and the public skill "shared"
+        $node = $this->db->prepare('INSERT INTO workflow_nodes (workflow_id, node_type, config) VALUES (?, ?, ?)');
+        $node->execute([self::WF, 'agent', json_encode(['type' => 'agent', 'bound_skill' => ['dir_name' => 'tools/secret']])]);
+        $node->execute([self::WF, 'agent', json_encode(['type' => 'agent', 'bound_skill' => ['dir_name' => 'shared']])]);
+        $s = $this->store();
+        $s->import(self::OWNER, 'tools/secret', $this->files('secret'), 'private');
+        $s->import(self::OWNER, 'shared', $this->files('shared'), 'public');
+    }
+
+    protected function tearDown(): void
+    {
+        exec('rm -rf ' . escapeshellarg($this->root));
+        unset($_ENV['SKILLS_DIR']);
+    }
+
+    private function files(string $name): array
+    {
+        return ['SKILL.md' => "---\nname: $name\ndescription: d\n---\nbody\n"];
+    }
+
+    private function store(string $edition = 'corporate'): SkillStore
+    {
+        return new SkillStore($this->root, $edition, fn(string $leaf) => $this->policy()->robotWorkflowsUsing($leaf));
+    }
+
+    private function policy(string $edition = 'corporate', ?SkillStore $store = null): RobotSkillPolicy
+    {
+        return new RobotSkillPolicy($this->db, ['edition' => $edition], $store ?? new SkillStore($this->root, $edition));
+    }
+
+    private function toRobot(): void
+    {
+        (new WorkflowOwnerTransfer($this->db, new RobotOwnership($this->db, ['edition' => 'corporate'])))->toRobot(self::OWNER, self::WF);
+    }
+
+    private function secret(): array
+    {
+        return [['path' => 'tools/secret', 'owner_id' => self::OWNER, 'owner_name' => 'Olga Ops']];
+    }
+
+    public function test_private_skills_listed_in_corporate(): void
+    {
+        $this->assertSame($this->secret(), $this->policy()->privateSkills(self::WF));
+    }
+
+    public function test_unknown_skill_is_listed_without_owner(): void
+    {
+        $this->db->prepare('INSERT INTO workflow_nodes (workflow_id, node_type, config) VALUES (?, ?, ?)')
+            ->execute([self::WF, 'agent', json_encode(['bound_skill' => ['dir_name' => 'ghost']])]);
+        $this->assertContains(['path' => 'ghost', 'owner_id' => 0, 'owner_name' => ''], $this->policy()->privateSkills(self::WF));
+    }
+
+    public function test_none_in_individual(): void
+    {
+        $this->assertSame([], $this->policy('individual')->privateSkills(self::WF));
+    }
+
+    public function test_none_in_folder_mode(): void
+    {
+        $p = new RobotSkillPolicy($this->db, ['edition' => 'corporate'], null);
+        $this->assertSame([], $p->privateSkills(self::WF));
+    }
+
+    public function test_transfer_refused_with_private_skills(): void
+    {
+        $t = new WorkflowOwnerTransfer($this->db, new RobotOwnership($this->db, ['edition' => 'corporate']), $this->policy());
+        foreach (['preview', 'toRobot'] as $method) {
+            try {
+                $t->$method(self::OWNER, self::WF);
+                $this->fail('expected PrivateSkillsRefused');
+            } catch (PrivateSkillsRefused $e) {
+                $this->assertSame($this->secret(), $e->skills);
+            }
+        }
+        $this->assertSame(self::OWNER, (int) $this->db->query('SELECT user_id FROM agent_workflows WHERE id = ' . self::WF)->fetchColumn());
+    }
+
+    public function test_refusal_shape(): void
+    {
+        $this->assertSame(['success' => false, 'code' => 'private_skills',
+            'message' => 'This workflow uses private skills. The robot can only use public skills.',
+            'data' => ['skills' => $this->secret()], 'status_code' => 409], RobotSkillPolicy::refusal($this->secret()));
+    }
+
+    public function test_transfer_route_answers_409(): void
+    {
+        $_ENV['SKILLS_DIR'] = $this->root;
+        $r = (new WorkflowController($this->db, ['edition' => 'corporate']))
+            ->owner(['user_id' => self::OWNER, 'body' => ['owner' => 'robot', 'confirm' => true], 'params' => ['id' => self::WF]]);
+        $this->assertSame(RobotSkillPolicy::refusal($this->secret()), $r);
+    }
+
+    public function test_activate_refused_with_private_skills(): void
+    {
+        $this->toRobot();
+        $svc = new ActiveWorkflowService($this->db, $this->policy());
+        $this->expectException(PrivateSkillsRefused::class);
+        $svc->activate($this->robot, self::WF);
+    }
+
+    public function test_activate_route_answers_409_and_passes_once_public(): void
+    {
+        $this->toRobot();
+        $_ENV['SKILLS_DIR'] = $this->root;
+        $c = new ActiveWorkflowController($this->db, ['edition' => 'corporate']);
+        $req = ['user_id' => self::OWNER, 'params' => ['id' => self::WF]];
+        $this->assertSame(RobotSkillPolicy::refusal($this->secret()), $c->activate($req));
+        $this->store()->setVisibility(self::OWNER, 'tools/secret', 'public');
+        $this->assertNotSame(409, $c->activate($req)['status_code']);
+    }
+
+    public function test_robot_run_refused_with_private_skills(): void
+    {
+        $this->toRobot();
+        $_ENV['SKILLS_DIR'] = $this->root;
+        $r = (new WorkflowController($this->db, ['edition' => 'corporate']))
+            ->run(['user_id' => self::OWNER, 'params' => ['id' => self::WF], 'body' => []]);
+        $this->assertSame(RobotSkillPolicy::refusal($this->secret()), $r);
+    }
+
+    public function test_a_persons_own_workflow_is_not_checked_on_run(): void
+    {
+        $_ENV['SKILLS_DIR'] = $this->root;
+        $r = (new WorkflowController($this->db, ['edition' => 'corporate']))
+            ->run(['user_id' => self::OWNER, 'params' => ['id' => self::WF], 'body' => []]);
+        $this->assertNotSame('private_skills', $r['code'] ?? null);
+    }
+
+    public function test_robot_workflows_using_matches_the_leaf(): void
+    {
+        $this->assertSame([], $this->policy()->robotWorkflowsUsing('shared'));   // wf 75 is still the owner's
+        $this->toRobot();
+        $this->assertSame([['id' => self::WF, 'name' => 'Mail to PDF']], $this->policy()->robotWorkflowsUsing('shared'));
+        $this->assertSame([], $this->policy()->robotWorkflowsUsing('other'));
+    }
+
+    public function test_make_private_refused_when_robot_workflow_binds_it(): void
+    {
+        $this->toRobot();
+        try {
+            $this->store()->setVisibility(self::OWNER, 'shared', 'private');
+            $this->fail('expected SkillInUse');
+        } catch (SkillInUse $e) {
+            $this->assertSame([['id' => self::WF, 'name' => 'Mail to PDF']], $e->workflows());
+            $this->assertSame(409, $e->statusCode());
+        }
+        $this->assertSame('public', $this->store()->list(self::OWNER)[0]['visibility'] ?? 'public');
+    }
+
+    public function test_delete_refused_when_robot_workflow_binds_it(): void
+    {
+        $this->toRobot();
+        $_ENV['SKILLS_DIR'] = $this->root;
+        $_ENV['GPT_EDITION'] = 'corporate';
+        $c = new SkillStoreController($this->db, ['edition' => 'corporate']);
+        $r = $c->delete(['user_id' => self::OWNER, 'query' => ['path' => 'shared']]);
+        $this->assertSame([409, [['id' => self::WF, 'name' => 'Mail to PDF']]], [$r['status_code'], $r['data']['robot_workflows']]);
+        $this->assertDirectoryExists("{$this->root}/public/shared");
+        $r = $c->visibility(['user_id' => self::OWNER, 'body' => ['path' => 'shared', 'visibility' => 'private']]);
+        $this->assertSame([409, 'Mail to PDF'], [$r['status_code'], $r['data']['robot_workflows'][0]['name']]);
+    }
+
+    public function test_rename_refused_but_regroup_allowed(): void
+    {
+        $this->toRobot();
+        $s = $this->store();
+        $s->move(self::OWNER, 'shared', 'grp/shared');   // same leaf: still found by the robot
+        $this->expectException(SkillInUse::class);
+        $s->move(self::OWNER, 'grp/shared', 'grp/renamed');
+    }
+
+    public function test_unbound_skills_and_individual_edition_are_free(): void
+    {
+        $this->toRobot();
+        $this->store()->import(self::OWNER, 'free', $this->files('free'), 'public');
+        $this->store()->setVisibility(self::OWNER, 'free', 'private');
+        $this->store()->delete(self::OWNER, 'free');
+        $this->assertTrue(true);
+    }
+}
