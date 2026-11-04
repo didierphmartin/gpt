@@ -211,18 +211,25 @@
 
     // ---- writing -------------------------------------------------------------------------------------------
 
+    // The app's own readers (skills-fs.js parseFrontmatter, SkillStore.php) strip one level of surrounding quotes
+    // and never unescape, so written scalars use no backslash escapes: plain when YAML allows, else single quotes,
+    // double quotes only when the value has ' but no ", and single quotes with '' doubling when it has both.
     const INDICATOR = /^[-?:,\[\]{}#&*!|>'"%@`]/;
+    const RESERVED = /^(true|false|yes|no|on|off|y|n|null|~)$/i;
+    const NUMBERISH = /^[-+]?(0x[0-9a-f_]+|0o[0-7_]+|(\d[\d_,]*\.?[\d_]*|\.\d+)(e[-+]?\d+)?|\.(inf|nan))$/i;
     function needsQuote(s) {
-        return s === '' || INDICATOR.test(s) || /^\s|\s$/.test(s) || /: |:$| #|[\n\r\t]/.test(s) || /[\x00-\x1f]/.test(s);
+        return s === '' || INDICATOR.test(s) || /^\s|\s$/.test(s) || /: |:$| #/.test(s) || /[\x00-\x1f]/.test(s)
+            || RESERVED.test(s) || NUMBERISH.test(s);
     }
-    const quote = (s) => '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-        .replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t') + '"';
-    function canonScalar(v) {
-        let s = String(v).replace(/\n+$/, '');
-        return needsQuote(s) ? quote(s) : s;
+    function quote(s) {
+        if (!s.includes("'")) return "'" + s + "'";
+        if (!s.includes('"')) return '"' + s + '"';
+        return "'" + s.replace(/'/g, "''") + "'";
     }
+    const oneLine = (v) => String(v).replace(/\s*[\r\n]+\s*/g, ' ').replace(/\t/g, ' ').trim();
+    function canonScalar(v) { const s = oneLine(v); return needsQuote(s) ? quote(s) : s; }
     function canonItem(v) {
-        const s = String(v);
+        const s = oneLine(v);
         return needsQuote(s) || /[,\[\]{}"']/.test(s) ? quote(s) : s;
     }
     function canonLine(key, v) {
@@ -246,17 +253,19 @@
         const seen = new Set();
         let out = '';
         for (const f of fields(front)) {
-            if (f.key === null || !Object.prototype.hasOwnProperty.call(edits, f.key) || seen.has(f.key)) { out += f.raw; seen.add(f.key); continue; }
+            if (f.key === null || !Object.prototype.hasOwnProperty.call(edits, f.key)) { out += f.raw; continue; }
+            if (seen.has(f.key)) continue;           // duplicate of an edited key: only the first span survives
             seen.add(f.key);
             const e = edits[f.key];
             if (e === undefined || (!f.complex && sameValue(f.value, e))) { out += f.raw; continue; }
-            if (e === null) continue;
+            if (e === null) { seen.delete(f.key); seen.add(f.key); continue; }
             // keep trailing blank / comment-only lines of the span
             const spanLines = ls.slice(f.start, f.end);
             let t = spanLines.length;
             while (t > 1 && (spanLines[t - 1].trim() === '' || /^#/.test(spanLines[t - 1]))) t--;
             out += canonLine(f.key, e) + eol + spanLines.slice(t).join('');
         }
+        if (out !== '' && !/\n$/.test(out)) out += eol;
         for (const k of Object.keys(edits)) {
             if (seen.has(k) || edits[k] === null || edits[k] === undefined) continue;
             out += canonLine(k, edits[k]) + eol;

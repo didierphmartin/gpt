@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import vm from 'node:vm';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -103,19 +104,64 @@ test('rebuild: null removes, new key appends, optional empty list written', () =
   assert.equal(SF.rebuild('', { name: 'a' }), 'name: a\n');
 });
 
-test('rebuild: quoting', () => {
-  assert.equal(SF.rebuild('name: a\n', { description: 'Use: this' }), 'name: a\ndescription: "Use: this"\n');
-  assert.equal(SF.rebuild('name: a\n', { description: 'say "hi" \\ ok: x' }), 'name: a\ndescription: "say \\"hi\\" \\\\ ok: x"\n');
-  assert.equal(SF.rebuild('name: a\n', { description: '[x]' }), 'name: a\ndescription: "[x]"\n');
-  assert.equal(SF.rebuild('name: a\n', { description: ' pad ' }), 'name: a\ndescription: " pad "\n');
-  assert.equal(SF.rebuild('name: a\n', { x: '' }), 'name: a\nx: ""\n');
-  assert.equal(SF.rebuild('name: a\n', { dependencies: ['a,b', 'c'] }), 'name: a\ndependencies: ["a,b", c]\n');
+test('rebuild: quoting (single quotes, no escapes)', () => {
+  const w = (v) => SF.rebuild('name: a\n', { description: v });
+  assert.equal(w('Use: this'), "name: a\ndescription: 'Use: this'\n");
+  assert.equal(w('[x]'), "name: a\ndescription: '[x]'\n");
+  assert.equal(w(" pad "), "name: a\ndescription: pad\n");
+  assert.equal(SF.rebuild('name: a\n', { x: '' }), "name: a\nx: ''\n");
+  assert.equal(SF.rebuild('name: a\n', { dependencies: ['a,b', 'c'] }), "name: a\ndependencies: ['a,b', c]\n");
+  assert.equal(w(`it's: x`), `name: a\ndescription: "it's: x"\n`);
+  assert.equal(w(`it's "x"`), `name: a\ndescription: it's "x"\n`);
+  assert.equal(w(`a: it's "x"`), `name: a\ndescription: 'a: it''s "x"'\n`);
 });
 
-test('rebuild: multi-line description becomes one quoted line that parses back', () => {
-  const out = SF.rebuild('name: a\ndescription: >\n  old\n', { description: 'line one\nline "two"' });
-  assert.equal(out, 'name: a\ndescription: "line one\\nline \\"two\\""\n');
-  assert.equal(SF.fields(out)[1].value, 'line one\nline "two"');
+test('rebuild: bool/null/number-like strings are quoted', () => {
+  for (const v of ['true', 'False', 'YES', 'no', 'On', 'off', 'null', '~', '1.10', '0x1', '12', '-3', '1e5', '.5']) {
+    assert.equal(SF.rebuild('', { k: v }), `k: '${v}'\n`, v);
+  }
+  assert.equal(SF.rebuild('', { k: '1.0.2' }), 'k: 1.0.2\n');
+  assert.equal(SF.rebuild('', { k: 'trueish' }), 'k: trueish\n');
+});
+
+test('rebuild: written lines read back through the app parser (skillsFs.parseFrontmatter)', () => {
+  const sandbox = { window: {}, console, TextEncoder, TextDecoder, setTimeout, clearTimeout };
+  vm.createContext(sandbox);
+  vm.runInContext(readFileSync(new URL('../assets/js/skills-fs.js', import.meta.url), 'utf8'), sandbox);
+  const pf = sandbox.window.skillsFs.parseFrontmatter;
+  const cases = [
+    ['multi-line', 'line one\nline two\n', 'line one line two'],
+    ['colon', 'Use this skill when: the user asks', 'Use this skill when: the user asks'],
+    ['dquote', 'say "hi" now', 'say "hi" now'],
+    ['squote', "it's fine", "it's fine"],
+    ['hash', 'a # b', 'a # b'],
+    ['hash-lead', '#tag', '#tag'],
+    ['colon+squote', "Use: it's", "Use: it's"],
+    ['bool', 'true', 'true'],
+    ['num', '1.10', '1.10'],
+  ];
+  for (const [n, input, want] of cases) {
+    const front = SF.rebuild('', { name: 'x', description: input });
+    const meta = pf('---\n' + front + '---\nbody').meta;
+    assert.equal(meta.description, want, n);
+  }
+});
+
+test('rebuild: duplicate keys', () => {
+  const f = 'name: a\nlicense: MIT\ndescription: b\nlicense: GPL\n';
+  assert.equal(SF.rebuild(f, { license: null }), 'name: a\ndescription: b\n');
+  assert.equal(SF.rebuild(f, { license: 'X' }), 'name: a\nlicense: X\ndescription: b\n');
+  assert.equal(SF.rebuild(f, { license: 'MIT' }), 'name: a\nlicense: MIT\ndescription: b\n');
+});
+
+test('rebuild: front without final newline gets eol before an appended key', () => {
+  assert.equal(SF.rebuild('name: a', { x: 'val' }), 'name: a\nx: val\n');
+  assert.equal(SF.rebuild('name: a\r\ndescription: b', { x: 'val' }), 'name: a\r\ndescription: b\r\nx: val\r\n');
+});
+
+test('rebuild: --- inside a block scalar is untouched while another key is edited', () => {
+  const f = 'name: a\ndescription: |\n  para\n  ---\n  more\nlicense: MIT\n';
+  assert.equal(SF.rebuild(f, { license: 'X' }), 'name: a\ndescription: |\n  para\n  ---\n  more\nlicense: X\n');
 });
 
 test('rebuild: edit a complex field with a plain value, keeps trailing comment', () => {
