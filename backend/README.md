@@ -76,10 +76,12 @@ Two modes, chosen by the `SKILLS_DIR` environment variable:
   `SkillStore` keeps public and private skills per user.
 
 Routes under `/api/v1/skills`: `GET /store`, `GET /` (rows include
-`owner_name`), `GET /files` (`wheels=0` leaves out bundled wheels),
+`owner_name`), `GET /listing` (a skill's file tree for the editor), `GET /files` (`wheels=0` leaves out bundled wheels),
 `GET|PUT /file` (base64 bytes), `POST /import`, `PUT /visibility`,
 `POST /move`, `DELETE /`, `POST /native-wheels`. The robot account uses public
 skills only; deleting or hiding a skill a robot workflow uses returns 409.
+
+The skill editor is a browser-only feature: this API only stores and serves files.
 
 ## Configuration
 

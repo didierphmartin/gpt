@@ -136,7 +136,11 @@ From the toolbar, *Compile workflow* offers **LangGraph**, **ADK (Google)**, **M
   so any model can read them.
 - **Skills.** Folders with a `SKILL.md` and Python scripts, run in the browser (Pyodide/WASM) against
   your local folder. The model picks the right skill from your intent. Skills can be imported from a
-  folder, a zip or GitHub, repaired (self-healing) and optimised.
+  folder, a zip or GitHub, repaired (self-healing) and optimised. Open a skill to edit it in place:
+  Markdown shows as a formatted single pane (Show source for the raw text) when it round-trips cleanly,
+  otherwise as a Markdown pane with a Why? note; scripts open in a code editor; the SKILL.md header is
+  a form; Changes to be saved lists every edit before it is written. The editors (Milkdown, CodeMirror)
+  load from esm.sh / jsDelivr on first use.
 - **MCP.** Connect servers for everyone or per user, test their tools from the sidebar, sign in to
   accounts (device code or browser), and display MCP Apps in a sandboxed frame.
 - **Artifacts.** HTML, Mermaid and SVG render in a side pane next to the chat.
