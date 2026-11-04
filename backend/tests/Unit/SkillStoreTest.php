@@ -520,6 +520,31 @@ final class SkillStoreTest extends TestCase
         $this->assertSame('"lone" needs "ghost", which you can\'t make public.', $e->getMessage());
     }
 
+    public function test_list_rows_carry_direct_requires_from_the_callers_view(): void
+    {
+        $s = $this->store();
+        $decl = fn(string $n, string $req) => ['SKILL.md' => "---\nname: $n\nrequires-skills: [$req]\n---\n"];
+        $s->import(1, 'leaf', $decl('leaf', ''));
+        $s->import(1, 'mid', $decl('mid', 'leaf'));
+        $s->import(1, 'top', $decl('top', 'mid'));
+        $s->import(2, 'theirs', $decl('theirs', 'secret'));          // another user's private requirement
+        $s->import(2, 'secret', $decl('secret', ''));
+        $s->import(2, 'viewer', $decl('viewer', 'pub'));
+        $s->import(2, 'pub', $decl('pub', ''));
+        $s->setVisibility(2, 'viewer', 'public');
+        $s->setVisibility(2, 'pub', 'public');
+        $r1 = array_column($s->list(1), 'requires', 'path');
+        $this->assertSame([], $r1['leaf']);
+        $this->assertSame(['leaf'], $r1['mid']);
+        $this->assertSame(['mid'], $r1['top']);                       // direct only, not the closure
+        $this->assertSame(['pub'], $r1['viewer']);                    // public skill of another user, resolved
+        $this->assertArrayNotHasKey('theirs', $r1);                   // their private skills are never listed
+        $this->assertArrayNotHasKey('secret', $r1);
+        foreach ($r1 as $paths) {
+            $this->assertNotContains('secret', $paths);
+        }
+    }
+
     public function test_group_delete_except_compares_area_and_path(): void
     {
         $s = $this->store();

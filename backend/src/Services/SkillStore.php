@@ -37,11 +37,13 @@ final class SkillStore
         return null;
     }
 
-    /** @return list<array{path:string,name:string,description:string,visibility:string,owner_id:int,mine:bool,dependencies:list<string>}> */
+    /** @return list<array{path:string,name:string,description:string,visibility:string,owner_id:int,mine:bool,dependencies:list<string>,requires:list<string>}> */
     public function list(int $userId, bool $asRobot = false): array
     {
         $rows = [];
-        foreach ($this->index() as $key => $e) {
+        $index = $this->index();
+        $names = array_map('strval', array_keys($this->viewOf($index, $userId)));   // once: what the caller resolves names against
+        foreach ($index as $key => $e) {
             [$area, $path] = $this->splitKey($key);
             if (!$this->visible($e, $userId, $asRobot) || !is_dir($this->dir($area, $path))) {
                 continue;
@@ -56,6 +58,8 @@ final class SkillStore
                 'owner_id' => (int) $e['owner'],
                 'mine' => (int) $e['owner'] === $userId,
                 'dependencies' => LangGraphPackage::skillDependencies($md),
+                // Direct required skills (same rule as delete protection), from the caller's view: own, then public.
+                'requires' => LangGraphPackage::requiredSkills($path, $this->requiresFiles($area, $path), $names)['requires'],
             ];
         }
         usort($rows, fn($a, $b) => strcmp($a['path'], $b['path']));
