@@ -113,6 +113,7 @@ function fakeCodeMirror() {
       getValue: () => value,
       on: (ev, f) => { if (ev === 'change') handlers.push(f); },
       setSize() {},
+      setOption(k, v) { opts[k] = v; },
       type(v) { value = v; handlers.forEach((f) => f()); },
     };
     made.push(cm);
@@ -529,4 +530,62 @@ test('switching the list type keeps the list attributes (order, spread) and sets
   md(host, 'orderedList').click();
   assert.equal(ml.log.dispatched.length, 1);
   assert.equal(ml.log.commands.length, 0);
+});
+
+// ---- fix round 2 ----
+
+test('Show formatted: the source pane is read-only while the check runs, and editable again if the switch is refused', async () => {
+  const { SM, document, cm } = load();
+  const host = document.createElement('div');
+  const a = SM.formattedAdapter();
+  await a.mount(host, 'one\n', {});
+  await a.toggle();
+  const c = cm.made.at(-1);
+  c.type('two\n');
+  let release; const gate = new Promise((r) => { release = r; });
+  SM.check = async () => { await gate; return { ok: false, changes: [], reason: 'no', error: '' }; };
+  const p = a.toggle();
+  await wait(0);
+  assert.equal(c.opts.readOnly, true, 'locked during the check');
+  release();
+  await p;
+  assert.equal(a.mode, 'source');
+  assert.equal(c.opts.readOnly, false, 'editable again after a refusal');
+});
+
+test('Show formatted: a read-only file stays read-only after a refused switch', async () => {
+  const { SM, document, cm } = load();
+  const host = document.createElement('div');
+  const a = SM.formattedAdapter();
+  await a.mount(host, 'one\n', { readOnly: true });
+  await a.toggle();
+  const c = cm.made.at(-1);
+  assert.equal(c.opts.readOnly, true);
+  await a.toggle();
+  assert.equal(c.opts.readOnly, true);
+});
+
+test('setOriginal: the text just saved becomes the merge base of the next formatted save', async () => {
+  const ml = fakeMilkdown();
+  const { SM, document } = load({ milkdown: ml });
+  const host = document.createElement('div');
+  const a = SM.formattedAdapter();
+  await a.mount(host, 'a\n\nold\n', { original: 'a\n\nold\n' });
+  a.setOriginal('* a\n\nnew\n');
+  ml.log.created[0].type('- a\n\nnew\n');
+  assert.equal(a.getText(), '* a\n\nnew\n');
+});
+
+test('in the dialog: a successful write hands the written markdown (body for SKILL.md) to the adapter as its new original', async () => {
+  const text = '---\nname: demo\ndescription: d\n---\n\n# Demo\n\nBody.\n';
+  const { SE, milkdown } = load({ files: { 'SKILL.md': text } });
+  const given = [];
+  const real = SE.adapters.markdown;
+  SE.adapters.markdown = () => { const x = real(); const so = x.setOriginal; x.setOriginal = (t) => { given.push(t); return so(t); }; return x; };
+  const dlg = await SE.open({ skill: { dir_name: 'demo', mine: true }, manager: null });
+  milkdown.log.created.at(-1).type('\n# Demo\n\nBody 2.\n');
+  await wait();
+  await dlg.save();
+  assert.deepEqual(given, ['\n# Demo\n\nBody 2.\n']);
+  dlg.close();
 });

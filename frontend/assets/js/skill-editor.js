@@ -10,8 +10,9 @@
  * frontmatter (SkillFrontmatter.split) goes to the frontmatter panel and is written back as it was.
  *
  * The editors sit behind one adapter interface, chosen by file kind from SkillEditor.adapters:
- *   factory() -> { mount(el, text, { readOnly, rel }), getText(), onChange(cb), destroy() }   (mount may be async)
- * markdown / markdownSource / code default to a plain <textarea>; binary is a read-only placeholder.
+ *   factory() -> { mount(el, text, { readOnly, rel, original }), getText(), onChange(cb), setOriginal(text), destroy() }
+ *   (mount may be async; setOriginal: the text just saved becomes the merge base - a no-op except for formatted markdown)
+ * markdown / markdownSource default to a plain <textarea>, code is CodeMirror 5 (modeOf: by extension); binary is a read-only placeholder.
  * skill-md-editor.js installs markdown (Milkdown, formatted), markdownSource (CodeMirror markdown) and checkMarkdown.
  * SkillEditor.frontPanel is the frontmatter panel slot, same shape: mount(el, front, { readOnly, isNew }).
  *
@@ -83,7 +84,36 @@
             },
             getText: () => (ta ? keepLineEnds(orig, ta.value) : ''),
             onChange(cb) { if (ta) ta.addEventListener('input', () => cb()); },
+            setOriginal() {},
             destroy() { if (ta && host) host.removeChild(ta); ta = null; },
+        };
+    }
+
+    /** CodeMirror 5 mode per extension (.mmd: no mermaid mode, plain text). Unknown: plain text. */
+    const CODE_MODES = { py: 'python', js: 'javascript', mjs: 'javascript', json: 'application/json', sh: 'shell',
+        yaml: 'yaml', yml: 'yaml', html: 'htmlmixed', css: 'css' };
+    const modeOf = (rel) => CODE_MODES[extOf(rel)] || 'text/plain';
+
+    /** Scripts and other non-markdown text: CodeMirror 5 (a <textarea> when it did not load). No auto-formatting. */
+    function codeAdapter() {
+        if (!window.CodeMirror) return textareaAdapter();
+        let host = null, box = null, cm = null, orig = '';
+        return {
+            mount(el, text, { readOnly, rel } = {}) {
+                host = el;
+                orig = String(text || '');
+                box = h('div', { class: 'h-full min-h-0 border border-gray-300 rounded-lg overflow-hidden bg-white', 'data-se': 'code' });
+                el.appendChild(box);
+                cm = window.CodeMirror(box, {
+                    value: orig, mode: modeOf(rel), lineNumbers: true, readOnly: !!readOnly,
+                    indentUnit: 4, tabSize: 4, indentWithTabs: false, viewportMargin: 50,
+                });
+                cm.setSize('100%', '100%');
+            },
+            getText: () => (cm ? keepLineEnds(orig, cm.getValue()) : orig),
+            onChange(cb) { if (cm) cm.on('change', () => cb()); },
+            setOriginal() {},
+            destroy() { if (box && host) host.removeChild(box); box = cm = null; },
         };
     }
 
@@ -97,6 +127,7 @@
             },
             getText: () => '',
             onChange() {},
+            setOriginal() {},
             destroy() { if (box && host) host.removeChild(box); box = null; },
         };
     }
@@ -428,6 +459,10 @@
                 try {
                     await this.fs.writeSkillFile(this.dir, f.rel, enc.encode(text));
                     f.loaded = text;
+                    // the open editor's merge base is now what was just written
+                    if (f.rel === this.rel && this.editor && typeof this.editor.setOriginal === 'function') {
+                        try { this.editor.setOriginal(this.mdOf(f, text)); } catch (e) { console.warn('[SkillEditor] setOriginal', e); }
+                    }
                     written.push(f.rel);
                 } catch (e) {
                     failed.push({ rel: f.rel, message: (e && e.message) || String(e) });
@@ -576,11 +611,11 @@
 
     window.SkillEditor = {
         open,
-        adapters: { markdown: textareaAdapter, markdownSource: textareaAdapter, code: textareaAdapter, binary: binaryAdapter },
+        adapters: { markdown: textareaAdapter, markdownSource: textareaAdapter, code: codeAdapter, binary: binaryAdapter },
         frontPanel: rawFrontPanel,
         checkMarkdown: null,                // (md) -> { ok, changes, reason, error }; skill-md-editor.js sets it
         current: null,
         // helpers (Tasks 5-7 and tests)
-        TEXT_EXT, kindOf, isTextExt, extOf, decode, validateNew, textareaAdapter, keepLineEnds, renderChanges,
+        TEXT_EXT, kindOf, isTextExt, extOf, decode, validateNew, textareaAdapter, codeAdapter, modeOf, keepLineEnds, renderChanges,
     };
 })();

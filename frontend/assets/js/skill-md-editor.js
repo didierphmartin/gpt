@@ -146,6 +146,7 @@
             },
             getText: () => (cm ? keepEnds(orig, cm.getValue()) : orig),
             onChange(cb) { if (cm) cm.on('change', () => cb()); },
+            setOriginal() {},
             destroy() { if (box && host) host.removeChild(box); box = cm = null; },
         };
     }
@@ -339,23 +340,31 @@
                     showSource(text);
                     status('');
                 } else {
-                    if (text !== base) {        // typed in the source pane: would Milkdown keep it?
-                        const r = await api.check(text);
-                        if (destroyed) return;
-                        if (!r.ok) { showWhy(r); return; }
-                    }
-                    const keepCm = cmBox;
-                    if (keepCm) showEl(keepCm, false);
+                    // The pane is read-only while the check and the switch run: a keystroke typed meanwhile would
+                    // be silently dropped (the switch carries `text`).
+                    const srcCm = cm;
+                    if (srcCm && srcCm.setOption) srcCm.setOption('readOnly', true);
                     try {
-                        await showFormatted(text);
-                        if (destroyed) return;
-                        dropSource();
-                        status('');
-                    } catch (e) {
-                        if (keepCm) showEl(keepCm, true);
-                        mode = 'source';
-                        base = text;
-                        status(tr('skills.editor.md.loadFailed', { message: msg(e) }));
+                        if (text !== base) {        // typed in the source pane: would Milkdown keep it?
+                            const r = await api.check(text);
+                            if (destroyed) return;
+                            if (!r.ok) { showWhy(r); return; }
+                        }
+                        const keepCm = cmBox;
+                        if (keepCm) showEl(keepCm, false);
+                        try {
+                            await showFormatted(text);
+                            if (destroyed) return;
+                            dropSource();
+                            status('');
+                        } catch (e) {
+                            if (keepCm) showEl(keepCm, true);
+                            mode = 'source';
+                            base = text;
+                            status(tr('skills.editor.md.loadFailed', { message: msg(e) }));
+                        }
+                    } finally {
+                        if (srcCm && srcCm.setOption && !destroyed) srcCm.setOption('readOnly', !!readOnly);
                     }
                 }
             } catch (e) {
@@ -407,6 +416,7 @@
                 return lastGood;
             },
             onChange(cb) { cbs.push(cb); },
+            setOriginal(text) { original = String(text); },
             destroy() {
                 destroyed = true;
                 clearTimeout(timer);
