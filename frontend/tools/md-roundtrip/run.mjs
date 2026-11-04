@@ -7,7 +7,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
-const { merge } = require('./merge-blocks.js');
+const { merge } = require('../../assets/js/merge-blocks.js');
 const { marked } = require('marked');
 const lexer = (s) => marked.lexer(s);
 

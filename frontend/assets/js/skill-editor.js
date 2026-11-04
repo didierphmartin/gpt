@@ -11,8 +11,14 @@
  *
  * The editors sit behind one adapter interface, chosen by file kind from SkillEditor.adapters:
  *   factory() -> { mount(el, text, { readOnly, rel }), getText(), onChange(cb), destroy() }   (mount may be async)
- * markdown / code default to a plain <textarea>; binary is a read-only placeholder.
+ * markdown / markdownSource / code default to a plain <textarea>; binary is a read-only placeholder.
+ * skill-md-editor.js installs markdown (Milkdown, formatted), markdownSource (CodeMirror markdown) and checkMarkdown.
  * SkillEditor.frontPanel is the frontmatter panel slot, same shape: mount(el, front, { readOnly, isNew }).
+ *
+ * Markdown, per file, on first open: SkillEditor.checkMarkdown(original) -> { ok, changes, reason, error }.
+ * ok -> the formatted editor; otherwise (or when it fails to mount) the markdown pane, with a note and a Why? list of
+ * the blocks the formatted editor would change. Saving a file that opened formatted first shows "Changes to be
+ * saved" (the changed blocks, before -> after) with [Back] [Save]; markdown-pane files are written as typed.
  */
 (function () {
     const TEXT_EXT = ['md', 'py', 'js', 'mjs', 'json', 'yaml', 'yml', 'sh', 'mmd', 'html', 'css', 'txt', 'csv',
@@ -29,9 +35,9 @@
     const isTextExt = (rel) => TEXT_EXT.includes(extOf(rel));
     const kindOf = (rel) => (MD_EXT.includes(extOf(rel)) ? 'markdown' : 'code');
 
-    /** Text of the bytes, or null when the file is binary: invalid UTF-8, or (unknown extension) a NUL byte. */
-    function decode(bytes, rel) {
-        if (!isTextExt(rel) && bytes.includes(0)) return null;
+    /** Text of the bytes, or null when the file is binary: a NUL byte or invalid UTF-8 (any extension). */
+    function decode(bytes, _rel) {
+        if (bytes.includes(0)) return null;
         try { return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); }
         catch { return null; }
     }
@@ -53,12 +59,18 @@
     // ---- default adapters (Tasks 5/6 replace markdown and code) ----
 
     /**
-     * A <textarea> reports line ends as \n: give back the text as loaded when nothing changed, and keep CRLF files
-     * CRLF, so opening a file never makes it dirty.
+     * Editors (<textarea>, CodeMirror) report line ends as \n. Give back the text as loaded when nothing changed, and
+     * keep a CRLF file CRLF, so opening a file never makes it dirty. A file with MIXED line ends (some CRLF, some LF,
+     * or lone CR) has no one style to restore: untouched it is returned as loaded; once edited it is saved with \n.
      */
+    function keepLineEnds(orig, v) {
+        if (v === orig || v === orig.replace(/\r\n?/g, '\n')) return orig;
+        const crlf = /\r\n/.test(orig) && !/(^|[^\r])\n/.test(orig) && !/\r(?!\n)/.test(orig);   // every line end is CRLF
+        return crlf ? v.replace(/\n/g, '\r\n') : v;
+    }
+
     function textareaAdapter() {
         let ta = null, host = null, orig = '';
-        const norm = (s) => s.replace(/\r\n?/g, '\n');
         return {
             mount(el, text, { readOnly } = {}) {
                 host = el;
@@ -69,13 +81,7 @@
                 });
                 el.appendChild(ta);
             },
-            getText() {
-                if (!ta) return '';
-                const v = ta.value;
-                if (v === norm(orig)) return orig;
-                const crlf = /\r\n/.test(orig) && !/(^|[^\r])\n/.test(orig);   // every line end is CRLF
-                return crlf ? v.replace(/\n/g, '\r\n') : v;
-            },
+            getText: () => (ta ? keepLineEnds(orig, ta.value) : ''),
             onChange(cb) { if (ta) ta.addEventListener('input', () => cb()); },
             destroy() { if (ta && host) host.removeChild(ta); ta = null; },
         };
@@ -134,6 +140,21 @@
     // ---- the dialog ----
 
     const BTN = 'px-3 py-1.5 text-sm rounded-lg border';
+    const BOM = '\uFEFF';
+    const errMsg = (e) => (e && e.message) || String(e);
+    const trimEnd = (s) => String(s).replace(/\n+$/, '');
+
+    /** Compact before -> after list of changed blocks ([{ before, after }]). */
+    function renderChanges(changes) {
+        const side = (text, cls) => (text
+            ? h('pre', { class: `m-0 p-2 text-xs font-mono whitespace-pre-wrap break-words max-h-40 overflow-auto rounded border ${cls}`, text: trimEnd(text) })
+            : h('div', { class: 'p-2 text-xs italic text-gray-400 rounded border border-gray-200', text: tr('skills.editor.changes.nothing') }));
+        return h('ol', { class: 'space-y-2', 'data-se': 'change-list' }, ...changes.map((c) => h('li', { class: 'space-y-1', 'data-se': 'change' },
+            h('div', { class: 'text-[11px] uppercase tracking-wide text-gray-400', text: tr('skills.editor.changes.before') }),
+            side(c.before, 'bg-red-50 border-red-200 text-red-900'),
+            h('div', { class: 'text-[11px] uppercase tracking-wide text-gray-400', text: tr('skills.editor.changes.after') }),
+            side(c.after, 'bg-green-50 border-green-200 text-green-900'))));
+    }
 
     class Dialog {
         constructor({ skill, manager }) {
@@ -146,6 +167,7 @@
             this.rel = null;
             this.editor = null;
             this.panel = null;
+            this.closed = false;
             this._busy = Promise.resolve();
         }
 
@@ -158,7 +180,7 @@
 
         isDirty(f) {
             if (this.readOnly || f.binary || !f.ready || f.error) return false;
-            return f.loaded === null || f.current !== f.loaded;
+            return f.current !== (f.loaded === null ? f.template : f.loaded);   // New Skill: compared with the template
         }
 
         build() {
@@ -204,7 +226,21 @@
             if (this.readOnly) parts.push(tr('skills.editor.readOnlyOwner', { name: (this.skill && this.skill.owner_name) || '' }));
             if (f && f.binary) parts.push(tr('skills.editor.binary'));
             if (f && f.error) parts.push(tr('skills.editor.loadFailed', { file: f.rel, message: f.error }));
-            this.q('note').textContent = parts.join(' ');
+            const el = this.q('note');
+            el.textContent = parts.join(' ');
+            if (f && f.md && !f.md.ok && !f.binary && !f.error) this.noteMarkdown(el, f.md);
+        }
+
+        /** "This file opens as markdown" + Why? (the blocks the formatted editor would change, or why it could not run). */
+        noteMarkdown(el, md) {
+            const why = h('div', { 'data-se': 'why-list', class: 'mt-2 p-2 max-h-64 overflow-auto border border-gray-200 rounded-lg bg-gray-50', hidden: true },
+                md.error ? h('p', { class: 'text-xs text-gray-600', text: tr('skills.editor.md.whyError', { message: md.error }) }) : null,
+                md.reason ? h('p', { class: 'text-xs text-gray-600 mb-2', text: tr('skills.editor.md.whyRefused') }) : null,
+                md.changes && md.changes.length ? renderChanges(md.changes) : null);
+            el.append(h('span', { 'data-se': 'md-note', text: (el.textContent ? ' ' : '') + tr('skills.editor.md.opensAsMarkdown') + ' ' }),
+                h('button', { type: 'button', 'data-se': 'why', class: 'text-blue-600 underline hover:text-blue-800', text: tr('skills.editor.md.why'),
+                    on: { click: () => { why.hidden = !why.hidden; } } }),
+                why);
         }
 
         /** Fill the drop-down: SKILL.md first, then one group per top folder (references, scripts, ...), then other files. */
@@ -236,7 +272,13 @@
         }
 
         /** SKILL.md: the full text from its parts + the current frontmatter and body. */
-        joinSkillMd(f) { return window.SkillFrontmatter.join({ ...f.parts, front: f.front, body: f.body }); }
+        joinSkillMd(f) { return (f.bom || '') + window.SkillFrontmatter.join({ ...f.parts, front: f.front, body: f.body }); }
+
+        /** The markdown the editor holds for this text: the body for SKILL.md (BOM and frontmatter off). */
+        mdOf(f, text) {
+            if (f.rel !== 'SKILL.md') return text;
+            return window.SkillFrontmatter.split(text.startsWith(BOM) ? text.slice(1) : text).body;
+        }
 
         /** Pull the editor's (and panel's) text into the file state. */
         capture() {
@@ -264,9 +306,12 @@
 
         setLoaded(f, text, { isNew = false } = {}) {
             f.loaded = isNew ? null : text;
+            f.template = isNew ? text : undefined;
             f.current = text;
+            f.md = undefined;                   // the markdown check runs again on this text
             if (f.rel === 'SKILL.md') {
-                f.parts = window.SkillFrontmatter.split(text);
+                f.bom = text.startsWith(BOM) ? BOM : '';   // split / join work on the text after the BOM
+                f.parts = window.SkillFrontmatter.split(text.slice(f.bom.length));
                 f.front = f.parts.front;
                 f.body = f.parts.body;
             }
@@ -280,7 +325,7 @@
 
         /** Run switches and saves one at a time; a failure is shown and does not block the next one. */
         queue(fn) {
-            const run = this._busy.then(fn).catch((e) => {
+            const run = this._busy.then(() => (this.closed ? undefined : fn())).catch((e) => {
                 console.error('[SkillEditor]', e);
                 this.status(tr('skills.editor.failed', { message: (e && e.message) || String(e) }), 'error');
             });
@@ -300,20 +345,43 @@
             if (!f.ready) {
                 this.q('note').textContent = tr('skills.editor.loading');
                 await this.load(f);
+                if (this.closed) return;
             }
+            const SE = window.SkillEditor;
+            let kind = f.binary ? 'binary' : kindOf(rel);
+            if (kind === 'markdown' && !f.error && f.md === undefined) {
+                this.q('note').textContent = tr('skills.editor.loading');
+                f.md = await this.checkMarkdown(this.mdOf(f, f.loaded === null ? f.template : f.loaded));
+                if (this.closed) return;
+            }
+            if (kind === 'markdown' && !f.md.ok) kind = 'markdownSource';
             this.note();
             this.refreshDots();
             if (f.error) return;
             const readOnly = this.readOnly || f.binary;
-            const SE = window.SkillEditor;
             if (rel === 'SKILL.md' && (this.isNew || f.front !== null)) {
                 this.panel = await this.mountOne(SE.frontPanel, this.q('front'), f.front, { readOnly: readOnly || !this.isNew, isNew: this.isNew });
+                if (this.closed) return;
             }
-            this.editor = await this.mountOne(SE.adapters[f.binary ? 'binary' : kindOf(rel)], this.q('editor'),
-                f.binary ? '' : (rel === 'SKILL.md' ? f.body : f.current), { readOnly, rel });
+            const el = this.q('editor'), text = f.binary ? '' : (rel === 'SKILL.md' ? f.body : f.current);
+            try {
+                this.editor = await this.mountOne(SE.adapters[kind], el, text, { readOnly, rel });
+            } catch (e) {
+                if (kind !== 'markdown') throw e;
+                f.md = { ok: false, changes: [], reason: '', error: errMsg(e) };   // the formatted editor did not load
+                this.note();
+                this.editor = await this.mountOne(SE.adapters.markdownSource, el, text, { readOnly, rel });
+            }
         }
 
-        /** Mount an adapter; only a mounted one is kept (capture never reads a half-mounted editor). */
+        async checkMarkdown(md) {
+            const fn = window.SkillEditor.checkMarkdown;
+            if (typeof fn !== 'function') return { ok: false, changes: [], reason: '', error: tr('skills.editor.md.notLoaded') };
+            try { return await fn(md); }
+            catch (e) { return { ok: false, changes: [], reason: '', error: errMsg(e) }; }
+        }
+
+        /** Mount an adapter; only a mounted one is kept (capture never reads a half-mounted editor). Null after close. */
         async mountOne(factory, el, text, opts) {
             const a = factory();
             try {
@@ -322,6 +390,7 @@
                 try { a.destroy(); } catch { /* nothing mounted */ }
                 throw e;
             }
+            if (this.closed) { try { a.destroy(); } catch { /* gone */ } return null; }
             a.onChange(() => this.changed());
             return a;
         }
@@ -331,7 +400,11 @@
             this.refreshDots();
         }
 
-        save() { return this.queue(() => this._save()); }
+        save() {
+            const btn = this.q('save');
+            if (btn) btn.disabled = true;           // one save at a time
+            return this.queue(() => this._save()).finally(() => { if (btn) btn.disabled = false; });
+        }
 
         async _save() {
             if (this.readOnly) return { written: [], failed: [] };
@@ -339,6 +412,9 @@
             if (this.isNew) return this.saveNew();
             const dirty = [...this.files.values()].filter((f) => this.isDirty(f));
             if (!dirty.length) { this.status(tr('skills.editor.nothingToSave')); return { written: [], failed: [] }; }
+            const reviews = this.reviews(dirty);
+            if (reviews.length && !(await this.confirmChanges(reviews))) return { written: [], failed: [], cancelled: true };
+            if (this.closed) return { written: [], failed: [] };
             const written = [], failed = [];
             for (const f of dirty) {
                 const text = f.current;
@@ -374,6 +450,7 @@
                     : tr('skills.editor.saveFailed', { files: `SKILL.md (${(e && e.message) || e})` }), 'error');
                 return { written: [], failed: [{ rel: 'SKILL.md', message: (e && e.message) || String(e) }] };
             }
+            if (this.closed) { await this.refreshTree(); return { written: ['SKILL.md'], failed: [] }; }
             // From here on it is an edit dialog for that skill.
             this.isNew = false;
             this.skill = { dir_name: name, name, mine: true };
@@ -386,33 +463,76 @@
             return { written: ['SKILL.md'], failed: [] };
         }
 
+        /** Files that opened in the formatted editor and whose markdown changed: what "Changes to be saved" lists. */
+        reviews(dirty) {
+            const MB = window.MergeBlocks;
+            const out = [];
+            for (const f of dirty) {
+                if (!f.md || !f.md.ok || f.loaded === null || !MB) continue;
+                const before = this.mdOf(f, f.loaded), after = this.mdOf(f, f.current);
+                if (before === after) continue;    // e.g. only the frontmatter changed
+                const m = MB.merge(before, after);
+                if (!m.merged) { out.push({ rel: f.rel, changes: [{ before, after }], refused: m.reason }); continue; }
+                out.push({ rel: f.rel, changes: MB.diffBlocks(before, after).changes, refused: '' });
+            }
+            return out;
+        }
+
+        /** The "Changes to be saved" view: resolves true for [Save], false for [Back]. */
+        confirmChanges(reviews) {
+            document.getElementById('skill-editor-changes')?.remove();
+            return new Promise((resolve) => {
+                const done = (ok) => { ov.remove(); resolve(ok); };
+                const ov = h('div', { id: 'skill-editor-changes', 'data-se': 'changes', class: 'fixed inset-0 z-[210] flex items-center justify-center', style: 'background-color: rgba(0,0,0,0.3)' },
+                    h('div', { class: 'bg-white rounded-xl shadow-xl border border-gray-200 w-full max-w-3xl mx-4 max-h-[85vh] flex flex-col' },
+                        h('h3', { class: 'px-5 pt-5 text-sm font-bold text-gray-800', text: tr('skills.editor.changes.title') }),
+                        h('div', { class: 'px-5 py-3 space-y-4 overflow-auto min-h-0' }, ...reviews.map((r) => h('section', { 'data-se': 'changes-file', class: 'space-y-2' },
+                            h('h4', { class: 'text-xs font-semibold text-gray-700', text: r.rel }),
+                            r.refused ? h('p', { 'data-se': 'changes-whole', class: 'text-xs text-amber-700', text: tr('skills.editor.changes.whole') }) : null,
+                            renderChanges(r.changes)))),
+                        h('div', { class: 'flex justify-end gap-2 px-5 pb-5 pt-2' },
+                            h('button', { 'data-se': 'changes-back', type: 'button', class: `${BTN} text-gray-600 border-gray-300 hover:bg-gray-100`, text: tr('skills.editor.changes.back'),
+                                on: { click: () => done(false) } }),
+                            h('button', { 'data-se': 'changes-save', type: 'button', class: `${BTN} text-white bg-blue-600 border-blue-600 hover:bg-blue-700`, text: tr('common.save'),
+                                on: { click: () => done(true) } }))));
+                document.body.appendChild(ov);
+            });
+        }
+
         async refreshTree() {
             try { if (this.manager && this.manager.loadTree) await this.manager.loadTree(); }
             catch (e) { console.warn('[SkillEditor] loadTree failed', e); }
         }
 
+        /** Close, asking first when files have unsaved edits. Resolves true when the dialog closed. */
         requestClose() {
             this.capture();
             const n = this.dirtyFiles().length;
-            if (!n) { this.close(); return; }
-            this.askDiscard(n);
+            if (!n) { this.close(); return Promise.resolve(true); }
+            return this.askDiscard(n);
         }
 
         askDiscard(n) {
             document.getElementById('skill-editor-discard')?.remove();
+            let resolve;
+            const p = new Promise((r) => { resolve = r; });
             const ov = h('div', { id: 'skill-editor-discard', 'data-se': 'discard', class: 'fixed inset-0 z-[210] flex items-center justify-center', style: 'background-color: rgba(0,0,0,0.3)' },
                 h('div', { class: 'bg-white rounded-xl shadow-xl border border-gray-200 w-full max-w-sm mx-4 p-5 space-y-4' },
                     h('h3', { class: 'text-sm font-bold text-gray-800', text: tr('skills.editor.discardTitle') }),
                     h('p', { class: 'text-sm text-gray-600', text: tr('skills.editor.discardMessage', { count: n }) }),
                     h('div', { class: 'flex justify-end gap-2' },
                         h('button', { 'data-se': 'discard-keep', type: 'button', class: `${BTN} text-gray-600 border-gray-300 hover:bg-gray-100`, text: tr('skills.editor.keepEditing'),
-                            on: { click: () => ov.remove() } }),
+                            on: { click: () => { ov.remove(); resolve(false); } } }),
                         h('button', { 'data-se': 'discard-confirm', type: 'button', class: `${BTN} text-white bg-red-600 border-red-600 hover:bg-red-700`, text: tr('skills.editor.discard'),
-                            on: { click: () => { ov.remove(); this.close(); } } }))));
+                            on: { click: () => { ov.remove(); this.close(); resolve(true); } } }))));
             document.body.appendChild(ov);
+            return p;
         }
 
+        /** Close now: destroys the editors; switches / saves still queued or in flight stop at their next step. */
         close() {
+            if (this.closed) return;
+            this.closed = true;
             this.unmount();
             this.el.remove();
             if (window.SkillEditor.current === this) window.SkillEditor.current = null;
@@ -438,10 +558,10 @@
     }
 
     async function open({ skill = null, manager = null } = {}) {
-        if (skill && skill.dir_name && manager) manager.lastSkillDir = skill.dir_name;   // Export preselects it
         const SE = window.SkillEditor;
-        if (SE.current) SE.current.close();
+        if (SE.current && !(await SE.current.requestClose())) return SE.current;   // kept editing: no new dialog
         document.getElementById('skill-editor-modal')?.remove();
+        if (skill && skill.dir_name && manager) manager.lastSkillDir = skill.dir_name;   // Export preselects it
         const dlg = new Dialog({ skill, manager });
         SE.current = dlg;
         return dlg.init();
@@ -449,10 +569,11 @@
 
     window.SkillEditor = {
         open,
-        adapters: { markdown: textareaAdapter, code: textareaAdapter, binary: binaryAdapter },
+        adapters: { markdown: textareaAdapter, markdownSource: textareaAdapter, code: textareaAdapter, binary: binaryAdapter },
         frontPanel: rawFrontPanel,
+        checkMarkdown: null,                // (md) -> { ok, changes, reason, error }; skill-md-editor.js sets it
         current: null,
         // helpers (Tasks 5-7 and tests)
-        TEXT_EXT, kindOf, isTextExt, extOf, decode, validateNew, textareaAdapter,
+        TEXT_EXT, kindOf, isTextExt, extOf, decode, validateNew, textareaAdapter, keepLineEnds, renderChanges,
     };
 })();

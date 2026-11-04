@@ -7,64 +7,24 @@ import { createRequire } from 'node:module';
 
 const SRC = readFileSync(fileURLToPath(new URL('../assets/js/skill-editor.js', import.meta.url)), 'utf8');
 const SkillFrontmatter = createRequire(import.meta.url)('../assets/js/skill-frontmatter.js');
+const MergeBlocksMod = createRequire(import.meta.url)('../assets/js/merge-blocks.js');
+const { marked } = createRequire(import.meta.url)('marked');
+const MD = { lexer: (s) => marked.lexer(s), parse: (s) => marked.parse(s) };
+// the browser module defaults to window.marked; tests pass marked explicitly
+const MergeBlocks = {
+  merge: (a, b) => MergeBlocksMod.merge(a, b, MD),
+  mergeBlocks: (a, b) => MergeBlocksMod.mergeBlocks(a, b, MD),
+  diffBlocks: (a, b) => MergeBlocksMod.diffBlocks(a, b, MD),
+};
 const EN = JSON.parse(readFileSync(fileURLToPath(new URL('../assets/i18n/en.json', import.meta.url)), 'utf8'));
 const tr = (k, p = {}) => {
   const v = k.split('.').reduce((a, x) => (a ? a[x] : undefined), EN);
   return typeof v === 'string' ? v.replace(/\{\{(\w+)\}\}/g, (_, n) => p[n] ?? '') : k;
 };
 const enc = new TextEncoder();
-const dec = new TextDecoder();
+const dec = new TextDecoder('utf-8', { ignoreBOM: true });   // keeps a BOM, so tests see the bytes written
 
-// ---- minimal DOM stub: elements built with createElement; querySelector on [attr="v"] / [attr] / tag ----
-class El {
-  constructor(tag) {
-    this.tagName = tag.toUpperCase(); this.children = []; this.parentNode = null; this.attributes = {};
-    this.style = {}; this._l = {}; this._text = ''; this.value = ''; this.hidden = false; this.disabled = false;
-    this.readOnly = false; this.className = '';
-    const self = this;
-    this.classList = {
-      add: (...c) => { const s = new Set(self.className.split(/\s+/).filter(Boolean)); c.forEach((x) => s.add(x)); self.className = [...s].join(' '); },
-      remove: (...c) => { self.className = self.className.split(/\s+/).filter((x) => x && !c.includes(x)).join(' '); },
-      contains: (c) => self.className.split(/\s+/).includes(c),
-      toggle: (c, on) => { const has = self.classList.contains(c); const want = on === undefined ? !has : !!on; if (want && !has) self.classList.add(c); if (!want && has) self.classList.remove(c); return want; },
-    };
-  }
-  appendChild(c) { if (c.parentNode) c.parentNode.removeChild(c); c.parentNode = this; this.children.push(c); return c; }
-  append(...cs) { for (const c of cs) this.appendChild(typeof c === 'string' ? Object.assign(new El('#text'), { _text: c }) : c); }
-  removeChild(c) { this.children = this.children.filter((x) => x !== c); c.parentNode = null; return c; }
-  remove() { if (this.parentNode) this.parentNode.removeChild(this); }
-  replaceChildren(...cs) { for (const c of [...this.children]) this.removeChild(c); this.append(...cs); }
-  setAttribute(k, v) { this.attributes[k] = String(v); }
-  getAttribute(k) { return k in this.attributes ? this.attributes[k] : null; }
-  addEventListener(t, f) { (this._l[t] = this._l[t] || []).push(f); }
-  dispatch(t, extra = {}) { for (const f of this._l[t] || []) f({ type: t, target: this, preventDefault() {}, stopPropagation() {}, ...extra }); }
-  click() { if (!this.disabled) this.dispatch('click'); }
-  get textContent() { return this._text + this.children.map((c) => c.textContent).join(''); }
-  set textContent(v) { this.children = []; this._text = String(v); }
-  get id() { return this.attributes.id || ''; }
-  set id(v) { this.attributes.id = v; }
-  get dataset() { return {}; }
-  focus() {}
-  *walk() { for (const c of this.children) { yield c; yield* c.walk(); } }
-  matches(sel) {
-    const m = /^\[([\w-]+)(?:="([^"]*)")?\]$/.exec(sel);
-    if (m) return m[2] === undefined ? m[1] in this.attributes : this.attributes[m[1]] === m[2];
-    return this.tagName === sel.toUpperCase();
-  }
-  querySelector(sel) { for (const e of this.walk()) if (e.matches(sel)) return e; return null; }
-  querySelectorAll(sel) { return [...this.walk()].filter((e) => e.matches(sel)); }
-}
-
-function makeDom() {
-  const body = new El('body');
-  const document = {
-    body,
-    createElement: (t) => new El(t),
-    getElementById: (id) => body.querySelector(`[id="${id}"]`),
-    addEventListener() {}, removeEventListener() {},
-  };
-  return document;
-}
+import { makeDom } from './fixtures/dom-stub.mjs';
 
 /** files: { rel: string | Uint8Array }; opts.fail: Set of rels whose write throws */
 function makeFs(files, { fail = new Set(), importErr = null } = {}) {
@@ -103,21 +63,39 @@ function fakeAdapters() {
     a.type = (t) => { a.text = t; a.cb && a.cb(); };
     return api;
   };
-  return { mounts, adapters: { markdown: make('markdown'), code: make('code'), binary: make('binary') }, last: () => mounts[mounts.length - 1] };
+  return { mounts, adapters: { markdown: make('markdown'), markdownSource: make('markdownSource'), code: make('code'), binary: make('binary') }, last: () => mounts[mounts.length - 1] };
 }
 
-function load({ files = {}, fsOpts, fake = true } = {}) {
+const PASS = async () => ({ ok: true, changes: [], reason: '', error: '' });
+
+/**
+ * check: the open-time markdown check (default: every file passes -> the formatted adapter, kind 'markdown').
+ * autoChanges: click [Save] in the "Changes to be saved" view as soon as it opens (false: the test drives it).
+ */
+function load({ files = {}, fsOpts, fake = true, check = PASS, autoChanges = true } = {}) {
   const document = makeDom();
   const { fs, calls, disk } = makeFs(files, fsOpts);
-  const window = { skillsFs: fs, SkillFrontmatter, i18n: { t: tr }, document };
-  const ctx = vm.createContext({ window, document, console, TextEncoder, TextDecoder, Uint8Array, setTimeout, Promise });
+  const window = { skillsFs: fs, SkillFrontmatter, MergeBlocks, i18n: { t: tr }, document };
+  const ctx = vm.createContext({ window, document, console, TextEncoder, TextDecoder, Uint8Array, setTimeout, clearTimeout, Promise });
   vm.runInContext(SRC, ctx);
   const SE = window.SkillEditor;
   const fa = fakeAdapters();
   if (fake) Object.assign(SE.adapters, fa.adapters);
+  const checks = [];
+  if (check) SE.checkMarkdown = (md) => { checks.push(md); return check(md); };
+  const changesViews = [];
+  const append = document.body.appendChild.bind(document.body);
+  document.body.appendChild = (el) => {
+    append(el);
+    if (el.getAttribute && el.getAttribute('data-se') === 'changes') {
+      changesViews.push(el.textContent);
+      if (autoChanges) q(el, 'changes-save').click();
+    }
+    return el;
+  };
   let loads = 0;
   const manager = { loadTree: async () => { loads++; } };
-  return { SE, document, calls, disk, fa, manager, loads: () => loads };
+  return { SE, document, calls, disk, fa, manager, loads: () => loads, checks, changesViews };
 }
 
 const q = (root, se) => root.querySelector(`[data-se="${se}"]`);
@@ -259,7 +237,8 @@ test('kindOf / decode helpers', () => {
   assert.equal(SE.isTextExt('a.png'), false);
   assert.equal(SE.decode(enc.encode('héllo'), 'x.bin'), 'héllo');
   assert.equal(SE.decode(new Uint8Array([0x41, 0x00]), 'x.bin'), null);
-  assert.equal(SE.decode(new Uint8Array([0x41, 0x00]), 'x.txt'), 'A\u0000');   // known text: NUL alone is not binary
+  assert.equal(SE.decode(new Uint8Array([0x41, 0x00]), 'x.txt'), null);   // a NUL byte is binary for every extension
+  assert.equal(SE.decode(new Uint8Array([0x41, 0x00]), 'x.md'), null);
   assert.equal(SE.decode(new Uint8Array([0xc3]), 'x.txt'), null);
   // a BOM survives decode so a save writes it back
   assert.equal(SE.decode(new Uint8Array([0xef, 0xbb, 0xbf, 0x41]), 'x.md'), '﻿A');
@@ -312,7 +291,7 @@ test('New Skill: template with name/description/dependencies and a body skeleton
   assert.equal(ta.readOnly, false);
   assert.ok(fa.last().text.trim().startsWith('#'));
   assert.equal(fa.last().opts.readOnly, false);
-  assert.deepEqual([...dlg.dirtyFiles()], ['SKILL.md']);
+  assert.deepEqual([...dlg.dirtyFiles()], []);          // untouched template: nothing to discard
 });
 
 test('New Skill validation: empty name, empty description, non-kebab or too long name -> nothing imported', async () => {
@@ -426,12 +405,195 @@ test('default textarea adapter: a CRLF file is not dirty just by opening, and st
 
 test('an editor that throws on mount is reported, and the next file still opens', async () => {
   const { SE, fa, manager } = load({ files: FILES });
-  const good = SE.adapters.code;
-  SE.adapters.markdown = () => ({ mount() { throw new Error('boom'); }, getText: () => '', onChange() {}, destroy() {} });
+  SE.adapters.code = () => ({ mount() { throw new Error('boom'); }, getText: () => '', onChange() {}, destroy() {} });
   const dlg = await SE.open({ skill: mine, manager });
-  assert.match(q(dlg.el, 'status').textContent, /boom/);
   await select(dlg, 'scripts/run.py');
-  assert.equal(dlg.dirtyFiles().length, 0);   // the failed editor's empty text never replaced the body
-  assert.equal(fa.last().kind, 'code');
-  assert.equal(SE.adapters.code, good);
+  assert.match(q(dlg.el, 'status').textContent, /boom/);
+  assert.equal(dlg.dirtyFiles().length, 0);   // the failed editor's empty text never replaced the file
+  await select(dlg, 'references/a.md');
+  assert.equal(fa.last().kind, 'markdown');
+  assert.equal(fa.last().text, '# A\n');
+});
+
+// ---- Task 5: per-file markdown choice, "Changes to be saved", review minors ----
+
+const FAIL = async () => ({ ok: false, changes: [{ before: '| a |\n', after: '| a  |\n' }], reason: '', error: '' });
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+test('open-time check passes -> the formatted editor; the check gets the BODY of SKILL.md and the text of other .md', async () => {
+  const { SE, fa, manager, checks } = load({ files: FILES });
+  const dlg = await SE.open({ skill: mine, manager });
+  assert.equal(fa.last().kind, 'markdown');
+  assert.equal(q(dlg.el, 'why'), null);
+  await select(dlg, 'references/a.md');
+  assert.equal(fa.last().kind, 'markdown');
+  await select(dlg, 'SKILL.md');
+  assert.deepEqual(checks, ['\n# Demo\n\nBody.\n', '# A\n']);   // once per file, cached across switches
+});
+
+test('open-time check fails -> the markdown pane, the note and a Why? list of the blocks that would change', async () => {
+  const { SE, fa, manager } = load({ files: FILES, check: FAIL });
+  const dlg = await SE.open({ skill: mine, manager });
+  assert.equal(fa.last().kind, 'markdownSource');
+  assert.equal(fa.last().text, '\n# Demo\n\nBody.\n');
+  const note = q(dlg.el, 'note');
+  assert.match(note.textContent, /This file opens as markdown: the formatted editor would change parts of it\./);
+  const why = q(note, 'why-list');
+  assert.equal(why.hidden, true);
+  q(note, 'why').click();
+  assert.equal(why.hidden, false);
+  assert.equal(why.querySelectorAll('[data-se="change"]').length, 1);
+  assert.match(why.textContent, /\| a \|[\s\S]*\| a {2}\|/);
+});
+
+test('open-time check throws -> the markdown pane; Why? says the formatted editor could not run', async () => {
+  const { SE, fa, manager } = load({ files: FILES, check: async () => { throw new Error('esm.sh unreachable'); } });
+  const dlg = await SE.open({ skill: mine, manager });
+  assert.equal(fa.last().kind, 'markdownSource');
+  assert.match(q(q(dlg.el, 'note'), 'why-list').textContent, /esm\.sh unreachable/);
+});
+
+test('the formatted editor failing to mount falls back to the markdown pane with the reason', async () => {
+  const { SE, fa, manager } = load({ files: FILES });
+  SE.adapters.markdown = () => ({ mount() { throw new Error('milkdown failed'); }, getText: () => '', onChange() {}, destroy() {} });
+  const dlg = await SE.open({ skill: mine, manager });
+  assert.equal(fa.last().kind, 'markdownSource');
+  assert.match(q(dlg.el, 'note').textContent, /opens as markdown/);
+  assert.match(q(q(dlg.el, 'note'), 'why-list').textContent, /milkdown failed/);
+  assert.equal(q(dlg.el, 'status').textContent, '');
+});
+
+test('Changes to be saved lists only the changed blocks; Back writes nothing and keeps the dot', async () => {
+  const body = '\n# Demo\n\nKeep this.\n\nBody.\n\n- a\n- b\n';
+  const { SE, fa, manager, calls, document } = load({ files: { 'SKILL.md': '---\nname: demo\ndescription: d\n---\n' + body }, autoChanges: false });
+  const dlg = await SE.open({ skill: mine, manager });
+  fa.last().type(body.replace('Body.', 'Body EDIT.'));
+  const saving = dlg.save();
+  await tick();
+  const view = q(document.body, 'changes');
+  assert.ok(view);
+  const ch = view.querySelectorAll('[data-se="change"]');
+  assert.equal(ch.length, 1);
+  assert.match(ch[0].textContent, /Body\.[\s\S]*Body EDIT\./);
+  assert.ok(!view.textContent.includes('Keep this'));
+  assert.equal(q(dlg.el, 'save').disabled, true);         // no second save while one runs
+  q(view, 'changes-back').click();
+  const r = await saving;
+  assert.equal(r.cancelled, true);
+  assert.equal(calls.writes.length, 0);
+  assert.ok(optionText(dlg, 'SKILL.md').includes('●'));
+  assert.equal(q(dlg.el, 'save').disabled, false);
+  // [Save] writes it
+  const again = dlg.save();
+  await tick();
+  q(q(document.body, 'changes'), 'changes-save').click();
+  await again;
+  assert.equal(calls.writes.length, 1);
+  assert.ok(calls.writes[0][2].endsWith('Keep this.\n\nBody EDIT.\n\n- a\n- b\n'));
+  assert.equal(q(document.body, 'changes'), null);
+});
+
+test('markdown-pane saves write as typed, without the changes view', async () => {
+  const { SE, fa, manager, calls, changesViews } = load({ files: FILES, check: FAIL });
+  const dlg = await SE.open({ skill: mine, manager });
+  fa.last().type('\n# Demo\n\nBody _typed_.\n');
+  await dlg.save();
+  assert.equal(changesViews.length, 0);
+  assert.ok(calls.writes[0][2].endsWith('\n# Demo\n\nBody _typed_.\n'));
+});
+
+test('a refused merge (reference definitions) shows the WHOLE file and says so', async () => {
+  const md = 'see [x]\n\n[x]: http://a\n';
+  const { SE, fa, manager, calls, changesViews } = load({ files: { 'SKILL.md': SKILL_MD, 'references/r.md': md } });
+  const dlg = await SE.open({ skill: mine, manager });
+  await select(dlg, 'references/r.md');
+  fa.last().type('see [x] EDIT\n\n[x]: http://a\n');
+  await dlg.save();
+  assert.equal(changesViews.length, 1);
+  assert.match(changesViews[0], /cannot be compared block by block/);
+  assert.match(changesViews[0], /see \[x\]\n\n\[x\]: http:\/\/a[\s\S]*see \[x\] EDIT/);
+  assert.equal(calls.writes.length, 1);
+});
+
+test('only the frontmatter changed in a formatted file: no changes view (nothing in the markdown changed)', async () => {
+  const { SE, fa, manager, changesViews } = load({ files: FILES });
+  const dlg = await SE.open({ skill: mine, manager });
+  const f = dlg.files.get('SKILL.md');
+  f.front = 'name: demo2\n';                   // (Task 7's form sets this)
+  f.current = dlg.joinSkillMd(f);
+  fa.last().cb();
+  assert.equal(dlg.reviews([f]).length, 0);
+  assert.equal(changesViews.length, 0);
+});
+
+test('an untouched New Skill closes without the discard prompt; a touched one asks', async () => {
+  const { SE, document, fa, manager } = load();
+  let dlg = await SE.open({ skill: null, manager });
+  q(dlg.el, 'close').click();
+  assert.equal(q(document.body, 'discard'), null);
+  assert.equal(document.getElementById('skill-editor-modal'), null);
+  dlg = await SE.open({ skill: null, manager });
+  fa.last().type('\n# Something\n');
+  q(dlg.el, 'close').click();
+  assert.ok(q(document.body, 'discard'));
+});
+
+test('a BOM-prefixed SKILL.md: the BOM is off for split, the body has none, and a save writes it back', async () => {
+  const text = '﻿---\nname: demo\ndescription: d\n---\n\n# Demo\n';
+  const { SE, fa, manager, calls } = load({ files: { 'SKILL.md': text } });
+  const dlg = await SE.open({ skill: mine, manager });
+  assert.equal(fa.last().text, '\n# Demo\n');
+  assert.ok(q(dlg.el, 'front').querySelector('textarea').value.includes('name: demo'));
+  assert.equal(dlg.dirtyFiles().length, 0);
+  fa.last().type('\n# Demo 2\n');
+  await dlg.save();
+  assert.equal(calls.writes[0][2], '﻿---\nname: demo\ndescription: d\n---\n\n# Demo 2\n');
+});
+
+test('open() while a dialog has unsaved edits goes through the discard prompt', async () => {
+  const { SE, document, fa, manager } = load({ files: FILES });
+  const first = await SE.open({ skill: mine, manager });
+  fa.last().type('changed');
+  const p = SE.open({ skill: mine, manager });
+  await tick();
+  q(q(document.body, 'discard'), 'discard-keep').click();
+  assert.equal(await p, first);                 // kept editing: the same dialog, still open
+  assert.ok(document.getElementById('skill-editor-modal'));
+  const p2 = SE.open({ skill: mine, manager });
+  await tick();
+  q(q(document.body, 'discard'), 'discard-confirm').click();
+  const second = await p2;
+  assert.notEqual(second, first);
+  assert.equal(first.closed, true);
+  assert.equal(document.body.querySelectorAll('[id="skill-editor-modal"]').length, 1);
+});
+
+test('closing while a file is still loading: nothing mounts afterwards; mounted editors are destroyed', async () => {
+  const { SE, fa, manager } = load({ files: FILES });
+  const dlg = await SE.open({ skill: mine, manager });
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const orig = dlg.fs.getSkillFileBytes;
+  dlg.fs = { ...dlg.fs, getSkillFileBytes: async (...a) => { await gate; return orig(...a); } };
+  const n = fa.mounts.length;
+  const switching = dlg.show('references/a.md');
+  const queued = dlg.show('scripts/run.py');
+  await tick();
+  dlg.close();
+  assert.ok(fa.mounts.every((m) => m.destroyed));
+  release();
+  await switching; await queued;
+  assert.equal(fa.mounts.length, n, 'no editor mounted after close');
+});
+
+test('keepLineEnds: CRLF stays CRLF, LF stays LF; a mixed file is returned as loaded until edited, then saved with \\n', () => {
+  const { SE } = load();
+  const k = SE.keepLineEnds;
+  assert.equal(k('a\r\nb\r\n', 'a\nb\n'), 'a\r\nb\r\n');
+  assert.equal(k('a\r\nb\r\n', 'a\nbc\n'), 'a\r\nbc\r\n');
+  assert.equal(k('a\nb\n', 'a\nbc\n'), 'a\nbc\n');
+  const mixed = 'a\r\nb\nc\rd\n';
+  assert.equal(k(mixed, 'a\nb\nc\nd\n'), mixed);             // untouched: as loaded, never dirty
+  assert.equal(k(mixed, 'a\nb\nc\nd!\n'), 'a\nb\nc\nd!\n');  // edited: no one style to restore -> \n
+  assert.equal(k('a\rb\r', 'a\nb!\n'), 'a\nb!\n');           // lone CR is not CRLF
 });

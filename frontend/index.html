@@ -258,6 +258,14 @@
         .markdown-content blockquote { border-left: 4px solid #3b82f6; padding-left: 1rem; margin: 0.5rem 0; color: #4b5563; font-style: italic; }
         .markdown-content a { color: #2563eb; text-decoration: underline; }
         .markdown-content a:hover { color: #1d4ed8; }
+        /* skill editor: the formatted markdown pane (Milkdown) */
+        .skill-md-pane .ProseMirror { outline: none; min-height: 100%; white-space: pre-wrap; }
+        .skill-md-pane ul, .skill-md-pane ol { padding-left: 1.5rem; }
+        .skill-md-pane h4 { font-size: 1rem; font-weight: 600; margin: 0.5rem 0 0.25rem; }
+        .skill-md-pane li[data-item-type="task"] { list-style: none; margin-left: -1.25rem; }
+        .skill-md-pane li[data-item-type="task"]::before { content: "\2610\00a0"; }
+        .skill-md-pane li[data-item-type="task"][data-checked="true"]::before { content: "\2611\00a0"; }
+        .skill-md-pane li[data-item-type="task"] > p { display: inline; }
 
         /* SVG generation placeholder (shown while streaming) */
         .svg-placeholder {
@@ -4409,7 +4417,11 @@
          the markdown editor (Milkdown, dynamic import) are added by the editor's own adapters. -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/lib/codemirror.css">
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/lib/codemirror.min.js"></script>
-    <script src="assets/js/skill-editor.js?v=20261103-shell"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/mode/markdown/markdown.min.js"></script>
+    <script src="assets/js/merge-blocks.js?v=20261103-md"></script>
+    <script src="assets/js/skill-editor.js?v=20261103-md"></script>
+    <!-- Milkdown (formatted markdown) loads on first use by dynamic import() of pinned esm.sh URLs, see the file. -->
+    <script src="assets/js/skill-md-editor.js?v=20261103-md"></script>
     <script src="assets/js/skills-manager.js?v=20261103-editor-shell"></script>
     <script src="assets/js/skillopt-panel.js?v=20261103-skillsfs-fix1"></script>
     <script src="assets/js/heal-panel.js?v=20260929-catalog-ids"></script>

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { marked } = require('marked');
-const { merge, mergeBlocks } = require('../tools/md-roundtrip/merge-blocks.js');
+const { merge, mergeBlocks, diffBlocks } = require('../assets/js/merge-blocks.js');
 const M = { lexer: (s) => marked.lexer(s), parse: (s) => marked.parse(s) };
 const mb = (o, e) => mergeBlocks(o, e, M);
 
@@ -98,4 +98,48 @@ test('refused when the edited side has a definition too', () => {
 test('html comments and html blocks survive', () => {
   const o = 'a\n\n<!-- keep me -->\n\n<div>x</div>\n\nb\n';
   assert.equal(mb(o, 'a\n\n<!-- keep me -->\n\n<div>x</div>\n\nb EDIT'), o.replace('b\n', 'b EDIT\n'));
+});
+
+// ---- diffBlocks / merge(...).changes: what a write would change, block by block ----
+const db = (a, b) => diffBlocks(a, b, M);
+test('diffBlocks: identical texts have no changes', () => {
+  assert.deepEqual(db('# A\n\nb\n', '# A\n\nb\n'), { changes: [], whole: false });
+});
+test('diffBlocks: only the changed block is listed, before and after', () => {
+  const r = db('# A\n\none\n\n- x\n', '# A\n\none EDIT\n\n- x\n');
+  assert.equal(r.whole, false);
+  assert.deepEqual(r.changes, [{ before: 'one\n\n', after: 'one EDIT\n\n' }]);
+});
+test('diffBlocks: an insertion and a deletion are separate changes', () => {
+  const r = db('a\n\nb\n\nc\n', 'a\n\nNEW\n\nb\n');
+  assert.deepEqual(r.changes, [{ before: '', after: 'NEW\n\n' }, { before: 'c\n', after: '' }]);
+});
+test('diffBlocks: a byte-only change (same meaning) is still listed', () => {
+  assert.deepEqual(db('Say *a*.\n', 'Say _a_.\n').changes, [{ before: 'Say *a*.\n', after: 'Say _a_.\n' }]);
+});
+test('diffBlocks: text the lexer drops -> the whole text is the change', () => {
+  const r = db('see [x]\n\n[x]: http://a\n', 'see [x] EDIT\n\n[x]: http://a\n');
+  assert.equal(r.whole, true);
+  assert.deepEqual(r.changes, [{ before: 'see [x]\n\n[x]: http://a\n', after: 'see [x] EDIT\n\n[x]: http://a\n' }]);
+});
+test('merge(...).changes lists the blocks the merged result changes, none when it keeps the original', () => {
+  assert.deepEqual(merge('- a\n- b\n', '* a\n* b\n', M).changes, []);
+  const r = merge('# T\n\nkeep *me*\n\nold\n', '# T\n\nkeep _me_\n\nnew\n', M);
+  assert.equal(r.md, '# T\n\nkeep *me*\n\nnew\n');
+  assert.deepEqual(r.changes, [{ before: 'old\n', after: 'new\n' }]);
+});
+test('a refused merge still reports the (whole-file) changes', () => {
+  const r = merge('see [x]\n\n[x]: http://a\n', 'see [x] EDIT\n\n[x]: http://a\n', M);
+  assert.equal(r.merged, false);
+  assert.equal(r.changes.length, 1);
+});
+
+test('without m, a private default-options marked is used, not the page\'s configured one (chat sets breaks: true)', () => {
+  const M2 = require('marked');
+  const withBreaks = new M2.Marked({ breaks: true });
+  globalThis.marked = { Marked: M2.Marked, lexer: (s) => withBreaks.lexer(s), parse: (s) => withBreaks.parse(s) };
+  try {
+    assert.equal(mergeBlocks('a\nb\n', 'a  \nb\n'), 'a  \nb\n', 'a hard break added is a real edit');
+    assert.equal(merge('a\nb\n', 'a  \nb\n').changes.length, 1);
+  } finally { delete globalThis.marked; }
 });
