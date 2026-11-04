@@ -496,7 +496,9 @@
       "alsoInstalls": "También instala",
       "alreadyInstalled": "ya instalada",
       "requiredClash": "hay instalada otra habilidad con este nombre",
-      "alsoInstalled": "También se instaló: {{list}}."
+      "alsoInstalled": "También se instaló: {{list}}.",
+      "requiresNotFound": "{{by}} necesita la habilidad {{name}}, que no está instalada ni en tu carpeta de habilidades de SynergyAI. Importa primero {{name}} (o permite el acceso a tu carpeta SynergyAI) y vuelve a importar {{by}}. No se instaló nada.",
+      "localUnavailable": "Tu carpeta SynergyAI no es accesible ahora mismo, así que podrían faltar habilidades que esta necesita."
     },
     "requiredBy": {
       "delete": "No se puede eliminar \"{{name}}\": {{dependents}} la necesita(n) para ejecutarse (figura en sus habilidades requeridas). Elimina primero {{dependents}}, o quita \"{{name}}\" de sus habilidades requeridas.",

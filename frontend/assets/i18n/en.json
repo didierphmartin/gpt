@@ -496,7 +496,9 @@
       "alsoInstalls": "Also installs",
       "alreadyInstalled": "already installed",
       "requiredClash": "a different skill with this name is installed",
-      "alsoInstalled": "Also installed: {{list}}."
+      "alsoInstalled": "Also installed: {{list}}.",
+      "requiresNotFound": "{{by}} needs the skill {{name}}, which is neither installed nor in your SynergyAI skills folder. Import {{name}} first (or allow access to your SynergyAI folder), then import {{by}} again. Nothing was installed.",
+      "localUnavailable": "Your SynergyAI folder isn't accessible right now, so skills this one needs could be missed."
     },
     "requiredBy": {
       "delete": "\"{{name}}\" can't be deleted: {{dependents}} need(s) it to run (listed in its required skills). Delete {{dependents}} first, or remove \"{{name}}\" from its required skills.",

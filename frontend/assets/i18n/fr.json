@@ -496,7 +496,9 @@
       "alsoInstalls": "Installe aussi",
       "alreadyInstalled": "déjà installée",
       "requiredClash": "une autre compétence de ce nom est installée",
-      "alsoInstalled": "Également installé : {{list}}."
+      "alsoInstalled": "Également installé : {{list}}.",
+      "requiresNotFound": "{{by}} a besoin de la compétence {{name}}, qui n'est ni installée ni dans votre dossier de compétences SynergyAI. Importez d'abord {{name}} (ou autorisez l'accès à votre dossier SynergyAI), puis importez à nouveau {{by}}. Rien n'a été installé.",
+      "localUnavailable": "Votre dossier SynergyAI n'est pas accessible pour le moment : des compétences nécessaires à celle-ci pourraient manquer."
     },
     "requiredBy": {
       "delete": "Impossible de supprimer « {{name}} » : {{dependents}} en a/ont besoin pour fonctionner (elle figure dans ses compétences requises). Supprimez d’abord {{dependents}}, ou retirez « {{name}} » de ses compétences requises.",

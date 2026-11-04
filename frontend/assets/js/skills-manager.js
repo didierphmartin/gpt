@@ -1086,6 +1086,11 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
                     <ul class="mt-1 space-y-0.5">${summary.groups.map((g) => `<li>${esc(groupText(g))}</li>`).join('')}</ul>`)}
                 ${row(t('skills.import.libraries'), esc(libraries))}
                 ${alsoInstalls ? row(t('skills.import.alsoInstalls'), alsoInstalls) : ''}
+                ${read.localUnavailable ? `
+                <div class="px-3 py-2 rounded-lg border border-amber-300 bg-amber-50 text-amber-900">
+                    ${esc(t('skills.import.localUnavailable'))}
+                    <button type="button" data-review="allow" class="ml-1 px-2 py-0.5 border border-amber-400 bg-white rounded hover:bg-amber-100">${esc(t('skills.fsaGrantBtn'))}</button>
+                </div>` : ''}
                 ${row(t('skills.import.destination'), esc(destination))}
                 ${edition === 'corporate' ? row(t('skills.import.visibility'), `
                     <span class="flex gap-4">
@@ -1099,6 +1104,20 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
             </div>`;
         modal.querySelector('#skills-import-status').before(box);
         box.querySelector('[data-review="cancel"]').addEventListener('click', () => modal.remove());
+        // No access to the local SynergyAI folder: ask for it (a click is the user gesture the browser needs),
+        // then look for the required skills again and redraw this review.
+        box.querySelector('[data-review="allow"]')?.addEventListener('click', async () => {
+            const res = await window.localFs?.requestRootAccess?.('synergyAI');
+            if (!res?.ok) return;
+            read.requires = [];
+            try {
+                await window.skillsImport._attachRequires(read);
+            } catch (e) {
+                showStatus(e.message, 'error');
+                return;
+            }
+            this.showZipReview(modal, read, showStatus, handleResult, source);
+        });
         box.querySelector('[data-review="install"]').addEventListener('click', async () => {
             const visibility = box.querySelector('input[name="skills-zip-visibility"]:checked')?.value || 'private';
             box.querySelectorAll('button').forEach((b) => { b.disabled = true; });

@@ -27,6 +27,55 @@
     const plainRead = (name, files) => ({ dir: name, name, files, pyodideWheels: {}, nativeWheels: {}, legacy: true, manifest: null });
 
     /**
+     * A folder, a GitHub path or an old zip carries only the skill itself. Fill read.requires with the skills it
+     * needs (SkillRequires closure, dependencies first), looked up in order: installed skills, the user's local
+     * SynergyAI skills folder (the Docker app reads it when access is granted), then extra.names / extra.read
+     * (e.g. sibling folders of the same GitHub repo). A required skill found nowhere throws (translated, .code
+     * 'missing-skill') BEFORE anything is written, so the import never installs a skill without what it needs.
+     */
+    async function attachRequires(read, extra = { names: [], read: null }) {
+        if (!window.SkillRequires || !window.skillsFs || (read.requires || []).length) return read;
+        const installed = (await window.skillsFs.listSkills()).map((s) => s.dirName);
+        let local = [];
+        // In the Docker app the local folder is the other place required skills come from. When the browser has
+        // not (re)granted access to it, say so (read.localUnavailable): the review offers "Allow access" and
+        // looks again, instead of importing without skills it could not see.
+        read.localUnavailable = false;
+        if (await window.skillsFs.mode() !== 'folder' && window.skillsFs.listFolderSkills) {
+            let granted = false;
+            try { granted = !!window.localFs && (await window.localFs.getStatus?.())?.state === 'granted'; } catch (_) { granted = false; }
+            if (granted) {
+                try { local = (await window.skillsFs.listFolderSkills()).map((s) => s.dirName); } catch (_) { local = []; }
+            } else {
+                read.localUnavailable = true;
+            }
+        }
+        const known = [...new Set([...installed, ...local, ...(extra.names || [])])].filter((d) => d !== read.dir);
+        const cache = new Map([[read.dir, read.files]]);
+        const load = async (p) => {
+            if (cache.has(p)) return cache.get(p);
+            let files = null;
+            if (installed.includes(p)) files = await zipFiles(p);
+            else if (local.includes(p)) {
+                const f = filterSkillFiles(await window.skillsFs.readFolderSkillFiles(p));
+                files = Object.keys(f).length ? f : null;
+            } else if (extra.read && (extra.names || []).includes(p)) files = await extra.read(p);
+            cache.set(p, files);
+            return files;
+        };
+        const r = await window.SkillRequires.closure(read.dir, known, load);
+        if (r.missing.length) {
+            const e = window.SkillRequires.missingError(r.missing);
+            throw Object.assign(new Error(tr('skills.import.requiresNotFound', { by: e.by || read.dir, name: e.skill })),
+                { code: e.code, skill: e.skill, by: e.by });
+        }
+        const clash = window.SkillRequires.leafCollision(read.dir, r.requires);
+        if (clash) throw Object.assign(new Error(tr('skills.zip.leafCollision', { a: clash.skills[0], b: clash.skills[1], leaf: clash.leaf })), { code: clash.code });
+        read.requires = r.requires.map((p) => ({ ...plainRead(p, cache.get(p)), name: p.split('/').pop() }));
+        return read;
+    }
+
+    /**
      * Look at the immediate contents of a directory handle and decide if
      * it's "shaped like a skill" — at minimum has a SKILL.md at the root.
      */
@@ -69,7 +118,11 @@
             console.error('[skillsImport] copy failed:', e);
             return { ok: false, error: 'Copy failed: ' + (e?.message || e) };
         }
-        return { ok: true, read: plainRead(srcDir.name, files) };
+        try {
+            return { ok: true, read: await attachRequires(plainRead(srcDir.name, files)) };
+        } catch (e) {
+            return { ok: false, error: e.message };
+        }
     }
 
     /**
@@ -80,7 +133,8 @@
         if (!window.fflate || !window.SkillZip) throw new Error('Zip library (fflate) is not loaded.');
         const fallbackName = file.name.replace(/\.(zip|skill)$/i, '').replace(/[\\/:*?"<>|]/g, '_').trim();
         const read = window.SkillZip.read(new Uint8Array(await file.arrayBuffer()), { fallbackName });
-        return read;
+        // An old zip (no manifest) carries only the skill: find what it needs like a folder import.
+        return read.legacy ? attachRequires(read) : read;
     }
 
     /**
@@ -280,7 +334,26 @@
         } catch (e) {
             return { ok: false, error: 'Download failed: ' + (e?.message || e) };
         }
-        return { ok: true, read: plainRead(safeName, files) };
+        // Skills it requires that are not installed here may sit beside it in the same repo folder.
+        const parent = path ? path.split('/').filter(Boolean).slice(0, -1).join('/') : '';
+        let siblings = [];
+        if (path) {
+            try {
+                const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${parent}?ref=${encodeURIComponent(ref)}`,
+                    { headers: { Accept: 'application/vnd.github+json' } });
+                if (res.ok) siblings = (await res.json()).filter((x) => x.type === 'dir' && x.name !== leaf).map((x) => x.name);
+            } catch (_) { siblings = []; }
+        }
+        const fromRepo = async (name) => {
+            const out = {};
+            try { await fetchGitHubTree(owner, repo, ref, parent ? `${parent}/${name}` : name, out); } catch (_) { return null; }
+            return out['SKILL.md'] ? out : null;
+        };
+        try {
+            return { ok: true, read: await attachRequires(plainRead(safeName, files), { names: siblings, read: fromRepo }) };
+        } catch (e) {
+            return { ok: false, error: e.message };
+        }
     }
 
     /** The skill filter: junk, dotfiles (may hold secrets) and __pycache__ are left out. */
@@ -406,5 +479,6 @@
         withWheels,
         readFolderFiles,
         filterSkillFiles,
+        _attachRequires: attachRequires,   // exported for testing
     };
 })();
