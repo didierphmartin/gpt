@@ -440,16 +440,13 @@
 
     /**
      * Parse a YAML-ish dependencies value from SKILL.md frontmatter. Accepts
-     * `bs4, cssutils` or `[bs4, cssutils]` — the small parser in skills-fs.js
-     * stores both as plain strings. Returns a deduped array of names.
+     * `bs4, cssutils` or `[bs4, 'numpy>=1.20,<2']` — the small parser in skills-fs.js
+     * stores both as plain strings. Commas inside quotes stay in their item
+     * (SkillRequires.listItems, the reader every other copy uses).
      */
     function parseDepsField(value) {
         if (!value) return [];
-        let s = String(value).trim();
-        if (s.startsWith('[') && s.endsWith(']')) s = s.slice(1, -1);
-        return s.split(',')
-            .map(x => x.trim().replace(/^['"]|['"]$/g, ''))
-            .filter(Boolean);
+        return window.SkillRequires.listItems(value);
     }
 
     /**

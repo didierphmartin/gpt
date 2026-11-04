@@ -31,9 +31,9 @@ class PythonEmitHelpersPinTest extends TestCase
     public function testSkillDepsBlockUnchanged(): void
     {
         $block = PythonEmitHelpers::skillDepsBlock();
-        $this->assertSame(4380, strlen($block), 'skillDepsBlock byte length changed');
+        $this->assertSame(5596, strlen($block), 'skillDepsBlock byte length changed');
         $this->assertSame(
-            '3904a498a7210c65e9d783bd60670af8a45e3aac3c2ca77c6434802d42049a15',
+            'fb71cb1def36dc3a7f1e2f006cc8a4e9c0419290d01958f967907afccdd85719',
             hash('sha256', $block),
             'skillDepsBlock content changed — this alters generated Python for both generators'
         );

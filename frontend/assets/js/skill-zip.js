@@ -1,7 +1,8 @@
 /**
  * Skill zip: the self-contained file a skill travels in (skill folder + bundled wheels + manifest.json).
  * Pure: no DOM, no localFs. fflate comes from opts.fflate or root.fflate; WorkflowPackage (filesHash) from
- * opts.workflowPackage or root.WorkflowPackage / require('./workflow-package.js').
+ * opts.workflowPackage or root.WorkflowPackage / require('./workflow-package.js'); list values are read by
+ * SkillRequires.listItems (root.SkillRequires / require('./skill-requires.js')).
  * NOTE build() is async (filesHash uses crypto.subtle); read() stays synchronous.
  *
  * Layout (format 1):
@@ -14,9 +15,9 @@
  * read() returns the main skill's read object plus requires: [read objects of the required skills].
  */
 (function (root, factory) {
-    if (typeof module === 'object' && module.exports) module.exports = factory(root, require('./workflow-package.js'));
-    else root.SkillZip = factory(root, root.WorkflowPackage);
-})(typeof self !== 'undefined' ? self : this, function (root, WP) {
+    if (typeof module === 'object' && module.exports) module.exports = factory(root, require('./workflow-package.js'), require('./skill-requires.js'));
+    else root.SkillZip = factory(root, root.WorkflowPackage, root.SkillRequires);
+})(typeof self !== 'undefined' ? self : this, function (root, WP, SR) {
     const FORMAT = 1;
     const JUNK = ['.DS_Store', '__MACOSX', 'Thumbs.db'];
     const isJunk = (n) => JUNK.some((p) => n === p || n.startsWith(p + '/') || n.split('/').pop() === p);
@@ -43,8 +44,7 @@
             const s = line.trim();
             if (s === '---') break;
             if (s.toLowerCase().startsWith('dependencies:')) {
-                const val = s.slice(s.indexOf(':') + 1).trim().replace(/^\[+|\]+$/g, '');
-                return val.split(',').map((d) => d.trim().replace(/^['"]+|['"]+$/g, '')).filter(Boolean);
+                return (SR || root.SkillRequires).listItems(s.slice(s.indexOf(':') + 1));
             }
         }
         return [];

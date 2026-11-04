@@ -440,18 +440,71 @@ final class LangGraphPackage
                 break;
             }
             if (str_starts_with(strtolower($s), $key)) {
-                $val = trim(trim(explode(':', $s, 2)[1]), '[]');
-                $deps = [];
-                foreach (explode(',', $val) as $d) {
-                    $d = trim(trim(trim($d), "'"), '"');
-                    if ($d !== '') {
-                        $deps[] = $d;
-                    }
-                }
-                return $deps;
+                return self::listItems(explode(':', $s, 2)[1]);
             }
         }
         return [];
+    }
+
+    /**
+     * Items of a frontmatter list value (`a, b` or `[a, 'b,c']`): split on commas outside single/double quotes,
+     * then one matching quote pair is stripped ('' -> ' inside single quotes). An unterminated quote falls back
+     * to splitting on every comma. Twin of SkillRequires.listItems (JS) and the emitted Python readers.
+     * @return list<string>
+     */
+    public static function listItems(string $raw): array
+    {
+        $val = trim(trim($raw), '[]');
+        $items = [];
+        $cur = '';
+        $q = null;
+        $n = strlen($val);
+        for ($i = 0; $i < $n; $i++) {
+            $c = $val[$i];
+            if ($q !== null) {
+                $cur .= $c;
+                if ($c === $q) {
+                    if ($q === "'" && ($val[$i + 1] ?? '') === "'") {
+                        $cur .= $val[++$i];
+                    } else {
+                        $q = null;
+                    }
+                }
+            } elseif (($c === '"' || $c === "'") && trim($cur) === '') {
+                $q = $c;
+                $cur .= $c;
+            } elseif ($c === ',') {
+                $items[] = $cur;
+                $cur = '';
+            } else {
+                $cur .= $c;
+            }
+        }
+        $items[] = $cur;
+        $out = [];
+        if ($q !== null) {
+            foreach (explode(',', $val) as $d) {
+                $d = trim(trim(trim($d), "'"), '"');
+                if ($d !== '') {
+                    $out[] = $d;
+                }
+            }
+            return $out;
+        }
+        foreach ($items as $d) {
+            $d = trim($d);
+            $k = $d[0] ?? '';
+            if (strlen($d) >= 2 && ($k === "'" || $k === '"') && $d[strlen($d) - 1] === $k) {
+                $d = substr($d, 1, -1);
+                if ($k === "'") {
+                    $d = str_replace("''", "'", $d);
+                }
+            }
+            if ($d !== '') {
+                $out[] = $d;
+            }
+        }
+        return $out;
     }
 
     private static function providers(array $facts): array

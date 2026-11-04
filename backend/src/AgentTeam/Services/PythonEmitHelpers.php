@@ -290,7 +290,37 @@ def _ensure_skill_deps(skill_dir: str) -> None:
             break
         if s.lower().startswith("dependencies:"):
             val = s.split(":", 1)[1].strip().strip("[]")
-            deps = [d.strip().strip("'").strip('"') for d in val.split(",") if d.strip()]
+            # Commas inside quotes stay in their item ('numpy>=1.20,<2'); one matching quote pair is
+            # stripped ('' -> ' inside single quotes); an unterminated quote splits on every comma.
+            items, cur, q, i = [], "", None, 0
+            while i < len(val):
+                c = val[i]
+                if q:
+                    cur += c
+                    if c == q:
+                        if q == "'" and val[i + 1:i + 2] == "'":
+                            cur += "'"
+                            i += 1
+                        else:
+                            q = None
+                elif c in "'\"" and not cur.strip():
+                    q, cur = c, cur + c
+                elif c == ",":
+                    items.append(cur)
+                    cur = ""
+                else:
+                    cur += c
+                i += 1
+            items.append(cur)
+            if q:
+                deps = [d.strip().strip("'").strip('"') for d in val.split(",") if d.strip()]
+            else:
+                for d in items:
+                    d = d.strip()
+                    if len(d) >= 2 and d[0] in "'\"" and d[-1] == d[0]:
+                        d = d[1:-1].replace("''", "'") if d[0] == "'" else d[1:-1]
+                    if d:
+                        deps.append(d)
             break
     # A skill that carries its libraries (.wheels/native/, bundled at export) installs them from
     # there, in one pip call, without the internet.
