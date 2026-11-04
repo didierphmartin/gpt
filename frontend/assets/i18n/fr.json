@@ -480,7 +480,9 @@
         "linkApply": "Ajouter le lien",
         "showSource": "Afficher la source",
         "showFormatted": "Afficher la mise en forme",
-        "crlf": "il utilise des fins de ligne Windows (CRLF)"
+        "crlf": "il utilise des fins de ligne Windows (CRLF)",
+        "staysSource": "Afficher la mise en forme modifierait des parties de ce texte : il reste dans la vue source.",
+        "serialiseFailed": "L'éditeur mis en forme a échoué ({{message}}) : le dernier texte valide est affiché en source."
       },
       "changes": {
         "title": "Modifications à enregistrer",

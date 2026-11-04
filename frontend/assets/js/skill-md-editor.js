@@ -47,12 +47,19 @@
 
     // ---- Milkdown ----
 
+    /** p, or a timeout error after api.timeoutMs (LOAD_TIMEOUT_MS); a value that arrives after the timeout goes to onLate (to destroy it). */
+    function withTimeout(p, onLate) {
+        let timer = null, late = false;
+        const t = new Promise((_, rej) => { timer = setTimeout(() => { late = true; rej(new Error(tr('skills.editor.md.loadTimeout'))); }, api.timeoutMs); });
+        return Promise.race([p.then((v) => { clearTimeout(timer); if (late && onLate) onLate(v); return v; },
+            (e) => { clearTimeout(timer); throw e; }), t]);
+    }
+
     let libP = null;
     /** The Milkdown modules ({ core, commonmark, gfm, utils, state }); a failed load is retried next time. */
     function load() {
         if (!libP) {
-            const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error(tr('skills.editor.md.loadTimeout'))), LOAD_TIMEOUT_MS));
-            libP = Promise.race([Promise.all(URLS.map((u) => import(u))), timeout])
+            libP = withTimeout(Promise.all(URLS.map((u) => import(u))))
                 .then(([core, commonmark, gfm, utils, state]) => ({ core, commonmark, gfm, utils, state }))
                 .catch((e) => { libP = null; throw e; });
         }
@@ -76,7 +83,8 @@
                 view: () => ({ update(view, prev) { if (!view.state.doc.eq(prev.doc)) onDocChange(); } }),
             })));
         }
-        return b.create();
+        // the timeout covers creating the editor too; an editor created too late is destroyed
+        return withTimeout(Promise.resolve().then(() => b.create()), (late) => { try { late.destroy(); } catch { /* gone */ } });
     }
 
     async function markdownOf(ed) { const L = await api.load(); return ed.action(L.utils.getMarkdown()); }
@@ -149,7 +157,9 @@
     function formattedAdapter() {
         let host = null, wrap = null, bar = null, pane = null, linkBox = null, linkInput = null, srcBtn = null;
         let ed = null, edBox = null, cm = null, cmBox = null;
-        let base = '', touched = false, mode = 'formatted', readOnly = false, busy = false, timer = null, L = null;
+        // original: the file's markdown AS LOADED (the merge base of every formatted save); base: the text this pane was
+        // given (returned as is until the user edits); lastGood: the last text getText produced.
+        let original = '', base = '', lastGood = '', touched = false, mode = 'formatted', readOnly = false, busy = false, destroyed = false, timer = null, L = null;
         const cbs = [];
         const fire = () => { clearTimeout(timer); timer = setTimeout(() => cbs.forEach((cb) => cb()), 150); };
 
@@ -184,7 +194,8 @@
                     if (n.type.name !== name) {
                         // the items carry their list type too (Milkdown syncs it back from them otherwise)
                         const pos = $f.before(d), listType = name === 'bullet_list' ? 'bullet' : 'ordered';
-                        const t = v.state.tr.setNodeMarkup(pos, v.state.schema.nodes[name], { spread: n.attrs.spread });
+                        // every attribute the list has is kept (ProseMirror keeps those the new type defines, e.g. order)
+                        const t = v.state.tr.setNodeMarkup(pos, v.state.schema.nodes[name], Object.assign({}, n.attrs));
                         n.forEach((item, off) => { t.setNodeMarkup(pos + 1 + off, undefined, Object.assign({}, item.attrs, { listType })); });
                         v.dispatch(t);
                         v.focus();
@@ -260,14 +271,21 @@
             box.appendChild(inner);
             pane.appendChild(box);
             touched = false;
+            let made;
             try {
-                ed = await make(inner, text, { readOnly, onDocChange: () => { touched = true; fire(); } });
+                made = await make(inner, text, { readOnly, onDocChange: () => { touched = true; fire(); } });
             } catch (e) {
                 box.remove();
                 throw e;
             }
+            if (destroyed) {                    // destroyed while Milkdown was being made: do not keep it
+                box.remove();
+                try { await made.destroy(); } catch { /* gone */ }
+                return;
+            }
+            ed = made;
             edBox = box;
-            base = text;
+            base = lastGood = text;
             mode = 'formatted';
         }
 
@@ -276,8 +294,28 @@
             pane.appendChild(cmBox);
             cm = makeCm(cmBox, text, readOnly);
             cm.on('change', fire);
-            base = text;
+            base = lastGood = text;
             mode = 'source';
+        }
+
+        /** Milkdown failed to give its markdown: show the last good text in the source pane, and the error. */
+        function fallBack(e) {
+            if (mode !== 'formatted' || destroyed) return;
+            const old = ed; ed = null;
+            if (edBox) { edBox.remove(); edBox = null; }
+            if (old) Promise.resolve().then(() => old.destroy()).catch(() => {});
+            showSource(lastGood);
+            if (bar) updateBar();
+            status(tr('skills.editor.md.serialiseFailed', { message: msg(e) }));
+        }
+
+        /** Show formatted was refused: say why and list the blocks it would change. */
+        function showWhy(r) {
+            if (!statusEl) return;
+            const R = root.SkillEditor && root.SkillEditor.renderChanges;
+            statusEl.replaceChildren(
+                h('p', { text: tr('skills.editor.md.staysSource') + ' ' + (r.error ? r.error : r.reason ? tr('skills.editor.md.whyRefused') : '') }),
+                r.changes && r.changes.length && R ? h('div', { class: 'mt-1 mb-2 max-h-48 overflow-auto text-gray-700', 'data-md': 'why-list' }, R(r.changes)) : null);
         }
 
         async function dropFormatted() {
@@ -289,18 +327,28 @@
 
         /** Show source / Show formatted: the same pane, carrying the text. Never an edit by itself. */
         async function toggle() {
-            if (busy || !pane) return;
+            if (busy || !pane || destroyed) return;
             busy = true;
-            const text = api_.getText();
             try {
+                const from = mode;
+                const text = api_.getText();
+                if (mode !== from) return;      // getText fell back to the source pane (Milkdown failed)
                 if (mode === 'formatted') {
                     await dropFormatted();
+                    if (destroyed) return;
                     showSource(text);
+                    status('');
                 } else {
+                    if (text !== base) {        // typed in the source pane: would Milkdown keep it?
+                        const r = await api.check(text);
+                        if (destroyed) return;
+                        if (!r.ok) { showWhy(r); return; }
+                    }
                     const keepCm = cmBox;
                     if (keepCm) showEl(keepCm, false);
                     try {
                         await showFormatted(text);
+                        if (destroyed) return;
                         dropSource();
                         status('');
                     } catch (e) {
@@ -310,6 +358,8 @@
                         status(tr('skills.editor.md.loadFailed', { message: msg(e) }));
                     }
                 }
+            } catch (e) {
+                status(tr('skills.editor.md.loadFailed', { message: msg(e) }));
             } finally {
                 busy = false;
                 if (bar) updateBar();
@@ -323,7 +373,9 @@
             async mount(el, text, opts = {}) {
                 host = el;
                 readOnly = !!opts.readOnly;
+                original = String(opts.original !== undefined && opts.original !== null ? opts.original : (text || ''));
                 L = await api.load();
+                if (destroyed) return;
                 buildBar();
                 statusEl = h('div', { class: 'text-xs text-red-700', 'data-md': 'status' });
                 pane = h('div', { class: 'flex-1 min-h-0' });
@@ -332,20 +384,31 @@
                 try {
                     await showFormatted(String(text || ''));
                 } catch (e) {
-                    el.removeChild(wrap);
+                    if (wrap && wrap.parentNode === el) el.removeChild(wrap);
                     wrap = null;
                     throw e;
                 }
+                if (destroyed) return;          // destroy() already took the pane down
                 updateBar();
             },
-            /** The text to save: as mounted until the user edits; then the merge (formatted) or as typed (source). */
+            /**
+             * The text to save: as given until the user edits; then, formatted, mergeBlocks(the file AS LOADED, the
+             * editor's markdown) - so the changes view (loaded -> this) is exactly what is written; source: as typed.
+             * Never throws: a Milkdown failure falls back to the source pane with the last good text.
+             */
             getText() {
-                if (mode === 'source') return cm ? keepEnds(base, cm.getValue()) : base;
+                if (mode === 'source') { lastGood = cm ? keepEnds(base, cm.getValue()) : base; return lastGood; }
                 if (!ed || !touched) return base;
-                return MB().mergeBlocks(base, ed.action(L.utils.getMarkdown()));
+                try {
+                    lastGood = MB().mergeBlocks(original, ed.action(L.utils.getMarkdown()));
+                } catch (e) {
+                    fallBack(e);
+                }
+                return lastGood;
             },
             onChange(cb) { cbs.push(cb); },
             destroy() {
+                destroyed = true;
                 clearTimeout(timer);
                 cbs.length = 0;
                 dropSource();
@@ -359,7 +422,7 @@
         return api_;
     }
 
-    const api = { URLS, STRINGIFY, load, make, roundtrip, check, formattedAdapter, sourceAdapter };
+    const api = { URLS, STRINGIFY, timeoutMs: LOAD_TIMEOUT_MS, load, make, roundtrip, check, formattedAdapter, sourceAdapter };
     root.SkillMdEditor = api;
     if (root.SkillEditor) {
         root.SkillEditor.adapters.markdown = formattedAdapter;

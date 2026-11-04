@@ -480,7 +480,9 @@
         "linkApply": "Añadir enlace",
         "showSource": "Ver código fuente",
         "showFormatted": "Ver con formato",
-        "crlf": "usa finales de línea de Windows (CRLF)"
+        "crlf": "usa finales de línea de Windows (CRLF)",
+        "staysSource": "Ver con formato cambiaría partes de este texto, así que se queda en la vista de código fuente.",
+        "serialiseFailed": "El editor con formato falló ({{message}}); se muestra como código fuente el último texto correcto."
       },
       "changes": {
         "title": "Cambios que se guardarán",

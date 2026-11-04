@@ -31,7 +31,8 @@ const dec = new TextDecoder();
  * (default: tables padded, a Milkdown-like rewrite). ed.type(md) simulates the user editing: the document changes and
  * the editor's markdown becomes md.
  */
-function fakeMilkdown({ serialise = (md) => md, failCreate = false } = {}) {
+// createDelay: a promise create() waits for; listNode: the list the cursor is in (for the list-switch test)
+function fakeMilkdown({ serialise = (md) => md, failCreate = false, createDelay = null, listNode = null } = {}) {
   const log = { created: [], destroyed: 0, commands: [], dispatched: [], stringify: [], readOnly: [] };
   const key = (k) => ({ key: k });
   const core = {
@@ -49,6 +50,7 @@ function fakeMilkdown({ serialise = (md) => md, failCreate = false } = {}) {
           use(p) { conf.plugins.push(p); return b; },
           async create() {
             if (failCreate) throw new Error('milkdown create failed');
+            if (createDelay) await createDelay;
             const md0 = conf.values.default;
             log.stringify.push(conf.values.stringify);
             log.readOnly.push(!!(conf.values.viewOpts && conf.values.viewOpts.editable && !conf.values.viewOpts.editable()));
@@ -56,10 +58,15 @@ function fakeMilkdown({ serialise = (md) => md, failCreate = false } = {}) {
             let md = serialise(md0);
             const doc = { eq: (o) => o === doc };
             const view = {
-              state: { doc, selection: { empty: true, $from: { depth: 0 } }, tr: {}, schema: {} },
+              state: {
+                doc,
+                selection: { empty: true, $from: listNode ? { depth: 1, node: () => listNode, before: () => 7 } : { depth: 0 } },
+                get tr() { const t = { steps: [], setNodeMarkup(pos, type, attrs) { t.steps.push({ pos, type, attrs }); return t; } }; return t; },
+                schema: { nodes: { bullet_list: 'BULLET', ordered_list: 'ORDERED' } },
+              },
               focus() {}, dispatch: (t) => log.dispatched.push(t),
             };
-            const ctx = { md: () => md, get: (k) => (k === 'view' ? view : k === 'commands' ? { call: (c) => log.commands.push([c]) } : null) };
+            const ctx = { md: () => { if (log.throwOnMarkdown) throw new Error('serialiser broke'); return md; }, get: (k) => (k === 'view' ? view : k === 'commands' ? { call: (c) => log.commands.push([c]) } : null) };
             const ed = {
               root: conf.values.root, loadedFrom: md0,
               action: (fn) => fn(ctx),
@@ -374,4 +381,152 @@ test('check: a CRLF file opens in the markdown pane, and Why? says so instead of
   assert.equal(r.changes.length, 0);
   assert.match(r.error, /CRLF/);
   assert.equal(milkdown.log.created.length, 0);
+});
+
+// ---- fix round 1 ----
+
+test('reviewer scenario: a reference definition typed in Show source -> Show formatted refuses, stays in source, says why; nothing lost', async () => {
+  const body = '\n# Demo\n\nSee [x].\n';
+  const text = '---\nname: demo\ndescription: d\n---\n' + body;
+  // Milkdown (like the real one) drops a reference definition
+  const ml = fakeMilkdown({ serialise: (s) => s.replace(/^\[x\]: .*\n?/m, '') });
+  const { SE, writes, views, cm } = load({ milkdown: ml, files: { 'SKILL.md': text } });
+  const dlg = await SE.open({ skill: { dir_name: 'demo', mine: true }, manager: null });
+  const a = dlg.editor;
+  await a.toggle();
+  const typed = body + '\n[x]: http://a\n';
+  cm.made.at(-1).type(typed);
+  await wait();
+  await a.toggle();
+  assert.equal(a.mode, 'source', 'stays in the source pane');
+  const st = dlg.el.querySelector('[data-md="status"]').textContent;
+  assert.match(st, /stays in the source view/);
+  assert.match(st, /\[x\]: http:\/\/a/, 'the Why list shows the block that would be lost');
+  assert.equal(a.getText(), typed);
+  await dlg.save();
+  assert.equal(views.length, 1);
+  assert.match(views[0], /cannot be compared block by block/);
+  assert.equal(writes[0][1], '---\nname: demo\ndescription: d\n---\n' + typed, 'the definition is written');
+});
+
+test('Show formatted after an untouched Show source needs no check; after a typed change that Milkdown keeps, it goes formatted', async () => {
+  const ml = fakeMilkdown();
+  const { SM, document, cm } = load({ milkdown: ml });
+  const host = document.createElement('div');
+  const a = SM.formattedAdapter();
+  await a.mount(host, 'one\n', {});
+  await a.toggle(); await a.toggle();
+  assert.equal(ml.log.created.length, 2);               // no hidden check instance
+  await a.toggle();
+  cm.made.at(-1).type('two\n');
+  await a.toggle();
+  assert.equal(a.mode, 'formatted');
+  assert.equal(ml.log.created.length, 4);               // + the check's hidden instance + the new pane
+});
+
+test('a formatted save is ALWAYS mergeBlocks(the file AS LOADED, the editor markdown), even when the pane was given the current text', async () => {
+  const ml = fakeMilkdown();
+  const { SM, document } = load({ milkdown: ml });
+  const host = document.createElement('div');
+  const a = SM.formattedAdapter();
+  await a.mount(host, '* a\n\nmid\n', { original: '* a\n\nold\n' });
+  assert.equal(a.getText(), '* a\n\nmid\n');            // untouched: as given
+  ml.log.created[0].type('- a\n\nnew\n');
+  assert.equal(a.getText(), '* a\n\nnew\n');            // merged against the loaded text
+});
+
+test('the dialog mounts the formatted adapter with the loaded markdown as original', async () => {
+  const { SE } = load({ files: { 'SKILL.md': '---\nname: d\ndescription: d\n---\nbody\n' } });
+  let got = null;
+  const real = SE.adapters.markdown;
+  SE.adapters.markdown = () => { const x = real(); const m = x.mount; x.mount = (el, t, o) => { got = o; return m(el, t, o); }; return x; };
+  await SE.open({ skill: { dir_name: 'd', mine: true }, manager: null });
+  assert.equal(got.original, 'body\n');
+});
+
+test('a Milkdown serialiser throw: getText falls back to the source pane with the last good text, shows the error, toggle still works', async () => {
+  const ml = fakeMilkdown();
+  const { SM, document } = load({ milkdown: ml });
+  const host = document.createElement('div');
+  const a = SM.formattedAdapter();
+  await a.mount(host, 'one\n', {});
+  ml.log.created[0].type('two\n');
+  assert.equal(a.getText(), 'two\n');
+  ml.log.throwOnMarkdown = true;
+  ml.log.created[0].type('three\n');
+  assert.equal(a.getText(), 'two\n');                   // the last good text, no throw
+  assert.equal(a.mode, 'source');
+  assert.ok(md(host, 'source'));
+  assert.equal(md(host, 'formatted'), null);
+  assert.match(md(host, 'status').textContent, /failed \(serialiser broke\)/);
+  ml.log.throwOnMarkdown = false;
+  await a.toggle();                                     // not locked
+  assert.equal(a.mode, 'formatted');
+  // a throw during toggle itself never leaves the pane locked
+  ml.log.created.at(-1).type('four\n');
+  ml.log.throwOnMarkdown = true;
+  await a.toggle();
+  assert.equal(a.mode, 'source');
+  ml.log.throwOnMarkdown = false;
+  await a.toggle();
+  assert.equal(a.mode, 'formatted');
+});
+
+test('the dialog: a change event whose getText throws shows the error, never throws from the timer', async () => {
+  const { SE } = load({ files: { 'SKILL.md': '---\nname: d\ndescription: d\n---\nbody\n' } });
+  let cb = null;
+  SE.adapters.markdown = () => ({ mount() {}, getText() { throw new Error('kaput'); }, onChange(f) { cb = f; }, destroy() {} });
+  const dlg = await SE.open({ skill: { dir_name: 'd', mine: true }, manager: null });
+  assert.doesNotThrow(() => cb());
+  assert.match(dlg.el.querySelector('[data-se="status"]').textContent, /kaput/);
+});
+
+test('destroyed while Milkdown is being created: the late editor is destroyed, nothing is mounted', async () => {
+  let go;
+  const ml = fakeMilkdown({ createDelay: new Promise((r) => { go = r; }) });
+  const { SM, document } = load({ milkdown: ml });
+  const host = document.createElement('div');
+  const a = SM.formattedAdapter();
+  const mounting = a.mount(host, 'x\n', {});
+  await wait(0);
+  a.destroy();
+  go();
+  await mounting;
+  await wait(0);
+  assert.equal(ml.log.created.length, 1);
+  assert.equal(ml.log.destroyed, 1);
+  assert.equal(host.children.length, 0);
+});
+
+test('the load timeout covers Editor.create too; an editor created too late is destroyed', async () => {
+  let go;
+  const ml = fakeMilkdown({ createDelay: new Promise((r) => { go = r; }) });
+  const { SM } = load({ milkdown: ml });
+  SM.timeoutMs = 20;
+  const r = await SM.check('x\n');
+  assert.equal(r.ok, false);
+  assert.match(r.error, /took too long/);
+  go();
+  await wait(10);
+  assert.equal(ml.log.created.length, 1);
+  assert.equal(ml.log.destroyed, 1);
+});
+
+test('switching the list type keeps the list attributes (order, spread) and sets the items\' list type', async () => {
+  const items = [{ attrs: { listType: 'ordered', label: '3.' } }, { attrs: { listType: 'ordered', label: '4.' } }];
+  const listNode = { type: { name: 'ordered_list' }, attrs: { order: 3, spread: false }, forEach: (f) => items.forEach((it, i) => f(it, i * 10)) };
+  const ml = fakeMilkdown({ listNode });
+  const { SM, document } = load({ milkdown: ml });
+  const host = document.createElement('div');
+  const a = SM.formattedAdapter();
+  await a.mount(host, 'x\n', {});
+  md(host, 'bulletList').click();
+  const t = ml.log.dispatched.at(-1);
+  assert.equal(t.steps[0].type, 'BULLET');
+  assert.deepEqual({ ...t.steps[0].attrs }, { order: 3, spread: false });
+  assert.deepEqual(t.steps.slice(1).map((x) => [x.pos, x.attrs.listType, x.attrs.label]), [[8, 'bullet', '3.'], [18, 'bullet', '4.']]);
+  // the cursor already in a list of that kind: nothing changes, no wrap
+  md(host, 'orderedList').click();
+  assert.equal(ml.log.dispatched.length, 1);
+  assert.equal(ml.log.commands.length, 0);
 });

@@ -480,7 +480,9 @@
         "linkApply": "Add link",
         "showSource": "Show source",
         "showFormatted": "Show formatted",
-        "crlf": "it uses Windows (CRLF) line ends"
+        "crlf": "it uses Windows (CRLF) line ends",
+        "staysSource": "Show formatted would change parts of this text, so it stays in the source view.",
+        "serialiseFailed": "The formatted editor failed ({{message}}); the last good text is shown as source."
       },
       "changes": {
         "title": "Changes to be saved",

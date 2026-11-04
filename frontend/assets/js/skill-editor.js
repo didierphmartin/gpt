@@ -365,7 +365,8 @@
             }
             const el = this.q('editor'), text = f.binary ? '' : (rel === 'SKILL.md' ? f.body : f.current);
             try {
-                this.editor = await this.mountOne(SE.adapters[kind], el, text, { readOnly, rel });
+                // original: the markdown as loaded, the merge base of a formatted save
+                this.editor = await this.mountOne(SE.adapters[kind], el, text, { readOnly, rel, original: this.mdOf(f, f.loaded === null ? f.template : f.loaded) });
             } catch (e) {
                 if (kind !== 'markdown') throw e;
                 f.md = { ok: false, changes: [], reason: '', error: errMsg(e) };   // the formatted editor did not load
@@ -395,9 +396,15 @@
             return a;
         }
 
+        /** An editor's change event (often from a timer): an error is shown, never thrown. */
         changed() {
-            this.capture();
-            this.refreshDots();
+            try {
+                this.capture();
+                this.refreshDots();
+            } catch (e) {
+                console.error('[SkillEditor]', e);
+                this.status(tr('skills.editor.failed', { message: errMsg(e) }), 'error');
+            }
         }
 
         save() {
