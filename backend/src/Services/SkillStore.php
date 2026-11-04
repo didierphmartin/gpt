@@ -37,12 +37,17 @@ final class SkillStore
         return null;
     }
 
-    /** @return list<array{path:string,name:string,description:string,visibility:string,owner_id:int,mine:bool,dependencies:list<string>,requires:list<string>}> */
-    public function list(int $userId, bool $asRobot = false): array
+    /** @return list<array{path:string,name:string,description:string,visibility:string,owner_id:int,mine:bool,dependencies:list<string>,requires?:list<string>}> */
+    public function list(int $userId, bool $asRobot = false, bool $withRequires = false): array
     {
         $rows = [];
         $index = $this->index();
-        $names = array_map('strval', array_keys($this->viewOf($index, $userId)));   // once: what the caller resolves names against
+        // Only when asked (reads each skill's scripts/): the names a row's requirements resolve against, built once.
+        $mine = $public = null;
+        if ($withRequires) {
+            $public = array_map('strval', array_keys($this->viewOf($index, -1)));   // no user -1: public skills only
+            $mine = $asRobot && $this->edition !== 'individual' ? $public : array_map('strval', array_keys($this->viewOf($index, $userId)));
+        }
         foreach ($index as $key => $e) {
             [$area, $path] = $this->splitKey($key);
             if (!$this->visible($e, $userId, $asRobot) || !is_dir($this->dir($area, $path))) {
@@ -58,9 +63,13 @@ final class SkillStore
                 'owner_id' => (int) $e['owner'],
                 'mine' => (int) $e['owner'] === $userId,
                 'dependencies' => LangGraphPackage::skillDependencies($md),
-                // Direct required skills (same rule as delete protection), from the caller's view: own, then public.
-                'requires' => LangGraphPackage::requiredSkills($path, $this->requiresFiles($area, $path), $names)['requires'],
             ];
+            if ($withRequires) {
+                // Direct required skills (same rule as delete protection). My own: from my view (own, then public); another
+                // user's public skill: against public skills only, as it resolves for its owner at run time.
+                $names = (int) $e['owner'] === $userId ? $mine : $public;
+                $rows[count($rows) - 1]['requires'] = LangGraphPackage::requiredSkills($path, $this->requiresFiles($area, $path, $md), $names)['requires'];
+            }
         }
         usort($rows, fn($a, $b) => strcmp($a['path'], $b['path']));
         return $rows;
@@ -352,10 +361,10 @@ final class SkillStore
     }
 
     /** SKILL.md and scripts/** of a skill, read from disk (nothing else of the tree). */
-    private function requiresFiles(string $area, string $path): array
+    private function requiresFiles(string $area, string $path, ?string $md = null): array
     {
         $dir = $this->dir($area, $path);
-        $out = is_file("$dir/SKILL.md") ? ['SKILL.md' => (string) file_get_contents("$dir/SKILL.md")] : [];
+        $out = $md !== null ? ['SKILL.md' => $md] : (is_file("$dir/SKILL.md") ? ['SKILL.md' => (string) file_get_contents("$dir/SKILL.md")] : []);
         foreach ($this->readTree("$dir/scripts", false) as $rel => $b) {
             $out["scripts/$rel"] = $b;
         }

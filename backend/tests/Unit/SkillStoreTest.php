@@ -533,7 +533,8 @@ final class SkillStoreTest extends TestCase
         $s->import(2, 'pub', $decl('pub', ''));
         $s->setVisibility(2, 'viewer', 'public');
         $s->setVisibility(2, 'pub', 'public');
-        $r1 = array_column($s->list(1), 'requires', 'path');
+        $this->assertArrayNotHasKey('requires', $s->list(1)[0]);          // opt-in
+        $r1 = array_column($s->list(1, false, true), 'requires', 'path');
         $this->assertSame([], $r1['leaf']);
         $this->assertSame(['leaf'], $r1['mid']);
         $this->assertSame(['mid'], $r1['top']);                       // direct only, not the closure
@@ -543,6 +544,34 @@ final class SkillStoreTest extends TestCase
         foreach ($r1 as $paths) {
             $this->assertNotContains('secret', $paths);
         }
+    }
+
+    public function test_requires_of_anothers_public_skill_resolve_against_public_skills_only(): void
+    {
+        $s = $this->store();
+        $decl = fn(string $n, string $req) => ['SKILL.md' => "---\nname: $n\nrequires-skills: [$req]\n---\n"];
+        $s->import(1, 'g/x', $decl('x', ''));                       // caller's private x
+        $s->import(2, 'h/x', $decl('x', ''));
+        $s->setVisibility(2, 'h/x', 'public');
+        $s->import(2, 'p', $decl('p', 'x'));
+        $s->setVisibility(2, 'p', 'public');
+        $s->import(1, 'mine', $decl('mine', 'x'));
+        $r = array_column($s->list(1, false, true), 'requires', 'path');
+        $this->assertSame(['h/x'], $r['p']);                        // the public x, as for its owner
+        $this->assertSame(['g/x'], $r['mine']);                     // my own: my view, mine first
+    }
+
+    public function test_robot_listing_resolves_requires_by_the_robots_visibility(): void
+    {
+        $decl = fn(string $n, string $req) => ['SKILL.md' => "---\nname: $n\nrequires-skills: [$req]\n---\n"];
+        $s = $this->store('corporate');
+        $s->import(1, 'x', $decl('x', ''));
+        $s->import(1, 'a', $decl('a', 'x'));
+        $s->setVisibility(1, 'a', 'public');                         // makes x public with it
+        $s->import(1, 'priv', $decl('priv', ''));
+        $rows = array_column($s->list(1, true, true), 'requires', 'path');
+        $this->assertSame(['a' => ['x'], 'x' => []], $rows);          // a corporate robot: public skills only, resolved among them
+        $this->assertSame(['x'], array_column($s->list(1, false, true), 'requires', 'path')['a']);
     }
 
     public function test_group_delete_except_compares_area_and_path(): void

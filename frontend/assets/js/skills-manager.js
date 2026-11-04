@@ -197,7 +197,7 @@ class SkillsManager {
     async loadLocalSkills() {
         if (!window.skillsFs) return [];
         try {
-            const list = await window.skillsFs.listSkills();
+            const list = await window.skillsFs.listSkills({ withRequires: true });
             // Eager-load each skill's SKILL.md body so the editor opens
             // instantly on click. Reads are local-disk fast; for libraries
             // larger than a few hundred skills we'd defer to first click.

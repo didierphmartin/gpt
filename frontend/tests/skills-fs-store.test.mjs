@@ -92,10 +92,14 @@ test('folder mode keeps the list shape and adds private/mine/dependencies', asyn
 
 test('volume listSkills maps requires (empty when absent)', async () => {
   const rows = [{ path: 'a', name: 'a', visibility: 'private', owner_id: 1, mine: true, requires: ['g/b'] }, { path: 'b', name: 'b', visibility: 'private', owner_id: 1, mine: true }];
-  const { fs } = load({ routes: { ...volume, 'GET /skills': () => [200, rows] } });
-  const out = await fs.listSkills();
+  const { fs, calls } = load({ routes: { ...volume, 'GET /skills': () => [200, rows] } });
+  assert.equal((await fs.listSkills())[0].requires, undefined);       // opt-in
+  const out = await fs.listSkills({ withRequires: true });
   assert.deepEqual([...out[0].requires], ['g/b']);
   assert.deepEqual([...out[1].requires], []);
+  assert.ok(calls.some((c) => c.path === '/skills?requires=1'));
+  await fs.listSkills({ asRobot: true, withRequires: true });
+  assert.ok(calls.some((c) => c.path === '/skills?as=robot&requires=1'));
 });
 
 test('folder mode lists the direct required skills (declared, or named in scripts/)', async () => {
@@ -103,6 +107,7 @@ test('folder mode lists the direct required skills (declared, or named in script
     top: { 'SKILL.md': '---\nname: top\nrequires-skills: [mid]\n---\n' },
     mid: { 'SKILL.md': '---\nname: mid\n---\n', scripts: { 'run.py': "load_script('leaf', 'x.py')\n" } },
     leaf: { 'SKILL.md': '---\nname: leaf\n---\n' },
+    cached: { 'SKILL.md': '---\nname: cached\n---\n', scripts: { __pycache__: { 'a.pyc': "'leaf'" }, 'img.png': "'leaf'" } },
   };
   const at = (parts) => parts.reduce((d, n) => (d && typeof d === 'object' ? d[n] : undefined), tree);
   const fileOf = (v) => ({ kind: 'file', getFile: async () => ({ text: async () => v, arrayBuffer: async () => new TextEncoder().encode(v).buffer }) });
@@ -112,8 +117,9 @@ test('folder mode lists the direct required skills (declared, or named in script
     if (v === undefined) return null;
     return typeof v === 'string' ? fileOf(v) : fakeDir(v, parts[parts.length - 1] || '');
   } } });
-  const out = await fs.listSkills();
-  assert.deepEqual(Object.fromEntries(out.map((r) => [r.dirName, [...r.requires]])), { leaf: [], mid: ['leaf'], top: ['mid'] });
+  assert.equal((await fs.listSkills())[0].requires, undefined);       // opt-in: no script reads
+  const out = await fs.listSkills({ withRequires: true });
+  assert.deepEqual(Object.fromEntries(out.map((r) => [r.dirName, [...r.requires]])), { cached: [], leaf: [], mid: ['leaf'], top: ['mid'] });
 });
 
 test('importSkill posts base64 toStoreFiles at read.dir and maps 409 to code clash', async () => {

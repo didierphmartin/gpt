@@ -90,7 +90,8 @@ final class SkillStoreControllerTest extends TestCase
         $c->import($this->req([], ['path' => 'app', 'visibility' => 'private', 'files' => ['SKILL.md' => $md('app', 'base')]]));
         $c->import($this->req([], ['path' => 'hidden', 'visibility' => 'private', 'files' => ['SKILL.md' => $md('hidden', '')]], 99));
         $rows = [];
-        foreach ($c->list($this->req())['data'] as $r) {
+        self::assertArrayNotHasKey('requires', $c->list($this->req())['data'][0]);
+        foreach ($c->list($this->req(['requires' => '1']))['data'] as $r) {
             $rows[$r['path']] = $r['requires'];
         }
         ksort($rows);
