@@ -1323,7 +1323,7 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
 
         } else if (action === 'export' && type === 'skill') {
             const skill = this.findSkillByDatasetId(id);
-            if (skill) this.showExportPicker(skill.dir_name);
+            if (skill) this.showExportPicker(skill.dir_name, { only: true });
 
         } else if (action === 'move' && type === 'skill') {
             const skill = this.findSkillByDatasetId(id);
@@ -1622,14 +1622,16 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
      * Export dialog: choose a skill (preselected: the one passed, else the last one opened), see what the zip will
      * hold — the skill and every skill it requires, with their libraries — choose where to save, then Export.
      * The zip is SkillZip's self-contained format (skillsImport.exportSkillZip), so an import brings it all back.
+     * only: the dialog is for that one skill (a skill's right-click Export…) — shown as its name, no list to pick from.
      */
-    async showExportPicker(preselect = null) {
+    async showExportPicker(preselect = null, { only = false } = {}) {
         document.getElementById('skills-export-modal')?.remove();
         const t = this.t;
         const esc = (v) => String(v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
         const skills = [...(this.skills || [])].sort((a, b) => String(a.dir_name).localeCompare(String(b.dir_name)));
         if (!skills.length) { alert(t('skills.export.none')); return; }
         const initial = [preselect, this.lastSkillDir].find((d) => d && skills.some((s) => s.dir_name === d)) || skills[0].dir_name;
+        const single = only && preselect === initial;
 
         const modal = document.createElement('div');
         modal.id = 'skills-export-modal';
@@ -1644,9 +1646,12 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
                 <p class="text-gray-500">${esc(t('skills.export.intro'))}</p>
                 <label class="block">
                     <span class="block text-gray-500 mb-1">${esc(t('skills.export.skill'))}</span>
+                    ${single ? `
+                    <input type="hidden" data-export="skill" value="${esc(initial)}">
+                    <span class="block px-2 py-1.5 border border-gray-200 bg-gray-50 rounded-lg text-sm font-medium text-gray-800">${esc(initial)}</span>` : `
                     <select data-export="skill" class="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-sm">
                         ${skills.map((s) => `<option value="${esc(s.dir_name)}"${s.dir_name === initial ? ' selected' : ''}>${esc(s.dir_name)}</option>`).join('')}
-                    </select>
+                    </select>`}
                 </label>
                 <div data-export="details" class="border border-gray-200 rounded-lg p-3 space-y-1.5"></div>
                 <div data-export="status" class="hidden px-3 py-2 rounded-lg border"></div>
