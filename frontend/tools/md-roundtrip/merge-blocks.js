@@ -18,6 +18,8 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   function keyOf(tok, m) {
     if (tok.type === 'space') return 'space';
+    // a fence's full info string (marked renders only its first word) is part of the key; the content is in the HTML
+    if (tok.type === 'code') return 'code|' + (tok.codeBlockStyle || 'fenced') + '|' + (tok.lang || '') + '|' + m.parse(tok.raw);
     return tok.type + '|' + m.parse(tok.raw);
   }
 

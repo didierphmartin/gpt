@@ -159,18 +159,20 @@ const count = (s, sub) => s.split(sub).length - 1;
 
 // probes: a user edit made on the markdown Toast produced, touching characters a sloppy key could fold away.
 // Each returns { edited, survives(merged, orig) } or null when the file has nothing to probe.
+const MARK = 'ZQ7K9XJ'; // cannot already be in a skill file (checked below)
+if (bodies.some((b) => b.includes(MARK))) throw new Error('probe marker occurs in a file');
 const PROBES = {
   'code indent': (orig, ed) => {
     const lines = ed.split('\n'); let inF = false;
     for (let i = 0; i < lines.length; i++) {
       if (/^\s*```/.test(lines[i])) { inF = !inF; continue; }
-      if (inF && lines[i].trim()) { const m = '  ' + lines[i]; lines[i] = m; return { edited: lines.join('\n'), survives: (g, o) => count(g, m) > count(o, m) }; }
+      if (inF && lines[i].trim()) { const m = '  ' + lines[i] + MARK; lines[i] = m; return { edited: lines.join('\n'), survives: (g) => g.includes(m) }; }
     }
     return null;
   },
-  '<br> added': (orig, ed) => paraEdit(ed, (p) => p + '<br>', (g, o) => count(g, '<br>') > count(o, '<br>')),
-  'escape added': (orig, ed) => paraEdit(ed, (p) => p + ' \\*zq\\*', (g, o) => g.includes(' \\*zq\\*') && !o.includes(' \\*zq\\*')),
-  'link target': (orig, ed) => { const m = /\]\(([^)\s]+)\)/.exec(ed); if (!m) return null; const nu = m[1] + 'X'; return { edited: ed.replace(m[0], '](' + nu + ')'), survives: (g, o) => g.includes('](' + nu + ')') }; },
+  '<br> added': (orig, ed) => paraEdit(ed, (p) => p + MARK + '<br>', (g) => g.includes(MARK + '<br>')),
+  'escape added': (orig, ed) => paraEdit(ed, (p) => p + ' \\*' + MARK + '\\*', (g) => g.includes('\\*' + MARK + '\\*')),
+  'link target': (orig, ed) => { const m = /\]\(([^)\s]+)\)/.exec(ed); if (!m) return null; const nu = m[1] + MARK; return { edited: ed.replace(m[0], '](' + nu + ')'), survives: (g) => g.includes('](' + nu + ')') }; },
 };
 function paraEdit(ed, fn, survives) {
   const t = lexer(ed).find((x) => x.type === 'paragraph' && x.text.trim());
