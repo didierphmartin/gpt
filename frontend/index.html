@@ -2338,7 +2338,7 @@
                         <!-- Libraries: one entry that opens the list of libraries; choosing one closes it (chat.js switchView). -->
                         <button id="nav-libraries" class="sidebar-nav-btn text-left px-3 py-2 text-xs font-semibold rounded-md shadow-sm border transition-all" aria-expanded="false" aria-controls="nav-libraries-menu">
                             📚 <span data-i18n="sidebar.libraries">Libraries</span><span id="nav-libraries-current"></span>
-                            <span id="nav-libraries-caret" style="float:right;">▸</span>
+                            <span id="nav-libraries-caret" style="float:right;" class="inline-flex items-center h-4"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="transition: transform .15s;" aria-hidden="true"><path d="M7 4l6 6-6 6"/></svg></span>
                         </button>
                         <div id="nav-libraries-menu" class="hidden flex flex-col gap-2 pl-4">
                             <button id="nav-prompt-library" class="sidebar-nav-btn text-left px-3 py-2 text-xs font-semibold rounded-md shadow-sm border transition-all">
@@ -4430,7 +4430,7 @@
     <script src="assets/js/mcp-tool-tester.js?v=20260904-mcplib"></script>
     <script src="assets/js/mcp-library.js?v=20261005-is-mock"></script>
     <script src="assets/js/file-storage.js?v=20260610-fileselect2"></script>
-    <script src="assets/js/chat.js?v=20261103-skilldeps"></script>
+    <script src="assets/js/chat.js?v=20261103-libchevron"></script>
     <script>
       (function initVoiceDictation() {
         const input = document.getElementById('user-input');

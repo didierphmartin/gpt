@@ -9828,7 +9828,9 @@ class ChatApp {
         this.navLibrariesMenu.classList.toggle('hidden', !show);
         this.navLibraries.setAttribute('aria-expanded', String(show));
         const caret = document.getElementById('nav-libraries-caret');
-        if (caret) caret.textContent = show ? '▾' : '▸';
+        // The chevron points right when closed, down when open.
+        const chevron = caret && caret.querySelector('svg');
+        if (chevron) chevron.style.transform = `rotate(${show ? 90 : 0}deg)`;
     }
 
     /** Libraries stays highlighted and names the open library while one is shown; the menu closes on any switch. */
