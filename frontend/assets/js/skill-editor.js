@@ -14,7 +14,9 @@
  *   (mount may be async; setOriginal: the text just saved becomes the merge base - a no-op except for formatted markdown)
  * markdown / markdownSource default to a plain <textarea>, code is CodeMirror 5 (modeOf: by extension); binary is a read-only placeholder.
  * skill-md-editor.js installs markdown (Milkdown, formatted), markdownSource (CodeMirror markdown) and checkMarkdown.
- * SkillEditor.frontPanel is the frontmatter panel slot, same shape: mount(el, front, { readOnly, isNew }).
+ * SkillEditor.frontPanel is the frontmatter form (frontForm): mount(el, front, { readOnly, isNew, state, installed }),
+ * getText() -> the rebuilt frontmatter (only the fields the user changed), errors(), setOriginal(front), destroy().
+ * The form always compares with the frontmatter as loaded (f.parts.front); its inputs live in f.form across switches.
  *
  * Markdown, per file, on first open: SkillEditor.checkMarkdown(original) -> { ok, changes, reason, error }.
  * ok -> the formatted editor; otherwise (or when it fails to mount) the markdown pane, with a note and a Why? list of
@@ -132,23 +134,219 @@
         };
     }
 
-    /** Frontmatter panel slot (Task 7 puts the form here). Raw text; editable only for New Skill. */
-    function rawFrontPanel() {
-        let box = null, ta = null, host = null;
+    // ---- the frontmatter form (SKILL.md) ----
+
+    /**
+     * The form's fields. kind: scalar (one line), text (description: a textarea + expand overlay), list (comma-separated
+     * in the form, written as a list; keepShape: a field that is a comma scalar in the file stays one). A key the file
+     * has in a shape the form cannot show (complex, or a list where a scalar belongs) is listed under Other fields.
+     */
+    const FORM_FIELDS = [
+        { key: 'name', kind: 'scalar', label: 'skills.editor.fm.name', required: 'skills.editor.nameRequired', hint: 'skills.editor.fm.nameHint' },
+        { key: 'description', kind: 'text', label: 'skills.editor.fm.description', required: 'skills.editor.descriptionRequired' },
+        { key: 'license', kind: 'scalar', label: 'skills.editor.fm.license', placeholder: 'MIT' },
+        { key: 'origin', kind: 'scalar', label: 'skills.editor.fm.origin', placeholder: 'synergyAI custom' },
+        { key: 'dependencies', kind: 'list', label: 'skills.editor.fm.libraries', placeholder: 'beautifulsoup4, python-docx' },
+        { key: 'requires-skills', kind: 'list', label: 'skills.editor.fm.requiredSkills', placeholder: 'docx, xlsx' },
+        { key: 'allowed-tools', kind: 'list', label: 'skills.editor.fm.allowedTools', placeholder: 'run_skill_script', keepShape: true },
+    ];
+    const splitList = (s) => String(s).split(',').map((x) => x.trim()).filter(Boolean);
+    const leafOf = (p) => String(p).split('/').pop();
+
+    /** What the form shows for a parsed field (a clip block scalar's final \n is not shown). */
+    function displayOf(spec, field) {
+        if (!field) return '';
+        if (Array.isArray(field.value)) return field.value.join(', ');
+        return String(field.value).replace(/\n+$/, '');
+    }
+
+    /**
+     * The frontmatter form: mount(el, front, { readOnly, isNew, state, installed }); getText() -> the frontmatter
+     * (SkillFrontmatter.rebuild of the as-loaded front with ONLY the fields whose input differs from what was shown);
+     * errors() -> i18n keys (a required field cleared); setOriginal(front) after a save; destroy().
+     * state (kept by the dialog per file): { values: { key: input text }, open } so edits survive a file switch.
+     * installed: a promise of the Skills-list rows (or null) for the Required skills warning.
+     */
+    function frontForm() {
+        let host = null, box = null, opts = {}, front = '', state = { values: {} }, rows = [], other = [];
+        const cbs = [];
+        let installed = null;              // Set of installed skill paths and leaf names; null = unknown (no warning)
+        const F = () => window.SkillFrontmatter;
+        const inputs = {};
+
+        const val = (spec) => (inputs[spec.key] ? inputs[spec.key].value : rows.find((r) => r.spec === spec)?.shown ?? '');
+        const changedRows = () => rows.filter((r) => val(r.spec) !== r.shown);
+
+        function edits() {
+            const out = {};
+            for (const r of changedRows()) {
+                const spec = r.spec, v = val(spec);
+                if (spec.kind === 'list') {
+                    const items = splitList(v);
+                    if (!items.length) { if (r.field) out[spec.key] = null; continue; }
+                    out[spec.key] = spec.keepShape && r.field && typeof r.field.value === 'string' ? items.join(', ') : items;
+                } else {
+                    const t = v.trim();
+                    if (t) out[spec.key] = t;
+                    else if (!spec.required && r.field) out[spec.key] = null;
+                }
+            }
+            return out;
+        }
+        function errors() {
+            return changedRows().filter((r) => r.spec.required && !val(r.spec).trim()).map((r) => r.spec.required);
+        }
+
+        function summary() {
+            const v = (k) => { const r = rows.find((x) => x.spec.key === k); return r ? val(r.spec) : ''; };
+            const nameRow = rows.find((x) => x.spec.key === 'name');
+            return tr('skills.editor.fm.summary', {
+                name: (nameRow ? v('name').trim() : '') || '—',
+                libraries: splitList(v('dependencies')).length,
+                required: splitList(v('requires-skills')).length,
+            });
+        }
+
+        function refresh() {
+            if (!box) return;
+            box.querySelector('[data-se="fm-summary"]').textContent = summary();
+            for (const r of rows) {
+                const err = box.querySelector(`[data-se="fm-${r.spec.key}-error"]`);
+                if (err) {
+                    const bad = r.spec.required && val(r.spec) !== r.shown && !val(r.spec).trim();
+                    err.hidden = !bad;
+                    err.textContent = bad ? tr(r.spec.required) : '';
+                }
+            }
+            const warn = box.querySelector('[data-se="fm-requires-skills-warning"]');
+            if (warn) {
+                const missing = installed ? splitList(val(FORM_FIELDS.find((x) => x.key === 'requires-skills'))).filter((n) => !installed.has(n) && !installed.has(leafOf(n))) : [];
+                warn.hidden = !missing.length;
+                warn.textContent = missing.length ? tr('skills.editor.fm.notInstalled', { names: missing.join(', ') }) : '';
+            }
+        }
+
+        function onInput(spec) {
+            if (opts.readOnly) return;
+            state.values[spec.key] = inputs[spec.key].value;
+            refresh();
+            for (const cb of cbs) cb();
+        }
+
+        /** The roomy textarea over the dialog for the description (Escape, the backdrop or ✕ closes and keeps the text). */
+        function expandDescription() {
+            const spec = FORM_FIELDS[1], inp = inputs.description;
+            document.getElementById('skill-editor-desc')?.remove();
+            const ta = h('textarea', { class: 'w-full h-64 px-3 py-2 text-sm border border-gray-300 rounded-lg resize-y focus:ring-2 focus:ring-blue-500',
+                readOnly: !!opts.readOnly, value: inp.value });
+            let ov = null;
+            const onKey = (e) => { if (e.key === 'Escape') close(); };
+            const close = () => {
+                if (!ov) return;
+                document.removeEventListener('keydown', onKey);
+                if (!opts.readOnly && ta.value !== inp.value) { inp.value = ta.value; onInput(spec); }
+                ov.remove(); ov = null;
+            };
+            const panel = h('div', { class: 'bg-white rounded-xl shadow-xl border border-gray-200 w-[min(640px,90vw)] max-h-[80vh] flex flex-col' },
+                h('div', { class: 'flex items-center justify-between px-4 py-3 border-b border-gray-200' },
+                    h('h4', { class: 'text-sm font-semibold text-gray-800', text: tr('skills.editor.fm.description') }),
+                    h('button', { type: 'button', 'data-se': 'fm-description-overlay-close', class: 'p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded', text: '✕',
+                        'aria-label': tr('skills.editor.fm.close'), on: { click: () => close() } })),
+                h('div', { class: 'p-4 flex-1 overflow-y-auto' }, ta));
+            ov = h('div', { id: 'skill-editor-desc', 'data-se': 'fm-description-overlay', class: 'fixed inset-0 z-[220] flex items-center justify-center', style: 'background-color: rgba(0,0,0,0.4)',
+                on: { click: (e) => { if (e.target === ov) close(); } } }, panel);
+            document.body.appendChild(ov);
+            document.addEventListener('keydown', onKey);
+            if (ta.focus) ta.focus();
+        }
+
+        function fieldEl(r) {
+            const spec = r.spec, se = 'fm-' + spec.key;
+            const cls = 'w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500';
+            const initial = Object.prototype.hasOwnProperty.call(state.values, spec.key) ? state.values[spec.key] : r.shown;
+            const inp = spec.kind === 'text'
+                ? h('textarea', { 'data-se': se, class: cls + ' resize-y', rows: 2, spellcheck: 'true', readOnly: !!opts.readOnly, value: initial })
+                : h('input', { 'data-se': se, type: 'text', class: cls, readOnly: !!opts.readOnly, value: initial, placeholder: spec.placeholder });
+            inp.addEventListener('input', () => onInput(spec));
+            inputs[spec.key] = inp;
+            const label = h('div', { class: 'flex items-center gap-2 mb-1' },
+                h('label', { class: 'text-xs font-medium text-gray-700', text: tr(spec.label) }),
+                spec.kind === 'list' ? h('span', { class: 'text-[11px] text-gray-400', text: tr('skills.editor.fm.commaHint') }) : null,
+                spec.kind === 'text' ? h('button', { type: 'button', 'data-se': 'fm-description-expand', class: 'text-[11px] text-blue-600 underline hover:text-blue-800',
+                    text: tr('skills.editor.fm.expand'), on: { click: () => expandDescription() } }) : null);
+            return h('div', { class: spec.kind === 'text' || spec.kind === 'list' ? 'col-span-2' : '' }, label, inp,
+                spec.hint && !opts.isNew ? h('p', { class: 'mt-0.5 text-[11px] text-gray-400', text: tr(spec.hint) }) : null,
+                spec.required ? h('p', { 'data-se': se + '-error', class: 'mt-0.5 text-xs text-red-700', hidden: true }) : null,
+                spec.key === 'requires-skills' ? h('p', { 'data-se': se + '-warning', class: 'mt-0.5 text-xs text-amber-700', hidden: true }) : null);
+        }
+
+        /** Which keys the form edits and what goes under Other fields, from the as-loaded front. */
+        function parse() {
+            const all = F().fields(front || '');
+            const first = (k) => all.find((x) => x.key === k);
+            const shownOk = (spec, f) => !f || (!f.complex && (spec.kind === 'list' || typeof f.value === 'string'));
+            const metaOrigin = all.some((x) => x.key === 'metadata' && /\n[ \t]+origin[ \t]*:/.test(x.raw));
+            rows = [];
+            const editable = new Set();
+            for (const spec of FORM_FIELDS) {
+                const f = first(spec.key);
+                if (!shownOk(spec, f)) continue;
+                if (spec.key === 'origin' && !f && metaOrigin) continue;   // origin is in metadata: listed there
+                rows.push({ spec, field: f || null, shown: displayOf(spec, f) });
+                editable.add(spec.key);
+            }
+            other = all.filter((x) => x.key !== null && !(editable.has(x.key) && first(x.key) === x));
+        }
+
+        function render() {
+            for (const k of Object.keys(inputs)) delete inputs[k];
+            const wasOpen = box ? box.open : undefined;
+            if (box && host) host.removeChild(box);
+            const otherBox = other.length ? h('div', { 'data-se': 'fm-other', class: 'col-span-2' },
+                h('div', { class: 'flex items-center gap-2 mb-1' },
+                    h('span', { class: 'text-xs font-medium text-gray-700', text: tr('skills.editor.fm.other') }),
+                    h('span', { class: 'text-[11px] text-gray-400', text: tr('skills.editor.fm.otherHint') })),
+                h('pre', { class: 'm-0 p-2 text-xs font-mono whitespace-pre-wrap break-words max-h-32 overflow-auto rounded border border-gray-200 bg-gray-50 text-gray-600',
+                    text: trimEnd(other.map((x) => x.raw.replace(/\r\n/g, '\n')).join('')) })) : null;
+            box = h('details', { 'data-se': 'fm-panel', class: 'text-xs text-gray-700 border border-gray-200 rounded-lg' },
+                h('summary', { class: 'cursor-pointer px-3 py-1.5 select-none' },
+                    h('span', { class: 'font-medium text-gray-600', text: tr('skills.editor.frontmatter') + ' · ' }),
+                    h('span', { 'data-se': 'fm-summary', class: 'text-gray-500' })),
+                h('div', { class: 'grid grid-cols-2 gap-3 px-3 pb-3 pt-1 max-h-[40vh] overflow-auto' }, ...rows.map(fieldEl), otherBox));
+            box.open = !!(wasOpen !== undefined ? wasOpen : state.open);   // (h() skips false)
+            box.addEventListener('toggle', () => { state.open = box.open; });
+            host.appendChild(box);
+            refresh();
+        }
+
         return {
-            mount(el, front, { readOnly, isNew } = {}) {
+            mount(el, text, o = {}) {
                 host = el;
-                ta = h('textarea', {
-                    class: 'w-full mt-1 p-2 text-xs font-mono border border-gray-300 rounded-lg resize-y',
-                    rows: 5, spellcheck: 'false', readOnly: !!readOnly, value: front || '',
-                });
-                box = h('details', { class: 'text-xs text-gray-700', open: !!isNew },
-                    h('summary', { class: 'cursor-pointer font-medium text-gray-600', text: tr('skills.editor.frontmatter') }), ta);
-                el.appendChild(box);
+                opts = o;
+                front = text || '';
+                state = o.state || { values: {} };
+                if (!state.values) state.values = {};
+                if (state.open === undefined) state.open = !!o.isNew;
+                parse();
+                render();
+                if (o.installed) Promise.resolve(o.installed).then((list) => {
+                    if (!list) return;
+                    installed = new Set();
+                    for (const s of list) for (const n of [s.path, s.dirName, s.leafName, s.dir_name]) if (n) installed.add(n);
+                    refresh();
+                }).catch(() => {});
             },
-            getText: () => (ta ? ta.value : ''),
-            onChange(cb) { if (ta) ta.addEventListener('input', () => cb()); },
-            destroy() { if (box && host) host.removeChild(box); box = ta = null; },
+            getText() {
+                const e = edits();
+                return Object.keys(e).length ? F().rebuild(front, e) : front;
+            },
+            errors,
+            /** Open the panel (a Save blocked by a field error shows where). */
+            reveal() { if (box) { box.open = true; state.open = true; } },
+            onChange(cb) { cbs.push(cb); },
+            /** The front just saved is the new baseline; the inputs show it. */
+            setOriginal(text) { front = text || ''; state.values = {}; parse(); render(); },
+            destroy() { if (box && host) host.removeChild(box); box = null; document.getElementById('skill-editor-desc')?.remove(); },
         };
     }
 
@@ -187,6 +385,27 @@
             side(c.after, 'bg-green-50 border-green-200 text-green-900'))));
     }
 
+    /** Before -> after of each frontmatter field whose lines changed (a removed field has no after, a new one no before). */
+    function frontChanges(before, after) {
+        const F = window.SkillFrontmatter;
+        if (before === after) return [];
+        const spans = (t) => {
+            const m = new Map();
+            for (const x of F.fields(t || '')) {
+                const k = x.key === null ? '\u0000' + x.start : x.key;
+                m.set(k, (m.get(k) || '') + x.raw);
+            }
+            return m;
+        };
+        const a = spans(before), b = spans(after);
+        const out = [];
+        for (const k of new Set([...a.keys(), ...b.keys()])) {
+            const x = a.get(k) || '', y = b.get(k) || '';
+            if (x !== y) out.push({ before: x, after: y });
+        }
+        return out;
+    }
+
     class Dialog {
         constructor({ skill, manager }) {
             this.skill = skill;
@@ -211,7 +430,18 @@
 
         isDirty(f) {
             if (this.readOnly || f.binary || !f.ready || f.error) return false;
+            if (f.frontErrors && f.frontErrors.length) return true;            // e.g. the name cleared: not saved yet
             return f.current !== (f.loaded === null ? f.template : f.loaded);   // New Skill: compared with the template
+        }
+
+        /** The Skills-list rows, once per dialog (the Required skills warning); null when they cannot be listed. */
+        installed() {
+            if (!this._installed) {
+                this._installed = typeof this.fs.listSkills === 'function'
+                    ? Promise.resolve().then(() => this.fs.listSkills()).catch((e) => { console.warn('[SkillEditor] listSkills', e); return null; })
+                    : Promise.resolve(null);
+            }
+            return this._installed;
         }
 
         build() {
@@ -317,7 +547,7 @@
             if (!f || !f.ready || f.binary || f.error || this.readOnly) return;
             if (f.rel === 'SKILL.md') {
                 if (this.editor) f.body = this.editor.getText();
-                if (this.panel && this.isNew) f.front = this.panel.getText();   // existing skills: front kept as loaded (Task 7: form)
+                if (this.panel) { f.front = this.panel.getText(); f.frontErrors = this.panel.errors(); }
                 f.current = this.joinSkillMd(f);
             } else if (this.editor) f.current = this.editor.getText();
         }
@@ -345,7 +575,18 @@
                 f.parts = window.SkillFrontmatter.split(text.slice(f.bom.length));
                 f.front = f.parts.front;
                 f.body = f.parts.body;
+                f.form = { values: {}, open: f.form ? f.form.open : undefined };
+                f.frontErrors = [];
             }
+        }
+
+        /** After SKILL.md was written: what was saved is the frontmatter as loaded (the form's new baseline). */
+        rebase(f, text) {
+            f.parts = window.SkillFrontmatter.split(text.slice(f.bom.length));
+            f.front = f.parts.front;
+            f.form.values = {};
+            f.frontErrors = [];
+            if (f.rel === this.rel && this.panel && typeof this.panel.setOriginal === 'function') this.panel.setOriginal(f.front);
         }
 
         unmount() {
@@ -391,7 +632,8 @@
             if (f.error) return;
             const readOnly = this.readOnly || f.binary;
             if (rel === 'SKILL.md' && (this.isNew || f.front !== null)) {
-                this.panel = await this.mountOne(SE.frontPanel, this.q('front'), f.front, { readOnly: readOnly || !this.isNew, isNew: this.isNew });
+                this.panel = await this.mountOne(SE.frontPanel, this.q('front'), f.parts.front,
+                    { readOnly, isNew: this.isNew, state: f.form, installed: this.installed() });
                 if (this.closed) return;
             }
             const el = this.q('editor'), text = f.binary ? '' : (rel === 'SKILL.md' ? f.body : f.current);
@@ -448,6 +690,12 @@
             if (this.readOnly) return { written: [], failed: [] };
             this.capture();
             if (this.isNew) return this.saveNew();
+            const sk = this.files.get('SKILL.md');
+            if (sk && sk.frontErrors && sk.frontErrors.length) {
+                if (this.rel === 'SKILL.md' && this.panel && this.panel.reveal) this.panel.reveal();
+                this.status(sk.frontErrors.map((k) => tr(k)).join(' '), 'error');
+                return { written: [], failed: [] };
+            }
             const dirty = [...this.files.values()].filter((f) => this.isDirty(f));
             if (!dirty.length) { this.status(tr('skills.editor.nothingToSave')); return { written: [], failed: [] }; }
             const reviews = this.reviews(dirty);
@@ -459,6 +707,7 @@
                 try {
                     await this.fs.writeSkillFile(this.dir, f.rel, enc.encode(text));
                     f.loaded = text;
+                    if (f.rel === 'SKILL.md') this.rebase(f, text);
                     // the open editor's merge base is now what was just written
                     if (f.rel === this.rel && this.editor && typeof this.editor.setOriginal === 'function') {
                         try { this.editor.setOriginal(this.mdOf(f, text)); } catch (e) { console.warn('[SkillEditor] setOriginal', e); }
@@ -505,17 +754,27 @@
             return { written: ['SKILL.md'], failed: [] };
         }
 
-        /** Files that opened in the formatted editor and whose markdown changed: what "Changes to be saved" lists. */
+        /**
+         * What "Changes to be saved" lists: SKILL.md's changed frontmatter fields (the form writes them in its own
+         * form, so they are always shown), and the changed blocks of files that opened in the formatted editor.
+         */
         reviews(dirty) {
             const MB = window.MergeBlocks;
             const out = [];
             for (const f of dirty) {
-                if (!f.md || !f.md.ok || f.loaded === null || !MB) continue;
-                const before = this.mdOf(f, f.loaded), after = this.mdOf(f, f.current);
-                if (before === after) continue;    // e.g. only the frontmatter changed
-                const m = MB.merge(before, after);
-                if (!m.merged) { out.push({ rel: f.rel, changes: [{ before, after }], refused: m.reason }); continue; }
-                out.push({ rel: f.rel, changes: MB.diffBlocks(before, after).changes, refused: '' });
+                if (f.loaded === null) continue;
+                const front = f.rel === 'SKILL.md' && f.parts && f.parts.front !== null ? frontChanges(f.parts.front, f.front) : [];
+                let body = [], refused = '';
+                if (f.md && f.md.ok && MB) {
+                    const before = this.mdOf(f, f.loaded), after = this.mdOf(f, f.current);
+                    if (before !== after) {
+                        const m = MB.merge(before, after);
+                        if (!m.merged) { body = [{ before, after }]; refused = m.reason; }
+                        else body = MB.diffBlocks(before, after).changes;
+                    }
+                }
+                if (front.length) out.push({ rel: f.rel, title: tr('skills.editor.fm.changesTitle', { file: f.rel }), changes: front, refused: '' });
+                if (body.length) out.push({ rel: f.rel, changes: body, refused });
             }
             return out;
         }
@@ -529,7 +788,7 @@
                     h('div', { class: 'bg-white rounded-xl shadow-xl border border-gray-200 w-full max-w-3xl mx-4 max-h-[85vh] flex flex-col' },
                         h('h3', { class: 'px-5 pt-5 text-sm font-bold text-gray-800', text: tr('skills.editor.changes.title') }),
                         h('div', { class: 'px-5 py-3 space-y-4 overflow-auto min-h-0' }, ...reviews.map((r) => h('section', { 'data-se': 'changes-file', class: 'space-y-2' },
-                            h('h4', { class: 'text-xs font-semibold text-gray-700', text: r.rel }),
+                            h('h4', { class: 'text-xs font-semibold text-gray-700', text: r.title || r.rel }),
                             r.refused ? h('p', { 'data-se': 'changes-whole', class: 'text-xs text-amber-700', text: tr('skills.editor.changes.whole') }) : null,
                             renderChanges(r.changes)))),
                         h('div', { class: 'flex justify-end gap-2 px-5 pb-5 pt-2' },
@@ -612,10 +871,10 @@
     window.SkillEditor = {
         open,
         adapters: { markdown: textareaAdapter, markdownSource: textareaAdapter, code: codeAdapter, binary: binaryAdapter },
-        frontPanel: rawFrontPanel,
+        frontPanel: frontForm,
         checkMarkdown: null,                // (md) -> { ok, changes, reason, error }; skill-md-editor.js sets it
         current: null,
         // helpers (Tasks 5-7 and tests)
-        TEXT_EXT, kindOf, isTextExt, extOf, decode, validateNew, textareaAdapter, codeAdapter, modeOf, keepLineEnds, renderChanges,
+        TEXT_EXT, kindOf, isTextExt, extOf, decode, validateNew, textareaAdapter, codeAdapter, modeOf, keepLineEnds, renderChanges, frontChanges,
     };
 })();

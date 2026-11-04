@@ -491,6 +491,24 @@
         "nothing": "(nada)",
         "back": "Volver",
         "whole": "Este archivo no se puede comparar bloque a bloque (contiene markdown que la comparación no puede dividir, como una definición de referencia), así que se muestra el archivo completo. Se guarda tal como lo escribió el editor."
+      },
+      "fm": {
+        "name": "Nombre",
+        "nameHint": "Cambiar el nombre no cambia el nombre de la carpeta.",
+        "description": "Descripción",
+        "expand": "Ampliar",
+        "close": "Cerrar",
+        "license": "Licencia",
+        "origin": "Origen",
+        "libraries": "Bibliotecas de Python",
+        "requiredSkills": "Habilidades requeridas",
+        "allowedTools": "Herramientas permitidas",
+        "commaHint": "separadas por comas",
+        "other": "Otros campos",
+        "otherHint": "Se conservan tal cual al guardar.",
+        "notInstalled": "No instalada: {{names}}. Se guarda igualmente; la importación y la exportación la indicarán.",
+        "summary": "{{name}} · {{libraries}} bibliotecas · {{required}} habilidades requeridas",
+        "changesTitle": "{{file}} — encabezado (frontmatter)"
       }
     },
     "section": {

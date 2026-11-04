@@ -491,6 +491,24 @@
         "nothing": "(nothing)",
         "back": "Back",
         "whole": "This file cannot be compared block by block (it has markdown the comparison cannot split, such as a reference definition), so the whole file is shown. It is saved as the editor wrote it."
+      },
+      "fm": {
+        "name": "Name",
+        "nameHint": "Changing the name does not rename the folder.",
+        "description": "Description",
+        "expand": "Expand",
+        "close": "Close",
+        "license": "License",
+        "origin": "Origin",
+        "libraries": "Python libraries",
+        "requiredSkills": "Required skills",
+        "allowedTools": "Allowed tools",
+        "commaHint": "comma-separated",
+        "other": "Other fields",
+        "otherHint": "Kept as is when you save.",
+        "notInstalled": "Not installed: {{names}}. The save still happens; import and export will name it.",
+        "summary": "{{name}} · {{libraries}} libraries · {{required}} required skills",
+        "changesTitle": "{{file}} — frontmatter"
       }
     },
     "section": {

@@ -491,6 +491,24 @@
         "nothing": "(rien)",
         "back": "Retour",
         "whole": "Ce fichier ne peut pas être comparé bloc par bloc (il contient du markdown que la comparaison ne sait pas découper, comme une définition de référence) : le fichier entier est affiché. Il est enregistré tel que l'éditeur l'a écrit."
+      },
+      "fm": {
+        "name": "Nom",
+        "nameHint": "Changer le nom ne renomme pas le dossier.",
+        "description": "Description",
+        "expand": "Agrandir",
+        "close": "Fermer",
+        "license": "Licence",
+        "origin": "Origine",
+        "libraries": "Bibliothèques Python",
+        "requiredSkills": "Compétences requises",
+        "allowedTools": "Outils autorisés",
+        "commaHint": "séparés par des virgules",
+        "other": "Autres champs",
+        "otherHint": "Conservés tels quels à l'enregistrement.",
+        "notInstalled": "Non installée : {{names}}. L'enregistrement a lieu quand même ; l'import et l'export la signaleront.",
+        "summary": "{{name}} · {{libraries}} bibliothèques · {{required}} compétences requises",
+        "changesTitle": "{{file}} — en-tête (frontmatter)"
       }
     },
     "section": {

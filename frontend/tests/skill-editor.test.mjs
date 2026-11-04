@@ -27,7 +27,7 @@ const dec = new TextDecoder('utf-8', { ignoreBOM: true });   // keeps a BOM, so 
 import { makeDom } from './fixtures/dom-stub.mjs';
 
 /** files: { rel: string | Uint8Array }; opts.fail: Set of rels whose write throws */
-function makeFs(files, { fail = new Set(), importErr = null } = {}) {
+function makeFs(files, { fail = new Set(), importErr = null, installed = null } = {}) {
   const disk = {};
   for (const [r, v] of Object.entries(files)) disk[r] = typeof v === 'string' ? enc.encode(v) : v;
   const calls = { writes: [], imports: [], reads: [] };
@@ -46,6 +46,8 @@ function makeFs(files, { fail = new Set(), importErr = null } = {}) {
       return { status: 'installed' };
     },
   };
+  // installed: skill paths the Skills list knows (the Required skills warning); null = no listSkills
+  if (installed) fs.listSkills = async () => installed.map((p) => ({ path: p, dirName: p, leafName: p.split('/').pop(), name: p.split('/').pop() }));
   return { fs, calls, disk };
 }
 
@@ -119,8 +121,8 @@ test('opens SKILL.md first, editor gets the BODY only; frontmatter panel slot sh
   assert.equal(fa.last().text, '\n# Demo\n\nBody.\n');
   assert.equal(fa.last().opts.readOnly, false);
   assert.equal(fa.last().opts.rel, 'SKILL.md');
-  assert.ok(q(dlg.el, 'front').querySelector('textarea').value.includes('folded'));
-  assert.equal(q(dlg.el, 'front').querySelector('textarea').readOnly, true);   // front kept intact (Task 7: form)
+  assert.equal(q(dlg.el, 'fm-description').value, 'folded text');   // the frontmatter form
+  assert.equal(q(dlg.el, 'fm-name').readOnly, false);
   const opts = q(dlg.el, 'file').querySelectorAll('option').map((o) => o.value);
   assert.deepEqual(opts, ['SKILL.md', 'references/a.md', 'scripts/run.py']);
   assert.match(q(dlg.el, 'title').textContent, /demo/);
@@ -279,16 +281,17 @@ test('opening again replaces an open editor dialog', async () => {
 
 // ---- New Skill ----
 
-const setFront = (dlg, front) => { const ta = q(dlg.el, 'front').querySelector('textarea'); ta.value = front; ta.dispatch('input'); };
+const setField = (dlg, key, v) => { const el = q(dlg.el, 'fm-' + key); el.value = v; el.dispatch('input'); };
 
 test('New Skill: template with name/description/dependencies and a body skeleton; only SKILL.md listed', async () => {
   const { SE, fa, manager } = load();
   const dlg = await SE.open({ skill: null, manager });
   const opts = q(dlg.el, 'file').querySelectorAll('option').map((o) => o.value);
   assert.deepEqual(opts, ['SKILL.md']);
-  const ta = q(dlg.el, 'front').querySelector('textarea');
-  assert.equal(ta.value, 'name:\ndescription:\ndependencies: []\n');
-  assert.equal(ta.readOnly, false);
+  assert.equal(dlg.files.get('SKILL.md').front, 'name:\ndescription:\ndependencies: []\n');
+  assert.equal(q(dlg.el, 'fm-name').value, '');
+  assert.equal(q(dlg.el, 'fm-name').readOnly, false);
+  assert.equal(q(dlg.el, 'fm-panel').open, true);       // open for New Skill
   assert.ok(fa.last().text.trim().startsWith('#'));
   assert.equal(fa.last().opts.readOnly, false);
   assert.deepEqual([...dlg.dirtyFiles()], []);          // untouched template: nothing to discard
@@ -297,16 +300,17 @@ test('New Skill: template with name/description/dependencies and a body skeleton
 test('New Skill validation: empty name, empty description, non-kebab or too long name -> nothing imported', async () => {
   const { SE, manager, calls } = load();
   const dlg = await SE.open({ skill: null, manager });
-  for (const [front, re] of [
-    ['name:\ndescription: d\n', /Name is required/],
-    ['name: my-skill\ndescription:\n', /Description is required/],
-    ['name: My Skill\ndescription: d\n', /kebab-case/],
-    ['name: my_skill\ndescription: d\n', /kebab-case/],
-    [`name: ${'a'.repeat(65)}\ndescription: d\n`, /kebab-case/],
+  for (const [name, desc, re] of [
+    ['', 'd', /Name is required/],
+    ['my-skill', '', /Description is required/],
+    ['My Skill', 'd', /kebab-case/],
+    ['my_skill', 'd', /kebab-case/],
+    ['a'.repeat(65), 'd', /kebab-case/],
   ]) {
-    setFront(dlg, front);
+    setField(dlg, 'name', name);
+    setField(dlg, 'description', desc);
     await dlg.save();
-    assert.match(q(dlg.el, 'status').textContent, re, front);
+    assert.match(q(dlg.el, 'status').textContent, re, name + '|' + desc);
   }
   assert.equal(calls.imports.length, 0);
   assert.deepEqual([...SE.validateNew(`name: ${'a'.repeat(64)}\ndescription: d\n`)], []);
@@ -315,7 +319,8 @@ test('New Skill validation: empty name, empty description, non-kebab or too long
 test('New Skill: first Save imports privately, then the dialog edits that skill', async () => {
   const { SE, fa, manager, calls, loads } = load();
   const dlg = await SE.open({ skill: null, manager });
-  setFront(dlg, 'name: my-skill\ndescription: Does things\ndependencies: []\n');
+  setField(dlg, 'name', 'my-skill');
+  setField(dlg, 'description', 'Does things');
   fa.last().type('\n# My skill\n');
   await dlg.save();
   assert.equal(calls.imports.length, 1);
@@ -342,7 +347,8 @@ test('New Skill: a name clash shows the existing clash message and stays a New S
   const err = Object.assign(new Error('A different skill named "my-skill" already exists.'), { code: 'clash', skill: 'my-skill' });
   const { SE, manager } = load({ fsOpts: { importErr: err } });
   const dlg = await SE.open({ skill: null, manager });
-  setFront(dlg, 'name: my-skill\ndescription: d\n');
+  setField(dlg, 'name', 'my-skill');
+  setField(dlg, 'description', 'd');
   await dlg.save();
   assert.equal(q(dlg.el, 'status').textContent, tr('skills.zip.clash', { name: 'my-skill' }));
   assert.deepEqual([...dlg.dirtyFiles()], ['SKILL.md']);
@@ -383,7 +389,7 @@ test('the real dialog works with the default adapters end to end', async () => {
 
 test('every skills.editor key exists in en, es and fr', () => {
   const langs = ['en', 'es', 'fr'].map((l) => JSON.parse(readFileSync(fileURLToPath(new URL(`../assets/i18n/${l}.json`, import.meta.url)), 'utf8')));
-  const keys = [...SRC.matchAll(/tr\('(skills\.[\w.]+)'/g)].map((m) => m[1]);
+  const keys = [...SRC.matchAll(/'(skills\.editor\.[\w.]+)'/g), ...SRC.matchAll(/tr\('(skills\.[\w.]+)'/g)].map((m) => m[1]);
   assert.ok(keys.length > 10);
   for (const k of keys) for (const L of langs) {
     const v = k.split('.').reduce((a, x) => (a ? a[x] : undefined), L);
@@ -515,15 +521,13 @@ test('a refused merge (reference definitions) shows the WHOLE file and says so',
   assert.equal(calls.writes.length, 1);
 });
 
-test('only the frontmatter changed in a formatted file: no changes view (nothing in the markdown changed)', async () => {
-  const { SE, fa, manager, changesViews } = load({ files: FILES });
+test('only the frontmatter changed in a formatted file: the changes view lists only the frontmatter lines', async () => {
+  const { SE, manager } = load({ files: FILES });
   const dlg = await SE.open({ skill: mine, manager });
-  const f = dlg.files.get('SKILL.md');
-  f.front = 'name: demo2\n';                   // (Task 7's form sets this)
-  f.current = dlg.joinSkillMd(f);
-  fa.last().cb();
-  assert.equal(dlg.reviews([f]).length, 0);
-  assert.equal(changesViews.length, 0);
+  setField(dlg, 'name', 'demo2');
+  const r = dlg.reviews([dlg.files.get('SKILL.md')]);
+  assert.equal(r.length, 1);
+  assert.equal(JSON.stringify(r[0].changes.map((c) => [c.before, c.after])), JSON.stringify([['name: demo\n', 'name: demo2\n']]));
 });
 
 test('an untouched New Skill closes without the discard prompt; a touched one asks', async () => {
@@ -543,7 +547,7 @@ test('a BOM-prefixed SKILL.md: the BOM is off for split, the body has none, and 
   const { SE, fa, manager, calls } = load({ files: { 'SKILL.md': text } });
   const dlg = await SE.open({ skill: mine, manager });
   assert.equal(fa.last().text, '\n# Demo\n');
-  assert.ok(q(dlg.el, 'front').querySelector('textarea').value.includes('name: demo'));
+  assert.equal(q(dlg.el, 'fm-name').value, 'demo');
   assert.equal(dlg.dirtyFiles().length, 0);
   fa.last().type('\n# Demo 2\n');
   await dlg.save();
@@ -596,4 +600,205 @@ test('keepLineEnds: CRLF stays CRLF, LF stays LF; a mixed file is returned as lo
   assert.equal(k(mixed, 'a\nb\nc\nd\n'), mixed);             // untouched: as loaded, never dirty
   assert.equal(k(mixed, 'a\nb\nc\nd!\n'), 'a\nb\nc\nd!\n');  // edited: no one style to restore -> \n
   assert.equal(k('a\rb\r', 'a\nb!\n'), 'a\nb!\n');           // lone CR is not CRLF
+});
+
+// ---- Task 7: the frontmatter form ----
+
+const RICH_FRONT = [
+  '# kept comment',
+  'name: rich',
+  'description: |',
+  '  Line one: with a colon.',
+  '  Line two.',
+  '',
+  'license: MIT',
+  'dependencies:',
+  '  - python-docx',
+  '  - "openpyxl>=3"',
+  'allowed-tools: run_skill_script, save_playbook_agent',
+  'metadata:',
+  '  origin: synergyAI custom',
+  '  version: 1.0.0',
+  'fetches_urls: false',
+  '',
+].join('\n');
+const RICH = `---\n${RICH_FRONT}---\n\n# Rich\n\nBody.\n`;
+const richSkill = { dir_name: 'rich', name: 'rich', mine: true };
+const fmEl = (dlg, key) => q(dlg.el, 'fm-' + key);
+
+test('RF 1: editing one field rewrites only its line; block-scalar description, multi-line list, comment stay byte-identical', async () => {
+  const { SE, manager, calls, changesViews } = load({ files: { 'SKILL.md': RICH } });
+  const dlg = await SE.open({ skill: richSkill, manager });
+  assert.equal(fmEl(dlg, 'description').value, 'Line one: with a colon.\nLine two.');
+  assert.equal(fmEl(dlg, 'dependencies').value, 'python-docx, openpyxl>=3');
+  setField(dlg, 'license', 'Apache-2.0');
+  assert.deepEqual([...dlg.dirtyFiles()], ['SKILL.md']);
+  assert.ok(optionText(dlg, 'SKILL.md').includes('●'));
+  await dlg.save();
+  assert.equal(calls.writes.length, 1);
+  assert.equal(calls.writes[0][2], RICH.replace('license: MIT\n', 'license: Apache-2.0\n'));
+  assert.equal(changesViews.length, 1);
+  assert.match(changesViews[0], /license: MIT[\s\S]*license: Apache-2\.0/);
+  assert.ok(!changesViews[0].includes('python-docx'));
+  // the form's baseline is now the saved file: nothing left to save
+  assert.equal(dlg.dirtyFiles().length, 0);
+  await dlg.save();
+  assert.equal(calls.writes.length, 1);
+});
+
+test('untouched form (change events, values typed back) + untouched body: SKILL.md bytes unchanged, nothing written', async () => {
+  const { SE, manager, calls, fa } = load({ files: { 'SKILL.md': RICH } });
+  const dlg = await SE.open({ skill: richSkill, manager });
+  for (const k of ['name', 'description', 'license', 'dependencies', 'allowed-tools', 'requires-skills']) {
+    const el = fmEl(dlg, k);
+    const v = el.value;
+    el.value = v + 'x'; el.dispatch('input');
+    el.value = v; el.dispatch('input');
+  }
+  fa.last().cb();
+  assert.equal(dlg.files.get('SKILL.md').current, RICH);
+  assert.equal(dlg.dirtyFiles().length, 0);
+  await dlg.save();
+  assert.equal(calls.writes.length, 0);
+});
+
+test('a clip block-scalar description (value ends in \\n) is not rewritten when untouched and another field is edited', async () => {
+  const text = '---\nname: demo\ndescription: >\n  folded\n  text\nlicense: MIT\n---\nBody\n';
+  const { SE, manager, calls } = load({ files: { 'SKILL.md': text } });
+  const dlg = await SE.open({ skill: mine, manager });
+  setField(dlg, 'name', 'demo-2');
+  await dlg.save();
+  assert.equal(calls.writes[0][2], text.replace('name: demo\n', 'name: demo-2\n'));
+});
+
+test('clearing an optional field removes it (scalar and multi-line list)', async () => {
+  const { SE, manager, calls } = load({ files: { 'SKILL.md': RICH } });
+  const dlg = await SE.open({ skill: richSkill, manager });
+  setField(dlg, 'license', '  ');
+  setField(dlg, 'dependencies', '');
+  await dlg.save();
+  assert.equal(calls.writes[0][2], RICH.replace('license: MIT\n', '').replace('dependencies:\n  - python-docx\n  - "openpyxl>=3"\n', ''));
+});
+
+test('empty name / description: inline error, Save blocked, the dot stays', async () => {
+  const { SE, manager, calls } = load({ files: { 'SKILL.md': RICH } });
+  const dlg = await SE.open({ skill: richSkill, manager });
+  setField(dlg, 'name', '');
+  assert.match(q(dlg.el, 'fm-name-error').textContent, /Name is required/);
+  assert.equal(q(dlg.el, 'fm-name-error').hidden, false);
+  assert.deepEqual([...dlg.dirtyFiles()], ['SKILL.md']);
+  await dlg.save();
+  assert.equal(calls.writes.length, 0);
+  assert.match(q(dlg.el, 'status').textContent, /Name is required/);
+  assert.equal(q(dlg.el, 'fm-panel').open, true);       // the error is visible
+  setField(dlg, 'name', 'rich');
+  setField(dlg, 'description', '');
+  assert.equal(q(dlg.el, 'fm-name-error').hidden, true);
+  await dlg.save();
+  assert.match(q(dlg.el, 'status').textContent, /Description is required/);
+  assert.equal(calls.writes.length, 0);
+});
+
+test('Required skills: a name not installed warns under the field; the save still happens and refreshes the list', async () => {
+  const { SE, manager, calls, loads } = load({ files: { 'SKILL.md': RICH }, fsOpts: { installed: ['docx', 'office/xlsx'] } });
+  const dlg = await SE.open({ skill: richSkill, manager });
+  await tick();
+  setField(dlg, 'requires-skills', 'docx, xlsx, nope-skill');
+  const warn = q(dlg.el, 'fm-requires-skills-warning');
+  assert.equal(warn.hidden, false);
+  assert.match(warn.textContent, /nope-skill/);
+  assert.ok(!/docx|xlsx/.test(warn.textContent));
+  await dlg.save();
+  assert.equal(calls.writes[0][2], RICH.replace('---\n\n# Rich', 'requires-skills: [docx, xlsx, nope-skill]\n---\n\n# Rich'));
+  assert.equal(loads(), 1);
+  setField(dlg, 'requires-skills', 'docx');
+  assert.equal(q(dlg.el, 'fm-requires-skills-warning').hidden, true);
+});
+
+test('allowed tools keep their shape: a comma scalar stays a scalar, a list stays a list', async () => {
+  const { SE, manager, calls } = load({ files: { 'SKILL.md': RICH } });
+  const dlg = await SE.open({ skill: richSkill, manager });
+  setField(dlg, 'allowed-tools', 'run_skill_script,  web_fetch');
+  await dlg.save();
+  assert.ok(calls.writes[0][2].includes('\nallowed-tools: run_skill_script, web_fetch\n'));
+  const listed = '---\nname: a\ndescription: d\nallowed-tools:\n  - x\n---\n';
+  const r2 = load({ files: { 'SKILL.md': listed } });
+  const d2 = await r2.SE.open({ skill: { dir_name: 'a', mine: true }, manager: r2.manager });
+  assert.equal(q(d2.el, 'fm-allowed-tools').value, 'x');
+  setField(d2, 'allowed-tools', 'x, z');
+  await d2.save();
+  assert.equal(r2.calls.writes[0][2], '---\nname: a\ndescription: d\nallowed-tools: [x, z]\n---\n');
+});
+
+test('collapsed by default for an existing skill, with a one-line summary; other fields listed read-only, kept as is', async () => {
+  const { SE, manager } = load({ files: { 'SKILL.md': RICH.replace('license: MIT\n', 'license: MIT\nrequires-skills: [a, b]\n') } });
+  const dlg = await SE.open({ skill: richSkill, manager });
+  assert.equal(q(dlg.el, 'fm-panel').open, false);
+  assert.equal(q(dlg.el, 'fm-summary').textContent, 'rich · 2 libraries · 2 required skills');
+  const other = q(dlg.el, 'fm-other');
+  assert.match(other.textContent, /metadata:\n {2}origin: synergyAI custom/);
+  assert.match(other.textContent, /fetches_urls: false/);
+  assert.match(other.textContent, /Kept as is/);
+  assert.ok(!/license|python-docx/.test(other.textContent));
+  assert.equal(fmEl(dlg, 'origin'), null);   // origin lives under metadata: shown there, not as its own field
+  setField(dlg, 'dependencies', 'a');
+  assert.equal(q(dlg.el, 'fm-summary').textContent, 'rich · 1 libraries · 2 required skills');
+});
+
+test('a field the parser marks complex (plain scalar with ": ") is read-only under Other fields and never rewritten', async () => {
+  const text = '---\nname: demo\ndescription: Use it: always\nlicense: MIT\n---\nB\n';
+  const { SE, manager, calls } = load({ files: { 'SKILL.md': text } });
+  const dlg = await SE.open({ skill: mine, manager });
+  assert.equal(fmEl(dlg, 'description'), null);
+  assert.match(q(dlg.el, 'fm-other').textContent, /description: Use it: always/);
+  setField(dlg, 'license', 'BSD');
+  await dlg.save();
+  assert.equal(calls.writes[0][2], text.replace('MIT', 'BSD'));
+});
+
+test('form edits survive switching files; a top-level origin is an editable field', async () => {
+  const text = '---\nname: demo\ndescription: d\norigin: here\n---\nB\n';
+  const { SE, manager, calls } = load({ files: { 'SKILL.md': text, 'scripts/run.py': 'x\n' } });
+  const dlg = await SE.open({ skill: mine, manager });
+  setField(dlg, 'origin', 'there');
+  await select(dlg, 'scripts/run.py');
+  assert.ok(optionText(dlg, 'SKILL.md').includes('●'));
+  await select(dlg, 'SKILL.md');
+  assert.equal(fmEl(dlg, 'origin').value, 'there');
+  await dlg.save();
+  assert.equal(calls.writes[0][2], text.replace('origin: here', 'origin: there'));
+});
+
+test('read-only skill: the form is read-only, nothing writes; the name hint is shown', async () => {
+  const { SE, manager, calls } = load({ files: { 'SKILL.md': RICH } });
+  const dlg = await SE.open({ skill: { ...richSkill, mine: false, owner_name: 'Bob' }, manager });
+  assert.equal(fmEl(dlg, 'name').readOnly, true);
+  assert.equal(fmEl(dlg, 'description').readOnly, true);
+  setField(dlg, 'name', 'x');
+  await dlg.save();
+  assert.equal(calls.writes.length, 0);
+  assert.match(q(dlg.el, 'fm-panel').textContent, /does not rename the folder/);
+});
+
+test('description expand overlay edits the description', async () => {
+  const { SE, manager, document } = load({ files: { 'SKILL.md': RICH } });
+  const dlg = await SE.open({ skill: richSkill, manager });
+  q(dlg.el, 'fm-description-expand').click();
+  const ov = q(document.body, 'fm-description-overlay');
+  const ta = ov.querySelector('textarea');
+  assert.equal(ta.value, 'Line one: with a colon.\nLine two.');
+  ta.value = 'New description.';
+  q(ov, 'fm-description-overlay-close').click();
+  assert.equal(q(document.body, 'fm-description-overlay'), null);
+  assert.equal(fmEl(dlg, 'description').value, 'New description.');
+  assert.deepEqual([...dlg.dirtyFiles()], ['SKILL.md']);
+  assert.ok(dlg.files.get('SKILL.md').current.includes('\ndescription: New description.\n\nlicense: MIT\n'))   // the span's trailing blank line stays;
+});
+
+test('New Skill: the form is open and the folder hint is not shown (the name becomes the folder)', async () => {
+  const { SE, manager } = load();
+  const dlg = await SE.open({ skill: null, manager });
+  assert.equal(q(dlg.el, 'fm-panel').open, true);
+  assert.ok(!/does not rename/.test(q(dlg.el, 'fm-panel').textContent));
+  assert.equal(q(dlg.el, 'fm-other'), null);
 });
