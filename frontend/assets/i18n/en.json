@@ -429,6 +429,7 @@
       "titleEdit": "Edit skill: {{name}}",
       "titleNew": "New skill",
       "file": "File",
+      "tabSkill": "Skill",
       "unsavedLegend": "● = unsaved changes",
       "otherFiles": "Other files",
       "frontmatter": "Frontmatter",
@@ -506,8 +507,11 @@
         "otherHint": "Kept as is when you save.",
         "duplicateHint": "Duplicate — removed when this field is saved.",
         "notInstalled": "Not installed: {{names}}. The save still happens; import and export will name it.",
-        "summary": "{{name}} · Python libraries: {{libraries}} · Required skills: {{required}}",
+        "expandMeta": "Expand to display {{name}} metadata",
+        "collapseMeta": "Collapse {{name}} metadata",
         "changesTitle": "{{file}} — frontmatter",
+        "detected": "Found in the skill's files; not declared in SKILL.md.",
+        "declare": "Declare",
         "lineHint": "one per line",
         "oneLine": "Saved on one line."
       }

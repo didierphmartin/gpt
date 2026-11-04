@@ -258,8 +258,8 @@ final class LangGraphPackage
      */
     private static function probedSkills(string $self, array $files, \Closure $resolve): array
     {
-        $cands = self::declaredSkills($files['SKILL.md'] ?? '');
-        if ($cands === []) {
+        $cands = self::declaredSkillsOrNull($files['SKILL.md'] ?? '') ?? [];
+        if (!self::declaresSkills($files['SKILL.md'] ?? '')) {   // declared (even []) replaces scanning
             foreach (self::quotedLiterals($files) as $lit) {
                 $cands[] = $lit;                                  // an exact literal
                 $segs = explode('/', $lit);
@@ -300,10 +300,22 @@ final class LangGraphPackage
         return $lits;
     }
 
-    /** `requires-skills:` of a SKILL.md frontmatter (list or single form, parsed as `dependencies:`). */
+    /** `requires-skills:` of a SKILL.md frontmatter (list or single form, parsed as `dependencies:`); [] when absent. */
     public static function declaredSkills(string $skillMd): array
     {
         return self::frontmatterList($skillMd, 'requires-skills:');
+    }
+
+    /** Whether the frontmatter has a `requires-skills:` line: `requires-skills: []` says "none" and stops scanning. */
+    public static function declaresSkills(string $skillMd): bool
+    {
+        return self::declaredSkillsOrNull($skillMd) !== null;
+    }
+
+    /** @return list<string>|null null when the frontmatter has no `requires-skills:` line */
+    private static function declaredSkillsOrNull(string $skillMd): ?array
+    {
+        return self::frontmatterListOrNull($skillMd, 'requires-skills:');
     }
 
     /** The installed skill a name means: the exact path, else by leaf (same group as $from, then top level, then the first). */
@@ -347,8 +359,8 @@ final class LangGraphPackage
         $list = array_values(array_filter($installed, fn(string $p) => $p !== $path));
         $out = [];
         $missing = [];
-        $declared = self::declaredSkills((string) ($files['SKILL.md'] ?? ''));
-        if ($declared !== []) {   // a declared list replaces scanning
+        $declared = self::declaredSkillsOrNull((string) ($files['SKILL.md'] ?? ''));
+        if ($declared !== null) {   // a declared list (even []) replaces scanning
             foreach ($declared as $name) {
                 $hit = self::resolveSkillName($name, $list, $path);
                 if ($hit === null) {
@@ -430,9 +442,15 @@ final class LangGraphPackage
     /** A frontmatter list field ($key with its colon): `key: a, b` or `key: [a, "b"]`; [] when absent. */
     private static function frontmatterList(string $skillMd, string $key): array
     {
+        return self::frontmatterListOrNull($skillMd, $key) ?? [];
+    }
+
+    /** frontmatterList, but null when the field is absent (or there is no frontmatter). */
+    private static function frontmatterListOrNull(string $skillMd, string $key): ?array
+    {
         $lines = preg_split('/\r\n|\r|\n/', $skillMd);
         if (!$lines || trim($lines[0]) !== '---') {
-            return [];
+            return null;
         }
         foreach (array_slice($lines, 1) as $line) {
             $s = trim($line);
@@ -443,7 +461,7 @@ final class LangGraphPackage
                 return self::listItems(explode(':', $s, 2)[1]);
             }
         }
-        return [];
+        return null;
     }
 
     /**

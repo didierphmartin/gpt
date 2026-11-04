@@ -325,3 +325,17 @@ test('loadLocalSkills maps requires onto the skill objects', async () => {
   const [s] = await mgr.loadLocalSkills();
   assert.deepEqual([...s.requires], ['b']);
 });
+
+test('a folder row shows the open folder icon expanded and the closed one collapsed (no separate arrow)', () => {
+  const { mgr } = load();
+  const folder = { name: 'GEO', readme: null };
+  const open = mgr.renderFolder(folder, [skill({ dir_name: 'GEO/a', group: 'GEO' })]);
+  assert.match(open, /skills-folder-icon[^>]*data-state="open"[^>]*><svg/);
+  assert.doesNotMatch(open, /📁|📂|▶|▼/);
+  mgr.collapsedFolders.add('GEO');
+  const closed = mgr.renderFolder(folder, []);
+  assert.match(closed, /skills-folder-icon[^>]*data-state="closed"[^>]*><svg/);
+  assert.match(mgr.renderExpandArrow('x'), />▶</);
+  mgr.expandedSkills.add('x');
+  assert.match(mgr.renderExpandArrow('x'), />▼</);
+});

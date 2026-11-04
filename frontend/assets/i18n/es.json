@@ -429,6 +429,7 @@
       "titleEdit": "Editar skill: {{name}}",
       "titleNew": "Nueva skill",
       "file": "Archivo",
+      "tabSkill": "Skill",
       "unsavedLegend": "● = cambios sin guardar",
       "otherFiles": "Otros archivos",
       "frontmatter": "Frontmatter",
@@ -506,8 +507,11 @@
         "otherHint": "Se conservan tal cual al guardar.",
         "duplicateHint": "Duplicado: se elimina al guardar este campo.",
         "notInstalled": "No instalada: {{names}}. Se guarda igualmente; la importación y la exportación la indicarán.",
-        "summary": "{{name}} · Bibliotecas de Python: {{libraries}} · Habilidades requeridas: {{required}}",
+        "expandMeta": "Expandir para mostrar los metadatos de {{name}}",
+        "collapseMeta": "Contraer los metadatos de {{name}}",
         "changesTitle": "{{file}} — encabezado (frontmatter)",
+        "detected": "Encontradas en los archivos de la skill; no declaradas en SKILL.md.",
+        "declare": "Declarar",
         "lineHint": "una por línea",
         "oneLine": "Se guarda en una sola línea."
       }

@@ -125,7 +125,7 @@ test('opens SKILL.md first, editor gets the BODY only; frontmatter panel slot sh
   assert.equal(q(dlg.el, 'fm-name').readOnly, false);
   const opts = q(dlg.el, 'file').querySelectorAll('option').map((o) => o.value);
   assert.deepEqual(opts, ['SKILL.md', 'references/a.md', 'scripts/run.py']);
-  assert.match(q(dlg.el, 'title').textContent, /demo/);
+  assert.equal(q(dlg.el, 'title'), null);                     // no title: the name is in the frontmatter
 });
 
 test('dirty only when the text differs from the text as loaded (RF 2)', async () => {
@@ -288,7 +288,7 @@ test('New Skill: template with name/description/dependencies and a body skeleton
   const dlg = await SE.open({ skill: null, manager });
   const opts = q(dlg.el, 'file').querySelectorAll('option').map((o) => o.value);
   assert.deepEqual(opts, ['SKILL.md']);
-  assert.equal(dlg.files.get('SKILL.md').front, 'name:\ndescription:\ndependencies: []\n');
+  assert.equal(dlg.files.get('SKILL.md').front, 'name:\ndescription:\ndependencies: []\nrequires-skills: []\n');
   assert.equal(q(dlg.el, 'fm-name').value, '');
   assert.equal(q(dlg.el, 'fm-name').readOnly, false);
   assert.equal(q(dlg.el, 'fm-panel').open, true);       // open for New Skill
@@ -328,14 +328,13 @@ test('New Skill: first Save imports privately, then the dialog edits that skill'
   assert.equal(read.dir, 'my-skill');
   assert.equal(read.name, 'my-skill');
   assert.deepEqual(Object.keys(read.files), ['SKILL.md']);
-  assert.equal(dec.decode(read.files['SKILL.md']), '---\nname: my-skill\ndescription: Does things\ndependencies: []\n---\n\n# My skill\n');
+  assert.equal(dec.decode(read.files['SKILL.md']), '---\nname: my-skill\ndescription: Does things\ndependencies: []\nrequires-skills: []\n---\n\n# My skill\n');
   assert.deepEqual({ ...read.pyodideWheels }, {});
   assert.deepEqual({ ...read.nativeWheels }, {});
   assert.equal(opts.visibility, 'private');
   assert.equal(loads(), 1);
   assert.equal(manager.lastSkillDir, 'my-skill');
   assert.equal(dlg.dirtyFiles().length, 0);
-  assert.match(q(dlg.el, 'title').textContent, /my-skill/);
   // the next save is a plain file write to the new skill
   fa.last().type('\n# My skill v2\n');
   await dlg.save();
@@ -734,7 +733,7 @@ test('collapsed by default for an existing skill, with a one-line summary; other
   const { SE, manager } = load({ files: { 'SKILL.md': RICH.replace('license: MIT\n', 'license: MIT\nrequires-skills: [a, b]\n') } });
   const dlg = await SE.open({ skill: richSkill, manager });
   assert.equal(q(dlg.el, 'fm-panel').open, false);
-  assert.equal(q(dlg.el, 'fm-summary').textContent, 'rich · Python libraries: 2 · Required skills: 2');
+  assert.equal(q(dlg.el, 'fm-summary').textContent, 'Expand to display rich metadata');
   const other = q(dlg.el, 'fm-other');
   assert.match(other.textContent, /metadata:\n {2}origin: synergyAI custom/);
   assert.match(other.textContent, /fetches_urls: false/);
@@ -742,7 +741,6 @@ test('collapsed by default for an existing skill, with a one-line summary; other
   assert.ok(!/license|python-docx/.test(other.textContent));
   assert.equal(fmEl(dlg, 'origin'), null);   // origin lives under metadata: shown there, not as its own field
   setField(dlg, 'dependencies', 'a');
-  assert.equal(q(dlg.el, 'fm-summary').textContent, 'rich · Python libraries: 1 · Required skills: 2');
 });
 
 test('a field the parser marks complex (plain scalar with ": ") is read-only under Other fields and never rewritten', async () => {
@@ -923,4 +921,65 @@ test('closing the dialog while the description overlay is open removes the overl
   dlg.close();
   assert.equal(keys.size, 0);
   assert.equal(q(document.body, 'fm-description-overlay'), null);
+});
+
+test('a root README gets its own tab (not in the file selector); the Skill tab holds SKILL.md and the other files', async () => {
+  const { SE, fa, manager } = load({ files: { 'README.md': '# Read me\n', ...FILES } });
+  const dlg = await SE.open({ skill: mine, manager });
+  assert.equal(q(dlg.el, 'tabs').hidden, false);
+  assert.equal(fa.last().opts.rel, 'SKILL.md');                 // opens on the Skill tab even when README lists first
+  const opts = q(dlg.el, 'file').querySelectorAll('option').map((o) => o.value);
+  assert.deepEqual(opts, ['SKILL.md', 'references/a.md', 'scripts/run.py']);
+  const tabBtn = (n) => dlg.el.querySelectorAll('[data-tab]').find((b) => b.getAttribute('data-tab') === n);
+  tabBtn('readme').dispatch('click');
+  await dlg.ready();
+  assert.equal(fa.last().opts.rel, 'README.md');
+  assert.equal(q(dlg.el, 'file-row').hidden, true);
+  tabBtn('skill').dispatch('click');
+  await dlg.ready();
+  assert.equal(fa.last().opts.rel, 'SKILL.md');
+  assert.equal(q(dlg.el, 'file-row').hidden, false);
+});
+
+test('no README: no tabs', async () => {
+  const { SE, manager } = load({ files: FILES });
+  const dlg = await SE.open({ skill: mine, manager });
+  assert.equal(q(dlg.el, 'tabs').hidden, true);
+});
+
+test('the file selector sits in the frontmatter grid while it is open, beside the summary when closed, and on its row for other files', async () => {
+  const { SE, manager } = load({ files: FILES });
+  const dlg = await SE.open({ skill: mine, manager });
+  const block = q(dlg.el, 'file-block');
+  const panel = q(dlg.el, 'fm-panel');
+  assert.equal(panel.open, false);                                // collapsed by default
+  assert.equal(block.parentNode, q(dlg.el, 'file-slot'));
+  panel.open = true; panel.dispatch('toggle');
+  assert.equal(block.parentNode, q(dlg.el, 'fm-file-cell'));
+  assert.equal(q(dlg.el, 'fm-summary').textContent, 'Collapse demo metadata');
+  panel.open = false; panel.dispatch('toggle');
+  assert.equal(block.parentNode, q(dlg.el, 'file-slot'));
+  assert.equal(q(dlg.el, 'fm-summary').textContent, 'Expand to display demo metadata');
+  panel.open = true; panel.dispatch('toggle');
+  await select(dlg, 'scripts/run.py');                         // no frontmatter: the selector goes home
+  assert.equal(block.parentNode, q(dlg.el, 'file-slot'));
+});
+
+test('requires-skills not declared: the Skills list detection shows, unchanged; Declare writes it on Save', async () => {
+  const { SE, manager, calls } = load({ files: FILES });
+  const dlg = await SE.open({ skill: { ...mine, requires: ['playbook-author', 'workflow-compile'] }, manager });
+  assert.equal(q(dlg.el, 'fm-requires-skills').value, 'playbook-author\nworkflow-compile');
+  assert.equal(dlg.dirtyFiles().length, 0);
+  q(dlg.el, 'fm-requires-skills-declare').dispatch('click', { target: q(dlg.el, 'fm-requires-skills-declare') });
+  assert.equal(dlg.dirtyFiles().length, 1);
+  await dlg.save();
+  assert.equal(calls.writes[0][2], '---\nname: demo\ndescription: >\n  folded\n  text\nrequires-skills: [playbook-author, workflow-compile]\n---\n\n# Demo\n\nBody.\n');
+});
+
+test('emptying Required skills writes requires-skills: [] (declares none), it is not removed', async () => {
+  const { SE, manager, calls } = load({ files: { 'SKILL.md': '---\nname: demo\ndescription: d\nrequires-skills: [docx]\n---\n\nBody.\n' } });
+  const dlg = await SE.open({ skill: mine, manager });
+  setField(dlg, 'requires-skills', '');
+  await dlg.save();
+  assert.equal(calls.writes[0][2], '---\nname: demo\ndescription: d\nrequires-skills: []\n---\n\nBody.\n');
 });

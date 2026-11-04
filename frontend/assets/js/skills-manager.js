@@ -5,6 +5,19 @@
  * folders they can be organized into, all under <root>/skills/.
  * Self-contained — does not depend on workflow-editor.js internals.
  */
+/**
+ * A yellow file-explorer folder (our own drawing): closed = tab + front panel; open = a sheet inside and the front
+ * panel tilted forward. Inline SVG, so it looks the same on every platform (the 📁/📂 emoji differ per OS).
+ */
+function folderIcon(open) {
+    const back = '<path d="M2 6.5A2.5 2.5 0 0 1 4.5 4h4.6l2.2 2.2h8.2A2.5 2.5 0 0 1 22 8.7v9.8a2.5 2.5 0 0 1-2.5 2.5h-15A2.5 2.5 0 0 1 2 18.5z" fill="#E2A21B"/>';
+    const front = open
+        ? '<path d="M5 6.8h13.2v4H5z" fill="#fff" stroke="#d9d9d9" stroke-width=".6"/>'
+          + '<path d="M5.2 10.2h17.3a1 1 0 0 1 .96 1.3l-2.2 7.7a2.5 2.5 0 0 1-2.4 1.8H4.2A1.7 1.7 0 0 1 2.6 18.8l1.6-7.7a1.2 1.2 0 0 1 1-0.9z" fill="#FFCD4A"/>'
+        : '<path d="M2 9.6h20v8.9a2.5 2.5 0 0 1-2.5 2.5h-15A2.5 2.5 0 0 1 2 18.5z" fill="#FFC83D"/>';
+    return `<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">${back}${front}</svg>`;
+}
+
 class SkillsManager {
     constructor(apiBase, getAuthHeaders, t) {
         this.apiBase = apiBase;
@@ -358,13 +371,12 @@ class SkillsManager {
         this.renderTree();
     }
 
-    /** The arrow of an expandable skill row: a chevron pointing right (closed) or down (open). */
+    /** The arrow of an expandable skill row: ▶ (closed) / ▼ (open), the glyph folders used before their open/closed icon. */
     renderExpandArrow(dir) {
         const open = this.expandedSkills.has(dir);
         return `<button type="button" class="skills-req-toggle flex-shrink-0 inline-flex items-center justify-center w-5 h-5 -ml-1 rounded text-gray-600 hover:text-gray-900 hover:bg-gray-300" data-expand="${this.escapeHtml(dir)}"
                         aria-expanded="${open}" title="${this.escapeHtml(this.t('skills.needsTree.toggle'))}">
-                    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
-                         style="transition: transform .15s; transform: rotate(${open ? 90 : 0}deg);" aria-hidden="true"><path d="M7 4l6 6-6 6"/></svg>
+                    <span class="text-xs leading-none" aria-hidden="true">${open ? '▼' : '▶'}</span>
                 </button>`;
     }
 
@@ -665,8 +677,7 @@ class SkillsManager {
             <div class="skills-category" data-folder="${safeName}">
                 <div class="skills-folder flex items-center gap-1 px-2 py-1.5 text-xs font-semibold text-gray-700 cursor-pointer hover:bg-gray-100 rounded select-none"
                      data-folder="${safeName}">
-                    <span class="skills-folder-icon">${isCollapsed ? '▶' : '▼'}</span>
-                    <span>📁</span>
+                    <span class="skills-folder-icon inline-flex flex-shrink-0" data-state="${isCollapsed ? 'closed' : 'open'}">${folderIcon(!isCollapsed)}</span>
                     <span class="flex-1 truncate">${safeName}</span>
                     ${readmeButton}
                     <span class="text-gray-400 font-normal flex-shrink-0">${skills.length}</span>
@@ -687,7 +698,7 @@ class SkillsManager {
         // The "DB" badge on legacy skills is intentional — it tells users
         // those entries can't be edited in their file explorer.
         const isLocal = skill.source === 'local';
-        const icon = isLocal ? '📁' : '🎯';
+        const icon = isLocal ? '🧩' : '🎯';   // 📁/📂 are the folders' (closed/open) icons
         const badge = isLocal
             ? `<span class="bg-indigo-100 text-indigo-700 text-[10px] px-1 rounded" title="Stored as a folder under your local data directory">folder</span>`
             : `<span class="bg-gray-100 text-gray-500 text-[10px] px-1 rounded" title="Stored in the database (legacy)">DB</span>`;

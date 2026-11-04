@@ -91,3 +91,13 @@ test('leafCollision: two required skills with one leaf (or one taking the main s
     assert.equal(SR.leafCollision('x', ['GEO/x']).leaf, 'x');
     assert.equal(SR.leafCollision('G/m', ['m2', 'H/n']), null);
 });
+
+test('requires-skills: [] declares none: scanning stops (a quoted skill name in a script is not a requirement)', () => {
+    const files = { 'SKILL.md': enc('---\nname: x\nrequires-skills: []\n---\n'), 'scripts/a.py': enc("ext = 'docx'") };
+    assert.deepEqual(plain(SR.direct('me', files, ['docx'])), { requires: [], missing: [] });
+    assert.equal(SR.declares('---\nrequires-skills: []\n---\n'), true);
+    assert.equal(SR.declares('---\nname: x\n---\n'), false);
+    assert.equal(SR.declares('no frontmatter'), false);
+    // absent: scanning still finds it
+    assert.deepEqual(plain(SR.direct('me', { 'scripts/a.py': enc("ext = 'docx'") }, ['docx'])), { requires: ['docx'], missing: [] });
+});

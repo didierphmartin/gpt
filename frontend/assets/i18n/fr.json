@@ -429,6 +429,7 @@
       "titleEdit": "Modifier la skill : {{name}}",
       "titleNew": "Nouvelle skill",
       "file": "Fichier",
+      "tabSkill": "Skill",
       "unsavedLegend": "● = modifications non enregistrées",
       "otherFiles": "Autres fichiers",
       "frontmatter": "Frontmatter",
@@ -506,8 +507,11 @@
         "otherHint": "Conservés tels quels à l'enregistrement.",
         "duplicateHint": "Doublon — supprimé à l'enregistrement de ce champ.",
         "notInstalled": "Non installée : {{names}}. L'enregistrement a lieu quand même ; l'import et l'export la signaleront.",
-        "summary": "{{name}} · Bibliothèques Python : {{libraries}} · Compétences requises : {{required}}",
+        "expandMeta": "Développer pour afficher les métadonnées de {{name}}",
+        "collapseMeta": "Réduire les métadonnées de {{name}}",
         "changesTitle": "{{file}} — en-tête (frontmatter)",
+        "detected": "Trouvées dans les fichiers de la skill ; non déclarées dans SKILL.md.",
+        "declare": "Déclarer",
         "lineHint": "une par ligne",
         "oneLine": "Enregistrée sur une seule ligne."
       }

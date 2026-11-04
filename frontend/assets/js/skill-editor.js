@@ -143,13 +143,16 @@
      * changes only when its trimmed text (scalars) or its items (lists) differ from what was shown. A key the file
      * has in a shape the form cannot show (complex, or a list where a scalar belongs) is listed under Other fields.
      */
+    /** hidden + display:none: a Tailwind display class (flex) would otherwise win over the hidden attribute. */
+    const hide = (el, yes) => { el.hidden = !!yes; el.style.display = yes ? 'none' : ''; };
+
     const FORM_FIELDS = [
         { key: 'name', kind: 'scalar', label: 'skills.editor.fm.name', required: 'skills.editor.nameRequired', hint: 'skills.editor.fm.nameHint', hideHintNew: true },
         { key: 'description', kind: 'text', label: 'skills.editor.fm.description', required: 'skills.editor.descriptionRequired', hint: 'skills.editor.fm.oneLine' },
         { key: 'license', kind: 'scalar', label: 'skills.editor.fm.license', placeholder: 'MIT' },
         { key: 'origin', kind: 'scalar', label: 'skills.editor.fm.origin', placeholder: 'synergyAI custom' },
-        { key: 'dependencies', kind: 'list', lines: true, label: 'skills.editor.fm.libraries', placeholder: 'beautifulsoup4\npython-docx>=1,<2' },
-        { key: 'requires-skills', kind: 'list', lines: true, label: 'skills.editor.fm.requiredSkills', placeholder: 'docx\nxlsx' },
+        { key: 'dependencies', kind: 'list', lines: true, label: 'skills.editor.fm.libraries' },
+        { key: 'requires-skills', kind: 'list', lines: true, label: 'skills.editor.fm.requiredSkills' },
         { key: 'allowed-tools', kind: 'list', label: 'skills.editor.fm.allowedTools', placeholder: 'run_skill_script', keepShape: true },
     ];
     const splitList = (s) => String(s).split(',').map((x) => x.trim()).filter(Boolean);
@@ -175,6 +178,7 @@
     function frontForm() {
         let host = null, box = null, opts = {}, front = '', state = { values: {} }, rows = [], other = [], dups = [];
         let closeDesc = null;   // the open description overlay's close(), so destroy() never leaks its keydown listener
+        let fileHost = null;    // the grid cell that holds the dialog's file selector while the panel is open
         const cbs = [];
         let installed = null;              // Set of installed skill paths and leaf names; null = unknown (no warning)
         const F = () => window.SkillFrontmatter;
@@ -195,7 +199,12 @@
                 const spec = r.spec, v = val(spec);
                 if (spec.kind === 'list') {
                     const items = itemsOf(spec, v);
-                    if (!items.length) { if (r.field) out[spec.key] = null; continue; }
+                    if (!items.length) {
+                        // requires-skills: [] declares "none" (scanning stops); other lists are removed when emptied
+                        if (spec.key === 'requires-skills') out[spec.key] = [];
+                        else if (r.field) out[spec.key] = null;
+                        continue;
+                    }
                     out[spec.key] = spec.keepShape && r.field && typeof r.field.value === 'string' ? items.join(', ') : items;
                 } else {
                     const t = v.trim();
@@ -209,14 +218,11 @@
             return changedRows().filter((r) => r.spec.required && !val(r.spec).trim()).map((r) => r.spec.required);
         }
 
+        /** The ▸/▾ line: "Expand to display <name> metadata" (collapsed) / "Collapse <name> metadata" (open). */
         function summary() {
-            const v = (k) => { const r = rows.find((x) => x.spec.key === k); return r ? val(r.spec) : ''; };
             const nameRow = rows.find((x) => x.spec.key === 'name');
-            return tr('skills.editor.fm.summary', {
-                name: (nameRow ? v('name').trim() : '') || '—',
-                libraries: splitLines(v('dependencies')).length,
-                required: splitLines(v('requires-skills')).length,
-            });
+            const name = (nameRow ? val(nameRow.spec).trim() : '') || opts.dir || '—';
+            return tr(box && box.open ? 'skills.editor.fm.collapseMeta' : 'skills.editor.fm.expandMeta', { name });
         }
 
         function refresh() {
@@ -289,10 +295,14 @@
                 spec.kind === 'list' ? h('span', { class: 'text-[11px] text-gray-400', text: tr(spec.lines ? 'skills.editor.fm.lineHint' : 'skills.editor.fm.commaHint') }) : null,
                 spec.kind === 'text' ? h('button', { type: 'button', 'data-se': 'fm-description-expand', class: 'text-[11px] text-blue-600 underline hover:text-blue-800',
                     text: tr('skills.editor.fm.expand'), on: { click: () => expandDescription() } }) : null);
-            return h('div', { class: spec.kind === 'scalar' ? '' : 'col-span-2' }, label, inp,
+            return h('div', { class: spec.kind === 'text' ? 'col-span-3' : '' }, label, inp,
                 spec.hint && !(spec.hideHintNew && opts.isNew) ? h('p', { class: 'mt-0.5 text-[11px] text-gray-400', text: tr(spec.hint) }) : null,
                 spec.required ? h('p', { 'data-se': se + '-error', class: 'mt-0.5 text-xs text-red-700', hidden: true }) : null,
-                spec.key === 'requires-skills' ? h('p', { 'data-se': se + '-warning', class: 'mt-0.5 text-xs text-amber-700', hidden: true }) : null);
+                spec.key === 'requires-skills' ? h('p', { 'data-se': se + '-warning', class: 'mt-0.5 text-xs text-amber-700', hidden: true }) : null,
+                r.detected && !opts.readOnly ? h('p', { 'data-se': se + '-detected', class: 'mt-0.5 text-[11px] text-amber-700' },
+                    tr('skills.editor.fm.detected') + ' ',
+                    h('button', { type: 'button', 'data-se': se + '-declare', class: 'text-blue-600 underline hover:text-blue-800', text: tr('skills.editor.fm.declare'),
+                        on: { click: (e) => { r.shown = ''; r.detected = false; e.target.parentNode.remove(); onInput(spec); } } })) : null);
         }
 
         /** Which keys the form edits and what goes under Other fields, from the as-loaded front. */
@@ -307,7 +317,13 @@
                 const f = first(spec.key);
                 if (!shownOk(spec, f)) continue;
                 if (spec.key === 'origin' && !f && metaOrigin) continue;   // origin is in metadata: listed there
-                rows.push({ spec, field: f || null, shown: displayOf(spec, f) });
+                const row = { spec, field: f || null, shown: displayOf(spec, f) };
+                // not declared: show the skills the Skills list found in the skill's files (unchanged until Declare or an edit)
+                if (spec.key === 'requires-skills' && !f && Array.isArray(opts.detected) && opts.detected.length) {
+                    row.shown = opts.detected.join('\n');
+                    row.detected = true;
+                }
+                rows.push(row);
                 editable.add(spec.key);
             }
             other = all.filter((x) => x.key !== null && !editable.has(x.key));
@@ -321,7 +337,7 @@
             if (box && host) host.removeChild(box);
             const PRE = 'm-0 p-2 text-xs font-mono whitespace-pre-wrap break-words max-h-32 overflow-auto rounded border border-gray-200 bg-gray-50 text-gray-600';
             const rawOf = (list) => trimEnd(list.map((x) => x.raw.replace(/\r\n/g, '\n')).join(''));
-            const otherBox = other.length || dups.length ? h('div', { 'data-se': 'fm-other', class: 'col-span-2 space-y-1' },
+            const otherBox = other.length || dups.length ? h('div', { 'data-se': 'fm-other', class: 'min-w-0 space-y-1' },
                 h('div', { class: 'flex items-center gap-2' },
                     h('span', { class: 'text-xs font-medium text-gray-700', text: tr('skills.editor.fm.other') }),
                     other.length ? h('span', { class: 'text-[11px] text-gray-400', text: tr('skills.editor.fm.otherHint') }) : null),
@@ -331,13 +347,44 @@
                     h('pre', { class: PRE, text: rawOf([x]) })))) : null;
             box = h('details', { 'data-se': 'fm-panel', class: 'text-xs text-gray-700 border border-gray-200 rounded-lg' },
                 h('summary', { class: 'cursor-pointer px-3 py-1.5 select-none' },
-                    h('span', { class: 'font-medium text-gray-600', text: tr('skills.editor.frontmatter') + ' · ' }),
-                    h('span', { 'data-se': 'fm-summary', class: 'text-gray-500' })),
-                h('div', { class: 'grid grid-cols-2 gap-3 px-3 pb-3 pt-1 max-h-[40vh] overflow-auto' }, ...rows.map(fieldEl), otherBox));
+                    h('span', { 'data-se': 'fm-summary', class: 'font-medium text-gray-600' })),
+                h('div', { class: 'grid grid-cols-4 gap-3 px-3 pb-3 pt-1 max-h-[40vh] overflow-auto' }, ...cells(otherBox)));
             box.open = !!(wasOpen !== undefined ? wasOpen : state.open);   // (h() skips false)
-            box.addEventListener('toggle', () => { state.open = box.open; });
+            box.addEventListener('toggle', () => { state.open = box.open; placeFile(); refresh(); });
             host.appendChild(box);
+            placeFile();
             refresh();
+        }
+
+        /**
+         * The grid, 4 columns: Name | Description (3) / License | Python libraries | Required skills | Other fields /
+         * Allowed tools | Origin (when it is a top-level field) | File selector (the rest of the row).
+         */
+        function cells(otherBox) {
+            const ORDER = ['name', 'description', 'license', 'dependencies', 'requires-skills', '(other)', 'allowed-tools', 'origin'];
+            const byKey = new Map(rows.map((r) => [r.spec.key, r]));
+            const out = [];
+            let used = 0;
+            for (const k of ORDER) {
+                if (k === '(other)') { if (otherBox) { out.push(otherBox); used += 1; } continue; }
+                const r = byKey.get(k);
+                if (!r) continue;
+                out.push(fieldEl(r));
+                used += r.spec.kind === 'text' ? 3 : 1;
+            }
+            if (opts.fileBlock) {
+                const span = 4 - (used % 4);   // the rest of the row (a full row when the last one is full)
+                fileHost = h('div', { 'data-se': 'fm-file-cell', class: ['', '', 'col-span-2', 'col-span-3', 'col-span-4'][span] });
+                out.push(fileHost);
+            }
+            return out;
+        }
+        /** Open: the selector is in the grid; closed: back on the dialog's row, beside the summary, so it stays reachable. */
+        function placeFile() {
+            const fb = opts.fileBlock;
+            if (!fb) return;
+            const target = box && box.open && fileHost ? fileHost : opts.fileHome;
+            if (target && fb.parentNode !== target) target.appendChild(fb);
         }
 
         return {
@@ -347,7 +394,7 @@
                 front = text || '';
                 state = o.state || { values: {} };
                 if (!state.values) state.values = {};
-                if (state.open === undefined) state.open = !!o.isNew;
+                if (state.open === undefined) state.open = !!o.isNew;   // collapsed for an existing skill; New Skill opens it to fill in
                 parse();
                 render();
                 if (o.installed) Promise.resolve(o.installed).then((list) => {
@@ -367,13 +414,18 @@
             onChange(cb) { cbs.push(cb); },
             /** The front just saved is the new baseline; the inputs show it. */
             setOriginal(text) { front = text || ''; state.values = {}; parse(); render(); },
-            destroy() { if (closeDesc) closeDesc(); if (box && host) host.removeChild(box); box = null; },
+            destroy() {
+                if (closeDesc) closeDesc();
+                if (opts.fileBlock && opts.fileHome && opts.fileBlock.parentNode !== opts.fileHome) opts.fileHome.appendChild(opts.fileBlock);
+                if (box && host) host.removeChild(box);
+                box = null;
+            },
         };
     }
 
     // ---- New Skill ----
 
-    const newSkillTemplate = () => '---\nname:\ndescription:\ndependencies: []\n---\n\n' + tr('skills.editor.template');
+    const newSkillTemplate = () => '---\nname:\ndescription:\ndependencies: []\nrequires-skills: []\n---\n\n' + tr('skills.editor.template');
 
     /** i18n keys of what is wrong with a New Skill's frontmatter text ([] = fine). */
     function validateNew(front) {
@@ -465,21 +517,45 @@
             return this._installed;
         }
 
+        /** A root README file (README.md, readme.markdown, README) gets its own tab; null when there is none. */
+        readmeRel() {
+            for (const rel of this.files.keys()) if (/^readme(\.(md|markdown|txt))?$/i.test(rel)) return rel;
+            return null;
+        }
+
+        /** Skill tab: the file selector, frontmatter and the editable text; README tab: the README alone. */
+        setTab(name) {
+            for (const b of this.el.querySelectorAll('[data-tab]')) {
+                const on = b.dataset.tab === name;
+                b.className = 'px-3 py-1.5 text-sm rounded-t-lg border border-b-0 -mb-px ' +
+                    (on ? 'bg-white text-gray-900 font-medium border-gray-200' : 'bg-gray-50 text-gray-500 border-transparent hover:text-gray-800');
+                b.setAttribute('aria-selected', on ? 'true' : 'false');
+            }
+            hide(this.q('file-row'), name !== 'skill');
+        }
+
         build() {
-            const sel = h('select', { 'data-se': 'file', class: 'flex-1 min-w-0 px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-white',
+            const tab = (name, label) => h('button', { type: 'button', 'data-tab': name, role: 'tab',
+                on: { click: () => { const r = this.readmeRel(); this.show(name === 'readme' ? r : (this.skillRel && this.files.has(this.skillRel) ? this.skillRel : 'SKILL.md')); } }, text: label });
+            const sel = h('select', { 'data-se': 'file', class: 'w-72 px-2 py-1.5 text-sm border border-gray-300 rounded-lg bg-white',
                 on: { change: () => this.show(sel.value) } });
             this.el = h('div', { id: 'skill-editor-modal', class: 'fixed inset-0 z-[200] flex items-center justify-center', style: 'background-color: rgba(0,0,0,0.5)' },
                 h('div', { class: 'bg-white rounded-xl shadow-xl border border-gray-200 w-[96vw] h-[94vh] overflow-hidden flex flex-col' },
-                    h('div', { class: 'flex items-center justify-between px-4 py-3 border-b border-gray-200' },
-                        h('h3', { 'data-se': 'title', class: 'text-sm font-bold text-gray-800' }),
-                        h('button', { 'data-se': 'close', type: 'button', class: 'p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded', text: '✕',
-                            on: { click: () => this.requestClose() } })),
-                    h('div', { class: 'flex items-center gap-3 px-4 pt-3' },
-                        h('label', { class: 'text-xs font-medium text-gray-700', text: tr('skills.editor.file') }),
-                        sel,
-                        h('span', { class: 'text-xs text-gray-400 whitespace-nowrap', text: tr('skills.editor.unsavedLegend') })),
+                    // no title: the skill's name is in the frontmatter; the tabs (only when there is a README) and ✕ share the top row
+                    h('div', { class: 'flex items-end justify-between gap-2 px-4 pt-2 border-b border-gray-200 min-h-[2.75rem]' },
+                        h('div', { 'data-se': 'tabs', class: 'flex items-end gap-1', hidden: true, style: 'display:none' },
+                            tab('skill', tr('skills.editor.tabSkill')), tab('readme', 'README')),
+                        h('button', { 'data-se': 'close', type: 'button', class: 'ml-auto mb-1.5 p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded', text: '✕',
+                            'aria-label': tr('common.close'), on: { click: () => this.requestClose() } })),
+                    // the frontmatter panel and the file selector share one row (frontmatter first; the panel opens below its summary)
+                    h('div', { 'data-se': 'file-row', class: 'flex items-start gap-3 px-4 pt-3' },
+                        h('div', { 'data-se': 'front', class: 'flex-1 min-w-0' }),
+                        h('div', { 'data-se': 'file-slot', class: 'flex-shrink-0' },
+                            h('div', { 'data-se': 'file-block' },
+                                h('label', { class: 'block text-xs font-medium text-gray-700 mb-1', text: tr('skills.editor.file') }),
+                                h('div', { class: 'flex items-center gap-2' }, sel,
+                                    h('span', { class: 'text-xs text-gray-400 whitespace-nowrap', text: tr('skills.editor.unsavedLegend') }))))),
                     h('div', { 'data-se': 'note', class: 'px-4 pt-2 text-xs text-gray-500' }),
-                    h('div', { 'data-se': 'front', class: 'px-4 pt-2' }),
                     h('div', { 'data-se': 'editor', class: 'flex-1 min-h-0 px-4 py-3' }),
                     h('div', { class: 'flex items-center justify-end gap-2 px-4 py-3 border-t border-gray-200' },
                         h('div', { 'data-se': 'status', class: 'flex-1 min-w-0 text-xs' }),
@@ -489,11 +565,6 @@
                             on: { click: () => this.save() } }))));
             this.q = (k) => this.el.querySelector(`[data-se="${k}"]`);
             document.body.appendChild(this.el);
-            this.setTitle();
-        }
-
-        setTitle() {
-            this.q('title').textContent = this.isNew ? tr('skills.editor.titleNew') : tr('skills.editor.titleEdit', { name: this.dir });
         }
 
         status(text, kind) {
@@ -531,7 +602,10 @@
             const opt = (f) => h('option', { value: f.rel, text: (this.isDirty(f) ? '● ' : '') + f.rel });
             const groups = new Map();
             const top = [], other = [];
+            const readme = this.readmeRel();
+            hide(this.q('tabs'), !readme);
             for (const f of this.files.values()) {
+                if (f.rel === readme) continue;   // it has its own tab
                 if (f.rel === 'SKILL.md') top.push(f);
                 else if (f.rel.includes('/')) {
                     const g = f.rel.split('/')[0];
@@ -634,7 +708,9 @@
             this.capture();
             this.unmount();
             this.rel = rel;
-            this.q('file').value = rel;
+            const isReadme = rel === this.readmeRel();
+            if (!isReadme) { this.skillRel = rel; this.q('file').value = rel; }
+            this.setTab(isReadme ? 'readme' : 'skill');
             if (!f.ready) {
                 this.q('note').textContent = tr('skills.editor.loading');
                 await this.load(f);
@@ -654,7 +730,7 @@
             const readOnly = this.readOnly || f.binary;
             if (rel === 'SKILL.md' && (this.isNew || f.front !== null)) {
                 this.panel = await this.mountOne(SE.frontPanel, this.q('front'), f.parts.front,
-                    { readOnly, isNew: this.isNew, state: f.form, installed: this.installed() });
+                    { readOnly, isNew: this.isNew, state: f.form, installed: this.installed(), detected: (this.skill && this.skill.requires) || null, dir: this.dir, fileBlock: this.q('file-block'), fileHome: this.q('file-slot') });
                 if (this.closed) return;
             }
             const el = this.q('editor'), text = f.binary ? '' : (rel === 'SKILL.md' ? f.body : f.current);
@@ -768,7 +844,6 @@
             this.skill = { dir_name: name, name, mine: true };
             if (this.manager) this.manager.lastSkillDir = name;
             this.setLoaded(f, text);
-            this.setTitle();
             await this._show('SKILL.md');       // the panel remounts as for an existing skill
             await this.refreshTree();
             this.status(tr('skills.editor.created', { name }), 'ok');
@@ -873,7 +948,7 @@
                 for (const r of list) this.files.set(r.rel, { rel: r.rel, size: r.size, loaded: null, current: null, binary: false, ready: false, error: null });
             }
             this.renderFiles();
-            const first = this.files.keys().next().value;
+            const first = this.files.has('SKILL.md') ? 'SKILL.md' : [...this.files.keys()].find((r) => r !== this.readmeRel()) || this.files.keys().next().value;
             if (first) await this.show(first);
             return this;
         }

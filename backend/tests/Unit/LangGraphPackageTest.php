@@ -671,6 +671,11 @@ PY;
         self::assertSame(['requires' => ['GEO/geo-report'], 'missing' => ['ghost']],
             LangGraphPackage::requiredSkills('servicenow-automation-author', $decl, $installed));
         self::assertSame(['docx'], LangGraphPackage::declaredSkills("---\nrequires-skills: docx\n---\n"));
+        // requires-skills: [] declares none: scanning stops
+        $none = ['SKILL.md' => "---\nrequires-skills: []\n---\n", 'scripts/create.py' => self::CREATE_PY];
+        self::assertSame(['requires' => [], 'missing' => []], LangGraphPackage::requiredSkills('servicenow-automation-author', $none, $installed));
+        self::assertTrue(LangGraphPackage::declaresSkills("---\nrequires-skills: []\n---\n"));
+        self::assertFalse(LangGraphPackage::declaresSkills("---\nname: a\n---\n"));
         self::assertSame('GEO/x', LangGraphPackage::resolveSkillName('x', ['SEO/x', 'GEO/x'], 'GEO/me'));
     }
 

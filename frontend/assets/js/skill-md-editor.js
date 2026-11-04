@@ -242,7 +242,7 @@
             linkBox = h('span', { class: 'flex items-center gap-1', 'data-md': 'link-box' }, linkInput,
                 h('button', { type: 'button', class: BTN, 'data-md': 'link-apply', text: tr('skills.editor.md.linkApply'), on: { click: applyLink } }));
             showEl(linkBox, false);
-            srcBtn = h('button', { type: 'button', class: BTN + ' ml-auto', 'data-md': 'toggle', text: tr('skills.editor.md.showSource'), on: { click: () => toggle() } });
+            srcBtn = h('button', { type: 'button', class: BTN, 'data-md': 'toggle', text: tr('skills.editor.md.showSource'), on: { click: () => toggle() } });
             const items = readOnly ? [] : [
                 heading,
                 b('bold', 'B', () => cmd(C().toggleStrongCommand.key), { class: BTN + ' font-bold' }),
@@ -267,7 +267,7 @@
         }
 
         async function showFormatted(text) {
-            const box = h('div', { class: PANE + ' overflow-auto', 'data-md': 'formatted' });
+            const box = h('div', { class: PANE.replace('overflow-hidden', 'overflow-auto'), 'data-md': 'formatted' });   // one overflow class: both on one element, hidden wins
             const inner = h('div', { class: 'markdown-content skill-md-pane min-h-full' });
             box.appendChild(inner);
             pane.appendChild(box);

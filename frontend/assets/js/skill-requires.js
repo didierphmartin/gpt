@@ -59,10 +59,15 @@
         }).filter(Boolean);
     }
 
-    /** `requires-skills:` of a SKILL.md frontmatter ([] when absent). */
-    function declared(md) {
+    /** `requires-skills:` of a SKILL.md frontmatter ([] when absent or empty; declares() tells them apart). */
+    function declared(md) { return declaredOrNull(md) || []; }
+
+    /** Whether the frontmatter has a `requires-skills:` line at all: `requires-skills: []` says "none" and stops scanning. */
+    function declares(md) { return declaredOrNull(md) !== null; }
+
+    function declaredOrNull(md) {
         const lines = String(md || '').split(/\r\n|\r|\n/);
-        if (lines[0].trim() !== '---') return [];
+        if (lines[0].trim() !== '---') return null;
         for (const line of lines.slice(1)) {
             const s = line.trim();
             if (s === '---') break;
@@ -70,7 +75,7 @@
                 return listItems(s.slice(s.indexOf(':') + 1));
             }
         }
-        return [];
+        return null;
     }
 
     /** The installed skill a name means: the exact path, else by leaf (same group as `from`, then top level, then any). */
@@ -89,7 +94,7 @@
 
     /**
      * The skill's own requirements (one level). files: { rel: bytes } of that skill; installed: skill paths.
-     * A skill that declares `requires-skills:` requires exactly those (no scanning). Otherwise: every other installed
+     * A skill that declares `requires-skills:` requires exactly those, none for `[]` (no scanning). Otherwise: every other installed
      * skill whose leaf name is an exact quoted literal ('x' / "x") of its scripts/** text files, or appears in one as
      * a path segment with a slash on both sides ('/skill/x/references/a.md'); "text/html" does not name html.
      */
@@ -98,8 +103,8 @@
         const out = new Set();
         const missing = [];
         const md = files && files['SKILL.md'] ? toText(files['SKILL.md']) : '';
-        const decl = declared(md);
-        if (decl.length) {
+        const decl = declaredOrNull(md);
+        if (decl !== null) {   // declared (even []) replaces scanning
             for (const name of decl) {
                 const hit = resolveName(name, list, path);
                 if (hit) out.add(hit); else missing.push(name);
@@ -169,5 +174,5 @@
         return Object.assign(e, { code: 'missing-skill', skill: m.name, by: m.by });
     }
 
-    return { listItems, declared, resolveName, direct, closure, missingError, leafCollision };
+    return { listItems, declared, declares, resolveName, direct, closure, missingError, leafCollision };
 });
