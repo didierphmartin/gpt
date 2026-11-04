@@ -471,3 +471,23 @@ test('store import of a zip: every dry run and import names the other skills of 
   await fs.importSkill(sk('solo', 'S'), { visibility: 'public' });
   assert.equal(posts[0].incoming, undefined);
 });
+
+test('listSkillFiles: store asks /skills/listing and returns the rows; as=robot is passed', async () => {
+  const rows = [{ rel: 'SKILL.md', size: 5 }, { rel: 'references/a.md', size: 2 }];
+  const { fs, calls } = load({ routes: { ...volume, 'GET /skills/listing': () => [200, { files: rows }] } });
+  assert.deepEqual(JSON.parse(JSON.stringify(await fs.listSkillFiles('g/s'))), rows);
+  await fs.listSkillFiles('g/s', { asRobot: true });
+  assert.deepEqual(calls.filter((c) => c.key === 'GET /skills/listing').map((c) => c.path), ['/skills/listing?path=g%2Fs', '/skills/listing?path=g%2Fs&as=robot']);
+});
+
+test('listSkillFiles: folder mode walks handles for size only, sorted, hidden things left out', async () => {
+  const file = (n, size) => ({ name: n, kind: 'file', getFile: async () => ({ size, arrayBuffer: async () => { throw new Error('read'); }, text: async () => { throw new Error('read'); } }) });
+  const dir = (n, kids) => ({ name: n, kind: 'directory', async *values() { yield* kids; } });
+  const skill = dir('s', [file('b.txt', 3), file('SKILL.md', 9), file('.DS_Store', 1), dir('.wheels', [file('a.whl', 7)]),
+    dir('scripts', [file('run.py', 4), dir('__pycache__', [file('r.pyc', 1)]), file('z.py', 6)]), dir('references', [file('a.md', 2)])]);
+  const localFs = { resolvePath: async (p) => (p === 'skills/s' ? skill : null) };
+  const out = await load({ localFs }).fs.listSkillFiles('s');
+  assert.deepEqual(JSON.parse(JSON.stringify(out)), [{ rel: 'SKILL.md', size: 9 }, { rel: 'b.txt', size: 3 }, { rel: 'references/a.md', size: 2 },
+    { rel: 'scripts/run.py', size: 4 }, { rel: 'scripts/z.py', size: 6 }]);
+  assert.equal((await load({ localFs: { resolvePath: async () => null } }).fs.listSkillFiles('nope')).length, 0);
+});

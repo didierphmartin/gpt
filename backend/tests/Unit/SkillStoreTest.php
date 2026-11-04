@@ -250,6 +250,34 @@ final class SkillStoreTest extends TestCase
         $s->readFile(1, 'ok', '../../secret');
     }
 
+    public function test_listing_gives_paths_and_sizes_sorted_without_hidden_files(): void
+    {
+        $s = $this->store();
+        $f = $this->skill() + ['references/b.md' => 'bb', 'references/a.md' => 'a', 'Zed.txt' => 'zzz', '.hidden' => 'h',
+            '.wheels/a.whl' => 'W', 'scripts/__pycache__/x.pyc' => 'P', 'scripts/.dot/y.py' => 'y', 'scripts/mod.pyc' => 'P'];
+        $s->import(1, 'docx', $f);
+        $out = $s->listing(1, 'docx');
+        $this->assertSame(['SKILL.md', 'Zed.txt', 'references/a.md', 'references/b.md', 'scripts/run.py'], array_column($out, 'rel'));
+        $this->assertSame(strlen($f['SKILL.md']), $out[0]['size']);
+        $this->assertSame(['rel', 'size'], array_keys($out[1]));
+        $this->assertSame(3, $out[1]['size']);
+    }
+
+    public function test_listing_of_other_users_private_skill_is_not_found(): void
+    {
+        $s = $this->store();
+        $s->import(1, 'docx', $this->skill());
+        $this->assertSame(['SKILL.md', 'scripts/run.py'], array_column($s->listing(1, 'docx'), 'rel'));
+        $this->expectException(SkillNotFound::class);
+        $s->listing(2, 'docx');
+    }
+
+    public function test_listing_rejects_a_bad_path(): void
+    {
+        $this->expectException(SkillPathInvalid::class);
+        $this->store()->listing(1, '../x');
+    }
+
     public function test_files_excludes_native_wheels(): void
     {
         $s = $this->store();

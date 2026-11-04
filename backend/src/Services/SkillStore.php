@@ -83,6 +83,31 @@ final class SkillStore
         return $this->readTree($this->dir($area, $path), $withWheels);
     }
 
+    /**
+     * A skill's files as paths and sizes (stat, contents never read): SKILL.md first, then byte order.
+     * Left out: `.wheels/`, `__pycache__/`, `*.pyc` and anything dot-named.
+     * @return list<array{rel:string,size:int}>
+     */
+    public function listing(int $userId, string $path, bool $asRobot = false): array
+    {
+        $this->checkPath($path);
+        [$area] = $this->resolve($userId, $path, $asRobot) ?? throw new SkillNotFound('No such skill.');
+        $dir = $this->dir($area, $path);
+        $out = [];
+        if (is_dir($dir)) {
+            $it = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS));
+            foreach ($it as $f) {
+                $rel = substr($f->getPathname(), strlen($dir) + 1);
+                if (!$f->isFile() || $this->isPyCache($rel) || preg_match('#(^|/)\.#', $rel)) {
+                    continue;
+                }
+                $out[] = ['rel' => $rel, 'size' => (int) $f->getSize()];
+            }
+        }
+        usort($out, fn($a, $b) => [$a['rel'] !== 'SKILL.md', $a['rel']] <=> [$b['rel'] !== 'SKILL.md', $b['rel']]);
+        return $out;
+    }
+
     public function readFile(int $userId, string $path, string $rel, bool $asRobot = false): string
     {
         $this->checkPath($path);
