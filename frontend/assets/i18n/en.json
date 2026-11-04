@@ -427,6 +427,33 @@
       "requiresMissing": "{{by}} needs skill {{name}}, which is not installed.",
       "leafCollision": "Skills {{a}} and {{b}} both need to be available as '{{leaf}}'; rename one."
     },
+    "editor": {
+      "titleEdit": "Edit skill: {{name}}",
+      "titleNew": "New skill",
+      "file": "File",
+      "unsavedLegend": "● = unsaved changes",
+      "otherFiles": "Other files",
+      "frontmatter": "Frontmatter",
+      "loading": "Loading…",
+      "missing": "the file is not there",
+      "loadFailed": "Could not read {{file}}: {{message}}",
+      "listFailed": "Could not list the skill's files: {{message}}",
+      "readOnlyOwner": "Owned by {{name}} — read-only",
+      "binary": "Binary file — read-only.",
+      "failed": "Something went wrong: {{message}}",
+      "nothingToSave": "No unsaved changes.",
+      "saved": "Saved {{count}} file(s).",
+      "saveFailed": "Could not save: {{files}}",
+      "created": "Skill {{name}} created.",
+      "nameRequired": "Name is required.",
+      "nameInvalid": "Name must be kebab-case (a-z, 0-9 and -), at most 64 characters.",
+      "descriptionRequired": "Description is required.",
+      "discardTitle": "Unsaved changes",
+      "discardMessage": "Discard changes to {{count}} file(s)?",
+      "keepEditing": "Keep editing",
+      "discard": "Discard",
+      "template": "# Skill title\n\nWhat this skill does and when to use it.\n\n## Instructions\n\n1. First step.\n"
+    },
     "section": {
       "public": "Public",
       "private": "Private"

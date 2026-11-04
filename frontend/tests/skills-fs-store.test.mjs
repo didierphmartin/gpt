@@ -491,3 +491,15 @@ test('listSkillFiles: folder mode walks handles for size only, sorted, hidden th
     { rel: 'scripts/run.py', size: 4 }, { rel: 'scripts/z.py', size: 6 }]);
   assert.equal((await load({ localFs: { resolvePath: async () => null } }).fs.listSkillFiles('nope')).length, 0);
 });
+
+test('getSkillFileBytes returns the exact bytes in both modes (null when missing)', async () => {
+  const bytes = [0xef, 0xbb, 0xbf, 0x41, 0x00, 0xff];
+  const store = load({ routes: { ...volume, 'GET /skills/file': (_b, p) => (p.includes('rel=x.bin') ? [200, { content: Buffer.from(bytes).toString('base64') }] : [404, { error: 'nf' }]) } }).fs;
+  assert.deepEqual([...await store.getSkillFileBytes('s', 'x.bin')], bytes);
+  assert.equal(await store.getSkillFileBytes('s', 'gone.bin'), null);
+  const file = { getFile: async () => ({ arrayBuffer: async () => new Uint8Array(bytes).buffer }) };
+  const localFs = { resolvePath: async (p) => (p === 'skills/s/x.bin' ? file : null) };
+  const folder = load({ localFs }).fs;
+  assert.deepEqual([...await folder.getSkillFileBytes('s', 'x.bin')], bytes);
+  assert.equal(await folder.getSkillFileBytes('s', 'gone.bin'), null);
+});

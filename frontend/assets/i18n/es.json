@@ -427,6 +427,33 @@
       "requiresMissing": "{{by}} necesita la habilidad {{name}}, que no está instalada.",
       "leafCollision": "Las habilidades {{a}} y {{b}} deben estar disponibles ambas como '{{leaf}}'; renombra una."
     },
+    "editor": {
+      "titleEdit": "Editar skill: {{name}}",
+      "titleNew": "Nueva skill",
+      "file": "Archivo",
+      "unsavedLegend": "● = cambios sin guardar",
+      "otherFiles": "Otros archivos",
+      "frontmatter": "Frontmatter",
+      "loading": "Cargando…",
+      "missing": "el archivo no existe",
+      "loadFailed": "No se pudo leer {{file}}: {{message}}",
+      "listFailed": "No se pudieron listar los archivos de la skill: {{message}}",
+      "readOnlyOwner": "Propiedad de {{name}} — solo lectura",
+      "binary": "Archivo binario — solo lectura.",
+      "failed": "Algo salió mal: {{message}}",
+      "nothingToSave": "No hay cambios sin guardar.",
+      "saved": "{{count}} archivo(s) guardado(s).",
+      "saveFailed": "No se pudo guardar: {{files}}",
+      "created": "Skill {{name}} creada.",
+      "nameRequired": "El nombre es obligatorio.",
+      "nameInvalid": "El nombre debe estar en kebab-case (a-z, 0-9 y -), 64 caracteres como máximo.",
+      "descriptionRequired": "La descripción es obligatoria.",
+      "discardTitle": "Cambios sin guardar",
+      "discardMessage": "¿Descartar los cambios en {{count}} archivo(s)?",
+      "keepEditing": "Seguir editando",
+      "discard": "Descartar",
+      "template": "# Título de la skill\n\nQué hace esta skill y cuándo usarla.\n\n## Instrucciones\n\n1. Primer paso.\n"
+    },
     "section": {
       "public": "Públicas",
       "private": "Privadas"

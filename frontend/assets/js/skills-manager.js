@@ -32,7 +32,7 @@ class SkillsManager {
         this.contextMenu = document.getElementById('skills-context-menu');
 
         if (this.newSkillBtn) {
-            this.newSkillBtn.addEventListener('click', () => this.showSkillEditor());
+            this.newSkillBtn.addEventListener('click', () => window.SkillEditor.open({ skill: null, manager: this }));
         }
         if (this.newFolderBtn) {
             this.newFolderBtn.addEventListener('click', () => this.promptNewFolder());
@@ -796,7 +796,7 @@ class SkillsManager {
                 if (e.target.closest('.skills-item-menu')) return;
                 if (e.target.closest('.skills-req-toggle')) return;   // the arrow only expands
                 const skill = this.findSkillByDatasetId(el.dataset.skillId);
-                if (skill) this.showSkillEditor(skill);
+                if (skill) window.SkillEditor.open({ skill, manager: this });
             });
 
             el.addEventListener('contextmenu', (e) => {
@@ -844,7 +844,7 @@ class SkillsManager {
             el.addEventListener('click', (e) => {
                 if (e.target.closest('.skills-req-toggle')) return;
                 const skill = this.findSkillByDatasetId(el.dataset.skillId);
-                if (skill) this.showSkillEditor(skill);
+                if (skill) window.SkillEditor.open({ skill, manager: this });
             });
         });
 
@@ -1319,7 +1319,7 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
 
         if (action === 'edit' && type === 'skill') {
             const skill = this.findSkillByDatasetId(id);
-            if (skill) this.showSkillEditor(skill);
+            if (skill) window.SkillEditor.open({ skill, manager: this });
 
         } else if (action === 'export' && type === 'skill') {
             const skill = this.findSkillByDatasetId(id);
@@ -1759,7 +1759,8 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
     // ===================== Skill Editor Modal =====================
 
     /**
-     * Show a modal to create or edit a skill.
+     * The old read-only skill dialog. Not called any more: skill-editor.js (SkillEditor.open) replaced it;
+     * removed in Task 8 of the skill editor plan.
      * @param {Object|null} skill - existing skill to edit, or null for new
      */
     async showSkillEditor(skill = null) {

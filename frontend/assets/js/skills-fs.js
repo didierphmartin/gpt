@@ -670,6 +670,14 @@
         return b ? dec.decode(b) : null;
     }
 
+    /** One file's exact bytes (Uint8Array), or null when missing — the skill editor sniffs text vs binary on them. */
+    async function getSkillFileBytes(dirName, relativePath, { asRobot = false } = {}) {
+        if (!dirName || !relativePath) return null;
+        if (await mode() === 'volume') return volumeFile(dirName, relativePath, asRobot);
+        const h = await window.localFs?.resolvePath(`skills/${dirName}/${relativePath}`, { kind: 'file' });
+        return h ? new Uint8Array(await (await h.getFile()).arrayBuffer()) : null;
+    }
+
     async function listUnder(dirName, prefix, ext, asRobot) {
         const files = await readSkillFiles(dirName, { asRobot, under: prefix });
         return Object.keys(files)
@@ -1112,6 +1120,7 @@
         listSkillReferences,
         getSkillContent,
         getSkillFile,
+        getSkillFileBytes,
         createFolder,
         deleteFolder,
         renameFolder,
