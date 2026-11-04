@@ -358,11 +358,14 @@ class SkillsManager {
         this.renderTree();
     }
 
-    /** The ▸/▾ arrow of an expandable skill row. */
+    /** The arrow of an expandable skill row: a chevron pointing right (closed) or down (open). */
     renderExpandArrow(dir) {
         const open = this.expandedSkills.has(dir);
-        return `<button type="button" class="skills-req-toggle px-1 text-gray-500 hover:text-gray-800 flex-shrink-0" data-expand="${this.escapeHtml(dir)}"
-                        aria-expanded="${open}" title="${this.escapeHtml(this.t('skills.needsTree.toggle'))}">${open ? '▾' : '▸'}</button>`;
+        return `<button type="button" class="skills-req-toggle flex-shrink-0 inline-flex items-center justify-center w-5 h-5 -ml-1 rounded text-gray-600 hover:text-gray-900 hover:bg-gray-300" data-expand="${this.escapeHtml(dir)}"
+                        aria-expanded="${open}" title="${this.escapeHtml(this.t('skills.needsTree.toggle'))}">
+                    <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
+                         style="transition: transform .15s; transform: rotate(${open ? 90 : 0}deg);" aria-hidden="true"><path d="M7 4l6 6-6 6"/></svg>
+                </button>`;
     }
 
     /** The required skills of `skill`, as indented link rows (nested; never a skill already open higher in the branch). */
