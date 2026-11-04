@@ -258,6 +258,14 @@
         .markdown-content blockquote { border-left: 4px solid #3b82f6; padding-left: 1rem; margin: 0.5rem 0; color: #4b5563; font-style: italic; }
         .markdown-content a { color: #2563eb; text-decoration: underline; }
         .markdown-content a:hover { color: #1d4ed8; }
+        /* skill editor: the formatted markdown pane (Milkdown) */
+        .skill-md-pane .ProseMirror { outline: none; min-height: 100%; white-space: pre-wrap; }
+        .skill-md-pane ul, .skill-md-pane ol { padding-left: 1.5rem; }
+        .skill-md-pane h4 { font-size: 1rem; font-weight: 600; margin: 0.5rem 0 0.25rem; }
+        .skill-md-pane li[data-item-type="task"] { list-style: none; margin-left: -1.25rem; }
+        .skill-md-pane li[data-item-type="task"]::before { content: "\2610\00a0"; }
+        .skill-md-pane li[data-item-type="task"][data-checked="true"]::before { content: "\2611\00a0"; }
+        .skill-md-pane li[data-item-type="task"] > p { display: inline; }
 
         /* SVG generation placeholder (shown while streaming) */
         .svg-placeholder {
@@ -4381,17 +4389,18 @@
     <script src="assets/js/voice-dictation.js?v=20261026-voicetoken"></script>
     <script src="assets/js/workflow-realtime-runner.js"></script>
     <script src="assets/js/workflow-package.js?v=20261103-skilldeps3"></script>
-    <script src="assets/js/skill-requires.js?v=20261103-skilldeps4"></script>
-    <script src="assets/js/skill-zip.js?v=20261103-skilldeps"></script>
+    <script src="assets/js/skill-requires.js?v=20261104-listitems"></script>
+    <script src="assets/js/skill-zip.js?v=20261104-listitems"></script>
+    <script src="assets/js/skill-frontmatter.js?v=20261103-fm2"></script>
     <script src="assets/js/skill-wheels.js?v=20261103-finalfix"></script>
     <!-- Folder-backed Skills service. Reads <root>/skills/*/SKILL.md.
          Must load after local-fs.js (uses window.localFs) and before
          skills-manager.js (which calls window.skillsFs). -->
-    <script src="assets/js/skills-fs.js?v=20261103-treedeps2"></script>
+    <script src="assets/js/skills-fs.js?v=20261103-editor"></script>
     <!-- Pyodide skill-script runner. Lazy-loads Pyodide on first call;
          depends on window.localFs (skill folder resolution) and
          window.skillsFs (frontmatter parsing for declared deps). -->
-    <script src="assets/js/pyodide-runner.js?v=20261103-skilldeps4"></script>
+    <script src="assets/js/pyodide-runner.js?v=20261104-listitems"></script>
     <!-- Parallel skill execution: worker pool used by chat.js for rounds of 2+
          independent run_skill_script calls (the worker itself loads via new Worker). -->
     <script src="assets/js/pyodide-pool.js?v=20260608-parallel"></script>
@@ -4404,7 +4413,23 @@
          imports. Loaded from jsDelivr; ~8KB gzipped. -->
     <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
     <script src="assets/js/skills-import.js?v=20261103-folderdeps"></script>
-    <script src="assets/js/skills-manager.js?v=20261103-export-one"></script>
+    <!-- Skill editor dialog (SkillEditor.open). CodeMirror 5 (pinned) is its code editor; the language modes and
+         the markdown editor (Milkdown, dynamic import) are added by the editor's own adapters. -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/lib/codemirror.css">
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/lib/codemirror.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/mode/markdown/markdown.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/mode/python/python.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/mode/javascript/javascript.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/mode/shell/shell.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/mode/yaml/yaml.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/mode/xml/xml.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/mode/css/css.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/mode/htmlmixed/htmlmixed.min.js"></script>
+    <script src="assets/js/merge-blocks.js?v=20261103-md"></script>
+    <script src="assets/js/skill-editor.js?v=20261104-final1"></script>
+    <!-- Milkdown (formatted markdown) loads on first use by dynamic import() of pinned esm.sh URLs, see the file. -->
+    <script src="assets/js/skill-md-editor.js?v=20261103-code1"></script>
+    <script src="assets/js/skills-manager.js?v=20261104-editor-cleanup"></script>
     <script src="assets/js/skillopt-panel.js?v=20261103-skillsfs-fix1"></script>
     <script src="assets/js/heal-panel.js?v=20260929-catalog-ids"></script>
     <script src="assets/js/genesis-panel.js?v=20261103-skillsfs-callers"></script>

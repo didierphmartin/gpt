@@ -83,6 +83,11 @@ final class SkillStoreController
         });
     }
 
+    public function listing(array $request): array
+    {
+        return $this->run(fn(SkillStore $s) => ['files' => $s->listing(self::uid($request), self::q($request, 'path'), self::robot($request))]);
+    }
+
     public function readFile(array $request): array
     {
         return $this->run(fn(SkillStore $s) => ['content' => base64_encode(

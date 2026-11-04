@@ -24,6 +24,41 @@
     const leafOf = (p) => String(p).split('/').pop();
     const groupOf = (p) => (String(p).includes('/') ? String(p).split('/')[0] : '');
 
+    /**
+     * Items of a frontmatter list value (`a, b` or `[a, 'b,c']`, as dependencies:/requires-skills: are written):
+     * split on commas outside single/double quotes, then one matching quote pair is stripped ('' -> ' inside
+     * single quotes). An unterminated quote falls back to splitting on every comma. Twin of PHP
+     * LangGraphPackage::listItems and the emitted Python dependency readers.
+     */
+    function listItems(raw) {
+        const val = String(raw == null ? '' : raw).trim().replace(/^\[+|\]+$/g, '');
+        const items = [];
+        let cur = '', q = null;
+        for (let i = 0; i < val.length; i++) {
+            const c = val[i];
+            if (q) {
+                cur += c;
+                if (c === q) {
+                    if (q === "'" && val[i + 1] === "'") cur += val[++i];
+                    else q = null;
+                }
+            } else if ((c === '"' || c === "'") && cur.trim() === '') { q = c; cur += c; }
+            else if (c === ',') { items.push(cur); cur = ''; }
+            else cur += c;
+        }
+        items.push(cur);
+        if (q) return val.split(',').map((d) => d.trim().replace(/^['"]+|['"]+$/g, '')).filter(Boolean);
+        return items.map((d) => {
+            d = d.trim();
+            const k = d[0];
+            if (d.length >= 2 && (k === "'" || k === '"') && d[d.length - 1] === k) {
+                d = d.slice(1, -1);
+                if (k === "'") d = d.replace(/''/g, "'");
+            }
+            return d;
+        }).filter(Boolean);
+    }
+
     /** `requires-skills:` of a SKILL.md frontmatter ([] when absent). */
     function declared(md) {
         const lines = String(md || '').split(/\r\n|\r|\n/);
@@ -32,8 +67,7 @@
             const s = line.trim();
             if (s === '---') break;
             if (s.toLowerCase().startsWith('requires-skills:')) {
-                const val = s.slice(s.indexOf(':') + 1).trim().replace(/^\[+|\]+$/g, '');
-                return val.split(',').map((d) => d.trim().replace(/^['"]+|['"]+$/g, '')).filter(Boolean);
+                return listItems(s.slice(s.indexOf(':') + 1));
             }
         }
         return [];
@@ -135,5 +169,5 @@
         return Object.assign(e, { code: 'missing-skill', skill: m.name, by: m.by });
     }
 
-    return { declared, resolveName, direct, closure, missingError, leafCollision };
+    return { listItems, declared, resolveName, direct, closure, missingError, leafCollision };
 });

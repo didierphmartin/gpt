@@ -1,0 +1,106 @@
+{
+  "cases": [
+    {
+      "name": "unquoted list",
+      "value": "pandas, numpy",
+      "items": [
+        "pandas",
+        "numpy"
+      ]
+    },
+    {
+      "name": "unquoted flow list",
+      "value": "[pandas>=2, numpy]",
+      "items": [
+        "pandas>=2",
+        "numpy"
+      ]
+    },
+    {
+      "name": "single unquoted",
+      "value": "bs4",
+      "items": [
+        "bs4"
+      ]
+    },
+    {
+      "name": "empty list",
+      "value": "[]",
+      "items": []
+    },
+    {
+      "name": "quoted range and extras keep their commas",
+      "value": "[pandas>=2, 'numpy>=1.20,<2', 'requests[socks,security]']",
+      "items": [
+        "pandas>=2",
+        "numpy>=1.20,<2",
+        "requests[socks,security]"
+      ]
+    },
+    {
+      "name": "double quotes",
+      "value": "[\"a,b\", c]",
+      "items": [
+        "a,b",
+        "c"
+      ]
+    },
+    {
+      "name": "doubled single quote",
+      "value": "['it''s,x', y]",
+      "items": [
+        "it's,x",
+        "y"
+      ]
+    },
+    {
+      "name": "spaces and a trailing comma",
+      "value": "[  a  ,   'b , c'  ,  ]",
+      "items": [
+        "a",
+        "b , c"
+      ]
+    },
+    {
+      "name": "apostrophe inside a word is not a quote",
+      "value": "don't, x",
+      "items": [
+        "don't",
+        "x"
+      ]
+    },
+    {
+      "name": "double-quoted single item",
+      "value": "[\"x\"]",
+      "items": [
+        "x"
+      ]
+    },
+    {
+      "name": "empty quoted item dropped",
+      "value": "['', a]",
+      "items": [
+        "a"
+      ]
+    },
+    {
+      "name": "unterminated quote splits on every comma",
+      "value": "['a, b]",
+      "items": [
+        "a",
+        "b"
+      ]
+    }
+  ],
+  "form": {
+    "note": "What the frontmatter form (skill-frontmatter.js rebuild) writes for these items; frontmatter-list.test.mjs pins it.",
+    "items": [
+      "pandas>=2",
+      "numpy>=1.20,<2",
+      "requests[socks,security]",
+      "it's \"x\"",
+      "a\"b"
+    ],
+    "value": "[pandas>=2, 'numpy>=1.20,<2', 'requests[socks,security]', 'it''s \"x\"', 'a\"b']"
+  }
+}

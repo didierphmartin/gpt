@@ -32,7 +32,7 @@ class SkillsManager {
         this.contextMenu = document.getElementById('skills-context-menu');
 
         if (this.newSkillBtn) {
-            this.newSkillBtn.addEventListener('click', () => this.showSkillEditor());
+            this.newSkillBtn.addEventListener('click', () => window.SkillEditor.open({ skill: null, manager: this }));
         }
         if (this.newFolderBtn) {
             this.newFolderBtn.addEventListener('click', () => this.promptNewFolder());
@@ -796,7 +796,7 @@ class SkillsManager {
                 if (e.target.closest('.skills-item-menu')) return;
                 if (e.target.closest('.skills-req-toggle')) return;   // the arrow only expands
                 const skill = this.findSkillByDatasetId(el.dataset.skillId);
-                if (skill) this.showSkillEditor(skill);
+                if (skill) window.SkillEditor.open({ skill, manager: this });
             });
 
             el.addEventListener('contextmenu', (e) => {
@@ -844,7 +844,7 @@ class SkillsManager {
             el.addEventListener('click', (e) => {
                 if (e.target.closest('.skills-req-toggle')) return;
                 const skill = this.findSkillByDatasetId(el.dataset.skillId);
-                if (skill) this.showSkillEditor(skill);
+                if (skill) window.SkillEditor.open({ skill, manager: this });
             });
         });
 
@@ -1319,7 +1319,7 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
 
         if (action === 'edit' && type === 'skill') {
             const skill = this.findSkillByDatasetId(id);
-            if (skill) this.showSkillEditor(skill);
+            if (skill) window.SkillEditor.open({ skill, manager: this });
 
         } else if (action === 'export' && type === 'skill') {
             const skill = this.findSkillByDatasetId(id);
@@ -1753,348 +1753,6 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
             }
             status(t('skills.export.done', { file: savedAs, count: 1 + (result.requires || []).length }), 'ok');
             setTimeout(close, 1800);
-        });
-    }
-
-    // ===================== Skill Editor Modal =====================
-
-    /**
-     * Show a modal to create or edit a skill.
-     * @param {Object|null} skill - existing skill to edit, or null for new
-     */
-    async showSkillEditor(skill = null) {
-        if (skill?.dir_name) this.lastSkillDir = skill.dir_name;   // Export preselects it
-        // Remove any existing editor modal
-        document.getElementById('skill-editor-modal')?.remove();
-
-        const isEdit = !!skill;
-        const t = this.t.bind ? this.t : (k) => this.t(k);
-
-        // Python scripts shipped under the skill's scripts/ folder (see
-        // listSkillScripts). When present, the right pane gains a "Script" tab
-        // alongside the SKILL.md preview so the source is viewable in-app.
-        const pyScripts = (skill?.scripts || []).filter(p => /\.py$/i.test(p));
-        const hasScripts = pyScripts.length > 0;
-
-        // Markdown docs under the skill's references/ folder. Each gets its own
-        // right-pane tab labelled with the folder over the filename.
-        const refDocs = (skill?.references || []).filter(p => /\.md$/i.test(p));
-
-        const modal = document.createElement('div');
-        modal.id = 'skill-editor-modal';
-        modal.className = 'fixed inset-0 z-[200] flex items-center justify-center';
-        modal.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
-        modal.innerHTML = `
-            <div class="bg-white rounded-xl shadow-xl border border-gray-200 w-full max-w-6xl mx-4 h-[90vh] overflow-hidden flex flex-col">
-                <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-                    <h3 class="text-sm font-bold text-gray-800">${isEdit ? 'Edit Skill' : t('skills.newSkill')}</h3>
-                    <button id="skill-editor-close" class="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition">&#10005;</button>
-                </div>
-                <div class="flex-1 flex overflow-hidden min-h-0">
-                    <!-- Left: technical metadata + system prompt editor -->
-                    <div class="w-1/2 flex flex-col gap-3 p-4 border-r border-gray-200 min-h-0 overflow-y-auto">
-                        <div class="grid grid-cols-2 gap-3 flex-shrink-0">
-                            <div>
-                                <label class="block text-xs font-medium text-gray-700 mb-1">License</label>
-                                <input type="text" id="skill-ed-license" class="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg"
-                                       value="${this.escapeHtml(skill?.license || '')}" placeholder="MIT">
-                            </div>
-                            <div>
-                                <label class="block text-xs font-medium text-gray-700 mb-1">Origin</label>
-                                <input type="text" id="skill-ed-origin" class="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg"
-                                       value="${this.escapeHtml(skill?.origin || skill?.metadata?.origin || '')}" placeholder="synergyAI custom">
-                            </div>
-                        </div>
-                        <div class="flex-shrink-0">
-                            <label class="block text-xs font-medium text-gray-700 mb-1">Dependencies</label>
-                            <input type="text" id="skill-ed-deps" class="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg"
-                                   value="${this.escapeHtml(Array.isArray(skill?.dependencies) ? skill.dependencies.join(', ') : (skill?.dependencies || ''))}" placeholder="beautifulsoup4, python-docx">
-                        </div>
-                        <div class="flex-shrink-0">
-                            <label class="block text-xs font-medium text-gray-700 mb-1">Allowed tools</label>
-                            <input type="text" id="skill-ed-allowed-tools" class="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg"
-                                   value="${this.escapeHtml((skill?.default_tools || skill?.allowed_tools || []).join(', '))}" placeholder="run_skill_script">
-                        </div>
-                        <div class="flex-1 flex flex-col min-h-0">
-                            <label class="block text-xs font-medium text-gray-700 mb-1 flex-shrink-0">${t('skills.systemPrompt')}</label>
-                            <textarea id="skill-ed-prompt" class="flex-1 w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg font-mono resize-none min-h-[200px]">${this.escapeHtml(skill?.skill_content || '')}</textarea>
-                        </div>
-                    </div>
-                    <!-- Right: identity fields + live rendered preview -->
-                    <div class="w-1/2 flex flex-col min-h-0">
-                        <div class="flex flex-col gap-3 p-4 bg-white flex-shrink-0">
-                            <div class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-700 mb-1">${t('skills.name')}</label>
-                                    <input type="text" id="skill-ed-name" class="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-                                           value="${this.escapeHtml(skill?.name || '')}">
-                                </div>
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-700 mb-1">Version</label>
-                                    <input type="text" id="skill-ed-version" class="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg"
-                                           value="${this.escapeHtml(skill?.version || skill?.metadata?.version || '1.0.0')}" placeholder="1.0.0">
-                                </div>
-                            </div>
-                            <div>
-                                <label class="block text-xs font-medium text-gray-700 mb-1">${t('skills.description')}</label>
-                                <input type="text" id="skill-ed-desc" class="w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg cursor-pointer"
-                                       value="${this.escapeHtml(skill?.description || '')}"
-                                       title="Click to expand" readonly>
-                            </div>
-                        </div>
-                        <div class="px-4 py-1.5 border-y border-gray-200 bg-gray-100 flex-shrink-0 flex items-center gap-1 overflow-x-auto" id="skill-ed-tabs">
-                            <button type="button" data-pane="preview" class="skill-ed-tab px-3 py-1 text-xs font-medium rounded-md transition bg-white text-indigo-700 shadow-sm">SKILL.md</button>
-                        </div>
-                        <div id="skill-ed-preview" class="flex-1 overflow-y-auto p-4 markdown-content prose prose-sm max-w-none bg-gray-50"></div>
-                    </div>
-                </div>
-                <div class="flex justify-end gap-2 px-4 py-3 border-t border-gray-200">
-                    <button id="skill-editor-cancel" class="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800 border border-gray-300 rounded-lg hover:bg-gray-50 transition">Cancel</button>
-                    <button id="skill-editor-save" class="px-3 py-1.5 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition">${t('skills.saveSkill')}</button>
-                </div>
-            </div>
-        `;
-
-        document.body.appendChild(modal);
-
-        // Editing folder-backed skills means writing back to the user's
-        // disk — not in this slice yet. Lock the form to read-only and
-        // make Save unavailable. The preview pane stays fully functional.
-        if (skill?.source === 'local') {
-            modal.querySelectorAll('input, textarea').forEach(el => { el.readOnly = true; });
-            const titleEl = modal.querySelector('h3');
-            if (titleEl) titleEl.textContent = `View Skill — ${skill.dir_name || skill.name}`;
-            const saveBtn = modal.querySelector('#skill-editor-save');
-            if (saveBtn) {
-                saveBtn.disabled = true;
-                saveBtn.textContent = 'Saved on disk';
-                saveBtn.title = 'This skill is read directly from your local data folder. Editing on disk is supported in your file explorer; in-app editing is coming in a later step.';
-                saveBtn.className = saveBtn.className.replace('bg-blue-600 hover:bg-blue-700', 'bg-gray-300 cursor-not-allowed');
-            }
-        }
-
-        // Event listeners
-        modal.querySelector('#skill-editor-close').addEventListener('click', () => modal.remove());
-        modal.querySelector('#skill-editor-cancel').addEventListener('click', () => modal.remove());
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) modal.remove();
-        });
-
-        // Description expand-on-click: the inline input shows only one line,
-        // so clicking it pops an overlay with a roomy textarea. Backdrop click
-        // or Escape closes and syncs the edited value back to the input.
-        const descEl = modal.querySelector('#skill-ed-desc');
-        const descReadOnly = skill?.source === 'local';
-        const openDescOverlay = () => {
-            const overlay = document.createElement('div');
-            overlay.className = 'fixed inset-0 z-[210] flex items-center justify-center';
-            overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.4)';
-            overlay.innerHTML = `
-                <div class="bg-white rounded-xl shadow-xl border border-gray-200 w-[min(640px,90vw)] max-h-[80vh] flex flex-col" data-desc-panel>
-                    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-                        <h4 class="text-sm font-semibold text-gray-800">${t('skills.description')}</h4>
-                        <button type="button" data-desc-close class="p-1.5 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded transition" aria-label="Close">&#10005;</button>
-                    </div>
-                    <div class="p-4 flex-1 overflow-y-auto">
-                        <textarea class="w-full h-64 px-3 py-2 text-sm border border-gray-300 rounded-lg resize-none focus:ring-2 focus:ring-blue-500"
-                                  ${descReadOnly ? 'readonly' : ''}></textarea>
-                    </div>
-                </div>
-            `;
-            document.body.appendChild(overlay);
-            const ta = overlay.querySelector('textarea');
-            ta.value = descEl.value;
-            ta.focus();
-            ta.setSelectionRange(ta.value.length, ta.value.length);
-
-            const closeOverlay = () => {
-                if (!descReadOnly) descEl.value = ta.value;
-                overlay.remove();
-                document.removeEventListener('keydown', onKey);
-            };
-            const onKey = (e) => { if (e.key === 'Escape') closeOverlay(); };
-            overlay.addEventListener('click', (e) => {
-                if (!overlay.querySelector('[data-desc-panel]').contains(e.target)) closeOverlay();
-            });
-            overlay.querySelector('[data-desc-close]').addEventListener('click', closeOverlay);
-            document.addEventListener('keydown', onKey);
-        };
-        descEl.addEventListener('click', openDescOverlay);
-        descEl.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                openDescOverlay();
-            }
-        });
-
-        // Live Markdown preview of skill content — renders YAML frontmatter
-        // (between leading --- delimiters) as a GitHub-style name/value table
-        const promptEl = modal.querySelector('#skill-ed-prompt');
-        const previewEl = modal.querySelector('#skill-ed-preview');
-        const renderPreview = () => {
-            const src = promptEl.value || '';
-            try {
-                const fm = src.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
-                let html = '';
-                let body = src;
-                if (fm) {
-                    body = fm[2];
-                    const pairs = [];
-                    let curKey = null;
-                    let curVal = '';
-                    for (const line of fm[1].split(/\r?\n/)) {
-                        const m = line.match(/^([A-Za-z_][\w-]*)\s*:\s*(.*)$/);
-                        if (m) {
-                            if (curKey !== null) pairs.push([curKey, curVal.trim()]);
-                            curKey = m[1];
-                            curVal = m[2];
-                        } else if (curKey !== null) {
-                            curVal += ' ' + line.trim();
-                        }
-                    }
-                    if (curKey !== null) pairs.push([curKey, curVal.trim()]);
-                    if (pairs.length) {
-                        html += '<table class="border border-gray-300 rounded mb-4 text-sm w-full">'
-                             + '<tbody>'
-                             + pairs.map(([k, v]) =>
-                                 `<tr class="border-b border-gray-200 last:border-b-0">`
-                                 + `<td class="bg-gray-50 px-3 py-1.5 font-semibold text-gray-700 align-top whitespace-nowrap">${this.escapeHtml(k)}</td>`
-                                 + `<td class="px-3 py-1.5 text-gray-800 break-words">${this.escapeHtml(v)}</td>`
-                                 + `</tr>`
-                               ).join('')
-                             + '</tbody></table>';
-                    }
-                }
-                html += window.renderMarkdown(body);
-                previewEl.innerHTML = html;
-            } catch (e) {
-                previewEl.textContent = src;
-            }
-        };
-        promptEl.addEventListener('input', renderPreview);
-        renderPreview();
-
-        // Right-pane tabs: SKILL.md preview (always), an optional Script tab
-        // when the skill ships Python under scripts/, and one tab per Markdown
-        // doc under references/. Every non-preview pane reads its file(s) from
-        // disk lazily on first activation so opening the editor stays instant.
-        if (hasScripts || refDocs.length) {
-            const tabsEl = modal.querySelector('#skill-ed-tabs');
-            const panes = [{ id: 'preview', el: previewEl, load: null }];
-
-            // Append a tab button. `folder` (when set) is shown as a small
-            // label over the file/label line — e.g. "references" / "second.md".
-            const addTab = (id, folder, label) => {
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.dataset.pane = id;
-                btn.className = 'skill-ed-tab px-3 py-1 text-xs font-medium rounded-md transition text-gray-600 hover:bg-gray-200 flex flex-col items-center leading-tight whitespace-nowrap';
-                btn.innerHTML = folder
-                    ? `<span class="text-[10px] uppercase tracking-wide opacity-70">${this.escapeHtml(folder)}</span><span>${this.escapeHtml(label)}</span>`
-                    : `<span>${this.escapeHtml(label)}</span>`;
-                tabsEl.appendChild(btn);
-            };
-
-            // Append a content pane as a sibling of the preview pane so the
-            // flex-1 sizing matches. Returns the empty div for lazy fill.
-            const addPane = (extraClasses) => {
-                const div = document.createElement('div');
-                div.className = `hidden flex-1 overflow-y-auto bg-gray-50 ${extraClasses}`.trim();
-                previewEl.parentElement.appendChild(div);
-                return div;
-            };
-
-            if (hasScripts) {
-                const pane = addPane('');
-                addTab('script', null, 'Script');
-                panes.push({ id: 'script', el: pane, load: async () => {
-                    const blocks = await Promise.all(pyScripts.map(async (rel) => {
-                        let code = '';
-                        try {
-                            code = await window.skillsFs.getSkillFile(skill.dir_name, rel);
-                        } catch (e) {
-                            code = `# could not read ${rel}: ${e?.message || e}`;
-                        }
-                        return `<div class="px-4 py-2 text-xs font-mono text-gray-500 bg-gray-100 border-b border-gray-200">${this.escapeHtml(rel)}</div>`
-                             + `<pre class="px-4 py-3 text-xs font-mono text-gray-800 whitespace-pre overflow-x-auto"><code>${this.escapeHtml(code || '')}</code></pre>`;
-                    }));
-                    pane.innerHTML = blocks.join('');
-                }});
-            }
-
-            refDocs.forEach((rel, i) => {
-                const id = `ref-${i}`;
-                const file = rel.split('/').pop();
-                const pane = addPane('p-4 markdown-content prose prose-sm max-w-none');
-                addTab(id, 'references', file);
-                panes.push({ id, el: pane, load: async () => {
-                    let md = '';
-                    try {
-                        md = await window.skillsFs.getSkillFile(skill.dir_name, rel);
-                    } catch (e) {
-                        md = `_Could not read ${rel}: ${e?.message || e}_`;
-                    }
-                    pane.innerHTML = window.renderMarkdown(md || '');
-                }});
-            });
-
-            const loaded = new Set();
-            const switchPane = (id) => {
-                panes.forEach(p => p.el.classList.toggle('hidden', p.id !== id));
-                tabsEl.querySelectorAll('.skill-ed-tab').forEach(b => {
-                    const on = b.dataset.pane === id;
-                    b.classList.toggle('bg-white', on);
-                    b.classList.toggle('text-indigo-700', on);
-                    b.classList.toggle('shadow-sm', on);
-                    b.classList.toggle('text-gray-600', !on);
-                    b.classList.toggle('hover:bg-gray-200', !on);
-                });
-                const target = panes.find(p => p.id === id);
-                if (target?.load && !loaded.has(id)) {
-                    loaded.add(id);
-                    target.load();
-                }
-            };
-            tabsEl.querySelectorAll('.skill-ed-tab').forEach(b => {
-                b.addEventListener('click', () => switchPane(b.dataset.pane));
-            });
-        }
-
-        // Helper: parse a comma-separated input into a clean array.
-        const parseCsv = (id) => {
-            const raw = document.getElementById(id)?.value || '';
-            return raw.split(',').map(s => s.trim()).filter(Boolean);
-        };
-
-        modal.querySelector('#skill-editor-save').addEventListener('click', async () => {
-            const name = document.getElementById('skill-ed-name').value.trim();
-            if (!name) {
-                alert('Name is required');
-                return;
-            }
-
-            // SKILL.md frontmatter fields. License / dependencies / origin
-            // aren't backed by DB columns yet — they ride along on the payload
-            // so the API can persist them once the schema catches up.
-            // allowed-tools maps to default_tools (the existing DB column).
-            const data = {
-                name,
-                description: document.getElementById('skill-ed-desc').value.trim(),
-                skill_content: document.getElementById('skill-ed-prompt').value,
-                version: document.getElementById('skill-ed-version').value.trim() || '1.0.0',
-                license: document.getElementById('skill-ed-license').value.trim(),
-                dependencies: parseCsv('skill-ed-deps'),
-                origin: document.getElementById('skill-ed-origin').value.trim(),
-                default_tools: parseCsv('skill-ed-allowed-tools'),
-            };
-
-            if (isEdit) {
-                await this.updateSkill(skill.id, data);
-            } else {
-                await this.createSkill(data);
-            }
-
-            modal.remove();
         });
     }
 

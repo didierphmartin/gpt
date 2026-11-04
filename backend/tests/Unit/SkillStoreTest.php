@@ -54,6 +54,22 @@ final class SkillStoreTest extends TestCase
         $this->assertSame([], $s->list(2));
     }
 
+    /** One matching outer quote pair is stripped from name/description, never inner or unmatched quotes. */
+    public function test_listing_strips_one_matching_quote_pair_and_reads_quoted_list_items(): void
+    {
+        $s = $this->store();
+        $cases = ['say "hi"' => 'say "hi"', "'say \"hi\"'" => 'say "hi"', "\"'x'\"" => "'x'", "'a' and 'b'" => 'a\' and \'b', '"open' => '"open'];
+        $i = 0;
+        foreach ($cases as $raw => $want) {
+            $i++;
+            $s->import(1, "q$i", ['SKILL.md' => "---\nname: q$i\ndescription: $raw\ndependencies: [pandas>=2, 'numpy>=1.20,<2', 'requests[socks,security]']\n---\nB\n"]);
+        }
+        $rows = $s->list(1);
+        usort($rows, fn($a, $b) => strcmp($a['path'], $b['path']));
+        $this->assertSame(array_values($cases), array_column($rows, 'description'));
+        $this->assertSame(['pandas>=2', 'numpy>=1.20,<2', 'requests[socks,security]'], $rows[0]['dependencies']);
+    }
+
     public function test_public_skill_listed_for_everyone_with_owner(): void
     {
         $s = $this->store();
@@ -248,6 +264,34 @@ final class SkillStoreTest extends TestCase
         $s->import(1, 'ok', $this->skill());
         $this->expectException(SkillPathInvalid::class);
         $s->readFile(1, 'ok', '../../secret');
+    }
+
+    public function test_listing_gives_paths_and_sizes_sorted_without_hidden_files(): void
+    {
+        $s = $this->store();
+        $f = $this->skill() + ['references/b.md' => 'bb', 'references/a.md' => 'a', 'Zed.txt' => 'zzz', '.hidden' => 'h',
+            '.wheels/a.whl' => 'W', 'scripts/__pycache__/x.pyc' => 'P', 'scripts/.dot/y.py' => 'y', 'scripts/mod.pyc' => 'P'];
+        $s->import(1, 'docx', $f);
+        $out = $s->listing(1, 'docx');
+        $this->assertSame(['SKILL.md', 'Zed.txt', 'references/a.md', 'references/b.md', 'scripts/run.py'], array_column($out, 'rel'));
+        $this->assertSame(strlen($f['SKILL.md']), $out[0]['size']);
+        $this->assertSame(['rel', 'size'], array_keys($out[1]));
+        $this->assertSame(3, $out[1]['size']);
+    }
+
+    public function test_listing_of_other_users_private_skill_is_not_found(): void
+    {
+        $s = $this->store();
+        $s->import(1, 'docx', $this->skill());
+        $this->assertSame(['SKILL.md', 'scripts/run.py'], array_column($s->listing(1, 'docx'), 'rel'));
+        $this->expectException(SkillNotFound::class);
+        $s->listing(2, 'docx');
+    }
+
+    public function test_listing_rejects_a_bad_path(): void
+    {
+        $this->expectException(SkillPathInvalid::class);
+        $this->store()->listing(1, '../x');
     }
 
     public function test_files_excludes_native_wheels(): void

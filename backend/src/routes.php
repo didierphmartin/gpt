@@ -301,6 +301,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->get('/api/v1/skills/store', ['SkillStoreController', 'store']);
         $r->get('/api/v1/skills', ['SkillStoreController', 'list']);
         $r->get('/api/v1/skills/files', ['SkillStoreController', 'files']);
+        $r->get('/api/v1/skills/listing', ['SkillStoreController', 'listing']);
         $r->get('/api/v1/skills/file', ['SkillStoreController', 'readFile']);
         $r->put('/api/v1/skills/file', ['SkillStoreController', 'writeFile']);
         // Native wheels for the skill export; works in folder mode too.

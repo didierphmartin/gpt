@@ -670,6 +670,14 @@
         return b ? dec.decode(b) : null;
     }
 
+    /** One file's exact bytes (Uint8Array), or null when missing — the skill editor sniffs text vs binary on them. */
+    async function getSkillFileBytes(dirName, relativePath, { asRobot = false } = {}) {
+        if (!dirName || !relativePath) return null;
+        if (await mode() === 'volume') return volumeFile(dirName, relativePath, asRobot);
+        const h = await window.localFs?.resolvePath(`skills/${dirName}/${relativePath}`, { kind: 'file' });
+        return h ? new Uint8Array(await (await h.getFile()).arrayBuffer()) : null;
+    }
+
     async function listUnder(dirName, prefix, ext, asRobot) {
         const files = await readSkillFiles(dirName, { asRobot, under: prefix });
         return Object.keys(files)
@@ -850,6 +858,37 @@
             for (const rel of Object.keys(files)) if (rel.startsWith('.wheels/')) delete files[rel];
         }
         return files;
+    }
+
+    /** Folder mode: [{ rel, size }] from directory handles; getFile() gives the size without reading the bytes. */
+    async function walkSizes(dirHandle, prefix, out) {
+        for await (const entry of dirHandle.values()) {
+            if (entry.name.startsWith('.') || entry.name === '__pycache__' || entry.name.endsWith('.pyc')) continue;
+            const p = prefix ? `${prefix}/${entry.name}` : entry.name;
+            if (entry.kind === 'directory') await walkSizes(entry, p, out);
+            else out.push({ rel: p, size: (await entry.getFile()).size });
+        }
+        return out;
+    }
+
+    /**
+     * [{ rel, size }] for one skill, SKILL.md first then byte order of rel; no file contents are read.
+     * Left out: .wheels/, __pycache__/, dot-files.
+     */
+    async function listSkillFiles(path, { asRobot = false } = {}) {
+        let rows;
+        if (await mode() === 'volume') {
+            const d = await api('GET', `/skills/listing?path=${enqPath(path)}${asRobot ? '&as=robot' : ''}`);
+            rows = ((d && d.files) || []).map((f) => ({ rel: f.rel, size: f.size }));
+        } else {
+            const dir = await window.localFs?.resolvePath(`skills/${path}`);
+            rows = dir ? await walkSizes(dir, '', []) : [];
+        }
+        const key = (r) => [r.rel === 'SKILL.md' ? 0 : 1, r.rel];
+        return rows.sort((a, b) => {
+            const [x, y] = [key(a), key(b)];
+            return x[0] - y[0] || (x[1] < y[1] ? -1 : x[1] > y[1] ? 1 : 0);
+        });
     }
 
     /**
@@ -1081,6 +1120,7 @@
         listSkillReferences,
         getSkillContent,
         getSkillFile,
+        getSkillFileBytes,
         createFolder,
         deleteFolder,
         renameFolder,
@@ -1091,6 +1131,7 @@
         edition,
         api,                 // authenticated backend call, unwraps {success,data}
         readSkillFiles,
+        listSkillFiles,
         writeSkillFile,
         writeSkillFiles,
         skillExists,

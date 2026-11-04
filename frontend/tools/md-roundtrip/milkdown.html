@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>md round-trip (Milkdown)</title>
+<!-- The SHIPPED editor module: same pinned Milkdown URLs, same tuned remark-stringify options, same setup. -->
+<script src="../../assets/js/skill-md-editor.js"></script>
+<script>
+  var S = window.SkillMdEditor;
+  // cfg = { tuned } : tuned = the shipped options (S.STRINGIFY); otherwise Milkdown's defaults.
+  function opts(cfg) { return { stringify: cfg && cfg.tuned ? undefined : null }; }
+
+  window.roundtrip = async function (md, cfg) {
+    try { return await S.roundtrip(md, opts(cfg)); }
+    catch (e) { return { error: String(e && e.message || e) }; }
+  };
+
+  // append a word to the end of the first top-level paragraph, then serialise
+  window.roundtripEdit = async function (md, cfg, word) {
+    var el = document.getElementById('ed'), ed = null;
+    el.innerHTML = '';
+    try {
+      var L = await S.load(), found = false;
+      ed = await S.make(el, md, opts(cfg));
+      ed.action(function (ctx) {
+        var view = ctx.get(L.core.editorViewCtx), pos = null;
+        view.state.doc.forEach(function (n, off) {
+          if (pos === null && n.type.name === 'paragraph' && n.content.size > 0) pos = off + n.nodeSize - 1;
+        });
+        if (pos !== null) { found = true; view.dispatch(view.state.tr.insertText(word, pos)); }
+      });
+      return found ? ed.action(L.utils.getMarkdown()) : null;
+    } catch (e) { return { error: String(e && e.message || e) }; }
+    finally { if (ed) await ed.destroy(); }
+  };
+  S.load().then(function () { window.ready = true; }, function (e) { window.loadError = String(e); });
+</script>
+<div id="ed"></div>

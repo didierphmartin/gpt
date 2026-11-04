@@ -56,12 +56,25 @@ final class SkillStoreControllerTest extends TestCase
     public function test_routes_404_in_folder_mode(): void
     {
         $c = $this->ctl(false);
-        foreach ([$c->list($this->req()), $c->files($this->req(['path' => 'a'])), $c->readFile($this->req(['path' => 'a', 'rel' => 'b'])),
+        foreach ([$c->list($this->req()), $c->files($this->req(['path' => 'a'])), $c->listing($this->req(['path' => 'a'])), $c->readFile($this->req(['path' => 'a', 'rel' => 'b'])),
                   $c->writeFile($this->req()), $c->import($this->req()), $c->visibility($this->req()),
                   $c->move($this->req()), $c->delete($this->req(['path' => 'a']))] as $r) {
             self::assertSame(404, $r['status_code']);
             self::assertSame('no skill store', $r['data']['message']);
         }
+    }
+
+    public function test_listing_returns_rel_and_size_only(): void
+    {
+        $c = $this->ctl();
+        $this->import($c, 'g/demo', 'hi');
+        $r = $c->listing($this->req(['path' => 'g/demo']));
+        self::assertTrue($r['success']);
+        self::assertSame(['files'], array_keys($r['data']));
+        self::assertSame(['SKILL.md'], array_column($r['data']['files'], 'rel'));
+        self::assertSame(['rel', 'size'], array_keys($r['data']['files'][0]));
+        self::assertStringNotContainsString('hi', json_encode($r['data']['files']) . '');
+        self::assertSame(404, $c->listing($this->req(['path' => 'g/demo'], [], 9))['status_code']);
     }
 
     public function test_list_names_the_owner_of_skills_that_are_not_mine(): void
