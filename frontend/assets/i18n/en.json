@@ -506,6 +506,21 @@
       "private": "\"{{name}}\" can't be made private: the public skill(s) {{dependents}} need it to run.",
       "public": "\"{{name}}\" needs \"{{dep}}\", which you can't make public.",
       "changed": "The skills that go public with \"{{name}}\" changed: {{dependents}}. Try again."
+    },
+    "export": {
+      "button": "Export",
+      "menu": "Export…",
+      "hint": "Export a skill as a .zip, with every skill it needs",
+      "title": "Export Skill",
+      "intro": "Saves the skill as a .zip with everything it needs to run elsewhere: the skills it requires and their Python libraries.",
+      "skill": "Skill",
+      "checking": "Checking what it needs…",
+      "skillsIncluded": "Skills included",
+      "librariesBundled": "{{list}} — bundled for the browser and for regular Python",
+      "exporting": "Exporting…",
+      "done": "Saved {{file}} ({{count}} skill(s)).",
+      "failed": "Export failed.",
+      "none": "There are no skills to export yet."
     }
   },
   "fileStorage": {

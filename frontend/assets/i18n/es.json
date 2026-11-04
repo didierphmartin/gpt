@@ -506,6 +506,21 @@
       "private": "No se puede hacer privada \"{{name}}\": la(s) habilidad(es) pública(s) {{dependents}} la necesita(n) para ejecutarse.",
       "public": "\"{{name}}\" necesita \"{{dep}}\", que no puedes hacer pública.",
       "changed": "Cambiaron las habilidades que se hacen públicas con \"{{name}}\": {{dependents}}. Inténtalo de nuevo."
+    },
+    "export": {
+      "button": "Exportar",
+      "menu": "Exportar…",
+      "hint": "Exportar una habilidad como .zip, con todas las habilidades que necesita",
+      "title": "Exportar habilidad",
+      "intro": "Guarda la habilidad como .zip con todo lo que necesita para funcionar en otro lugar: las habilidades que requiere y sus bibliotecas de Python.",
+      "skill": "Habilidad",
+      "checking": "Comprobando lo que necesita…",
+      "skillsIncluded": "Habilidades incluidas",
+      "librariesBundled": "{{list}} — incluidas para el navegador y para Python estándar",
+      "exporting": "Exportando…",
+      "done": "{{file}} guardado ({{count}} habilidad(es)).",
+      "failed": "La exportación falló.",
+      "none": "Todavía no hay habilidades para exportar."
     }
   },
   "fileStorage": {

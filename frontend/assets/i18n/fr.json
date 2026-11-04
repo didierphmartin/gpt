@@ -506,6 +506,21 @@
       "private": "Impossible de rendre « {{name}} » privée : la/les compétence(s) publique(s) {{dependents}} en a/ont besoin pour fonctionner.",
       "public": "« {{name}} » a besoin de « {{dep}} », que vous ne pouvez pas rendre publique.",
       "changed": "Les compétences rendues publiques avec « {{name}} » ont changé : {{dependents}}. Réessayez."
+    },
+    "export": {
+      "button": "Exporter",
+      "menu": "Exporter…",
+      "hint": "Exporter une compétence en .zip, avec toutes les compétences dont elle a besoin",
+      "title": "Exporter une compétence",
+      "intro": "Enregistre la compétence en .zip avec tout ce qu'il lui faut pour fonctionner ailleurs : les compétences requises et leurs bibliothèques Python.",
+      "skill": "Compétence",
+      "checking": "Vérification de ce dont elle a besoin…",
+      "skillsIncluded": "Compétences incluses",
+      "librariesBundled": "{{list}} — incluses pour le navigateur et pour Python standard",
+      "exporting": "Exportation…",
+      "done": "{{file}} enregistré ({{count}} compétence(s)).",
+      "failed": "L'exportation a échoué.",
+      "none": "Aucune compétence à exporter pour l'instant."
     }
   },
   "fileStorage": {

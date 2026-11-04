@@ -26,6 +26,7 @@ class SkillsManager {
         this.searchInput = document.getElementById('skills-search');
         this.newSkillBtn = document.getElementById('skills-new-btn');
         this.newFolderBtn = document.getElementById('skills-new-folder-btn');
+        this.exportBtn = document.getElementById('skills-export-btn');
         this.importBtn = document.getElementById('skills-import-btn');
         this.contextMenu = document.getElementById('skills-context-menu');
 
@@ -34,6 +35,9 @@ class SkillsManager {
         }
         if (this.newFolderBtn) {
             this.newFolderBtn.addEventListener('click', () => this.promptNewFolder());
+        }
+        if (this.exportBtn) {
+            this.exportBtn.addEventListener('click', () => this.showExportPicker());
         }
         if (this.importBtn) {
             this.importBtn.addEventListener('click', () => this.showImportPicker());
@@ -724,6 +728,8 @@ class SkillsManager {
             el.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
                 this.contextTarget = { type: 'skill', id: el.dataset.skillId };
+                const picked = this.findSkillByDatasetId(el.dataset.skillId);
+                if (picked?.dir_name) this.lastSkillDir = picked.dir_name;   // Export preselects it
                 this.showContextMenu(e.clientX, e.clientY, 'skill');
             });
 
@@ -1167,6 +1173,8 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         if (moveItem) moveItem.classList.toggle('hidden', type !== 'skill');
         if (renameItem) renameItem.classList.toggle('hidden', false);
         if (optimizeItem) optimizeItem.classList.toggle('hidden', type !== 'skill');
+        // Export: a skill (any you can see).
+        this.contextMenu.querySelector('[data-action="export"]')?.classList.toggle('hidden', type !== 'skill');
         // Someone else's public skill: no rename / delete / move / optimize.
         const target = type === 'skill' ? this.findSkillByDatasetId(this.contextTarget?.id) : null;
         if (target && target.mine === false) {
@@ -1220,6 +1228,10 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         if (action === 'edit' && type === 'skill') {
             const skill = this.findSkillByDatasetId(id);
             if (skill) this.showSkillEditor(skill);
+
+        } else if (action === 'export' && type === 'skill') {
+            const skill = this.findSkillByDatasetId(id);
+            if (skill) this.showExportPicker(skill.dir_name);
 
         } else if (action === 'move' && type === 'skill') {
             const skill = this.findSkillByDatasetId(id);
@@ -1512,6 +1524,141 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
         });
     }
 
+    // ===================== Export =====================
+
+    /**
+     * Export dialog: choose a skill (preselected: the one passed, else the last one opened), see what the zip will
+     * hold — the skill and every skill it requires, with their libraries — choose where to save, then Export.
+     * The zip is SkillZip's self-contained format (skillsImport.exportSkillZip), so an import brings it all back.
+     */
+    async showExportPicker(preselect = null) {
+        document.getElementById('skills-export-modal')?.remove();
+        const t = this.t;
+        const esc = (v) => String(v).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        const skills = [...(this.skills || [])].sort((a, b) => String(a.dir_name).localeCompare(String(b.dir_name)));
+        if (!skills.length) { alert(t('skills.export.none')); return; }
+        const initial = [preselect, this.lastSkillDir].find((d) => d && skills.some((s) => s.dir_name === d)) || skills[0].dir_name;
+
+        const modal = document.createElement('div');
+        modal.id = 'skills-export-modal';
+        modal.className = 'fixed inset-0 z-[200] flex items-center justify-center';
+        modal.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+        modal.innerHTML = `
+            <div class="bg-white rounded-xl shadow-xl border border-gray-200 w-full max-w-md mx-4 p-5 text-xs text-gray-700 space-y-3">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-base font-semibold text-gray-800">${esc(t('skills.export.title'))}</h3>
+                    <button data-export="close" class="p-1.5 text-gray-500 hover:text-gray-700 rounded">&#10005;</button>
+                </div>
+                <p class="text-gray-500">${esc(t('skills.export.intro'))}</p>
+                <label class="block">
+                    <span class="block text-gray-500 mb-1">${esc(t('skills.export.skill'))}</span>
+                    <select data-export="skill" class="w-full px-2 py-1.5 border border-gray-300 rounded-lg text-sm">
+                        ${skills.map((s) => `<option value="${esc(s.dir_name)}"${s.dir_name === initial ? ' selected' : ''}>${esc(s.dir_name)}</option>`).join('')}
+                    </select>
+                </label>
+                <div data-export="details" class="border border-gray-200 rounded-lg p-3 space-y-1.5"></div>
+                <div data-export="status" class="hidden px-3 py-2 rounded-lg border"></div>
+                <div class="flex justify-end gap-2 pt-1">
+                    <button type="button" data-export="cancel" class="px-3 py-1.5 text-gray-600 border border-gray-300 hover:bg-gray-100 rounded">${esc(t('common.cancel'))}</button>
+                    <button type="button" data-export="go" class="px-3 py-1.5 text-white bg-blue-600 hover:bg-blue-700 rounded disabled:opacity-50">${esc(t('skills.export.button'))}</button>
+                </div>
+            </div>`;
+        document.body.appendChild(modal);
+
+        const q = (k) => modal.querySelector(`[data-export="${k}"]`);
+        const close = () => modal.remove();
+        q('close').addEventListener('click', close);
+        q('cancel').addEventListener('click', close);
+        modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+        const status = (text, kind = 'info') => {
+            const el = q('status');
+            el.classList.toggle('hidden', !text);
+            el.className = 'px-3 py-2 rounded-lg border ' + (kind === 'error' ? 'bg-red-50 border-red-200 text-red-800'
+                : kind === 'ok' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-blue-50 border-blue-200 text-blue-800')
+                + (text ? '' : ' hidden');
+            el.textContent = text || '';
+        };
+        const row = (label, value) => `<div class="flex gap-2"><span class="w-24 shrink-0 text-gray-500">${esc(label)}</span><span class="min-w-0 break-words">${value}</span></div>`;
+
+        // What the zip will hold for the chosen skill: the skills it requires (dependencies first) and libraries.
+        let ready = false;
+        const describe = async () => {
+            const dir = q('skill').value;
+            ready = false;
+            q('go').disabled = true;
+            status('');
+            q('details').innerHTML = `<div class="text-gray-400">${esc(t('skills.export.checking'))}</div>`;
+            try {
+                const files = await window.skillsFs.readSkillFiles(dir);
+                const md = files['SKILL.md'] ? new TextDecoder().decode(files['SKILL.md']) : '';
+                const requires = await window.skillsImport.readRequires(dir, files);
+                const libs = new Set(window.SkillZip?.skillDependencies ? window.SkillZip.skillDependencies(md) : []);
+                for (const r of requires) {
+                    const rmd = r.files && r.files['SKILL.md'] ? new TextDecoder().decode(r.files['SKILL.md']) : '';
+                    for (const d of (window.SkillZip?.skillDependencies ? window.SkillZip.skillDependencies(rmd) : [])) libs.add(d);
+                }
+                if (q('skill').value !== dir) return;   // changed meanwhile
+                q('details').innerHTML = [
+                    row(t('skills.export.skillsIncluded'), esc([dir, ...requires.map((r) => r.dir)].join(', '))),
+                    row(t('skills.import.libraries'), esc(libs.size ? t('skills.export.librariesBundled', { list: [...libs].join(', ') }) : t('skills.import.noLibraries'))),
+                ].join('');
+                ready = true;
+                q('go').disabled = false;
+            } catch (e) {
+                if (q('skill').value !== dir) return;
+                q('details').innerHTML = '';
+                status(e.message || String(e), 'error');
+            }
+        };
+        q('skill').addEventListener('change', describe);
+        await describe();
+
+        q('go').addEventListener('click', async () => {
+            if (!ready) return;
+            const dir = q('skill').value;
+            const leaf = dir.split('/').pop();
+            // Ask where to save first, while this click still counts as a user gesture.
+            let handle = null;
+            if (typeof window.showSaveFilePicker === 'function') {
+                try {
+                    handle = await window.showSaveFilePicker({ suggestedName: `${leaf}.zip`,
+                        types: [{ description: 'Skill zip', accept: { 'application/zip': ['.zip'] } }] });
+                } catch (e) {
+                    if (e?.name === 'AbortError') return;
+                    handle = null;
+                }
+            }
+            q('go').disabled = true;
+            q('skill').disabled = true;
+            status(t('skills.export.exporting'));
+            const result = await window.skillsImport.exportSkillZip(dir, {
+                onProgress: (stage) => status(t('skills.zip.progress.' + stage)),
+            });
+            q('skill').disabled = false;
+            if (!result?.ok) {
+                q('go').disabled = false;
+                status(result?.error || t('skills.export.failed'), 'error');
+                return;
+            }
+            const blob = new Blob([result.bytes], { type: 'application/zip' });
+            let savedAs = `${result.name}.zip`;
+            if (handle) {
+                const w = await handle.createWritable();
+                await w.write(blob);
+                await w.close();
+                savedAs = handle.name;
+            } else {
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = savedAs;
+                a.click();
+                setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+            }
+            status(t('skills.export.done', { file: savedAs, count: 1 + (result.requires || []).length }), 'ok');
+            setTimeout(close, 1800);
+        });
+    }
+
     // ===================== Skill Editor Modal =====================
 
     /**
@@ -1519,6 +1666,7 @@ ln -s ~/.agents/skills/* ~/Documents/synergyAI/skills/</code></pre>
      * @param {Object|null} skill - existing skill to edit, or null for new
      */
     async showSkillEditor(skill = null) {
+        if (skill?.dir_name) this.lastSkillDir = skill.dir_name;   // Export preselects it
         // Remove any existing editor modal
         document.getElementById('skill-editor-modal')?.remove();
 

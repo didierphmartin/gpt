@@ -2480,15 +2480,18 @@
                     <!-- Skills View (hidden by default) -->
                     <div id="skills-view" class="h-full hidden bg-gray-200 flex flex-col">
                         <div class="flex-shrink-0 px-2 py-2 border-b border-gray-200 bg-gray-200 flex flex-col gap-2">
-                            <div class="flex gap-1">
-                                <button id="skills-new-btn" class="flex-1 text-blue-600 hover:text-blue-700 text-xs font-medium py-1 px-2 bg-blue-50 hover:bg-blue-100 rounded transition">
-                                    ➕ <span data-i18n="skills.newSkill">New Skill</span>
+                            <div class="grid grid-cols-4 gap-1">
+                                <button id="skills-new-btn" class="flex flex-col items-center justify-center gap-0.5 text-[11px] leading-tight font-medium py-1.5 px-1 rounded transition text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100">
+                                    <span>➕</span><span data-i18n="skills.newSkill">New Skill</span>
                                 </button>
-                                <button id="skills-import-btn" class="text-indigo-600 hover:text-indigo-700 text-xs font-medium py-1 px-2 bg-indigo-50 hover:bg-indigo-100 rounded transition" title="Import a skill from a folder or .zip file">
-                                    ⬆️ <span>Import</span>
+                                <button id="skills-new-folder-btn" class="flex flex-col items-center justify-center gap-0.5 text-[11px] leading-tight font-medium py-1.5 px-1 rounded transition text-gray-600 hover:text-gray-700 bg-gray-50 hover:bg-gray-100">
+                                    <span>📁</span><span data-i18n="skills.newCategory">New Folder</span>
                                 </button>
-                                <button id="skills-new-folder-btn" class="text-gray-600 hover:text-gray-700 text-xs font-medium py-1 px-2 bg-gray-50 hover:bg-gray-100 rounded transition">
-                                    📁 <span data-i18n="skills.newCategory">New Folder</span>
+                                <button id="skills-import-btn" class="flex flex-col items-center justify-center gap-0.5 text-[11px] leading-tight font-medium py-1.5 px-1 rounded transition text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100" title="Import a skill from a folder or .zip file">
+                                    <span>⬆️</span><span>Import</span>
+                                </button>
+                                <button id="skills-export-btn" class="flex flex-col items-center justify-center gap-0.5 text-[11px] leading-tight font-medium py-1.5 px-1 rounded transition text-gray-600 hover:text-gray-700 bg-gray-50 hover:bg-gray-100" data-i18n-title="skills.export.hint" title="Export a skill as a .zip, with every skill it needs">
+                                    <span>⬇️</span><span data-i18n="skills.export.button">Export</span>
                                 </button>
                             </div>
                             <input id="skills-search" type="text" class="w-full text-xs border border-gray-300 rounded px-2 py-1"
@@ -4233,6 +4236,9 @@
         <button class="skills-menu-item w-full text-left px-4 py-2 text-xs hover:bg-gray-100 transition" data-action="edit">
             ✏️ Edit
         </button>
+        <button class="skills-menu-item w-full text-left px-4 py-2 text-xs hover:bg-gray-100 transition" data-action="export">
+            ⬇️ <span data-i18n="skills.export.menu">Export…</span>
+        </button>
         <button class="skills-menu-item w-full text-left px-4 py-2 text-xs hover:bg-gray-100 transition" data-action="move">
             📁 Move to folder…
         </button>
@@ -4398,7 +4404,7 @@
          imports. Loaded from jsDelivr; ~8KB gzipped. -->
     <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
     <script src="assets/js/skills-import.js?v=20261103-folderdeps"></script>
-    <script src="assets/js/skills-manager.js?v=20261103-folderdeps"></script>
+    <script src="assets/js/skills-manager.js?v=20261103-export-4btn"></script>
     <script src="assets/js/skillopt-panel.js?v=20261103-skillsfs-fix1"></script>
     <script src="assets/js/heal-panel.js?v=20260929-catalog-ids"></script>
     <script src="assets/js/genesis-panel.js?v=20261103-skillsfs-callers"></script>
