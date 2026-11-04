@@ -2,27 +2,173 @@
 <meta charset="utf-8">
 <title>md round-trip</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@toast-ui/editor@3.2.2/dist/toastui-editor.min.css">
-<div id="ed"></div>
 <!-- the UMD build needs prosemirror globals; the jsDelivr +esm build bundles them -->
 <script type="module">
   import Editor from "https://cdn.jsdelivr.net/npm/@toast-ui/editor@3.2.2/+esm";
-  // window.roundtrip(md, options) -> markdown after markdown -> WYSIWYG -> markdown.
-  // options are passed to the Editor constructor (used to try fidelity-improving settings).
-  window.roundtrip = function (md, options) {
+
+  // ---- fidelity fixes, each switchable: cfg = { hr, text, tableDelim, listIndent, sanitizer, html, softbreak } ----
+  var reInlineCode = /`/;
+
+  // Escape only what would change meaning when the text is parsed again. Toast's own common_escape
+  // escapes far more (intra-word _, "1." in a heading, "-" "," "." in prose, ...).
+  function minimalEscape(text, ctx) {
+    var t = text.replace(/\\(?=[!"#$%&'()*+,\-.\/:;<=>?@\[\]\\^_`{|}~])/g, '\\\\'); // a literal backslash before punctuation stays literal
+    // emphasis / strike / code delimiters
+    t = t.replace(/[*~`]/g, '\\$&');
+    t = t.replace(/(^|[^A-Za-z0-9])_|_(?=[^A-Za-z0-9]|$)/g, function (m) { return m.replace('_', '\\_'); }); // _ at a word edge only
+    if (ctx.inTable) t = t.replace(/\|/g, '\\|');
+        // block markers only at the start of a line in a plain paragraph
+    if (ctx.lineStart && ctx.parent === 'paragraph') {
+      t = t.replace(/^(#{1,6})(?= )/, '\\$1').replace(/^(\s*)([-+*]|\d+[.)])(?= )/, function (m, a, b) { return a + b.replace(/[.)]$/, '\\$&').replace(/^[-+]$/, '\\$&'); }).replace(/^>/, '\\>');
+    }
+    return t;
+  }
+
+  function applyFixes(ed, cfg) {
+    var nt = ed.convertor.toMdConvertors.nodeTypeConvertors;
+    if (cfg.text) {
+      var baseText = nt.text;
+      nt.text = function (state, info) {
+        var node = info.node, marks = node.marks || [];
+        if (marks.some(function (m) { return m.type.name === 'link'; })) return baseText(state, info);
+        var parent = info.parent ? info.parent.type.name : '';
+        var lines = (node.text || '').split('\n');
+        for (var i = 0; i < lines.length; i++) {
+          state.write();
+          var lineStart = i > 0 || info.index === 0 || /(^|\n)$/.test(state.result);
+          state.result += minimalEscape(lines[i], { inTable: state.inTable, parent: parent, lineStart: lineStart, html: cfg.html });
+          if (i !== lines.length - 1) state.result += '\n';
+        }
+      };
+    }
+    if (cfg.html) {
+      // unknown inline tags (<path>, <name>, ...) are silently dropped by the md->wysiwyg converter: keep them as text
+      var tw = ed.convertor.toWwConvertors, baseHtml = tw.htmlInline;
+      tw.htmlInline = function (state, node, ctx) {
+        var top = state.stack[state.stack.length - 1];
+        var before = [state.stack.length, top.content.length, state.marks];
+        baseHtml(state, node, ctx);
+        var t2 = state.stack[state.stack.length - 1];
+        if (state.stack.length === before[0] && t2.content.length === before[1] && state.marks === before[2]) state.addText(node.literal);
+      };
+    }
+    if (cfg.softbreak) {
+      // A line break inside **bold** / *emphasis* / a link is dropped by md->wysiwyg ("one\nassistant" -> "oneassistant"),
+      // and a "\n" kept inside a marked text node is truncated by the wysiwyg->md writer (its whitespace-expelling regex
+      // is single-line). So: keep the "\n" in the document, swap it for a private-use placeholder just for serialisation,
+      // and write the placeholder as a real line break (with the current quote / list prefix).
+      var tw2 = ed.convertor.toWwConvertors, baseSoft = tw2.softbreak;
+      tw2.softbreak = function (state, node, ctx) {
+        if (node.parent && node.parent.type !== 'paragraph') state.addText('\n');
+        else baseSoft(state, node, ctx);
+      };
+      var prevText = nt.text;
+      nt.text = function (state, info) {
+        var t = info.node.text || '';
+        if (t.indexOf('\uE000') < 0) return prevText(state, info);
+        t.split('\uE000').forEach(function (seg, i) {
+          if (i) state.result += '\n';
+          if (seg) prevText(state, { node: info.node.type.schema.text(seg, info.node.marks), parent: info.parent, index: info.index });
+          else state.write();
+        });
+      };
+      var baseToMd = ed.convertor.toMarkdownText.bind(ed.convertor);
+      var swap = function (n) {
+        if (n.isText) return n.marks.length && n.text.indexOf('\n') >= 0 ? n.type.schema.text(n.text.replace(/\n/g, '\uE000'), n.marks) : n;
+        if (!n.content.size) return n;
+        var kids = []; n.content.forEach(function (c) { kids.push(swap(c)); });
+        return n.copy(n.content.constructor.fromArray(kids));
+      };
+      ed.convertor.toMarkdownText = function (doc) { return baseToMd(swap(doc)); };
+    }
+    if (cfg.html) {
+      // a block of HTML with an unknown tag (<HARD-GATE>...</HARD-GATE>) loses its tags and gets its markdown escaped:
+      // keep it verbatim as an htmlComment block (which the md writer prints as-is)
+      var tw3 = ed.convertor.toWwConvertors, baseBlock = tw3.htmlBlock;
+      tw3.htmlBlock = function (state, node) {
+        var m = /^<\/?([A-Za-z][\w:-]*)/.exec(node.literal || '');
+        var tag = m && m[1].toLowerCase();
+        var unknown = tag && !state.schema.nodes[tag] && (tag.indexOf('-') >= 0 || document.createElement(tag) instanceof HTMLUnknownElement);
+        if (unknown) {
+          state.openNode(state.schema.nodes.htmlComment);
+          state.addText(node.literal.replace(/\n+$/, ''));
+          state.closeNode();
+        } else baseBlock(state, node);
+      };
+    }
+    if (cfg.listIndent) {
+      // continuation lines indented by the marker width, not a fixed 4 spaces
+      nt.bulletList = function (state, info) {
+        state.convertList(info.node, '  ', function () { return '- '; });
+      };
+      nt.orderedList = function (state, info) {
+        var start = info.node.attrs.order || 1;
+        state.convertList(info.node, ' '.repeat(String(start).length + 2), function (i) { return (start + i) + '. '; });
+      };
+    }
+  }
+
+  function buildOptions(cfg) {
+    var o = {};
+    var cmr = {};
+    if (cfg.hr) cmr.thematicBreak = function () { return { delim: '---' }; };
+    if (cfg.tableDelim) cmr.tableHead = function (info) {
+      var row = info.node.firstChild, d = '';
+      if (row) row.forEach(function (c) {
+        var a = c.attrs.align;
+        d += '| ' + (a === 'left' ? ':---' : a === 'right' ? '---:' : a === 'center' ? ':---:' : '---') + ' ';
+      });
+      return { delim: d };
+    };
+    if (Object.keys(cmr).length) o.customMarkdownRenderer = cmr;
+    if (cfg.sanitizer) o.customHTMLSanitizer = function (html) { return html; };
+    return o;
+  }
+
+  function make(md, cfg) {
     var el = document.getElementById('ed');
     el.innerHTML = '';
-    var opts = Object.assign({}, options || {});
-    if (opts.__hrDashes) { delete opts.__hrDashes; opts.customMarkdownRenderer = { thematicBreak: function () { return { delim: '---' }; } }; }
     var ed = new Editor(Object.assign({
       el: el, height: '400px', initialEditType: 'markdown', previewStyle: 'tab',
       usageStatistics: false, initialValue: md
-    }, opts));
+    }, buildOptions(cfg || {})));
+    applyFixes(ed, cfg || {});
+    return ed;
+  }
+
+  // markdown -> WYSIWYG -> markdown
+  window.roundtrip = function (md, cfg) {
+    try { return rt1(md, cfg); } catch (e) { return { error: String(e && e.message || e) }; }
+  };
+  function rt1(md, cfg) {
+    var ed = make(md, cfg);
     ed.setMarkdown(md);
     ed.changeMode('wysiwyg', true);
     ed.changeMode('markdown', true);
     var out = ed.getMarkdown();
     ed.destroy();
     return out;
+  }
+
+  // same, but append a word to the first top-level paragraph in WYSIWYG before converting back
+  window.roundtripEdit = function (md, cfg, word) {
+    try { return edit1(md, cfg, word); } catch (e) { return { error: String(e && e.message || e) }; }
   };
+  function edit1(md, cfg, word) {
+    var ed = make(md, cfg);
+    ed.setMarkdown(md);
+    ed.changeMode('wysiwyg', true);
+    var view = ed.wwEditor.view, doc = view.state.doc, pos = null;
+    doc.forEach(function (n, off) {
+      if (pos === null && n.type.name === 'paragraph' && n.content.size > 0) pos = off + n.nodeSize - 1;
+    });
+    if (pos === null) { ed.destroy(); return null; }
+    view.dispatch(view.state.tr.insertText(word, pos));
+    ed.changeMode('markdown', true);
+    var out = ed.getMarkdown();
+    ed.destroy();
+    return out;
+  }
   window.ready = true;
 </script>
+<div id="ed"></div>
