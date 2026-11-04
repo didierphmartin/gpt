@@ -6,26 +6,37 @@
 <script type="module">
   import Editor from "https://cdn.jsdelivr.net/npm/@toast-ui/editor@3.2.2/+esm";
 
-  // ---- fidelity fixes, each switchable: cfg = { hr, text, tableDelim, listIndent, sanitizer, html, softbreak } ----
-  var reInlineCode = /`/;
+  // ---- fidelity fixes, each switchable: cfg = { hr, text, tableDelim, listIndent, sanitizer, html, softbreak, deepHeading } ----
 
-  // Escape only what would change meaning when the text is parsed again. Toast's own common_escape
-  // escapes far more (intra-word _, "1." in a heading, "-" "," "." in prose, ...).
+  // Escape what would change meaning when the text is parsed again - and only that. Toast's own common_escape
+  // also escapes intra-word _, "1." in a heading, "-" "," "." in prose, ...
+  //  ctx.blockStart: the text starts a line of a paragraph (so a block marker would be live there)
+  //  ctx.inTable: inside a table cell (| must be escaped, block markers do not apply)
+  var PUNCT = '!"#$%&\'()*+,\\-./:;<=>?@\\[\\]\\\\^_`{|}~';
   function minimalEscape(text, ctx) {
-    var t = text.replace(/\\(?=[!"#$%&'()*+,\-.\/:;<=>?@\[\]\\^_`{|}~])/g, '\\\\'); // a literal backslash before punctuation stays literal
-    // emphasis / strike / code delimiters
-    t = t.replace(/[*~`]/g, '\\$&');
-    t = t.replace(/(^|[^A-Za-z0-9])_|_(?=[^A-Za-z0-9]|$)/g, function (m) { return m.replace('_', '\\_'); }); // _ at a word edge only
+    var t = text;
+    // a literal backslash that would otherwise escape the next character (or hard-break at the end of a line)
+    t = t.replace(new RegExp('\\\\(?=[' + PUNCT + ']|$)', 'g'), '\\\\');
+    t = t.replace(/[*~`\[\]]/g, '\\$&');                                         // emphasis, strike, code, link brackets
+    t = t.replace(/(^|[^\p{L}\p{N}])_|_(?=[^\p{L}\p{N}]|$)/gu, function (m) { return m.replace('_', '\\_'); }); // _ at a word edge
+    t = t.replace(/<(?=[A-Za-z\/!?])/g, '\\<');                                  // would open a tag / autolink / comment
+    t = t.replace(/&(?=#?\w+;)/g, '\\&');                                        // would be read as an entity
     if (ctx.inTable) t = t.replace(/\|/g, '\\|');
-        // block markers only at the start of a line in a plain paragraph
-    if (ctx.lineStart && ctx.parent === 'paragraph') {
-      t = t.replace(/^(#{1,6})(?= )/, '\\$1').replace(/^(\s*)([-+*]|\d+[.)])(?= )/, function (m, a, b) { return a + b.replace(/[.)]$/, '\\$&').replace(/^[-+]$/, '\\$&'); }).replace(/^>/, '\\>');
+    if (ctx.blockStart && !ctx.inTable) {
+      t = t.replace(/^ {2,}/, ' ');                                              // 4+ spaces would be an indented code block
+      t = t.replace(/^(\s?)(#{1,6})(?=[ \t]|$)/, '$1\\$2');                      // ATX heading
+      t = t.replace(/^(\s?)([-+])(?=[ \t]|$)/, '$1\\$2');                        // bullet / rule
+      t = t.replace(/^(\s?)(-{2,}|={1,})\s*$/, function (m, sp, run) { return sp + '\\' + run; }); // rule / setext underline
+      t = t.replace(/^(\s?)>/, '$1\\>');                                         // blockquote
+      t = t.replace(/^(\s?)(\d{1,9})([.)])(?=[ \t]|$)/, '$1$2\\$3');             // ordered list
     }
     return t;
   }
 
   function applyFixes(ed, cfg) {
     var nt = ed.convertor.toMdConvertors.nodeTypeConvertors;
+    // Toast turns on disallowDeepHeading: "> ## H" and "- ## H" become literal text. Allow headings there.
+    if (cfg.deepHeading) ed.toastMark.parser.options.disallowDeepHeading = false;
     if (cfg.text) {
       var baseText = nt.text;
       nt.text = function (state, info) {
@@ -35,8 +46,8 @@
         var lines = (node.text || '').split('\n');
         for (var i = 0; i < lines.length; i++) {
           state.write();
-          var lineStart = i > 0 || info.index === 0 || /(^|\n)$/.test(state.result);
-          state.result += minimalEscape(lines[i], { inTable: state.inTable, parent: parent, lineStart: lineStart, html: cfg.html });
+          var blockStart = parent === 'paragraph' && (i > 0 || info.lineStart || info.index === 0);
+          state.result += minimalEscape(lines[i], { inTable: state.inTable, blockStart: blockStart });
           if (i !== lines.length - 1) state.result += '\n';
         }
       };
@@ -62,38 +73,35 @@
         if (node.parent && node.parent.type !== 'paragraph') state.addText('\n');
         else baseSoft(state, node, ctx);
       };
-      var prevText = nt.text;
+      // hard break (two trailing spaces / backslash): the document has no node for it and Toast drops it ("a\nb" -> "ab").
+      // Keep it as two trailing spaces before the same split a soft break makes.
+      tw2.linebreak = function (state, node, ctx) {
+        if (node.parent && node.parent.type !== 'paragraph') state.addText('  \n');
+        else { state.addText('  '); baseSoft(state, node, ctx); }
+      };
+      var prevText = nt.text, PH = String.fromCharCode(0xE000);
       nt.text = function (state, info) {
         var t = info.node.text || '';
-        if (t.indexOf('\uE000') < 0) return prevText(state, info);
-        t.split('\uE000').forEach(function (seg, i) {
+        if (t.indexOf(PH) < 0) return prevText(state, info);
+        t.split(PH).forEach(function (seg, i) {
           if (i) state.result += '\n';
-          if (seg) prevText(state, { node: info.node.type.schema.text(seg, info.node.marks), parent: info.parent, index: info.index });
+          if (seg) prevText(state, { node: info.node.type.schema.text(seg, info.node.marks), parent: info.parent, index: info.index, lineStart: i > 0 });
           else state.write();
         });
       };
       var baseToMd = ed.convertor.toMarkdownText.bind(ed.convertor);
       var swap = function (n) {
-        if (n.isText) return n.marks.length && n.text.indexOf('\n') >= 0 ? n.type.schema.text(n.text.replace(/\n/g, '\uE000'), n.marks) : n;
+        if (n.isText) return n.marks.length && n.text.indexOf('\n') >= 0 ? n.type.schema.text(n.text.split('\n').join(PH), n.marks) : n;
         if (!n.content.size) return n;
         var kids = []; n.content.forEach(function (c) { kids.push(swap(c)); });
         return n.copy(n.content.constructor.fromArray(kids));
       };
-      ed.convertor.toMarkdownText = function (doc) { return baseToMd(swap(doc)); };
-    }
-    if (cfg.html) {
-      // a block of HTML with an unknown tag (<HARD-GATE>...</HARD-GATE>) loses its tags and gets its markdown escaped:
-      // keep it verbatim as an htmlComment block (which the md writer prints as-is)
-      var tw3 = ed.convertor.toWwConvertors, baseBlock = tw3.htmlBlock;
-      tw3.htmlBlock = function (state, node) {
-        var m = /^<\/?([A-Za-z][\w:-]*)/.exec(node.literal || '');
-        var tag = m && m[1].toLowerCase();
-        var unknown = tag && !state.schema.nodes[tag] && (tag.indexOf('-') >= 0 || document.createElement(tag) instanceof HTMLUnknownElement);
-        if (unknown) {
-          state.openNode(state.schema.nodes.htmlComment);
-          state.addText(node.literal.replace(/\n+$/, ''));
-          state.closeNode();
-        } else baseBlock(state, node);
+      ed.convertor.toMarkdownText = function (doc) {
+        // the placeholder is a private-use character that does not occur anywhere in this document
+        var all = doc.textContent, cp = 0xE000;
+        while (all.indexOf(String.fromCharCode(cp)) >= 0) cp++;
+        PH = String.fromCharCode(cp);
+        return baseToMd(swap(doc));
       };
     }
     if (cfg.listIndent) {

@@ -1,70 +1,62 @@
-// mergeBlocks(originalMd, editedMd) -> md
+// merge(originalMd, editedMd, m) -> { md, merged, reason }      mergeBlocks(...) -> md
 // Block-level merge for the skill editor's save: top-level markdown blocks the editor did not change keep the
 // ORIGINAL bytes; changed / inserted blocks take the edited markdown; deleted blocks disappear.
-// UMD: window.mergeBlocks (needs window.marked) or require('./merge-blocks.js') with a lexer passed in.
+//
+// "Unchanged" means: the block RENDERS to the same HTML. That folds away exactly the differences that have no
+// meaning (emphasis style * vs _, list marker, hr style, setext vs atx heading, table padding / dash width,
+// <u> vs [u](u), `a_b` vs `a\_b`, ...) and nothing that has: code indentation, nested list indentation,
+// <br>, hard breaks, escapes that change what is literal, link targets, heading levels, task state ... all change
+// the HTML, so such a block counts as changed and the edited version wins.
+//
+// `m` is the marked module ({ lexer, parse }); in the browser it defaults to window.marked.
+// If the lexer does not account for every byte of either text (reference definitions `[x]: url` are not tokens in
+// marked 11), the merge is refused: md is the edited text and reason says why. Callers can show that.
+// UMD: window.MergeBlocks = { merge, mergeBlocks, keyOf }.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.mergeBlocks = factory().mergeBlocks;
+  else root.MergeBlocks = factory();
 }(typeof self !== 'undefined' ? self : this, function () {
-  // Comparison key of a block: token type + raw text with the differences the editor introduces on its own
-  // folded away (whitespace, backslash escapes, list marker, hr style, emphasis style, table padding/dash width, <br>).
-  // Nothing else is folded: any other character change makes the block "changed".
-  function keyOf(tok) {
-    var t = tok.raw.replace(/\r\n/g, '\n');
-    t = t.replace(/\\([!"#$%&'()*+,\-.\/:;<=>?@\[\]\\^_`{|}~])/g, '$1');
-    t = t.replace(/<br>/g, '');
-    // inline code: same content, whatever backtick fence / padding the editor chose
-    t = t.replace(/(`+)([\s\S]*?[^`])\1(?!`)/g, function (m, f, c) { return '`' + c.replace(/^ (.*) $/, '$1') + '`'; });
-    // autolink <u> and [u](u) are the same link
-    t = t.replace(/\[([^\]\s]+)\]\(\1\)/g, '<$1>');
-    if (tok.type === 'blockquote') t = t.split('\n').filter(function (l) { return !/^\s*(>\s*)+$/.test(l); }).map(function (l) { return l.replace(/^\s*(>\s*)+/, ''); }).join('\n');
-    if (tok.type === 'code') return 'code|' + (tok.lang || '') + '|' + (tok.text || '').replace(/^\s+|\s+$/gm, '');
-    if (tok.type === 'hr') return 'hr';
-    if (tok.type === 'table') {
-      t = t.split('\n').map(function (l) {
-        if (/^\s*\|[\s:|-]+\|\s*$/.test(l)) return '|' + l.replace(/[^:|]/g, '').replace(/\s/g, '');
-        return l.replace(/\s*\|\s*/g, '|').trim();
-      }).join('\n');
-    }
-    t = t.replace(/^(\s*)[*+](\s)/gm, '$1-$2');
-    t = t.replace(/(^|[^\w])_([^_\n]+)_(?=[^\w]|$)/g, '$1*$2*').replace(/__([^_\n]+)__/g, '**$1**');
-    return tok.type + '|' + t.replace(/\s+/g, ' ').trim();
+  function keyOf(tok, m) {
+    if (tok.type === 'space') return 'space';
+    return tok.type + '|' + m.parse(tok.raw);
   }
 
-  // groups: each content token plus the blank-line (space) tokens that follow it; a leading space is its own group
-  function groups(md, lexer) {
-    var toks = lexer(md), out = [], cur = null;
-    toks.forEach(function (tk) {
+  // each content token plus the blank-line (space) tokens that follow it; leading blank lines are their own group
+  function groups(md, m) {
+    var out = [], cur = null;
+    m.lexer(md).forEach(function (tk) {
       if (tk.type === 'space' && cur) { cur.raw += tk.raw; return; }
-      cur = { tok: tk, raw: tk.raw, key: tk.type === 'space' ? 'space' : keyOf(tk) };
+      cur = { raw: tk.raw, key: keyOf(tk, m) };
       out.push(cur);
     });
     return out;
   }
 
-  function mergeBlocks(originalMd, editedMd, lexer) {
-    lexer = lexer || (typeof marked !== 'undefined' ? function (s) { return marked.lexer(s); } : null);
-    var A = groups(originalMd, lexer), B = groups(editedMd, lexer);
-    // links defined by reference ([x]: url) are not tokens; if the lexer dropped bytes, do not guess
-    if (A.map(function (g) { return g.raw; }).join('') !== originalMd) return editedMd;
-    var n = A.length, m = B.length, dp = [], i, j;
-    for (i = 0; i <= n; i++) dp.push(new Array(m + 1).fill(0));
-    for (i = n - 1; i >= 0; i--) for (j = m - 1; j >= 0; j--)
+  function merge(originalMd, editedMd, m) {
+    m = m || (typeof marked !== 'undefined' ? marked : null);
+    var A = groups(originalMd, m), B = groups(editedMd, m);
+    function joined(g) { return g.map(function (x) { return x.raw; }).join(''); }
+    if (joined(A) !== originalMd) return { md: editedMd, merged: false, reason: 'original has markdown the block lexer drops (reference definition?)' };
+    if (joined(B) !== editedMd) return { md: editedMd, merged: false, reason: 'edited text has markdown the block lexer drops (reference definition?)' };
+    var n = A.length, k = B.length, dp = [], i, j;
+    for (i = 0; i <= n; i++) dp.push(new Array(k + 1).fill(0));
+    for (i = n - 1; i >= 0; i--) for (j = k - 1; j >= 0; j--)
       dp[i][j] = A[i].key === B[j].key ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-    var out = '', prevFromOriginal = true; i = 0; j = 0;
-    // leading blank lines of the original are kept as they are (the editor drops them)
-    if (A.length && A[0].key === 'space') { out = A[0].raw; i = 1; if (B.length && B[0].key === 'space') j = 1; }
+    var out = '', prevOrig = true; i = 0; j = 0;
+    if (A.length && A[0].key === 'space') { out = A[0].raw; i = 1; if (B.length && B[0].key === 'space') j = 1; } // leading blank lines stay
     function push(raw, fromOriginal) {
       if (out && !/\n$/.test(out)) out += '\n\n';
-      else if (out && !/\n\n$/.test(out) && !fromOriginal && prevFromOriginal) out += '\n';
-      out += raw; prevFromOriginal = fromOriginal;
+      else if (out && !/\n\n$/.test(out) && !fromOriginal && prevOrig) out += '\n';
+      out += raw; prevOrig = fromOriginal;
     }
-    while (i < n || j < m) {
-      if (i < n && j < m && A[i].key === B[j].key) { push(A[i].raw, true); i++; j++; }
-      else if (j >= m || (i < n && dp[i + 1][j] >= dp[i][j + 1])) { i++; }          // deleted: gone
-      else { if (B[j].key !== 'space') push(B[j].raw, false); j++; }                  // inserted / changed
+    while (i < n || j < k) {
+      if (i < n && j < k && A[i].key === B[j].key) { push(A[i].raw, true); i++; j++; }
+      else if (j >= k || (i < n && dp[i + 1][j] >= dp[i][j + 1])) { i++; }            // deleted
+      else { if (B[j].key !== 'space') push(B[j].raw, false); j++; }                    // inserted / changed
     }
-    return out;
+    if (/\n$/.test(originalMd) && !/\n$/.test(out)) out += '\n';                        // keep the final newline
+    return { md: out, merged: true, reason: '' };
   }
-  return { mergeBlocks: mergeBlocks, keyOf: keyOf };
+  function mergeBlocks(o, e, m) { return merge(o, e, m).md; }
+  return { merge: merge, mergeBlocks: mergeBlocks, keyOf: keyOf };
 }));
