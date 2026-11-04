@@ -82,6 +82,22 @@ final class SkillStoreControllerTest extends TestCase
         self::assertSame(['one' => 'Ada Lovelace', 'three' => '', 'two' => 'z@x.io'], $by);
     }
 
+    public function test_list_rows_carry_requires_and_never_another_users_private_skill(): void
+    {
+        $c = $this->ctl();
+        $md = fn(string $n, string $r) => base64_encode("---\nname: $n\nrequires-skills: [$r]\n---\n");
+        $c->import($this->req([], ['path' => 'base', 'visibility' => 'private', 'files' => ['SKILL.md' => $md('base', '')]]));
+        $c->import($this->req([], ['path' => 'app', 'visibility' => 'private', 'files' => ['SKILL.md' => $md('app', 'base')]]));
+        $c->import($this->req([], ['path' => 'hidden', 'visibility' => 'private', 'files' => ['SKILL.md' => $md('hidden', '')]], 99));
+        $rows = [];
+        self::assertArrayNotHasKey('requires', $c->list($this->req())['data'][0]);
+        foreach ($c->list($this->req(['requires' => '1']))['data'] as $r) {
+            $rows[$r['path']] = $r['requires'];
+        }
+        ksort($rows);
+        self::assertSame(['app' => ['base'], 'base' => []], $rows);
+    }
+
     public function test_import_dry_run_writes_nothing(): void
     {
         $c = $this->ctl();

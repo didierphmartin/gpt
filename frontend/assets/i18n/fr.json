@@ -521,6 +521,13 @@
       "done": "{{file}} enregistré ({{count}} compétence(s)).",
       "failed": "L'exportation a échoué.",
       "none": "Aucune compétence à exporter pour l'instant."
+    },
+    "needsTree": {
+      "needs": "nécessite {{count}}",
+      "needsTitle": "Nécessite {{count}} compétence(s) pour fonctionner",
+      "usedBy": "utilisée par {{count}}",
+      "usedByTitle": "Utilisée par : {{names}}",
+      "toggle": "Afficher ou masquer les compétences dont elle a besoin"
     }
   },
   "fileStorage": {

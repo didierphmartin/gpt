@@ -90,6 +90,38 @@ test('folder mode keeps the list shape and adds private/mine/dependencies', asyn
   assert.ok(r.dirHandle);
 });
 
+test('volume listSkills maps requires (empty when absent)', async () => {
+  const rows = [{ path: 'a', name: 'a', visibility: 'private', owner_id: 1, mine: true, requires: ['g/b'] }, { path: 'b', name: 'b', visibility: 'private', owner_id: 1, mine: true }];
+  const { fs, calls } = load({ routes: { ...volume, 'GET /skills': () => [200, rows] } });
+  assert.equal((await fs.listSkills())[0].requires, undefined);       // opt-in
+  const out = await fs.listSkills({ withRequires: true });
+  assert.deepEqual([...out[0].requires], ['g/b']);
+  assert.deepEqual([...out[1].requires], []);
+  assert.ok(calls.some((c) => c.path === '/skills?requires=1'));
+  await fs.listSkills({ asRobot: true, withRequires: true });
+  assert.ok(calls.some((c) => c.path === '/skills?as=robot&requires=1'));
+});
+
+test('folder mode lists the direct required skills (declared, or named in scripts/)', async () => {
+  const tree = {
+    top: { 'SKILL.md': '---\nname: top\nrequires-skills: [mid]\n---\n' },
+    mid: { 'SKILL.md': '---\nname: mid\n---\n', scripts: { 'run.py': "load_script('leaf', 'x.py')\n" } },
+    leaf: { 'SKILL.md': '---\nname: leaf\n---\n' },
+    cached: { 'SKILL.md': '---\nname: cached\n---\n', scripts: { __pycache__: { 'a.pyc': "'leaf'" }, 'img.png': "'leaf'" } },
+  };
+  const at = (parts) => parts.reduce((d, n) => (d && typeof d === 'object' ? d[n] : undefined), tree);
+  const fileOf = (v) => ({ kind: 'file', getFile: async () => ({ text: async () => v, arrayBuffer: async () => new TextEncoder().encode(v).buffer }) });
+  const { fs } = load({ localFs: { resolvePath: async (p) => {
+    const parts = p.split('/').slice(1);
+    const v = parts.length ? at(parts) : tree;
+    if (v === undefined) return null;
+    return typeof v === 'string' ? fileOf(v) : fakeDir(v, parts[parts.length - 1] || '');
+  } } });
+  assert.equal((await fs.listSkills())[0].requires, undefined);       // opt-in: no script reads
+  const out = await fs.listSkills({ withRequires: true });
+  assert.deepEqual(Object.fromEntries(out.map((r) => [r.dirName, [...r.requires]])), { cached: [], leaf: [], mid: ['leaf'], top: ['mid'] });
+});
+
 test('importSkill posts base64 toStoreFiles at read.dir and maps 409 to code clash', async () => {
   let sent;
   const read = { dir: 'g/s', name: 's', files: { 'SKILL.md': new TextEncoder().encode('hi') }, pyodideWheels: { 'a.whl': new Uint8Array([1]) }, nativeWheels: {} };

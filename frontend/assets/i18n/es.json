@@ -521,6 +521,13 @@
       "done": "{{file}} guardado ({{count}} habilidad(es)).",
       "failed": "La exportación falló.",
       "none": "Todavía no hay habilidades para exportar."
+    },
+    "needsTree": {
+      "needs": "necesita {{count}}",
+      "needsTitle": "Necesita {{count}} habilidad(es) para funcionar",
+      "usedBy": "usada por {{count}}",
+      "usedByTitle": "Usada por: {{names}}",
+      "toggle": "Mostrar u ocultar las habilidades que necesita"
     }
   },
   "fileStorage": {

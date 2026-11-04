@@ -223,3 +223,105 @@ test('import review summarizes the skill folder: SKILL.md first, folders with co
   assert.equal(JSON.stringify(s.groups.map((g) => [g.kind, g.name, g.count])),
     JSON.stringify([['skillmd', 'SKILL.md', 1], ['folder', 'references/', 1], ['folder', 'scripts/', 2], ['loose', '', 1]]));
 });
+
+// ---- expandable entries: a skill shows the skills it requires ----
+const TREE = [
+  skill({ dir_name: 'app', requires: ['mid', 'solo'] }),
+  skill({ dir_name: 'mid', requires: ['leaf'] }),
+  skill({ dir_name: 'leaf' }),
+  skill({ dir_name: 'solo' }),
+];
+const rowOf = (html, dir) => html.split('<div class="skills-item').find((c) => c.includes(`data-skill-id="local:${dir}"`)) || '';
+const childIds = (html) => [...html.matchAll(/skills-req-item[^>]*data-skill-id="([^"]+)"/g)].map((m) => m[1]);
+
+test('a skill with requirements shows an arrow and a needs badge; others do not', () => {
+  const { mgr } = load();
+  const html = mgr.buildTreeHtml(TREE, '');
+  assert.match(rowOf(html, 'app'), /skills-req-toggle/);
+  assert.match(rowOf(html, 'app'), /skills\.needsTree\.needs\{"count":2\}/);
+  assert.doesNotMatch(rowOf(html, 'leaf'), /skills-req-toggle|needsTree\.needs/);
+});
+
+test('collapsed: no children; expanded: direct requirements only; they stay top-level entries too', () => {
+  const { mgr } = load();
+  assert.deepEqual(childIds(mgr.buildTreeHtml(TREE, '')), []);
+  mgr.expandedSkills.add('app');
+  const html = mgr.buildTreeHtml(TREE, '');
+  assert.deepEqual(childIds(html), ['local:mid', 'local:solo']);     // not leaf: direct only
+  for (const d of ['app', 'mid', 'leaf', 'solo']) assert.ok(rowOf(html, d), `${d} stays a normal entry`);
+});
+
+test('a child that is itself expandable has its own arrow and expands nested', () => {
+  const { mgr } = load();
+  mgr.expandedSkills.add('app');
+  assert.match(mgr.buildTreeHtml(TREE, ''), /skills-req-item[^>]*data-skill-id="local:mid"[\s\S]*?skills-req-toggle/);
+  mgr.expandedSkills.add('mid');
+  // under app: mid (open) > leaf, then solo; the top-level mid row is open too: leaf
+  assert.deepEqual(childIds(mgr.buildTreeHtml(TREE, '')), ['local:mid', 'local:leaf', 'local:solo', 'local:leaf']);
+});
+
+test('requirement cycles never expand a skill already open in the branch', () => {
+  const { mgr } = load();
+  const cyc = [skill({ dir_name: 'a', requires: ['b'] }), skill({ dir_name: 'b', requires: ['a'] })];
+  mgr.expandedSkills.add('a'); mgr.expandedSkills.add('b');
+  const html = mgr.buildTreeHtml(cyc, '');
+  // top-level a -> child b -> child a (plain, no arrow, nothing below); top-level b -> child a -> child b (plain)
+  assert.equal(childIds(html).length, 4);
+  assert.equal((html.match(/skills-req-toggle/g) || []).length, 4);   // 2 top-level rows + b under a + a under b
+});
+
+test('used-by hint on a required skill lists the names in its tooltip', () => {
+  const { mgr } = load();
+  const html = mgr.buildTreeHtml(TREE, '');
+  assert.match(rowOf(html, 'leaf'), /skills\.needsTree\.usedBy\{"count":1\}/);
+  assert.match(rowOf(html, 'leaf'), /skills\.needsTree\.usedByTitle\{"names":"mid"\}/);
+  assert.doesNotMatch(rowOf(html, 'app'), /usedBy/);
+});
+
+test('search hiding a parent keeps its children hidden; a visible parent still shows them', () => {
+  const { mgr } = load();
+  mgr.skills = TREE;
+  mgr.expandedSkills.add('app');
+  const html = mgr.buildTreeHtml(TREE.filter((s) => s.dir_name === 'mid'), 'mid');
+  assert.ok(rowOf(html, 'mid'));
+  assert.deepEqual(childIds(html), []);
+  const parent = mgr.buildTreeHtml(TREE.filter((s) => s.dir_name === 'app'), 'app');
+  assert.deepEqual(childIds(parent), ['local:mid', 'local:solo']);
+});
+
+test('expanding works in both corporate sections; child rows are not draggable and have no menu', () => {
+  const { mgr } = load();
+  mgr.edition = 'corporate';
+  const list = [skill({ dir_name: 'p', visibility: 'public', requires: ['q'] }), skill({ dir_name: 'q', visibility: 'public', mine: false, ownerId: 9 }),
+    skill({ dir_name: 'r', requires: ['q'] })];
+  mgr.expandedSkills.add('p'); mgr.expandedSkills.add('r');
+  const html = mgr.buildTreeHtml(list, '');
+  const [pub, priv] = html.split('data-section="private"');
+  assert.deepEqual(childIds(pub), ['local:q']);
+  assert.deepEqual(childIds(priv), ['local:q']);
+  const child = html.split('skills-req-item')[1].split('</div>')[0];
+  assert.doesNotMatch(child, /draggable="true"|skills-item-menu/);
+});
+
+test('picker mode (expandable:false) renders plain rows', () => {
+  const { mgr } = load();
+  mgr.expandedSkills.add('app');
+  const html = mgr.buildTreeHtml(TREE, '', { expandable: false });
+  assert.doesNotMatch(html, /skills-req-|needsTree/);
+});
+
+test('toggling an arrow flips expandedSkills and re-renders', () => {
+  const { mgr } = load();
+  let n = 0; mgr.renderTree = () => { n++; };
+  mgr.toggleExpanded('app'); assert.ok(mgr.expandedSkills.has('app'));
+  mgr.toggleExpanded('app'); assert.ok(!mgr.expandedSkills.has('app'));
+  assert.equal(n, 2);
+});
+
+test('loadLocalSkills maps requires onto the skill objects', async () => {
+  const fs = { listSkills: async () => [{ name: 'a', description: '', dirName: 'g/a', group: 'g', requires: ['b'] }],
+    getSkillContent: async () => '', listSkillScripts: async () => [], listSkillReferences: async () => [] };
+  const { mgr } = load({ fs });
+  const [s] = await mgr.loadLocalSkills();
+  assert.deepEqual([...s.requires], ['b']);
+});

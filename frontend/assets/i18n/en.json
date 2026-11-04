@@ -521,6 +521,13 @@
       "done": "Saved {{file}} ({{count}} skill(s)).",
       "failed": "Export failed.",
       "none": "There are no skills to export yet."
+    },
+    "needsTree": {
+      "needs": "needs {{count}}",
+      "needsTitle": "Needs {{count}} skill(s) to run",
+      "usedBy": "used by {{count}}",
+      "usedByTitle": "Used by: {{names}}",
+      "toggle": "Show or hide the skills it needs"
     }
   },
   "fileStorage": {

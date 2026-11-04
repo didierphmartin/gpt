@@ -583,9 +583,39 @@
     async function mode() { return (await storeInfo()).mode; }
     async function edition() { return (await storeInfo()).edition; }
 
-    async function listSkills({ asRobot = false } = {}) {
-        if (await mode() !== 'volume') return folderListSkills();
-        const rows = await api('GET', '/skills' + (asRobot ? '?as=robot' : ''));
+    /**
+     * Folder mode: add `requires` (the DIRECT required skills, as paths) to each listed skill, with skill-requires.js
+     * over its SKILL.md + scripts/ only. The store computes the same on the server (SkillStore::list).
+     */
+    // Not read for `requires`: bytecode caches and binaries (they cannot name a skill).
+    const BINARY_EXT = /\.(pyc|pyo|so|dylib|dll|whl|zip|gz|png|jpe?g|gif|webp|ico|pdf|bin|pkl|npy|onnx)$/i;
+    const skipNonScript = (p, entry) => entry.name === '__pycache__' || (entry.kind !== 'directory' && BINARY_EXT.test(entry.name));
+
+    async function withFolderRequires(list) {
+        if (!window.SkillRequires) return list.map((x) => ({ ...x, requires: [] }));
+        const all = list.map((x) => x.dirName);
+        return Promise.all(list.map(async (x) => {
+            try {
+                const dir = await window.localFs?.resolvePath(`skills/${x.dirName}/scripts`);
+                const files = dir ? await walkBytes(dir, 'scripts', {}, skipNonScript) : {};
+                const md = await folder_getSkillFile(x.dirName, 'SKILL.md');
+                if (md !== null && md !== undefined) files['SKILL.md'] = enc.encode(md);
+                return { ...x, requires: window.SkillRequires.direct(x.dirName, files, all).requires };
+            } catch (e) {
+                console.warn(`[skillsFs] could not work out what ${x.dirName} requires:`, e);
+                return { ...x, requires: [] };
+            }
+        }));
+    }
+
+    // withRequires: add `requires` to each row (reads every skill's SKILL.md + scripts/, so only the Skills list asks).
+    async function listSkills({ asRobot = false, withRequires = false } = {}) {
+        if (await mode() !== 'volume') {
+            const list = await folderListSkills();
+            return withRequires ? withFolderRequires(list) : list;
+        }
+        const q = [asRobot ? 'as=robot' : '', withRequires ? 'requires=1' : ''].filter(Boolean).join('&');
+        const rows = await api('GET', '/skills' + (q ? '?' + q : ''));
         const out = (rows || []).map((r) => {
             const parts = r.path.split('/');
             return {
@@ -600,6 +630,7 @@
                 ownerId: r.owner_id ?? null,
                 ownerName: r.owner_name || '',
                 dependencies: r.dependencies || [],
+                ...(withRequires ? { requires: r.requires || [] } : {}),
                 source: 'store',
             };
         });

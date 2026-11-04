@@ -47,7 +47,7 @@ final class SkillStoreController
     public function list(array $request): array
     {
         return $this->run(function (SkillStore $s) use ($request) {
-            $rows = $s->list(self::uid($request), self::robot($request));
+            $rows = $s->list(self::uid($request), self::robot($request), ($request['query']['requires'] ?? '') === '1');
             $names = $this->ownerNames(array_map(fn($r) => (int) $r['owner_id'], array_filter($rows, fn($r) => empty($r['mine']))));
             return array_map(fn($r) => $r + ['owner_name' => $names[(int) $r['owner_id']] ?? ''], $rows);
         });
