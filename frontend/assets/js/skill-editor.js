@@ -173,7 +173,8 @@
      * installed: a promise of the Skills-list rows (or null) for the Required skills warning.
      */
     function frontForm() {
-        let host = null, box = null, opts = {}, front = '', state = { values: {} }, rows = [], other = [];
+        let host = null, box = null, opts = {}, front = '', state = { values: {} }, rows = [], other = [], dups = [];
+        let closeDesc = null;   // the open description overlay's close(), so destroy() never leaks its keydown listener
         const cbs = [];
         let installed = null;              // Set of installed skill paths and leaf names; null = unknown (no warning)
         const F = () => window.SkillFrontmatter;
@@ -247,7 +248,6 @@
         /** The roomy textarea over the dialog for the description (Escape, the backdrop or ✕ closes and keeps the text). */
         function expandDescription() {
             const spec = FORM_FIELDS[1], inp = inputs.description;
-            document.getElementById('skill-editor-desc')?.remove();
             const ta = h('textarea', { class: 'w-full h-64 px-3 py-2 text-sm border border-gray-300 rounded-lg resize-y focus:ring-2 focus:ring-blue-500',
                 readOnly: !!opts.readOnly, value: inp.value });
             let ov = null;
@@ -255,9 +255,12 @@
             const close = () => {
                 if (!ov) return;
                 document.removeEventListener('keydown', onKey);
+                if (closeDesc === close) closeDesc = null;
                 if (!opts.readOnly && ta.value !== inp.value) { inp.value = ta.value; onInput(spec); }
                 ov.remove(); ov = null;
             };
+            if (closeDesc) closeDesc();
+            closeDesc = close;
             const panel = h('div', { class: 'bg-white rounded-xl shadow-xl border border-gray-200 w-[min(640px,90vw)] max-h-[80vh] flex flex-col' },
                 h('div', { class: 'flex items-center justify-between px-4 py-3 border-b border-gray-200' },
                     h('h4', { class: 'text-sm font-semibold text-gray-800', text: tr('skills.editor.fm.description') }),
@@ -307,19 +310,25 @@
                 rows.push({ spec, field: f || null, shown: displayOf(spec, f) });
                 editable.add(spec.key);
             }
-            other = all.filter((x) => x.key !== null && !(editable.has(x.key) && first(x.key) === x));
+            other = all.filter((x) => x.key !== null && !editable.has(x.key));
+            // a later duplicate of a form field: rebuild drops it when that field is saved, so it is not "kept as is"
+            dups = all.filter((x) => x.key !== null && editable.has(x.key) && first(x.key) !== x);
         }
 
         function render() {
             for (const k of Object.keys(inputs)) delete inputs[k];
             const wasOpen = box ? box.open : undefined;
             if (box && host) host.removeChild(box);
-            const otherBox = other.length ? h('div', { 'data-se': 'fm-other', class: 'col-span-2' },
-                h('div', { class: 'flex items-center gap-2 mb-1' },
+            const PRE = 'm-0 p-2 text-xs font-mono whitespace-pre-wrap break-words max-h-32 overflow-auto rounded border border-gray-200 bg-gray-50 text-gray-600';
+            const rawOf = (list) => trimEnd(list.map((x) => x.raw.replace(/\r\n/g, '\n')).join(''));
+            const otherBox = other.length || dups.length ? h('div', { 'data-se': 'fm-other', class: 'col-span-2 space-y-1' },
+                h('div', { class: 'flex items-center gap-2' },
                     h('span', { class: 'text-xs font-medium text-gray-700', text: tr('skills.editor.fm.other') }),
-                    h('span', { class: 'text-[11px] text-gray-400', text: tr('skills.editor.fm.otherHint') })),
-                h('pre', { class: 'm-0 p-2 text-xs font-mono whitespace-pre-wrap break-words max-h-32 overflow-auto rounded border border-gray-200 bg-gray-50 text-gray-600',
-                    text: trimEnd(other.map((x) => x.raw.replace(/\r\n/g, '\n')).join('')) })) : null;
+                    other.length ? h('span', { class: 'text-[11px] text-gray-400', text: tr('skills.editor.fm.otherHint') }) : null),
+                other.length ? h('pre', { class: PRE, text: rawOf(other) }) : null,
+                ...dups.map((x) => h('div', { 'data-se': 'fm-duplicate' },
+                    h('p', { class: 'mb-0.5 text-[11px] text-amber-700', text: tr('skills.editor.fm.duplicateHint') }),
+                    h('pre', { class: PRE, text: rawOf([x]) })))) : null;
             box = h('details', { 'data-se': 'fm-panel', class: 'text-xs text-gray-700 border border-gray-200 rounded-lg' },
                 h('summary', { class: 'cursor-pointer px-3 py-1.5 select-none' },
                     h('span', { class: 'font-medium text-gray-600', text: tr('skills.editor.frontmatter') + ' · ' }),
@@ -358,7 +367,7 @@
             onChange(cb) { cbs.push(cb); },
             /** The front just saved is the new baseline; the inputs show it. */
             setOriginal(text) { front = text || ''; state.values = {}; parse(); render(); },
-            destroy() { if (box && host) host.removeChild(box); box = null; document.getElementById('skill-editor-desc')?.remove(); },
+            destroy() { if (closeDesc) closeDesc(); if (box && host) host.removeChild(box); box = null; },
         };
     }
 

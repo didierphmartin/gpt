@@ -504,6 +504,7 @@
         "commaHint": "comma-separated",
         "other": "Other fields",
         "otherHint": "Kept as is when you save.",
+        "duplicateHint": "Duplicate — removed when this field is saved.",
         "notInstalled": "Not installed: {{names}}. The save still happens; import and export will name it.",
         "summary": "{{name}} · Python libraries: {{libraries}} · Required skills: {{required}}",
         "changesTitle": "{{file}} — frontmatter",

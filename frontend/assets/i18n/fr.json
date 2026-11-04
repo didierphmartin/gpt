@@ -504,6 +504,7 @@
         "commaHint": "séparés par des virgules",
         "other": "Autres champs",
         "otherHint": "Conservés tels quels à l'enregistrement.",
+        "duplicateHint": "Doublon — supprimé à l'enregistrement de ce champ.",
         "notInstalled": "Non installée : {{names}}. L'enregistrement a lieu quand même ; l'import et l'export la signaleront.",
         "summary": "{{name}} · Bibliothèques Python : {{libraries}} · Compétences requises : {{required}}",
         "changesTitle": "{{file}} — en-tête (frontmatter)",

@@ -504,6 +504,7 @@
         "commaHint": "separadas por comas",
         "other": "Otros campos",
         "otherHint": "Se conservan tal cual al guardar.",
+        "duplicateHint": "Duplicado: se elimina al guardar este campo.",
         "notInstalled": "No instalada: {{names}}. Se guarda igualmente; la importación y la exportación la indicarán.",
         "summary": "{{name}} · Bibliotecas de Python: {{libraries}} · Habilidades requeridas: {{required}}",
         "changesTitle": "{{file}} — encabezado (frontmatter)",

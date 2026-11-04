@@ -846,3 +846,81 @@ test('the description says it is saved on one line', async () => {
   const dlg = await SE.open({ skill: mine, manager });
   assert.match(q(dlg.el, 'fm-panel').textContent, /Saved on one line\./);
 });
+
+// ---- final review fixes ----
+
+const SkillZipMod = createRequire(import.meta.url)('../assets/js/skill-zip.js');
+
+test('a comma-scalar dependencies (a, b): untouched stays byte-identical; edited reads back the same items everywhere', async () => {
+  const text = '---\nname: d\ndescription: x\ndependencies: a, b\nlicense: MIT\n---\nB\n';
+  const r1 = load({ files: { 'SKILL.md': text } });
+  const d1 = await r1.SE.open({ skill: { dir_name: 'd', mine: true }, manager: r1.manager });
+  assert.equal(fmEl(d1, 'dependencies').value, 'a\nb');
+  setField(d1, 'license', 'BSD');
+  await d1.save();
+  assert.equal(r1.calls.writes[0][2], text.replace('MIT', 'BSD'));   // dependencies: a, b untouched
+  const r2 = load({ files: { 'SKILL.md': text } });
+  const d2 = await r2.SE.open({ skill: { dir_name: 'd', mine: true }, manager: r2.manager });
+  const items = ['a', 'b>=1,<2', 'c[x,y]'];
+  setField(d2, 'dependencies', items.join('\n'));
+  await d2.save();
+  const out = r2.calls.writes[0][2];
+  assert.equal(JSON.stringify(SkillFrontmatter.fields(SkillFrontmatter.split(out).front).find((f) => f.key === 'dependencies').value), JSON.stringify(items));
+  assert.deepEqual(SkillZipMod.skillDependencies(out), items);
+});
+
+test('a formatted file saved twice: the second save writes nothing (SKILL.md body and a references .md)', async () => {
+  const { SE, fa, manager, calls } = load({ files: FILES });
+  const dlg = await SE.open({ skill: mine, manager });
+  fa.last().type('\n# Demo\n\nBody EDIT.\n');
+  await dlg.save();
+  assert.equal(calls.writes.length, 1);
+  assert.equal(calls.writes[0][2], SKILL_MD.replace('Body.', 'Body EDIT.'));
+  assert.equal(dlg.dirtyFiles().length, 0);
+  await dlg.save();
+  assert.equal(calls.writes.length, 1);
+  await select(dlg, 'references/a.md');
+  assert.equal(fa.last().kind, 'markdown');
+  fa.last().type('# A\n\nmore\n');
+  await dlg.save();
+  assert.equal(calls.writes.length, 2);
+  await dlg.save();
+  assert.equal(calls.writes.length, 2);
+  assert.equal(dlg.dirtyFiles().length, 0);
+});
+
+test('a duplicate of a form field under Other fields is not "kept as is": it says it is removed when that field is saved', async () => {
+  const text = '---\nname: d\ndescription: x\nlicense: MIT\nfetches_urls: false\nlicense: GPL\n---\nB\n';
+  const { SE, manager, calls } = load({ files: { 'SKILL.md': text } });
+  const dlg = await SE.open({ skill: { dir_name: 'd', mine: true }, manager });
+  const other = q(dlg.el, 'fm-other');
+  const dup = q(other, 'fm-duplicate');
+  assert.match(dup.textContent, /license: GPL/);
+  assert.match(dup.textContent, /Duplicate — removed when this field is saved\./);
+  assert.ok(!/Kept as is/.test(dup.textContent));
+  assert.match(other.textContent, /Kept as is[\s\S]*fetches_urls: false/);
+  setField(dlg, 'license', 'BSD');
+  await dlg.save();
+  assert.equal(calls.writes[0][2], '---\nname: d\ndescription: x\nlicense: BSD\nfetches_urls: false\n---\nB\n');
+  // only duplicates: no "kept as is" hint at all
+  const r2 = load({ files: { 'SKILL.md': '---\nname: d\ndescription: x\nname: e\n---\nB\n' } });
+  const d2 = await r2.SE.open({ skill: { dir_name: 'd', mine: true }, manager: r2.manager });
+  assert.ok(!/Kept as is/.test(q(d2.el, 'fm-other').textContent));
+  assert.ok(q(q(d2.el, 'fm-other'), 'fm-duplicate'));
+});
+
+test('closing the dialog while the description overlay is open removes the overlay and its keydown listener', async () => {
+  const { SE, manager, document } = load({ files: { 'SKILL.md': RICH } });
+  const keys = new Set();
+  document.addEventListener = (t, f) => { if (t === 'keydown') keys.add(f); };
+  document.removeEventListener = (t, f) => { if (t === 'keydown') keys.delete(f); };
+  const dlg = await SE.open({ skill: richSkill, manager });
+  q(dlg.el, 'fm-description-expand').click();
+  assert.ok(q(document.body, 'fm-description-overlay'));
+  assert.equal(keys.size, 1);
+  q(dlg.el, 'fm-description-expand').click();   // opening it again replaces it: still one listener
+  assert.equal(keys.size, 1);
+  dlg.close();
+  assert.equal(keys.size, 0);
+  assert.equal(q(document.body, 'fm-description-overlay'), null);
+});
