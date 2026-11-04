@@ -507,8 +507,10 @@
         "other": "Autres champs",
         "otherHint": "Conservés tels quels à l'enregistrement.",
         "notInstalled": "Non installée : {{names}}. L'enregistrement a lieu quand même ; l'import et l'export la signaleront.",
-        "summary": "{{name}} · {{libraries}} bibliothèques · {{required}} compétences requises",
-        "changesTitle": "{{file}} — en-tête (frontmatter)"
+        "summary": "{{name}} · Bibliothèques Python : {{libraries}} · Compétences requises : {{required}}",
+        "changesTitle": "{{file}} — en-tête (frontmatter)",
+        "lineHint": "une par ligne",
+        "oneLine": "Enregistrée sur une seule ligne."
       }
     },
     "section": {

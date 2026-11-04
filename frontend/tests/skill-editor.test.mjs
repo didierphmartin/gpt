@@ -630,7 +630,7 @@ test('RF 1: editing one field rewrites only its line; block-scalar description, 
   const { SE, manager, calls, changesViews } = load({ files: { 'SKILL.md': RICH } });
   const dlg = await SE.open({ skill: richSkill, manager });
   assert.equal(fmEl(dlg, 'description').value, 'Line one: with a colon.\nLine two.');
-  assert.equal(fmEl(dlg, 'dependencies').value, 'python-docx, openpyxl>=3');
+  assert.equal(fmEl(dlg, 'dependencies').value, 'python-docx\nopenpyxl>=3');   // one per line
   setField(dlg, 'license', 'Apache-2.0');
   assert.deepEqual([...dlg.dirtyFiles()], ['SKILL.md']);
   assert.ok(optionText(dlg, 'SKILL.md').includes('●'));
@@ -703,7 +703,7 @@ test('Required skills: a name not installed warns under the field; the save stil
   const { SE, manager, calls, loads } = load({ files: { 'SKILL.md': RICH }, fsOpts: { installed: ['docx', 'office/xlsx'] } });
   const dlg = await SE.open({ skill: richSkill, manager });
   await tick();
-  setField(dlg, 'requires-skills', 'docx, xlsx, nope-skill');
+  setField(dlg, 'requires-skills', 'docx\n xlsx\n\nnope-skill\n');
   const warn = q(dlg.el, 'fm-requires-skills-warning');
   assert.equal(warn.hidden, false);
   assert.match(warn.textContent, /nope-skill/);
@@ -734,7 +734,7 @@ test('collapsed by default for an existing skill, with a one-line summary; other
   const { SE, manager } = load({ files: { 'SKILL.md': RICH.replace('license: MIT\n', 'license: MIT\nrequires-skills: [a, b]\n') } });
   const dlg = await SE.open({ skill: richSkill, manager });
   assert.equal(q(dlg.el, 'fm-panel').open, false);
-  assert.equal(q(dlg.el, 'fm-summary').textContent, 'rich · 2 libraries · 2 required skills');
+  assert.equal(q(dlg.el, 'fm-summary').textContent, 'rich · Python libraries: 2 · Required skills: 2');
   const other = q(dlg.el, 'fm-other');
   assert.match(other.textContent, /metadata:\n {2}origin: synergyAI custom/);
   assert.match(other.textContent, /fetches_urls: false/);
@@ -742,7 +742,7 @@ test('collapsed by default for an existing skill, with a one-line summary; other
   assert.ok(!/license|python-docx/.test(other.textContent));
   assert.equal(fmEl(dlg, 'origin'), null);   // origin lives under metadata: shown there, not as its own field
   setField(dlg, 'dependencies', 'a');
-  assert.equal(q(dlg.el, 'fm-summary').textContent, 'rich · 1 libraries · 2 required skills');
+  assert.equal(q(dlg.el, 'fm-summary').textContent, 'rich · Python libraries: 1 · Required skills: 2');
 });
 
 test('a field the parser marks complex (plain scalar with ": ") is read-only under Other fields and never rewritten', async () => {
@@ -801,4 +801,48 @@ test('New Skill: the form is open and the folder hint is not shown (the name bec
   assert.equal(q(dlg.el, 'fm-panel').open, true);
   assert.ok(!/does not rename/.test(q(dlg.el, 'fm-panel').textContent));
   assert.equal(q(dlg.el, 'fm-other'), null);
+});
+
+// ---- fix round 1: one item per line, whitespace-only edits, hints, summary ----
+
+test('dependencies: one per line; editing one item keeps an untouched range spec (numpy>=1.20,<2) as ONE item', async () => {
+  const text = '---\nname: d\ndescription: x\ndependencies: [pandas, \'numpy>=1.20,<2\']\n---\n';
+  const { SE, manager, calls } = load({ files: { 'SKILL.md': text } });
+  const dlg = await SE.open({ skill: { dir_name: 'd', mine: true }, manager });
+  assert.equal(fmEl(dlg, 'dependencies').value, 'pandas\nnumpy>=1.20,<2');
+  assert.equal(fmEl(dlg, 'dependencies').tagName, 'TEXTAREA');
+  setField(dlg, 'dependencies', 'pandas>=2\nnumpy>=1.20,<2');
+  await dlg.save();
+  assert.equal(calls.writes[0][2], text.replace("[pandas, 'numpy>=1.20,<2']", "[pandas>=2, 'numpy>=1.20,<2']"));
+  const back = SkillFrontmatter.fields(SkillFrontmatter.split(calls.writes[0][2]).front).find((f) => f.key === 'dependencies').value;
+  assert.equal(JSON.stringify(back), JSON.stringify(['pandas>=2', 'numpy>=1.20,<2']));
+});
+
+test('a range and an extras spec can be entered as new items', async () => {
+  const { SE, manager, calls } = load({ files: { 'SKILL.md': '---\nname: d\ndescription: x\n---\n' } });
+  const dlg = await SE.open({ skill: { dir_name: 'd', mine: true }, manager });
+  setField(dlg, 'dependencies', 'scipy>=1,<2\nrequests[socks,security]');
+  await dlg.save();
+  const back = SkillFrontmatter.fields(SkillFrontmatter.split(calls.writes[0][2]).front).find((f) => f.key === 'dependencies').value;
+  assert.equal(JSON.stringify(back), JSON.stringify(['scipy>=1,<2', 'requests[socks,security]']));
+});
+
+test('whitespace-only edits never rewrite a field (> description, comma-scalar allowed-tools, list items)', async () => {
+  const text = '---\nname: demo\ndescription: >\n  folded\n  text\nallowed-tools: run_skill_script, save_playbook_agent\ndependencies:\n  - a\n---\nB\n';
+  const { SE, manager, calls } = load({ files: { 'SKILL.md': text } });
+  const dlg = await SE.open({ skill: mine, manager });
+  setField(dlg, 'description', 'folded text  ');
+  setField(dlg, 'allowed-tools', 'run_skill_script,save_playbook_agent ');
+  setField(dlg, 'dependencies', '  a  \n\n');
+  setField(dlg, 'name', ' demo ');
+  assert.equal(dlg.files.get('SKILL.md').current, text);
+  assert.equal(dlg.dirtyFiles().length, 0);
+  await dlg.save();
+  assert.equal(calls.writes.length, 0);
+});
+
+test('the description says it is saved on one line', async () => {
+  const { SE, manager } = load({ files: FILES });
+  const dlg = await SE.open({ skill: mine, manager });
+  assert.match(q(dlg.el, 'fm-panel').textContent, /Saved on one line\./);
 });

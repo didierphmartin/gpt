@@ -137,26 +137,31 @@
     // ---- the frontmatter form (SKILL.md) ----
 
     /**
-     * The form's fields. kind: scalar (one line), text (description: a textarea + expand overlay), list (comma-separated
-     * in the form, written as a list; keepShape: a field that is a comma scalar in the file stays one). A key the file
+     * The form's fields. kind: scalar (one line), text (description: a textarea + expand overlay), list (written as a
+     * list). lines: one item per line in a textarea (pip specifiers have commas: `numpy>=1.20,<2`, `requests[socks,x]`),
+     * else comma-separated (tool names); keepShape: a field that is a comma scalar in the file stays one. A field
+     * changes only when its trimmed text (scalars) or its items (lists) differ from what was shown. A key the file
      * has in a shape the form cannot show (complex, or a list where a scalar belongs) is listed under Other fields.
      */
     const FORM_FIELDS = [
-        { key: 'name', kind: 'scalar', label: 'skills.editor.fm.name', required: 'skills.editor.nameRequired', hint: 'skills.editor.fm.nameHint' },
-        { key: 'description', kind: 'text', label: 'skills.editor.fm.description', required: 'skills.editor.descriptionRequired' },
+        { key: 'name', kind: 'scalar', label: 'skills.editor.fm.name', required: 'skills.editor.nameRequired', hint: 'skills.editor.fm.nameHint', hideHintNew: true },
+        { key: 'description', kind: 'text', label: 'skills.editor.fm.description', required: 'skills.editor.descriptionRequired', hint: 'skills.editor.fm.oneLine' },
         { key: 'license', kind: 'scalar', label: 'skills.editor.fm.license', placeholder: 'MIT' },
         { key: 'origin', kind: 'scalar', label: 'skills.editor.fm.origin', placeholder: 'synergyAI custom' },
-        { key: 'dependencies', kind: 'list', label: 'skills.editor.fm.libraries', placeholder: 'beautifulsoup4, python-docx' },
-        { key: 'requires-skills', kind: 'list', label: 'skills.editor.fm.requiredSkills', placeholder: 'docx, xlsx' },
+        { key: 'dependencies', kind: 'list', lines: true, label: 'skills.editor.fm.libraries', placeholder: 'beautifulsoup4\npython-docx>=1,<2' },
+        { key: 'requires-skills', kind: 'list', lines: true, label: 'skills.editor.fm.requiredSkills', placeholder: 'docx\nxlsx' },
         { key: 'allowed-tools', kind: 'list', label: 'skills.editor.fm.allowedTools', placeholder: 'run_skill_script', keepShape: true },
     ];
     const splitList = (s) => String(s).split(',').map((x) => x.trim()).filter(Boolean);
+    const splitLines = (s) => String(s).split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+    const itemsOf = (spec, text) => (spec.lines ? splitLines(text) : splitList(text));
     const leafOf = (p) => String(p).split('/').pop();
 
     /** What the form shows for a parsed field (a clip block scalar's final \n is not shown). */
     function displayOf(spec, field) {
         if (!field) return '';
-        if (Array.isArray(field.value)) return field.value.join(', ');
+        if (Array.isArray(field.value)) return field.value.join(spec.lines ? '\n' : ', ');
+        if (spec.lines) return splitList(field.value).join('\n');   // a comma scalar (`a, b`): the readers split it on commas
         return String(field.value).replace(/\n+$/, '');
     }
 
@@ -175,14 +180,20 @@
         const inputs = {};
 
         const val = (spec) => (inputs[spec.key] ? inputs[spec.key].value : rows.find((r) => r.spec === spec)?.shown ?? '');
-        const changedRows = () => rows.filter((r) => val(r.spec) !== r.shown);
+        const isChanged = (r) => {
+            const v = val(r.spec);
+            if (r.spec.kind !== 'list') return v.trim() !== r.shown.trim();
+            const a = itemsOf(r.spec, v), b = itemsOf(r.spec, r.shown);
+            return a.length !== b.length || a.some((x, i) => x !== b[i]);
+        };
+        const changedRows = () => rows.filter(isChanged);
 
         function edits() {
             const out = {};
             for (const r of changedRows()) {
                 const spec = r.spec, v = val(spec);
                 if (spec.kind === 'list') {
-                    const items = splitList(v);
+                    const items = itemsOf(spec, v);
                     if (!items.length) { if (r.field) out[spec.key] = null; continue; }
                     out[spec.key] = spec.keepShape && r.field && typeof r.field.value === 'string' ? items.join(', ') : items;
                 } else {
@@ -202,8 +213,8 @@
             const nameRow = rows.find((x) => x.spec.key === 'name');
             return tr('skills.editor.fm.summary', {
                 name: (nameRow ? v('name').trim() : '') || '—',
-                libraries: splitList(v('dependencies')).length,
-                required: splitList(v('requires-skills')).length,
+                libraries: splitLines(v('dependencies')).length,
+                required: splitLines(v('requires-skills')).length,
             });
         }
 
@@ -213,14 +224,14 @@
             for (const r of rows) {
                 const err = box.querySelector(`[data-se="fm-${r.spec.key}-error"]`);
                 if (err) {
-                    const bad = r.spec.required && val(r.spec) !== r.shown && !val(r.spec).trim();
+                    const bad = r.spec.required && isChanged(r) && !val(r.spec).trim();
                     err.hidden = !bad;
                     err.textContent = bad ? tr(r.spec.required) : '';
                 }
             }
             const warn = box.querySelector('[data-se="fm-requires-skills-warning"]');
             if (warn) {
-                const missing = installed ? splitList(val(FORM_FIELDS.find((x) => x.key === 'requires-skills'))).filter((n) => !installed.has(n) && !installed.has(leafOf(n))) : [];
+                const missing = installed ? splitLines(val(FORM_FIELDS.find((x) => x.key === 'requires-skills'))).filter((n) => !installed.has(n) && !installed.has(leafOf(n))) : [];
                 warn.hidden = !missing.length;
                 warn.textContent = missing.length ? tr('skills.editor.fm.notInstalled', { names: missing.join(', ') }) : '';
             }
@@ -264,18 +275,19 @@
             const spec = r.spec, se = 'fm-' + spec.key;
             const cls = 'w-full px-2 py-1.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500';
             const initial = Object.prototype.hasOwnProperty.call(state.values, spec.key) ? state.values[spec.key] : r.shown;
-            const inp = spec.kind === 'text'
-                ? h('textarea', { 'data-se': se, class: cls + ' resize-y', rows: 2, spellcheck: 'true', readOnly: !!opts.readOnly, value: initial })
+            const inp = spec.kind === 'text' || spec.lines
+                ? h('textarea', { 'data-se': se, class: cls + ' resize-y' + (spec.lines ? ' font-mono' : ''), rows: spec.lines ? 3 : 2,
+                    spellcheck: spec.lines ? 'false' : 'true', readOnly: !!opts.readOnly, value: initial, placeholder: spec.placeholder })
                 : h('input', { 'data-se': se, type: 'text', class: cls, readOnly: !!opts.readOnly, value: initial, placeholder: spec.placeholder });
             inp.addEventListener('input', () => onInput(spec));
             inputs[spec.key] = inp;
             const label = h('div', { class: 'flex items-center gap-2 mb-1' },
                 h('label', { class: 'text-xs font-medium text-gray-700', text: tr(spec.label) }),
-                spec.kind === 'list' ? h('span', { class: 'text-[11px] text-gray-400', text: tr('skills.editor.fm.commaHint') }) : null,
+                spec.kind === 'list' ? h('span', { class: 'text-[11px] text-gray-400', text: tr(spec.lines ? 'skills.editor.fm.lineHint' : 'skills.editor.fm.commaHint') }) : null,
                 spec.kind === 'text' ? h('button', { type: 'button', 'data-se': 'fm-description-expand', class: 'text-[11px] text-blue-600 underline hover:text-blue-800',
                     text: tr('skills.editor.fm.expand'), on: { click: () => expandDescription() } }) : null);
-            return h('div', { class: spec.kind === 'text' || spec.kind === 'list' ? 'col-span-2' : '' }, label, inp,
-                spec.hint && !opts.isNew ? h('p', { class: 'mt-0.5 text-[11px] text-gray-400', text: tr(spec.hint) }) : null,
+            return h('div', { class: spec.kind === 'scalar' ? '' : 'col-span-2' }, label, inp,
+                spec.hint && !(spec.hideHintNew && opts.isNew) ? h('p', { class: 'mt-0.5 text-[11px] text-gray-400', text: tr(spec.hint) }) : null,
                 spec.required ? h('p', { 'data-se': se + '-error', class: 'mt-0.5 text-xs text-red-700', hidden: true }) : null,
                 spec.key === 'requires-skills' ? h('p', { 'data-se': se + '-warning', class: 'mt-0.5 text-xs text-amber-700', hidden: true }) : null);
         }

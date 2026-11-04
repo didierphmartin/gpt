@@ -507,8 +507,10 @@
         "other": "Otros campos",
         "otherHint": "Se conservan tal cual al guardar.",
         "notInstalled": "No instalada: {{names}}. Se guarda igualmente; la importación y la exportación la indicarán.",
-        "summary": "{{name}} · {{libraries}} bibliotecas · {{required}} habilidades requeridas",
-        "changesTitle": "{{file}} — encabezado (frontmatter)"
+        "summary": "{{name}} · Bibliotecas de Python: {{libraries}} · Habilidades requeridas: {{required}}",
+        "changesTitle": "{{file}} — encabezado (frontmatter)",
+        "lineHint": "una por línea",
+        "oneLine": "Se guarda en una sola línea."
       }
     },
     "section": {

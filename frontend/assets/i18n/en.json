@@ -507,8 +507,10 @@
         "other": "Other fields",
         "otherHint": "Kept as is when you save.",
         "notInstalled": "Not installed: {{names}}. The save still happens; import and export will name it.",
-        "summary": "{{name}} · {{libraries}} libraries · {{required}} required skills",
-        "changesTitle": "{{file}} — frontmatter"
+        "summary": "{{name}} · Python libraries: {{libraries}} · Required skills: {{required}}",
+        "changesTitle": "{{file}} — frontmatter",
+        "lineHint": "one per line",
+        "oneLine": "Saved on one line."
       }
     },
     "section": {
