@@ -754,7 +754,12 @@ final class SkillStore
                 break;
             }
             if (preg_match('/^(name|description):\s*(.*)$/', $line, $m)) {
-                $out[$m[1]] = trim(trim($m[2]), '"\'');
+                $v = trim($m[2]);
+                // one matching outer quote pair only: `say "hi"` stays as written
+                if (strlen($v) >= 2 && ($v[0] === '"' || $v[0] === "'") && $v[strlen($v) - 1] === $v[0]) {
+                    $v = substr($v, 1, -1);
+                }
+                $out[$m[1]] = $v;
             }
         }
         return $out;
