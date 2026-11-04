@@ -4387,7 +4387,7 @@
     <!-- Folder-backed Skills service. Reads <root>/skills/*/SKILL.md.
          Must load after local-fs.js (uses window.localFs) and before
          skills-manager.js (which calls window.skillsFs). -->
-    <script src="assets/js/skills-fs.js?v=20261103-skilldeps4"></script>
+    <script src="assets/js/skills-fs.js?v=20261103-treedeps"></script>
     <!-- Pyodide skill-script runner. Lazy-loads Pyodide on first call;
          depends on window.localFs (skill folder resolution) and
          window.skillsFs (frontmatter parsing for declared deps). -->
@@ -4404,7 +4404,7 @@
          imports. Loaded from jsDelivr; ~8KB gzipped. -->
     <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js"></script>
     <script src="assets/js/skills-import.js?v=20261103-folderdeps"></script>
-    <script src="assets/js/skills-manager.js?v=20261103-export-4btn"></script>
+    <script src="assets/js/skills-manager.js?v=20261103-treedeps"></script>
     <script src="assets/js/skillopt-panel.js?v=20261103-skillsfs-fix1"></script>
     <script src="assets/js/heal-panel.js?v=20260929-catalog-ids"></script>
     <script src="assets/js/genesis-panel.js?v=20261103-skillsfs-callers"></script>

@@ -583,8 +583,28 @@
     async function mode() { return (await storeInfo()).mode; }
     async function edition() { return (await storeInfo()).edition; }
 
+    /**
+     * Folder mode: add `requires` (the DIRECT required skills, as paths) to each listed skill, with skill-requires.js
+     * over its SKILL.md + scripts/ only. The store computes the same on the server (SkillStore::list).
+     */
+    async function withFolderRequires(list) {
+        if (!window.SkillRequires) return list.map((x) => ({ ...x, requires: [] }));
+        const all = list.map((x) => x.dirName);
+        return Promise.all(list.map(async (x) => {
+            try {
+                const files = await readSkillFiles(x.dirName, { under: 'scripts' });
+                const md = await folder_getSkillFile(x.dirName, 'SKILL.md');
+                if (md !== null && md !== undefined) files['SKILL.md'] = enc.encode(md);
+                return { ...x, requires: window.SkillRequires.direct(x.dirName, files, all).requires };
+            } catch (e) {
+                console.warn(`[skillsFs] could not work out what ${x.dirName} requires:`, e);
+                return { ...x, requires: [] };
+            }
+        }));
+    }
+
     async function listSkills({ asRobot = false } = {}) {
-        if (await mode() !== 'volume') return folderListSkills();
+        if (await mode() !== 'volume') return withFolderRequires(await folderListSkills());
         const rows = await api('GET', '/skills' + (asRobot ? '?as=robot' : ''));
         const out = (rows || []).map((r) => {
             const parts = r.path.split('/');
@@ -600,6 +620,7 @@
                 ownerId: r.owner_id ?? null,
                 ownerName: r.owner_name || '',
                 dependencies: r.dependencies || [],
+                requires: r.requires || [],
                 source: 'store',
             };
         });

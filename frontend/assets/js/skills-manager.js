@@ -14,6 +14,7 @@ class SkillsManager {
         this.folders = [];                  // group folders under skills/
         this.edition = '';                  // 'corporate' shows Public / Private sections
         this.collapsedFolders = new Set();  // folder names currently collapsed
+        this.expandedSkills = new Set();    // skill paths (dir_name) whose required skills are shown under them
         this.contextMenu = null;
         this.contextTarget = null; // { type: 'skill'|'category', id: ... }
     }
@@ -275,6 +276,7 @@ class SkillsManager {
                     max_tool_rounds: maxToolRounds,    // orchestrators may raise the client-tool round cap (see chat.js dispatchClientToolCall)
                     spec_compliant: s.spec_compliant !== false,
                     spec_issues: s.spec_issues || [],
+                    requires: s.requires || [],       // dir_names of the DIRECT required skills
                 };
             }));
             return enriched;
@@ -315,7 +317,8 @@ class SkillsManager {
      * longer exists fall back to the top level. Shared by the sidebar tree
      * and the workflow-editor skill picker.
      */
-    buildTreeHtml(filteredSkills, query) {
+    buildTreeHtml(filteredSkills, query, opts = {}) {
+        this._treeLinks = opts.expandable === false ? null : this.indexRequirements(filteredSkills);
         if (this.edition !== 'corporate') return this.buildGroupedHtml(filteredSkills, query, false);
         // Corporate: everything public, then my private skills, each with its own heading.
         const isPublic = (s) => s.visibility === 'public';
@@ -326,6 +329,58 @@ class SkillsManager {
             </div>`;
         return section('public', filteredSkills.filter(isPublic))
             + section('private', filteredSkills.filter((s) => !isPublic(s)));
+    }
+
+    /**
+     * Who needs whom, over every known skill (not just the filtered ones, so children and "used by" don't
+     * depend on the search): { byDir: dir_name -> skill, needs: dir_name -> [skill], usedBy: dir_name -> [skill] }.
+     * Required skills that are not in the list are left out.
+     */
+    indexRequirements(visible) {
+        const byDir = new Map();
+        for (const x of [...this.skills, ...visible]) if (x.dir_name !== undefined) byDir.set(x.dir_name, x);
+        const needs = new Map();
+        const usedBy = new Map();
+        const byName = (a, b) => String(a.name).localeCompare(String(b.name));
+        for (const x of byDir.values()) {
+            const req = [...new Set(x.requires || [])].map((d) => byDir.get(d)).filter((r) => r && r !== x).sort(byName);
+            if (!req.length) continue;
+            needs.set(x.dir_name, req);
+            for (const r of req) usedBy.set(r.dir_name, [...(usedBy.get(r.dir_name) || []), x]);
+        }
+        return { byDir, needs, usedBy };
+    }
+
+    /** Show or hide the skills a skill requires (the ▸ arrow). */
+    toggleExpanded(dir) {
+        if (this.expandedSkills.has(dir)) this.expandedSkills.delete(dir);
+        else this.expandedSkills.add(dir);
+        this.renderTree();
+    }
+
+    /** The ▸/▾ arrow of an expandable skill row. */
+    renderExpandArrow(dir) {
+        const open = this.expandedSkills.has(dir);
+        return `<button type="button" class="skills-req-toggle px-1 text-gray-500 hover:text-gray-800 flex-shrink-0" data-expand="${this.escapeHtml(dir)}"
+                        aria-expanded="${open}" title="${this.escapeHtml(this.t('skills.needsTree.toggle'))}">${open ? '▾' : '▸'}</button>`;
+    }
+
+    /** The required skills of `skill`, as indented link rows (nested; never a skill already open higher in the branch). */
+    renderRequiredRows(skill, chain) {
+        const links = this._treeLinks;
+        const trail = new Set([...chain, skill.dir_name]);
+        let html = '';
+        for (const r of links.needs.get(skill.dir_name) || []) {
+            const expandable = links.needs.has(r.dir_name) && !trail.has(r.dir_name);
+            html += `
+            <div class="skills-req-item flex items-center gap-1 px-2 py-1 text-xs text-gray-500 cursor-pointer hover:bg-blue-50 rounded select-none"
+                 data-skill-id="${r.id}" title="${this.escapeHtml(r.description || '')}">
+                ${expandable ? this.renderExpandArrow(r.dir_name) : '<span class="px-1 flex-shrink-0">&nbsp;</span>'}
+                <span class="flex-1 truncate">${this.escapeHtml(r.name)}</span>
+            </div>`;
+            if (expandable && this.expandedSkills.has(r.dir_name)) html += this.renderRequiredRows(r, trail);
+        }
+        return `<div class="skills-req-children pl-4">${html}</div>`;
     }
 
     /** Group folders (collapsible) with their skills, then the top-level skills. */
@@ -426,7 +481,7 @@ class SkillsManager {
                 return;
             }
             const query = (searchInput?.value || '').toLowerCase().trim();
-            containerEl.innerHTML = this.buildTreeHtml(filtered, query)
+            containerEl.innerHTML = this.buildTreeHtml(filtered, query, { expandable: false })
                 || `<div class="text-center text-gray-400 text-xs py-6">${this.t('skills.empty')}</div>`;
 
             // Picker-specific event binding (independent of sidebar's
@@ -654,12 +709,27 @@ class SkillsManager {
                        data-skill-id="${skill.id}"
                        title="${this.escapeHtml(this.t(skill.visibility === 'public' ? 'skills.visibility.makePrivate' : 'skills.visibility.makePublic'))}">${this.escapeHtml(this.t(skill.visibility === 'public' ? 'skills.visibility.public' : 'skills.visibility.private'))}</button>`
             : '';
+        // Skills that need other skills: ▸ arrow + count; skills others need: "used by N" with the names on hover.
+        const links = this._treeLinks;
+        const needs = links?.needs.get(skill.dir_name) || [];
+        const users = links?.usedBy.get(skill.dir_name) || [];
+        const arrow = needs.length ? this.renderExpandArrow(skill.dir_name) : '';
+        const needsBadge = needs.length
+            ? `<span class="skills-req-count bg-gray-100 text-gray-600 text-[10px] px-1 rounded flex-shrink-0" title="${this.escapeHtml(this.t('skills.needsTree.needsTitle', { count: needs.length }))}">${this.escapeHtml(this.t('skills.needsTree.needs', { count: needs.length }))}</span>`
+            : '';
+        const usedByHint = users.length
+            ? `<span class="skills-req-usedby text-[10px] text-gray-400 flex-shrink-0" title="${this.escapeHtml(this.t('skills.needsTree.usedByTitle', { names: users.map((u) => u.name).join(', ') }))}">${this.escapeHtml(this.t('skills.needsTree.usedBy', { count: users.length }))}</span>`
+            : '';
+        const children = needs.length && this.expandedSkills.has(skill.dir_name) ? this.renderRequiredRows(skill, []) : '';
         return `
             <div class="skills-item flex items-center gap-1 px-2 py-1.5 text-xs text-gray-700 cursor-pointer hover:bg-blue-50 rounded select-none"
                  draggable="true"
                  data-skill-id="${skill.id}" title="${this.escapeHtml(skill.description || '')}">
+                ${arrow}
                 <span>${icon}</span>
                 <span class="flex-1 truncate">${this.escapeHtml(skill.name)}</span>
+                ${needsBadge}
+                ${usedByHint}
                 ${owner}
                 ${tags}
                 ${specBadge}
@@ -669,7 +739,7 @@ class SkillsManager {
                         class="skills-item-menu px-1 text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded transition flex-shrink-0"
                         data-skill-id="${skill.id}"
                         title="Options">⋮</button>
-            </div>
+            </div>${children}
         `;
     }
 
@@ -721,6 +791,7 @@ class SkillsManager {
             el.addEventListener('click', (e) => {
                 // Clicks on the ⋮ button shouldn't open the editor.
                 if (e.target.closest('.skills-item-menu')) return;
+                if (e.target.closest('.skills-req-toggle')) return;   // the arrow only expands
                 const skill = this.findSkillByDatasetId(el.dataset.skillId);
                 if (skill) this.showSkillEditor(skill);
             });
@@ -753,6 +824,24 @@ class SkillsManager {
                 if (skill.mine !== false) e.dataTransfer.setData('application/x-skill-movable', '1');
                 // copy → dropping onto the chat input; move → onto a folder.
                 e.dataTransfer.effectAllowed = 'copyMove';
+            });
+        });
+
+        // ▸/▾ arrow: show or hide the skills a skill requires (the row itself still opens the editor).
+        this.treeContainer.querySelectorAll('.skills-req-toggle').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                this.toggleExpanded(btn.dataset.expand);
+            });
+        });
+
+        // A required skill listed under another is a link: click opens that skill's editor.
+        this.treeContainer.querySelectorAll('.skills-req-item').forEach(el => {
+            el.addEventListener('click', (e) => {
+                if (e.target.closest('.skills-req-toggle')) return;
+                const skill = this.findSkillByDatasetId(el.dataset.skillId);
+                if (skill) this.showSkillEditor(skill);
             });
         });
 
