@@ -1,0 +1,28 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>md round-trip</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@toast-ui/editor@3.2.2/dist/toastui-editor.min.css">
+<div id="ed"></div>
+<!-- the UMD build needs prosemirror globals; the jsDelivr +esm build bundles them -->
+<script type="module">
+  import Editor from "https://cdn.jsdelivr.net/npm/@toast-ui/editor@3.2.2/+esm";
+  // window.roundtrip(md, options) -> markdown after markdown -> WYSIWYG -> markdown.
+  // options are passed to the Editor constructor (used to try fidelity-improving settings).
+  window.roundtrip = function (md, options) {
+    var el = document.getElementById('ed');
+    el.innerHTML = '';
+    var opts = Object.assign({}, options || {});
+    if (opts.__hrDashes) { delete opts.__hrDashes; opts.customMarkdownRenderer = { thematicBreak: function () { return { delim: '---' }; } }; }
+    var ed = new Editor(Object.assign({
+      el: el, height: '400px', initialEditType: 'markdown', previewStyle: 'tab',
+      usageStatistics: false, initialValue: md
+    }, opts));
+    ed.setMarkdown(md);
+    ed.changeMode('wysiwyg', true);
+    ed.changeMode('markdown', true);
+    var out = ed.getMarkdown();
+    ed.destroy();
+    return out;
+  };
+  window.ready = true;
+</script>
