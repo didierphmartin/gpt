@@ -13,7 +13,10 @@ const lexer = (s) => marked.lexer(s);
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(os.homedir(), 'Documents/synergyAI/skills');
-const REPORT = '/private/tmp/claude-501/-Applications-XAMPP-xamppfiles-htdocs-gpt/f0deb36f-aec0-4ae0-8587-73e349dd10fa/scratchpad/md-roundtrip-report.md';
+const ei = process.argv.indexOf('--editor');
+const EDITOR = ei > 0 ? process.argv[ei + 1] : 'toast';   // toast | milkdown
+if (!['toast', 'milkdown'].includes(EDITOR)) throw new Error('--editor toast|milkdown');
+const REPORT = `/private/tmp/claude-501/-Applications-XAMPP-xamppfiles-htdocs-gpt/f0deb36f-aec0-4ae0-8587-73e349dd10fa/scratchpad/md-roundtrip-report${EDITOR === 'toast' ? '' : '-' + EDITOR}.md`;
 function stripFrontmatter(s) { return s.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, ''); }
 
 function collect() {
@@ -93,8 +96,8 @@ function classify(a, b, diff) {
 const files = collect();
 const browser = await chromium.launch();
 const page = await browser.newPage();
-await page.goto('file://' + path.join(here, 'roundtrip.html'));
-await page.waitForFunction(() => window.ready === true, null, { timeout: 30000 });
+await page.goto('file://' + path.join(here, EDITOR === 'toast' ? 'roundtrip.html' : 'milkdown.html'));
+await page.waitForFunction(() => window.ready === true, null, { timeout: 90000 });
 
 const bodies = files.map((f) => { const md = fs.readFileSync(f.file, 'utf8'); return f.body ? stripFrontmatter(md) : md; });
 const rt = async (md, cfg) => page.evaluate(([m, c]) => window.roundtrip(m, c), [md, cfg]);
@@ -120,7 +123,7 @@ async function fidelity(cfg) {
 
 const SHIPPED = { hr: 1 };
 const ALL = { hr: 1, text: 1, tableDelim: 1, listIndent: 1, html: 1, softbreak: 1, deepHeading: 1 };
-const CONFIGS = [
+const TOAST_CONFIGS = [
   ['shipped (hr only)', SHIPPED],
   ['+ text (minimal escaping)', { hr: 1, text: 1 }],
   ['+ tableDelim (--- per column)', { hr: 1, tableDelim: 1 }],
@@ -131,6 +134,8 @@ const CONFIGS = [
   ['+ deepHeading (headings inside quotes and list items)', { hr: 1, deepHeading: 1 }],
   ['ALL fixes (A)', ALL],
 ];
+const MILKDOWN_CONFIGS = [['shipped (default options)', {}], ['tuned (official remark-stringify options)', { tuned: 1 }]];
+const CONFIGS = EDITOR === 'toast' ? TOAST_CONFIGS : MILKDOWN_CONFIGS;
 const results = [];
 for (const [label, cfg] of CONFIGS) results.push({ label, cfg, ...(await fidelity(cfg)) });
 
@@ -175,7 +180,7 @@ function paraEdit(ed, fn, survives) {
 }
 
 async function measure(label, cfg, mergeFn, isMerge) {
-  const R = { label, n: files.length, ident: 0, crashed: [], refused: [], notIdent: [], plainN: 0, plainOk: 0, plainOutside: [], probes: {} };
+  const R = { isMerge, label, n: files.length, ident: 0, crashed: [], refused: [], notIdent: [], plainN: 0, plainOk: 0, plainOutside: [], probes: {} };
   for (const k of Object.keys(PROBES)) R.probes[k] = { n: 0, ok: 0, lost: [] };
   for (let k = 0; k < files.length; k++) {
     const orig = bodies[k];
@@ -213,18 +218,22 @@ async function measure(label, cfg, mergeFn, isMerge) {
   }
   return R;
 }
-const rows = [
+const rows = EDITOR === 'toast' ? [
   await measure('shipped (Toast as is)', SHIPPED, identityMerge, false),
   await measure('A (Toast + fixes)', ALL, identityMerge, false),
   await measure('B alone (shipped + mergeBlocks)', SHIPPED, realMerge, true),
   await measure('A + B', ALL, realMerge, true),
+] : [
+  await measure('shipped (Milkdown default)', {}, identityMerge, false),
+  await measure('tuned (Milkdown options)', { tuned: 1 }, identityMerge, false),
+  await measure('tuned + B', { tuned: 1 }, realMerge, true),
 ];
 await browser.close();
 
 // ---- report ----
-const base = results[0], allRes = results[results.length - 1];
+const base = results[0], allRes = results[results.length - 1];  // milkdown: base = default, allRes = tuned
 const sum = (r) => `${files.length} files, ${r.pass} pass, ${r.fails.length} fail`;
-let rep = `# Markdown round-trip report\n\nToast UI Editor 3.2.2 (jsDelivr +esm). ${files.length} files = SKILL.md bodies (frontmatter stripped) + every references/**/*.md under ${ROOT}.\nNormalisation (section 1 only): the brief's list, never inside code fences; blank-line runs become ONE blank line.\n\n`;
+let rep = `# Markdown round-trip report\n\n${EDITOR === 'toast' ? 'Toast UI Editor 3.2.2 (jsDelivr +esm)' : 'Milkdown 7.23.0 (esm.sh)'}. ${files.length} files = SKILL.md bodies (frontmatter stripped) + every references/**/*.md under ${ROOT}.\nNormalisation (section 1 only): the brief's list, never inside code fences; blank-line runs become ONE blank line.\n\n`;
 rep += `## 1. Normalised fidelity per Toast configuration\n\n| config | pass | fail | classes |\n|---|---|---|---|\n`;
 for (const r of results) rep += `| ${r.label} | ${r.pass} | ${r.fails.length} | ${JSON.stringify(r.classCount)} |\n`;
 rep += `\n### Shipped: failing files\n\n`;
@@ -236,7 +245,7 @@ rep += `(1) no edit: result === original, byte for byte. (2) plain word appended
 const N = (a, b) => `${a} of ${b}`;
 rep += `| row | (1) no-edit identical | (2) plain-word edit confined | (3) code indent | (3) <br> | (3) escape | (3) link target | Toast crashes | merge refused |\n|---|---|---|---|---|---|---|---|---|\n`;
 for (const r of rows) {
-  const pr = (k) => (r.probes[k].n || r.label.includes('+') || r.label.includes('alone') ? N(r.probes[k].ok, r.probes[k].n) : 'n/a');
+  const pr = (k) => (r.isMerge ? N(r.probes[k].ok, r.probes[k].n) : 'n/a');
   rep += `| ${r.label} | ${N(r.ident, r.n)} | ${N(r.plainOk, r.plainN)} | ${pr('code indent')} | ${pr('<br> added')} | ${pr('escape added')} | ${pr('link target')} | ${r.crashed.length} | ${r.refused.length} |\n`;
 }
 rep += '\n';
@@ -244,7 +253,7 @@ for (const r of rows) {
   rep += `### ${r.label}\n\n- Toast crashed on: ${r.crashed.join(', ') || 'none'}\n- merge refused on: ${r.refused.join(', ') || 'none'}\n`;
   for (const [k, v] of Object.entries(r.probes)) if (v.lost.length) rep += `- probe "${k}" lost on: ${v.lost.join(', ')}\n`;
   rep += '\n';
-  if (r.label.startsWith('shipped') || r.label.startsWith('A (')) continue;
+  if (!r.isMerge) continue;
   for (const f of r.notIdent) rep += `#### (1) not identical: ${f.name}\n\n\`\`\`diff\n${f.diff.slice(0, 20).join('\n')}\n\`\`\`\n\n`;
   for (const f of r.plainOutside) rep += `#### (2) outside the edit: ${f.name} (paragraph lines ${f.para}, changed ${f.changed})\n\n\`\`\`diff\n${f.diff.slice(0, 20).join('\n')}\n\`\`\`\n\n`;
 }

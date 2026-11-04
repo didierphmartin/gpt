@@ -1,0 +1,58 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>md round-trip (Milkdown)</title>
+<script type="module">
+  // Milkdown 7.23.0 from esm.sh (shares one prosemirror / ctx instance across the kit modules).
+  // Official options and plugins only: no patches to Milkdown internals.
+  import { Editor, rootCtx, defaultValueCtx, editorViewCtx, remarkStringifyOptionsCtx } from "https://esm.sh/@milkdown/kit@7.23.0/core";
+  import { commonmark } from "https://esm.sh/@milkdown/kit@7.23.0/preset/commonmark";
+  import { gfm } from "https://esm.sh/@milkdown/kit@7.23.0/preset/gfm";
+  import { getMarkdown } from "https://esm.sh/@milkdown/kit@7.23.0/utils";
+
+  // cfg = { tuned } : tuned sets remark-stringify options so the output matches the corpus where it can.
+  async function make(md, cfg) {
+    var el = document.getElementById('ed');
+    el.innerHTML = '';
+    var editor = await Editor.make()
+      .config(function (ctx) {
+        ctx.set(rootCtx, el);
+        ctx.set(defaultValueCtx, md);
+        if (cfg && cfg.tuned) ctx.update(remarkStringifyOptionsCtx, function (o) {
+          return Object.assign({}, o, { bullet: '-', emphasis: '*', strong: '*', rule: '-', fences: true, listItemIndent: 'one', incrementListMarker: true });
+        });
+      })
+      .use(commonmark)
+      .use(gfm)
+      .create();
+    return editor;
+  }
+
+  window.roundtrip = async function (md, cfg) {
+    try {
+      var ed = await make(md, cfg);
+      var out = ed.action(getMarkdown());
+      await ed.destroy();
+      return out;
+    } catch (e) { return { error: String(e && e.message || e) }; }
+  };
+
+  // append a word to the end of the first top-level paragraph, then serialise
+  window.roundtripEdit = async function (md, cfg, word) {
+    try {
+      var ed = await make(md, cfg), found = false;
+      ed.action(function (ctx) {
+        var view = ctx.get(editorViewCtx), pos = null;
+        view.state.doc.forEach(function (n, off) {
+          if (pos === null && n.type.name === 'paragraph' && n.content.size > 0) pos = off + n.nodeSize - 1;
+        });
+        if (pos !== null) { found = true; view.dispatch(view.state.tr.insertText(word, pos)); }
+      });
+      if (!found) { await ed.destroy(); return null; }
+      var out = ed.action(getMarkdown());
+      await ed.destroy();
+      return out;
+    } catch (e) { return { error: String(e && e.message || e) }; }
+  };
+  window.ready = true;
+</script>
+<div id="ed"></div>
