@@ -22,14 +22,23 @@ final class McpTestRelay
     }
 
     /**
+     * The message is encoded as given: pass it as decoded objects (stdClass)
+     * so empty JSON objects stay {} and do not turn into [].
+     * An empty protocol version sends no mcp-protocol-version header.
+     *
      * @param array<string,string> $headers
-     * @param array<mixed> $message
+     * @param array<mixed>|object $message
      * @return array{url:string,status:int,headers:array,body:string,messages:array,duration_ms:int,error:?string}
      */
-    public function relay(string $url, array $headers, array $message, ?string $sessionId, string $protocolVersion): array
+    public function relay(string $url, array $headers, array|object $message, ?string $sessionId, string $protocolVersion): array
     {
-        $lines = ['mcp-protocol-version: ' . $protocolVersion];
-        if ($sessionId !== null && $sessionId !== '') {
+        $lines = [];
+        $protocolVersion = (string) preg_replace('/[\r\n]/', '', $protocolVersion);
+        if ($protocolVersion !== '') {
+            $lines[] = 'mcp-protocol-version: ' . $protocolVersion;
+        }
+        $sessionId = $sessionId === null ? '' : (string) preg_replace('/[\r\n]/', '', $sessionId);
+        if ($sessionId !== '') {
             $lines[] = 'mcp-session-id: ' . $sessionId;
         }
         foreach ($headers as $name => $value) {

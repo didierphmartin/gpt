@@ -41,6 +41,29 @@ final class McpTestRelayTest extends TestCase
         }
     }
 
+    public function testEmptyProtocolVersionOmitsHeader(): void
+    {
+        $this->relay()->relay('http://h/mcp', [], ['a' => 1], null, '');
+        $this->assertStringNotContainsString('mcp-protocol-version', implode("\n", $this->seen['lines']));
+    }
+
+    public function testObjectMessageKeepsEmptyObjects(): void
+    {
+        $msg = json_decode('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}');
+        $this->relay()->relay('http://h/mcp', [], $msg, null, '');
+        $this->assertStringContainsString('"capabilities":{}', $this->seen['body']);
+    }
+
+    public function testSessionAndVersionCrLfStripped(): void
+    {
+        $this->relay()->relay('http://h/mcp', [], ['a' => 1], "abc\r\nX-Evil: 1", "2025-11-25\r\nX-Bad: 2");
+        $this->assertContains('mcp-session-id: abcX-Evil: 1', $this->seen['lines']);
+        $this->assertContains('mcp-protocol-version: 2025-11-25X-Bad: 2', $this->seen['lines']);
+        foreach ($this->seen['lines'] as $line) {
+            $this->assertDoesNotMatchRegularExpression('/[\r\n]/', $line);
+        }
+    }
+
     public function testParsesSseEvents(): void
     {
         $body = "event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\r\n\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n";

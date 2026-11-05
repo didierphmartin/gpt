@@ -57,11 +57,21 @@ final class McpTestController
     private function run(array $request, string $userId, bool $admin): array
     {
         $in = (array) ($request['body'] ?? []);
+        // The message must reach the server verbatim: the parsed body has
+        // turned every {} into [], so take it again from the raw JSON text
+        // with objects kept.
         $message = $in['message'] ?? null;
-        $version = $in['protocol_version'] ?? null;
-        if (!is_array($message) || $message === [] || !is_string($version) || $version === '') {
-            return self::fail('message and protocol_version are required', 400);
+        if (is_string($request['raw_body'] ?? null)) {
+            $raw = json_decode($request['raw_body']);
+            if (is_object($raw) && isset($raw->message) && (is_object($raw->message) || is_array($raw->message))) {
+                $message = $raw->message;
+            }
         }
+        if (!(is_array($message) || is_object($message)) || (array) $message === []) {
+            return self::fail('message is required', 400);
+        }
+        // Optional: initialize is sent before any version is negotiated.
+        $version = is_string($in['protocol_version'] ?? null) ? $in['protocol_version'] : '';
         $sessionId = isset($in['session_id']) && is_string($in['session_id']) ? $in['session_id'] : null;
         $sibling = !empty($in['sibling']);
         $transport = ($in['transport'] ?? 'http') === 'sse' ? 'sse' : 'http';

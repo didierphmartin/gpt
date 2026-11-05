@@ -28,7 +28,7 @@ final class McpTestControllerTest extends TestCase
     private function ctl(): McpTestController
     {
         $relay = new McpTestRelay(function (string $url, array $lines, string $body, int $t): array {
-            $this->calls[] = ['url' => $url, 'lines' => $lines];
+            $this->calls[] = ['url' => $url, 'lines' => $lines, 'body' => $body];
             return ['status' => 200, 'headers' => [], 'body' => '{}', 'error' => null];
         });
         return new McpTestController($this->db, [], $relay);
@@ -84,15 +84,38 @@ final class McpTestControllerTest extends TestCase
         $this->assertContains('X-Key: s3cret', $this->calls[0]['lines']);
     }
 
-    public function testMissingMessageOrVersionIs400(): void
+    public function testMissingMessageIs400(): void
     {
         $r = $this->req(['server_url' => 'https://x.test/mcp']);
         unset($r['body']['message']);
         $this->assertSame(400, $this->ctl()->test($r)['status_code']);
-        $r = $this->req(['server_url' => 'https://x.test/mcp']);
-        $r['body']['protocol_version'] = '';
-        $this->assertSame(400, $this->ctl()->test($r)['status_code']);
         $this->assertSame(401, $this->ctl()->test($this->req(['server_id' => 1], null))['status_code']);
+    }
+
+    public function testProtocolVersionOptional(): void
+    {
+        foreach ([null, ''] as $v) {
+            $this->calls = [];
+            $r = $this->req(['server_url' => 'https://x.test/mcp']);
+            if ($v === null) {
+                unset($r['body']['protocol_version']);
+            } else {
+                $r['body']['protocol_version'] = $v;
+            }
+            $res = $this->ctl()->test($r);
+            $this->assertTrue($res['success']);
+            $this->assertStringNotContainsString('mcp-protocol-version', implode("\n", $this->calls[0]['lines']));
+        }
+    }
+
+    public function testMessageRelayedVerbatimFromRawBody(): void
+    {
+        $raw = '{"message":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"clientInfo":{"name":"t"}}},"server_url":"https://x.test/mcp","protocol_version":"2025-11-25"}';
+        $req = ['user_id' => 'u1', 'body' => json_decode($raw, true) ?? [], 'raw_body' => $raw];
+        $res = $this->ctl()->test($req);
+        $this->assertTrue($res['success']);
+        $this->assertStringContainsString('"capabilities":{}', $this->calls[0]['body']);
+        $this->assertSame(json_encode(json_decode($raw)->message), $this->calls[0]['body']);
     }
 
     public function testResponseNeverContainsStoredSecrets(): void
