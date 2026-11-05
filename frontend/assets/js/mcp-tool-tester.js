@@ -11,9 +11,10 @@
  */
 class MCPToolTester {
     /**
-     * @param {{container: HTMLElement, server: object, t?: (k:string)=>string}} opts
+     * @param {{container: HTMLElement, server: object, t?: (k:string)=>string, onCall?: (request:object, res:object|null, ms:number)=>void}} opts
      */
-    constructor({ container, server, t }) {
+    constructor({ container, server, t, onCall }) {
+        this.onCall = typeof onCall === 'function' ? onCall : null;
         this.container = container;
         this.server = server;
         this.t = typeof t === 'function' ? t : (k) => k;
@@ -132,6 +133,8 @@ class MCPToolTester {
             params: { name: tool.name, arguments: args }
         };
 
+        const startedAt = Date.now();
+        let callRes = null;
         resultEl.innerHTML = `<div class="mcp-tool-loading">⏳ ${MCPToolTester.escape(this.t('mcpLibrary.calling'))}</div>`;
         if (btn) btn.disabled = true;
         try {
@@ -141,6 +144,7 @@ class MCPToolTester {
                 window.mcpClient.registerTools(this.server, [tool]);
             }
             const res = await window.mcpClient.callTool(tool.name, args);
+            callRes = res;
             if (!res.success) {
                 resultEl.innerHTML = this.renderError(res.error || 'Tool execution failed', requestPayload, res);
                 return;
@@ -157,8 +161,10 @@ class MCPToolTester {
                 }
             }
         } catch (err) {
+            callRes = { success: false, error: err.message };
             resultEl.innerHTML = this.renderError(err.message, requestPayload, null);
         } finally {
+            if (this.onCall) { try { this.onCall(requestPayload, callRes, Date.now() - startedAt); } catch (e) { /* never break the tool card */ } }
             if (btn) btn.disabled = false;
         }
     }

@@ -385,6 +385,18 @@ class MCPClient {
     }
 
     /**
+     * Protocol test relay: one JSON-RPC message through the backend (POST /mcp/test).
+     * Resolves to {success, relay?, error?}.
+     */
+    async testRelay(body) {
+        try {
+            return await this.request('/mcp/test', { method: 'POST', body: JSON.stringify(body) });
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    }
+
+    /**
      * Discover tools from an MCP server
      */
     async discoverTools(serverUrl, serverId = null) {
