@@ -53,6 +53,31 @@ final class McpEndpoint
         return $url;
     }
 
+    /**
+     * Stored headers JSON as name => value. Skips non-string names and
+     * non-scalar values; strips CR/LF and ":" from names, CR/LF from values.
+     *
+     * @return array<string,string>
+     */
+    public static function decodeStoredHeaders(?string $json): array
+    {
+        if ($json === null || $json === '') {
+            return [];
+        }
+        $decoded = json_decode($json, true);
+        if (!is_array($decoded)) {
+            return [];
+        }
+        $out = [];
+        foreach ($decoded as $name => $value) {
+            if (!is_string($name) || $name === '' || !is_scalar($value)) {
+                continue;
+            }
+            $out[(string) preg_replace('/[\r\n:]/', '', $name)] = (string) preg_replace('/[\r\n]/', '', (string) $value);
+        }
+        return $out;
+    }
+
     /** @return list<string> */
     private static function rawCandidates(string $serverUrl, string $transport): array
     {

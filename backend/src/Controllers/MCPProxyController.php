@@ -490,14 +490,8 @@ class MCPProxyController
             $stmt->execute([$serverId, $userId]);
             $row = $stmt->fetch(\PDO::FETCH_ASSOC);
             if (!$row || empty($row['headers'])) return [];
-            $decoded = json_decode($row['headers'], true);
-            if (!is_array($decoded)) return [];
             $out = [];
-            foreach ($decoded as $name => $value) {
-                if (!is_string($name) || $name === '') continue;
-                if (!is_scalar($value)) continue;
-                $name = preg_replace('/[\r\n:]/', '', $name);
-                $value = preg_replace('/[\r\n]/', '', (string)$value);
+            foreach (McpEndpoint::decodeStoredHeaders((string) $row['headers']) as $name => $value) {
                 $out[] = $name . ': ' . $value;
             }
             return $out;
