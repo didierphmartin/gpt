@@ -1,0 +1,54 @@
+/* CodeMirror (skill editor scripts, code components' Code tab): the fold arrows are a filled triangle at the Skills
+   list chevron's size and colour (14px, gray-600, darker on hover), right when folded, down when open.
+   Loaded after the add-on's foldgutter.css; the .CodeMirror prefix outranks its selectors anyway. */
+.CodeMirror .CodeMirror-foldgutter {
+    width: 16px;
+}
+.CodeMirror .CodeMirror-foldgutter-open,
+.CodeMirror .CodeMirror-foldgutter-folded {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 18px;
+    color: #4b5563;
+    cursor: pointer;
+}
+.CodeMirror .CodeMirror-foldgutter-open:hover,
+.CodeMirror .CodeMirror-foldgutter-folded:hover {
+    color: #111827;
+}
+.CodeMirror .CodeMirror-foldgutter-open:after,
+.CodeMirror .CodeMirror-foldgutter-folded:after {
+    content: "";
+    width: 14px;
+    height: 14px;
+    background-color: currentColor;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='black' stroke='black' stroke-width='1.5' stroke-linejoin='round'%3E%3Cpath d='M7 4l7 6-7 6z'/%3E%3C/svg%3E") center / 14px 14px no-repeat;
+            mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='black' stroke='black' stroke-width='1.5' stroke-linejoin='round'%3E%3Cpath d='M7 4l7 6-7 6z'/%3E%3C/svg%3E") center / 14px 14px no-repeat;
+    transition: transform .15s;
+}
+.CodeMirror .CodeMirror-foldgutter-open:after {
+    transform: rotate(90deg);
+}
+/* the folded block's marker: a grey ⋯ pill instead of the add-on's blue glowing ↔ */
+.CodeMirror .CodeMirror-foldmarker {
+    font-size: 0;
+    color: #4b5563;
+    background: #e5e7eb;
+    border-radius: 4px;
+    padding: 0 5px;
+    margin: 0 2px;
+    text-shadow: none;
+    font-family: inherit;
+    line-height: inherit;
+    cursor: pointer;
+}
+.CodeMirror .CodeMirror-foldmarker:after {
+    content: "\22EF";
+    font-size: 12px;
+}
+.CodeMirror .CodeMirror-foldmarker:hover {
+    background: #d1d5db;
+    color: #111827;
+}

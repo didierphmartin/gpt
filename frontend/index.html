@@ -72,7 +72,7 @@
     <link rel="stylesheet" href="assets/css/mcp-library.css?v=20260904-mcplib">
     <!-- Drawflow workflow editor -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.css">
-    <link rel="stylesheet" href="assets/css/workflow-editor.css?v=20261101-args-three">
+    <link rel="stylesheet" href="assets/css/workflow-editor.css?v=20261105-cm-code">
     <link rel="stylesheet" href="assets/css/file-storage.css?v=20260610-fileselect3">
     <!-- driver.js (onboarding tour). v1.4.0 to match local source at frontend/driver.js/.
          Swap to local once that copy is built (pnpm install && pnpm build inside that dir). -->
@@ -4416,6 +4416,8 @@
     <!-- Skill editor dialog (SkillEditor.open). CodeMirror 5 (pinned) is its code editor; the language modes and
          the markdown editor (Milkdown, dynamic import) are added by the editor's own adapters. -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/lib/codemirror.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/addon/fold/foldgutter.min.css">
+    <link rel="stylesheet" href="assets/css/code-editor.css?v=20261105-filled">
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/lib/codemirror.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/mode/markdown/markdown.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/mode/python/python.min.js"></script>
@@ -4425,8 +4427,13 @@
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/mode/xml/xml.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/mode/css/css.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/mode/htmlmixed/htmlmixed.min.js"></script>
+    <!-- code folding (▸/▾ beside the line numbers): indentation for Python/YAML, brackets for JS/JSON/CSS -->
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/addon/fold/foldcode.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/addon/fold/foldgutter.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/addon/fold/indent-fold.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.21/addon/fold/brace-fold.min.js"></script>
     <script src="assets/js/merge-blocks.js?v=20261103-md"></script>
-    <script src="assets/js/skill-editor.js?v=20261104-req2"></script>
+    <script src="assets/js/skill-editor.js?v=20261105-fold"></script>
     <!-- Milkdown (formatted markdown) loads on first use by dynamic import() of pinned esm.sh URLs, see the file. -->
     <script src="assets/js/skill-md-editor.js?v=20261104-scroll1"></script>
     <script src="assets/js/skills-manager.js?v=20261104-foldersvg1"></script>
@@ -4436,7 +4443,7 @@
     <script src="assets/js/agent-turn.js?v=20261022-start-args"></script>
     <script src="assets/js/swarm-rewrite.js?v=20260916-dupnames"></script>
     <script src="assets/js/code-node.js?v=20261029-robot-run"></script>
-    <script src="assets/js/code-node-assist.js?v=20261028-assist-center"></script>
+    <script src="assets/js/code-node-assist.js?v=20261105-ai-note"></script>
     <script src="assets/js/code-components.js?v=20261028-argdecls"></script>
     <script src="assets/js/start-options.js?v=20261101-watch-args"></script>
     <script src="assets/js/playbook-collection.js?v=20261102-robot-env"></script>
@@ -4450,7 +4457,7 @@
     <script src="assets/js/workflow-package-ui.js?v=20261103-skilldeps"></script>
     <script src="assets/js/workflow-package-import.js?v=20261103-skilldeps3"></script>
     <script src="assets/js/skill-visibility-card.js?v=20261103-skilldeps3"></script>
-    <script src="assets/js/workflow-editor.js?v=20261103-skilldeps"></script>
+    <script src="assets/js/workflow-editor.js?v=20261105-cm-code"></script>
     <script src="assets/js/agents-library.js?v=20260903-playbook-agent"></script>
     <script src="assets/js/mcp-tool-tester.js?v=20260904-mcplib"></script>
     <script src="assets/js/mcp-library.js?v=20261005-is-mock"></script>

@@ -11361,6 +11361,30 @@ class WorkflowEditor {
      */
     _numberCodeLines(ta) {
         const gutter = ta.previousElementSibling;
+        // The skill editor's code editor (CodeMirror) when it loaded; the textarea stays the API: its value reads and
+        // writes the editor, and an edit fires 'change' (debounced, not for programmatic writes) as a blur used to.
+        const SE = window.SkillEditor;
+        if (window.CodeMirror && SE && typeof SE.codeAdapter === 'function') {
+            const ed = SE.codeAdapter();
+            const wrap = ta.parentNode;
+            wrap.classList.add('code-editor-cm');
+            gutter.style.display = 'none';
+            ta.style.display = 'none';
+            ed.mount(wrap, '', { rel: 'code.py' });
+            let writing = false, timer = null;
+            Object.defineProperty(ta, 'value', {
+                get() { return ed.getText(); },
+                set(v) { writing = true; try { ed.setText(v); } finally { writing = false; } },
+            });
+            ed.onChange(() => {
+                if (writing) return;
+                clearTimeout(timer);
+                timer = setTimeout(() => ta.dispatchEvent(new Event('change')), 300);
+            });
+            // CodeMirror measures nothing while its tab is hidden: redraw when the pane is shown or resized
+            if (typeof ResizeObserver === 'function') new ResizeObserver(() => ed.refresh()).observe(wrap);
+            return;
+        }
         let shown = 0;
         const renumber = () => {
             const n = ta.value.split('\n').length;

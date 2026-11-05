@@ -2999,6 +2999,20 @@ svg.connection.wf-edge-chosen .main-path {
     white-space: pre;
     overflow: auto;
 }
+/* the skill editor's CodeMirror in the Code tab: it brings its own border and line numbers */
+.wf-code-window .code-editor-wrap.code-editor-cm {
+    border: 0;
+    border-radius: 0;
+}
+.wf-code-window .code-editor-wrap.code-editor-cm > [data-se="code"] {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.wf-code-window .code-editor-cm .CodeMirror {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 12px;
+    line-height: 18px;
+}
 
 /* ============================================
    Node Delete Button (X)

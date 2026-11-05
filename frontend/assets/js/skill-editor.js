@@ -106,15 +106,26 @@
                 orig = String(text || '');
                 box = h('div', { class: 'h-full min-h-0 border border-gray-300 rounded-lg overflow-hidden bg-white', 'data-se': 'code' });
                 el.appendChild(box);
+                // folding (▸/▾ beside the line numbers) when the fold add-ons loaded: the mode picks the rule
+                // (indentation for Python/YAML, brackets for JS/JSON/CSS); it only hides lines, the text is unchanged
+                const fold = 'foldGutter' in (window.CodeMirror.defaults || {});
                 cm = window.CodeMirror(box, {
                     value: orig, mode: modeOf(rel), lineNumbers: true, readOnly: !!readOnly,
                     indentUnit: 4, tabSize: 4, indentWithTabs: false, viewportMargin: 50,
+                    ...(fold ? {
+                        foldGutter: true,
+                        gutters: ['CodeMirror-linenumbers', 'CodeMirror-foldgutter'],
+                        extraKeys: { 'Ctrl-Q': (ed) => ed.foldCode(ed.getCursor()) },
+                    } : {}),
                 });
                 cm.setSize('100%', '100%');
             },
             getText: () => (cm ? keepLineEnds(orig, cm.getValue()) : orig),
             onChange(cb) { if (cm) cm.on('change', () => cb()); },
             setOriginal() {},
+            // for editors hosted elsewhere (the code node's Code tab): replace the text, redraw once visible
+            setText(text) { orig = String(text || ''); if (cm) cm.setValue(orig); },
+            refresh() { if (cm) cm.refresh(); },
             destroy() { if (box && host) host.removeChild(box); box = cm = null; },
         };
     }
@@ -176,7 +187,7 @@
      * installed: a promise of the Skills-list rows (or null) for the Required skills warning.
      */
     function frontForm() {
-        let host = null, box = null, opts = {}, front = '', state = { values: {} }, rows = [], other = [], dups = [];
+        let host = null, box = null, wrap = null, opts = {}, front = '', state = { values: {} }, rows = [], other = [], dups = [];
         let closeDesc = null;   // the open description overlay's close(), so destroy() never leaks its keydown listener
         let fileHost = null;    // the grid cell that holds the dialog's file selector while the panel is open
         const cbs = [];
@@ -334,7 +345,7 @@
         function render() {
             for (const k of Object.keys(inputs)) delete inputs[k];
             const wasOpen = box ? box.open : undefined;
-            if (box && host) host.removeChild(box);
+            if (wrap && host) host.removeChild(wrap);
             const PRE = 'm-0 p-2 text-xs font-mono whitespace-pre-wrap break-words max-h-32 overflow-auto rounded border border-gray-200 bg-gray-50 text-gray-600';
             const rawOf = (list) => trimEnd(list.map((x) => x.raw.replace(/\r\n/g, '\n')).join(''));
             const otherBox = other.length || dups.length ? h('div', { 'data-se': 'fm-other', class: 'min-w-0 space-y-1' },
@@ -351,7 +362,10 @@
                 h('div', { class: 'grid grid-cols-4 gap-3 px-3 pb-3 pt-1 max-h-[40vh] overflow-auto' }, ...cells(otherBox)));
             box.open = !!(wasOpen !== undefined ? wasOpen : state.open);   // (h() skips false)
             box.addEventListener('toggle', () => { state.open = box.open; placeFile(); refresh(); });
-            host.appendChild(box);
+            // the "Metadata" label over the panel matches the File label beside it
+            wrap = h('div', { 'data-se': 'fm-wrap' },
+                h('div', { 'data-se': 'fm-label', class: 'block text-xs font-medium text-gray-700 mb-1', text: tr('skills.editor.fm.metadata') }), box);
+            host.appendChild(wrap);
             placeFile();
             refresh();
         }
@@ -417,8 +431,8 @@
             destroy() {
                 if (closeDesc) closeDesc();
                 if (opts.fileBlock && opts.fileHome && opts.fileBlock.parentNode !== opts.fileHome) opts.fileHome.appendChild(opts.fileBlock);
-                if (box && host) host.removeChild(box);
-                box = null;
+                if (wrap && host) host.removeChild(wrap);
+                box = wrap = null;
             },
         };
     }

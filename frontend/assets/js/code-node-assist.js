@@ -248,6 +248,7 @@
         const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
         el.innerHTML = `
             <label>${esc(t('workflow.codeAssist.title'))}</label>
+            <div data-a="note" class="text-xs text-gray-500" style="margin:-2px 0 6px;">${esc(t('workflow.codeAssist.note'))}</div>
             <div style="display:flex;gap:8px;align-items:stretch;">
                 <textarea data-a="request" rows="3" style="flex:1;min-width:0;" placeholder="${esc(t('workflow.codeAssist.placeholder'))}"></textarea>
                 <div style="display:flex;flex-direction:column;gap:6px;width:240px;flex:none;">
