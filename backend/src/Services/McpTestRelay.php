@@ -63,7 +63,7 @@ final class McpTestRelay
         ];
     }
 
-    /** @return list<array> */
+    /** @return list<\stdClass> */
     public static function parseMessages(string $contentType, string $body): array
     {
         $out = [];
@@ -79,18 +79,25 @@ final class McpTestRelay
                 if ($data === []) {
                     continue;
                 }
-                $decoded = json_decode(implode("\n", $data), true);
-                if (is_array($decoded)) {
-                    $out[] = $decoded;
-                }
+                array_push($out, ...self::messagesOf(implode("\n", $data)));
             }
             return $out;
         }
-        $decoded = json_decode($body, true);
-        if (!is_array($decoded)) {
-            return [];
+        return self::messagesOf($body);
+    }
+
+    /**
+     * One JSON text → its JSON-RPC message objects (a batch array gives several). Decoded as objects, never
+     * assoc arrays: an assoc decode turns the server's {} into [] and the validator would blame the server.
+     * @return list<\stdClass>
+     */
+    private static function messagesOf(string $json): array
+    {
+        $decoded = json_decode($json);
+        if ($decoded instanceof \stdClass) {
+            return [$decoded];
         }
-        return array_is_list($decoded) ? array_values(array_filter($decoded, 'is_array')) : [$decoded];
+        return is_array($decoded) ? array_values(array_filter($decoded, fn ($m) => $m instanceof \stdClass)) : [];
     }
 
     /** @return array<string,string> */

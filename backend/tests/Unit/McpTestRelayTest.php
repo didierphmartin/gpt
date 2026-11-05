@@ -69,7 +69,18 @@ final class McpTestRelayTest extends TestCase
         $body = "event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\r\n\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n";
         $m = McpTestRelay::parseMessages('text/event-stream; charset=utf-8', $body);
         $this->assertCount(2, $m);
-        $this->assertSame(1, $m[1]['id']);
+        $this->assertSame(1, $m[1]->id);
+    }
+
+    /** The server's {} must reach the browser as {}: an assoc decode turns it into [] and the validator then blames the server. */
+    public function testParsedMessagesKeepEmptyObjects(): void
+    {
+        $json = '{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"tools":{}},"serverInfo":{"name":"s"}}}';
+        $this->assertSame('[' . $json . ']', json_encode(McpTestRelay::parseMessages('application/json', $json)));
+        $sse = "event: message\ndata: $json\n\n";
+        $this->assertSame('[' . $json . ']', json_encode(McpTestRelay::parseMessages('text/event-stream', $sse)));
+        $batch = '[' . $json . ',{"jsonrpc":"2.0","id":2,"result":{"tools":[]}}]';
+        $this->assertSame($batch, json_encode(McpTestRelay::parseMessages('application/json', $batch)));
     }
 
     public function testParsesJsonAndBatch(): void
