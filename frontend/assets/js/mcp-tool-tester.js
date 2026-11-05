@@ -146,7 +146,7 @@ class MCPToolTester {
             const res = await window.mcpClient.callTool(tool.name, args);
             callRes = res;
             if (!res.success) {
-                resultEl.innerHTML = this.renderError(res.error || 'Tool execution failed', requestPayload, res);
+                resultEl.innerHTML = this.renderError(res.error || 'Function call failed', requestPayload, res);
                 return;
             }
             resultEl.innerHTML = this.renderResult(res.result, requestPayload);
