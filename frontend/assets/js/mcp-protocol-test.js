@@ -58,7 +58,10 @@
         let init = await call('initialize', 'initialize', initParams);
         let initId = 'initialize';
         const url = String(opts.url || '').replace(/\/+$/, '');
-        if (opts.transport !== 'sse' && !init.relay.error && !init.response) {
+        // McpEndpoint::candidates has no /mcp sibling for a path already ending in /mcp or .php.
+        const path = url.split(/[?#]/)[0].replace(/\/+$/, '');
+        const hasSibling = !/(\/mcp|\.php)$/i.test(path);
+        if (opts.transport !== 'sse' && hasSibling && !init.relay.error && !init.response) {
             const note = init.relay.status ? `no MCP answer at the registered URL (HTTP ${init.relay.status})` : 'no MCP answer at the registered URL';
             report.steps.push(stepOf('initialize', 'warn', init.relay, note));
             ctx.sibling = true;
@@ -81,7 +84,8 @@
         const sid = init.relay.headers && init.relay.headers['mcp-session-id'];
         ctx.sessionId = sid || null;
         const result = init.response.result || {};
-        ctx.protocolVersion = result.protocolVersion || null;
+        // Steps after initialize send the negotiated version, else the one requested.
+        ctx.protocolVersion = result.protocolVersion || Validator.LATEST_VERSION;
         const caps = result.capabilities || {};
         report.server = {
             name: result.serverInfo && result.serverInfo.name, version: result.serverInfo && result.serverInfo.version,
@@ -138,6 +142,9 @@
     };
     const STEP_LABEL = { initialize: 'stepInitialize', 'initialize-mcp': 'stepInitializeMcp', initialized: 'stepInitialized', tools: 'stepTools', resources: 'stepResources', prompts: 'stepPrompts' };
     const ICON = { ok: '✅', warn: '⚠️', error: '❌', skipped: '⏭' };
+    // Validator messages may already start with an icon; don't add a second one.
+    const HAS_ICON = /^(❌|⚠️|⚠|✅)/u;
+    const issue = (icon, context, text) => `${HAS_ICON.test(String(text)) ? '' : icon + ' '}${context}: ${text}`;
     const fmt = (t, o) => String(t).replace(/\{(\w+)\}/g, (m, k) => (o && o[k] != null ? o[k] : m));
 
     function normaliseUrl(u) {
@@ -192,8 +199,8 @@
         if (report.transportNote) out.push(report.transportNote);
         report.steps.forEach(s => out.push(`${ICON[s.status] || ''} ${s.id}${s.http ? ' HTTP ' + s.http : ''}${s.ms != null ? ' ' + s.ms + ' ms' : ''}${s.note ? ' - ' + s.note : ''}`));
         report.validation.forEach(v => {
-            v.errors.forEach(e => out.push(`${ICON.error} ${v.context}: ${e}`));
-            v.warnings.forEach(w => out.push(`${ICON.warn} ${v.context}: ${w}`));
+            v.errors.forEach(e => out.push(issue(ICON.error, v.context, e)));
+            v.warnings.forEach(w => out.push(issue(ICON.warn, v.context, w)));
         });
         return out.join('\n');
     }
@@ -256,8 +263,8 @@
             else {
                 vk.push(mk('p', 'mpt-summary', fmt(L.summary, counts(report))));
                 report.validation.forEach(v => {
-                    v.errors.forEach(e => vk.push(mk('div', 'mpt-issue mpt-error', `${ICON.error} ${v.context}: ${e}`)));
-                    v.warnings.forEach(w => vk.push(mk('div', 'mpt-issue mpt-warn', `${ICON.warn} ${v.context}: ${w}`)));
+                    v.errors.forEach(e => vk.push(mk('div', 'mpt-issue mpt-error', issue(ICON.error, v.context, e))));
+                    v.warnings.forEach(w => vk.push(mk('div', 'mpt-issue mpt-warn', issue(ICON.warn, v.context, w))));
                 });
             }
             body.append(section(L.validation, ...vk));

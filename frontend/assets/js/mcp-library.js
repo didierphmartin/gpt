@@ -360,8 +360,9 @@ class MCPLibrary {
                 return res.relay;
             },
             onReport: async (report) => {
+                if (!report.server?.name) return;
                 const url = formUrl();
-                const r = await P.registryStatus(report.server?.name, url, (u) => fetch(u).then(x => x.json()));
+                const r = await P.registryStatus(report.server.name, url, (u) => fetch(u).then(x => { if (!x.ok) throw new Error(x.status); return x.json(); }));
                 this.registryLine(r);
             },
         });

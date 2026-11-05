@@ -141,6 +141,35 @@ async function main() {
         errs.forEach(e => assert(text.includes(e), e));
         assert(text.includes('initialize'));
     }
+    { // protocol version: none on initialize, negotiated after, requested when the server gave none
+        const f = fake(byMethod({ tools: {} }));
+        await run(f.send);
+        assert.strictEqual(f.calls[0].ctx.protocolVersion, null);
+        f.calls.slice(1).forEach(c => assert.strictEqual(c.ctx.protocolVersion, '2025-11-25'));
+        const g = fake(byMethod({ tools: {} }, { init: relay([rpc(1, { capabilities: { tools: {} }, serverInfo: { name: 'S', version: '1' } })]) }));
+        await run(g.send);
+        assert(g.calls.length > 1);
+        g.calls.slice(1).forEach(c => assert.strictEqual(c.ctx.protocolVersion, Validator.LATEST_VERSION));
+    }
+    { // no sibling probe when the stored path ends in /mcp or .php
+        for (const u of ['https://x.test/mcp', 'https://x.test/mcp/', 'https://x.test/srv/server.php', 'https://x.test/mcp?k=1']) {
+            const f = fake(() => relay([], { headers: { 'content-type': 'text/html' }, body: '<html>' }));
+            const r = await run(f.send, { url: u });
+            assert.strictEqual(f.calls.length, 1, u);
+            assert(!f.calls.some(c => c.ctx.sibling), u);
+            assert.strictEqual(st(r, 'initialize').status, 'error', u);
+        }
+    }
+    { // a validator message that already carries an icon gets no second one
+        const rep = { steps: [], server: null, log: [], urlWarning: null, transportNote: null,
+            validation: [{ context: 'initialize', valid: false, errors: ['❌ CRITICAL: capabilities.tools must be an object {}, not an array []', 'plain'], warnings: ['⚠️ already', 'w'] }] };
+        const text = T.reportText(rep, T.DEFAULT_LABELS);
+        assert(!/❌.*❌/.test(text), text);
+        assert(!/⚠️.*⚠️/.test(text), text);
+        assert(text.includes('❌ initialize: plain'), text);
+        assert(text.includes('⚠️ initialize: w'), text);
+        assert(text.includes('❌ CRITICAL: capabilities.tools'), text);
+    }
     { // labels
         const keys = Object.keys(T.DEFAULT_LABELS);
         assert(keys.length > 10);
