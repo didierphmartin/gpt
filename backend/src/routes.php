@@ -246,6 +246,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->post('/api/v1/admin/mcp/servers/update', ['AdminController', 'updateMCPServer']);
         $r->post('/api/v1/admin/mcp/servers/toggle', ['AdminController', 'toggleMCPServer']);
         $r->post('/api/v1/admin/mcp/servers/refresh', ['AdminController', 'refreshMCPServerTools']);
+        $r->post('/api/v1/admin/mcp/test', ['McpTestController', 'adminTest']);
         $r->delete('/api/v1/admin/mcp/servers/{id:\d+}', ['AdminController', 'deleteMCPServer']);
 
         // Per-user MCP overrides — admin broadens/narrows the package allowlist
@@ -319,6 +320,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         // MCP PROXY ROUTES
         // ============================================
         $r->post('/api/v1/mcp/proxy', ['MCPProxyController', 'forward']);
+        $r->post('/api/v1/mcp/test', ['McpTestController', 'test']);
 
         // ============================================
         // MCP APP ROUTES (Public - serves HTML)

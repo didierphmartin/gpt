@@ -202,6 +202,7 @@ class MCPLibrary {
             <div class="flex border-b border-gray-200 px-3">
               <button class="mcp-modal-tab active" data-tab="settings">${this.esc(t('mcpLibrary.tabSettings'))}</button>
               <button class="mcp-modal-tab" data-tab="tools" ${isNew ? 'disabled' : ''}>${this.esc(t('mcpLibrary.tabTools'))} <span id="mcp-modal-tool-count" class="mcp-lib-count">(${Number(server?.tool_count) || 0})</span></button>
+              <button class="mcp-modal-tab" data-tab="test">${this.esc(t('mcpLibrary.tabTest'))}</button>
             </div>
             <div class="flex-1 overflow-y-auto px-5 py-4">
               <div id="mcp-tab-settings">
@@ -225,9 +226,9 @@ class MCPLibrary {
                 ${!own ? `<div class="mcp-help">${this.esc(t('mcpLibrary.headersAdminManaged'))}</div>` : ''}
                 <label class="mcp-field flex items-center gap-2"><input type="checkbox" id="mcp-f-enabled" ${dis} ${isNew || Number(server.enabled) === 1 ? 'checked' : ''}> ${this.esc(t('mcpLibrary.enabled'))}</label>
                 <label class="mcp-field flex items-center gap-2"><input type="checkbox" id="mcp-f-mock" ${dis} ${!isNew && Number(server.is_mock) === 1 ? 'checked' : ''}> ${this.esc(t('mcpLibrary.isMock'))}</label>
+                <div id="mcp-f-registry" class="mcp-help"></div>
                 <div id="mcp-f-msg" class="mcp-msg hidden"></div>
                 <div class="flex items-center gap-2 mt-4">
-                  <button id="mcp-f-test" class="mcp-btn mcp-btn-secondary">${this.esc(t('mcpLibrary.testConnection'))}</button>
                   ${own ? `<button id="mcp-f-save" class="mcp-btn mcp-btn-primary">${this.esc(t('mcpLibrary.save'))}</button>` : ''}
                   <span class="flex-1"></span>
                   ${own && !isNew ? `<button id="mcp-f-delete" class="mcp-btn mcp-btn-secondary" data-armed="0">${this.esc(t('mcpLibrary.delete'))}</button>` : ''}
@@ -240,6 +241,7 @@ class MCPLibrary {
                 </div>
                 <div id="mcp-tools-cards"><div class="mcp-tool-empty">${this.esc(t('mcpLibrary.loadingTools'))}</div></div>
               </div>
+              <div id="mcp-tab-test" class="hidden"></div>
             </div>
           </div>
         </div>`;
@@ -250,7 +252,7 @@ class MCPLibrary {
 
     bindModal(server, own, isNew) {
         const modal = document.getElementById('mcp-server-modal');
-        const close = () => modal.remove();
+        const close = () => { this.testView?.destroy(); this.testView = null; modal.remove(); };
         document.getElementById('mcp-modal-close').addEventListener('click', close);
         modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
 
@@ -260,11 +262,12 @@ class MCPLibrary {
                 modal.querySelectorAll('.mcp-modal-tab').forEach(b => b.classList.toggle('active', b === btn));
                 document.getElementById('mcp-tab-settings').classList.toggle('hidden', btn.dataset.tab !== 'settings');
                 document.getElementById('mcp-tab-tools').classList.toggle('hidden', btn.dataset.tab !== 'tools');
+                document.getElementById('mcp-tab-test').classList.toggle('hidden', btn.dataset.tab !== 'test');
                 if (btn.dataset.tab === 'tools') this.loadTools(server);
             });
         });
 
-        document.getElementById('mcp-f-test').addEventListener('click', () => this.testConnection());
+        this.mountTestView(server, own);
         document.getElementById('mcp-f-save')?.addEventListener('click', () => this.save(server, isNew));
         document.getElementById('mcp-f-delete')?.addEventListener('click', (e) => this.deleteTwoStep(e.currentTarget, server));
         document.getElementById('mcp-tools-refresh').addEventListener('click', () => this.loadTools(server, /*force*/ true));
@@ -300,18 +303,76 @@ class MCPLibrary {
         el.className = `mcp-msg ${ok ? 'ok' : 'err'}`;
     }
 
-    async testConnection() {
-        const f = this.readForm();
-        if (f.error) return this.showMsg(f.error, false);
-        if (!f.url) return this.showMsg(this.t('mcpLibrary.urlRequired'), false);
-        this.showMsg(this.t('mcpLibrary.testing'), true);
-        const res = await window.mcpClient.testConnection(f.url, f.headers || {}, f.transport);
-        if (res?.success) {
-            const info = res.serverInfo ? ` — ${res.serverInfo.name || ''} ${res.serverInfo.version || ''}` : '';
-            this.showMsg(this.t('mcpLibrary.connected') + info, true);
-        } else {
-            this.showMsg((res?.error?.message || res?.error || this.t('mcpLibrary.connectionFailed')), false);
+    // ─── test tab ──────────────────────────────────────────────────────────
+    registryLine(r) {
+        const t = this.t;
+        const el = document.getElementById('mcp-f-registry');
+        if (!el) return;
+        const state = r?.state;
+        const key = { registered: 'registryRegistered', deprecated: 'registryDeprecated',
+            'not-registered': 'registryNotRegistered', unreachable: 'registryUnreachable' }[state] || 'registryNotTested';
+        let text = t('mcpLibrary.test.' + key);
+        text = text.replace('{name}', r?.name ?? '').replace('{version}', r?.version ?? '');
+        const icon = state === 'registered' ? '✅ ' : state === 'deprecated' ? '⚠️ ' : '';
+        el.className = 'mcp-help';
+        el.textContent = icon + text;
+        if ((state === 'registered' || state === 'deprecated') && r.link) {
+            const a = document.createElement('a');
+            a.href = r.link; a.target = '_blank'; a.rel = 'noopener'; a.textContent = ' ↗';
+            el.append(a);
         }
+    }
+
+    cachedRegistry(url) {
+        try {
+            const c = JSON.parse(localStorage.getItem('mcpRegistry:' + window.McpProtocolTest.normaliseUrl(url)));
+            if (c && c.result && Date.now() - c.at < 24 * 3600 * 1000) return c.result;
+        } catch { /* no cache */ }
+        return null;
+    }
+
+    mountTestView(server, own) {
+        const host = document.getElementById('mcp-tab-test');
+        const P = window.McpProtocolTest;
+        if (!host || !P) return;
+        const labels = {};
+        Object.keys(P.DEFAULT_LABELS).forEach(k => { labels[k] = this.t('mcpLibrary.test.' + k); });
+        const formUrl = () => document.getElementById('mcp-f-url')?.value.trim() || '';
+        const form = () => (own ? this.readForm() : null);
+        this.registryLine(formUrl() ? this.cachedRegistry(formUrl()) : null);
+        this.testView?.destroy();
+        this.testView = P.mount(host, {
+            labels,
+            get url() { return formUrl(); },
+            get transport() { return document.getElementById('mcp-f-transport')?.value || 'http'; },
+            send: async (message, ctx) => {
+                const body = { message, protocol_version: ctx.protocolVersion || undefined, session_id: ctx.sessionId || undefined, sibling: !!ctx.sibling };
+                if (own) {
+                    const f = form();
+                    if (f.error) return { error: f.error };
+                    if (!f.url) return { error: this.t('mcpLibrary.urlRequired') };
+                    body.server_url = f.url; body.headers = f.headers || undefined; body.transport = f.transport;
+                } else {
+                    body.server_id = server.id;
+                }
+                const res = await window.mcpClient.testRelay(body);
+                if (!res?.success) return { error: res?.error?.message || res?.error || 'request failed' };
+                return res.relay;
+            },
+            onReport: async (report) => {
+                if (!report.server?.name) return;
+                const url = formUrl();
+                const r = await P.registryStatus(report.server.name, url, (u) => fetch(u).then(x => { if (!x.ok) throw new Error(x.status); return x.json(); }));
+                this.registryLine(r);
+            },
+        });
+    }
+
+    logToolCall(request, res) {
+        if (!this.testView) return;
+        const at = new Date().toISOString();
+        this.testView.log({ at, step: 'tools/call', direction: 'request', body: request });
+        this.testView.log({ at: new Date().toISOString(), step: 'tools/call', direction: 'response', body: res });
     }
 
     async save(server, isNew) {
@@ -389,7 +450,7 @@ class MCPLibrary {
             typeEl.className = `mcp-badge ${isApp ? 'mcp-badge-app' : 'mcp-badge-type'}`;
             typeEl.style.fontSize = '11px';
         }
-        this.tester = new window.MCPToolTester({ container: cards, server, t: this.t });
+        this.tester = new window.MCPToolTester({ container: cards, server, t: this.t, onCall: (req, res) => this.logToolCall(req, res) });
         this.tester.render(tools);
         // Keep the sidebar's tool_count / server_type badge in sync: refresh the
         // tree whenever what we just rendered disagrees with what it shows
