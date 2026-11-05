@@ -118,5 +118,209 @@
         return report;
     }
 
-    return { runTest };
+    const DEFAULT_LABELS = {
+        run: 'Run test', running: 'Running…', copyReport: 'Copy report', copied: 'Copied',
+        idle: 'Press Run test to check how this server speaks MCP.',
+        handshake: 'Handshake', serverInfo: 'Server information', validation: 'Protocol validation',
+        resourcesPrompts: 'Resources & prompts', activityLog: 'Activity log',
+        resources: 'Resources', prompts: 'Prompts', none: 'None',
+        name: 'Name', version: 'Version', requested: 'Protocol requested', negotiated: 'Protocol negotiated',
+        capabilities: 'Capabilities', instructions: 'Instructions',
+        summary: '{passed} passed, {warnings} warnings, {errors} errors',
+        request: 'request', response: 'response', raw: 'raw JSON', noValidation: 'No validation ran.',
+        registryNotTested: 'Run the test to check the MCP Registry',
+        registryRegistered: 'Registered in the MCP Registry: {name} v{version}, active',
+        registryDeprecated: 'Registered in the MCP Registry, deprecated: {name} v{version}',
+        registryNotRegistered: 'Not registered in the MCP Registry',
+        registryUnreachable: 'MCP Registry unreachable',
+        stepInitialize: 'initialize', stepInitializeMcp: 'initialize (at /mcp)', stepInitialized: 'notifications/initialized',
+        stepTools: 'tools/list', stepResources: 'resources/list', stepPrompts: 'prompts/list',
+    };
+    const STEP_LABEL = { initialize: 'stepInitialize', 'initialize-mcp': 'stepInitializeMcp', initialized: 'stepInitialized', tools: 'stepTools', resources: 'stepResources', prompts: 'stepPrompts' };
+    const ICON = { ok: '✅', warn: '⚠️', error: '❌', skipped: '⏭' };
+    const fmt = (t, o) => String(t).replace(/\{(\w+)\}/g, (m, k) => (o && o[k] != null ? o[k] : m));
+
+    function normaliseUrl(u) {
+        let x;
+        try { x = new URL(String(u).trim()); } catch (e) { return String(u || '').trim().toLowerCase().replace(/\/+$/, ''); }
+        return x.origin + x.pathname.replace(/\/+$/, '') + x.search;
+    }
+
+    const REGISTRY = 'https://registry.modelcontextprotocol.io/v0/servers?search=';
+    const DAY = 24 * 3600 * 1000;
+    async function registryStatus(name, url, fetchFn, now) {
+        if (!name) return { state: 'not-registered' };
+        now = now == null ? Date.now() : now;
+        const ls = typeof localStorage !== 'undefined' ? localStorage : null;
+        const key = 'mcpRegistry:' + normaliseUrl(url);
+        if (ls) {
+            try {
+                const c = JSON.parse(ls.getItem(key));
+                if (c && c.result && now - c.at < DAY) return c.result;
+            } catch (e) { /* ignore a bad cache entry */ }
+        }
+        const link = REGISTRY + encodeURIComponent(name);
+        let result;
+        try {
+            const data = await fetchFn(link);
+            const want = normaliseUrl(url);
+            const hit = ((data && data.servers) || []).map(e => ({ s: (e && e.server) || e || {}, m: e && e._meta })).find(e =>
+                (e.s.remotes || []).some(r => r && r.url && normaliseUrl(r.url) === want));
+            if (!hit) result = { state: 'not-registered' };
+            else {
+                const m = (hit.m || hit.s._meta || {})['io.modelcontextprotocol.registry/official'] || {};
+                result = { state: m.status === 'deprecated' ? 'deprecated' : 'registered', name: hit.s.name, version: hit.s.version, link };
+            }
+        } catch (e) { return { state: 'unreachable' }; }
+        if (ls) { try { ls.setItem(key, JSON.stringify({ at: now, result })); } catch (e) { /* quota */ } }
+        return result;
+    }
+
+    function counts(report) {
+        const c = { passed: 0, warnings: 0, errors: 0 };
+        report.validation.forEach(v => { if (v.errors.length) c.errors += v.errors.length; else c.passed++; c.warnings += v.warnings.length; });
+        return c;
+    }
+
+    function reportText(report, labels) {
+        const L = Object.assign({}, DEFAULT_LABELS, labels);
+        const out = [];
+        const sv = report.server;
+        if (sv) out.push(`${sv.name || ''} ${sv.version || ''}`.trim() + ` (${sv.negotiated || ''})`);
+        out.push(fmt(L.summary, counts(report)));
+        if (report.urlWarning) out.push(report.urlWarning);
+        if (report.transportNote) out.push(report.transportNote);
+        report.steps.forEach(s => out.push(`${ICON[s.status] || ''} ${s.id}${s.http ? ' HTTP ' + s.http : ''}${s.ms != null ? ' ' + s.ms + ' ms' : ''}${s.note ? ' - ' + s.note : ''}`));
+        report.validation.forEach(v => {
+            v.errors.forEach(e => out.push(`${ICON.error} ${v.context}: ${e}`));
+            v.warnings.forEach(w => out.push(`${ICON.warn} ${v.context}: ${w}`));
+        });
+        return out.join('\n');
+    }
+
+    // ---- view ----
+    function mount(el, opts) {
+        opts = opts || {};
+        const L = Object.assign({}, DEFAULT_LABELS, opts.labels);
+        const doc = el.ownerDocument;
+        let running = false, destroyed = false, last = null;
+        const extra = [];
+        const mk = (tag, cls, text) => { const n = doc.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+        const json = v => { try { return JSON.stringify(v, null, 2); } catch (e) { return String(v); } };
+
+        el.textContent = '';
+        el.classList.add('mpt');
+        const bar = mk('div', 'mpt-bar');
+        const runBtn = mk('button', 'mpt-btn mpt-run', L.run); runBtn.type = 'button';
+        const copyBtn = mk('button', 'mpt-btn', L.copyReport); copyBtn.type = 'button'; copyBtn.disabled = true;
+        bar.append(runBtn, copyBtn);
+        const body = mk('div', 'mpt-body');
+        el.append(bar, body);
+
+        const section = (title, ...kids) => { const s = mk('section', 'mpt-section'); s.append(mk('h4', 'mpt-h', title), ...kids); return s; };
+        const row = (k, v) => { const r = mk('div', 'mpt-kv'); r.append(mk('span', 'mpt-k', k), mk('span', 'mpt-v', v == null || v === '' ? '-' : String(v))); return r; };
+        const logLine = e => {
+            const d = mk('details', 'mpt-log-entry mpt-' + e.direction);
+            d.append(mk('summary', '', `${e.at} ${e.step} ${e.direction === 'request' ? L.request : L.response}`), mk('pre', 'mpt-pre', json(e.body)));
+            return d;
+        };
+        const logBox = mk('div', 'mpt-log');
+
+        function render(report) {
+            body.textContent = '';
+            if (!report) { body.append(mk('p', 'mpt-idle', L.idle)); return; }
+            const hs = mk('ul', 'mpt-steps');
+            report.steps.forEach(s => {
+                const li = mk('li', 'mpt-step mpt-' + s.status);
+                li.append(mk('span', 'mpt-icon', ICON[s.status] || ''), mk('span', 'mpt-step-id', L[STEP_LABEL[s.id]] || s.id));
+                if (s.http) li.append(mk('span', 'mpt-meta', 'HTTP ' + s.http));
+                if (s.ms != null) li.append(mk('span', 'mpt-meta', s.ms + ' ms'));
+                if (s.note) li.append(mk('span', 'mpt-note', s.note));
+                hs.append(li);
+            });
+            const hsKids = [hs];
+            if (report.urlWarning) hsKids.unshift(mk('p', 'mpt-warn', report.urlWarning));
+            if (report.transportNote) hsKids.unshift(mk('p', 'mpt-note', report.transportNote));
+            body.append(section(L.handshake, ...hsKids));
+
+            if (report.server) {
+                const sv = report.server, kids = [row(L.name, sv.name), row(L.version, sv.version), row(L.requested, sv.requested), row(L.negotiated, sv.negotiated)];
+                const cd = mk('details', 'mpt-caps'); cd.append(mk('summary', '', L.capabilities), mk('pre', 'mpt-pre', json(sv.capabilities)));
+                kids.push(cd);
+                if (sv.instructions) kids.push(mk('div', 'mpt-instr', sv.instructions));
+                body.append(section(L.serverInfo, ...kids));
+            }
+
+            const vk = [];
+            if (!report.validation.length) vk.push(mk('p', 'mpt-idle', L.noValidation));
+            else {
+                vk.push(mk('p', 'mpt-summary', fmt(L.summary, counts(report))));
+                report.validation.forEach(v => {
+                    v.errors.forEach(e => vk.push(mk('div', 'mpt-issue mpt-error', `${ICON.error} ${v.context}: ${e}`)));
+                    v.warnings.forEach(w => vk.push(mk('div', 'mpt-issue mpt-warn', `${ICON.warn} ${v.context}: ${w}`)));
+                });
+            }
+            body.append(section(L.validation, ...vk));
+
+            const list = (title, items, fn) => {
+                const g = mk('div', 'mpt-group'); g.append(mk('h5', 'mpt-h5', title));
+                if (!items.length) g.append(mk('p', 'mpt-idle', L.none));
+                items.forEach(i => g.append(fn(i)));
+                return g;
+            };
+            body.append(section(L.resourcesPrompts,
+                list(L.resources, report.resources, r => mk('div', 'mpt-item', [r.name, r.uri, r.description].filter(Boolean).join(' - '))),
+                list(L.prompts, report.prompts, p => mk('div', 'mpt-item', [p.name, (p.arguments || []).map(a => a.name).join(', '), p.description].filter(Boolean).join(' - ')))));
+
+            logBox.textContent = '';
+            report.log.concat(extra).forEach(e => logBox.append(logLine(e)));
+            body.append(section(L.activityLog, logBox));
+        }
+
+        async function run() {
+            if (destroyed) return last;
+            if (running) return last;
+            running = true; runBtn.disabled = true; runBtn.textContent = L.running;
+            let report = null;
+            try {
+                report = await runTest(opts.send, { transport: opts.transport, url: opts.url, Validator: opts.Validator });
+                last = report; extra.length = 0;
+                if (!destroyed) { render(report); copyBtn.disabled = false; }
+                if (opts.onReport) { try { opts.onReport(report); } catch (e) { /* caller's problem */ } }
+            } finally {
+                running = false;
+                if (!destroyed) { runBtn.disabled = false; runBtn.textContent = L.run; }
+            }
+            return report;
+        }
+        function log(entry) {
+            if (destroyed || !entry) return;
+            extra.push(entry);
+            if (last) logBox.append(logLine(entry));
+        }
+        async function copy() {
+            if (!last) return;
+            const text = reportText(last, L);
+            try {
+                if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(text);
+                    copyBtn.textContent = L.copied; setTimeout(() => { if (!destroyed) copyBtn.textContent = L.copyReport; }, 1500);
+                    return;
+                }
+            } catch (e) { /* fall through to the textarea */ }
+            try {
+                const ta = mk('textarea', 'mpt-copy'); ta.readOnly = true; ta.value = text; ta.rows = 8;
+                bar.after(ta); ta.focus(); ta.select();
+            } catch (e) { /* never throw */ }
+        }
+        runBtn.addEventListener('click', () => { run(); });
+        copyBtn.addEventListener('click', copy);
+        render(null);
+        return {
+            run, log,
+            destroy() { destroyed = true; el.textContent = ''; el.classList.remove('mpt'); },
+        };
+    }
+
+    return { runTest, mount, reportText, normaliseUrl, registryStatus, DEFAULT_LABELS };
 });

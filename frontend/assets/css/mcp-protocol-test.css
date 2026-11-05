@@ -1,0 +1,35 @@
+/* MCP protocol test view. Self-contained: no dependency on the host app's CSS. */
+.mpt { font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: #1f2937; }
+.mpt-bar { display: flex; gap: 8px; margin-bottom: 12px; }
+.mpt-btn { padding: 6px 14px; border: 1px solid #9ca3af; border-radius: 6px; background: #fff; color: inherit; cursor: pointer; font: inherit; }
+.mpt-btn:hover:not(:disabled) { background: #f3f4f6; }
+.mpt-btn:disabled { opacity: .5; cursor: default; }
+.mpt-run { background: #2563eb; border-color: #2563eb; color: #fff; }
+.mpt-run:hover:not(:disabled) { background: #1d4ed8; }
+.mpt-section { border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; background: #fff; }
+.mpt-h { margin: 0 0 8px; font-size: 13px; font-weight: 600; }
+.mpt-h5 { margin: 6px 0 4px; font-size: 12px; font-weight: 600; color: #4b5563; }
+.mpt-steps { list-style: none; margin: 0; padding: 0; }
+.mpt-step { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; padding: 3px 0; }
+.mpt-step-id { font-family: ui-monospace, Menlo, monospace; }
+.mpt-meta { color: #6b7280; font-size: 12px; }
+.mpt-note { color: #6b7280; }
+.mpt-error, .mpt-step.mpt-error .mpt-note { color: #b91c1c; }
+.mpt-warn, .mpt-step.mpt-warn .mpt-note { color: #92400e; }
+.mpt-skipped { color: #6b7280; }
+.mpt-kv { display: flex; gap: 8px; padding: 1px 0; }
+.mpt-k { width: 150px; color: #6b7280; flex: none; }
+.mpt-instr { margin-top: 6px; white-space: pre-wrap; background: #f9fafb; padding: 6px 8px; border-radius: 6px; }
+.mpt-summary { margin: 0 0 6px; font-weight: 600; }
+.mpt-issue { padding: 2px 0; }
+.mpt-idle { margin: 0; color: #6b7280; }
+.mpt-item { padding: 2px 0; }
+.mpt-pre { margin: 4px 0 0; padding: 6px 8px; background: #f3f4f6; border-radius: 6px; overflow: auto; max-height: 260px; font: 12px/1.4 ui-monospace, Menlo, monospace; }
+.mpt-log-entry { padding: 2px 0; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+.mpt-log-entry.mpt-request > summary { color: #1d4ed8; }
+.mpt-log-entry.mpt-response > summary { color: #047857; }
+.mpt-copy { width: 100%; margin-bottom: 10px; font: 12px ui-monospace, Menlo, monospace; }
+/* registry line: neutral, never error red */
+.mpt-registry { color: #6b7280; }
+.mpt-registry.mpt-registered { color: #047857; }
+.mpt-registry.mpt-deprecated { color: #92400e; }

@@ -96,6 +96,56 @@ async function main() {
         assert.strictEqual(f.calls.length, 1);
         assert.strictEqual(r.transportNote, 'Transport SSE: tested the way SynergyAI reaches it (Streamable HTTP at the server\'s /mcp endpoint).');
     }
+    { // normaliseUrl
+        assert.strictEqual(T.normaliseUrl('HTTPS://Api.X.test:443/mcp/'), T.normaliseUrl('https://api.x.test/mcp'));
+        assert.strictEqual(T.normaliseUrl('http://a.test:80/x#frag'), 'http://a.test/x');
+        assert.notStrictEqual(T.normaliseUrl('http://a.test:8080/x'), T.normaliseUrl('http://a.test/x'));
+    }
+    { // registryStatus
+        const store = {};
+        global.localStorage = { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } };
+        const meta = status => ({ 'io.modelcontextprotocol.registry/official': { status } });
+        const answer = (u, status) => ({ servers: [{ server: { name: 'io.x/srv', version: '2.1', remotes: [{ type: 'streamable-http', url: u }] }, _meta: meta(status) }] });
+        let n = 0;
+        const fetchOk = a => async () => { n++; return a; };
+        let r = await T.registryStatus('io.x/srv', 'https://Api.x.test:443/mcp/', fetchOk(answer('https://api.x.test/mcp', 'active')));
+        assert.strictEqual(r.state, 'registered'); assert.strictEqual(r.name, 'io.x/srv'); assert.strictEqual(r.version, '2.1');
+        assert(r.link.startsWith('https://registry.modelcontextprotocol.io/v0/servers?search='));
+        n = 0;
+        await T.registryStatus('io.x/srv', 'https://api.x.test/mcp', fetchOk({}));
+        assert.strictEqual(n, 0, 'cached within 24h');
+        r = await T.registryStatus('io.x/srv', 'https://api.x.test/mcp', fetchOk({}), Date.now() + 25 * 3600e3);
+        assert.strictEqual(n, 1);
+        r = await T.registryStatus('io.x/srv', 'https://other.test/mcp', fetchOk(answer('https://api.x.test/mcp', 'active')));
+        assert.strictEqual(r.state, 'not-registered');
+        r = await T.registryStatus('io.x/srv', 'https://dep.test/mcp', fetchOk(answer('https://dep.test/mcp', 'deprecated')));
+        assert.strictEqual(r.state, 'deprecated');
+        r = await T.registryStatus('io.x/srv', 'https://down.test/mcp', async () => { throw new Error('boom'); });
+        assert.strictEqual(r.state, 'unreachable');
+        n = 0;
+        r = await T.registryStatus('', 'https://z.test/mcp', fetchOk({}));
+        assert.strictEqual(r.state, 'not-registered'); assert.strictEqual(n, 0);
+        delete global.localStorage;
+        r = await T.registryStatus('io.x/srv', 'https://nols.test/mcp', fetchOk(answer('https://nols.test/mcp', 'active')));
+        assert.strictEqual(r.state, 'registered');
+    }
+    { // reportText
+        const f = fake(byMethod({ tools: {} }, { init: relay([{ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-11-25', capabilities: [], serverInfo: { name: 'S', version: '1' } } }]) }));
+        const rep = await run(f.send);
+        rep.validation.push({ context: 'initialize', valid: false, errors: ['capabilities.tools must be an object'], warnings: ['missing title'] });
+        rep.log.push({ at: 'now', step: 'x', direction: 'request', body: { headers: { Authorization: 'Bearer SECRET-TOKEN-123' } } });
+        const text = T.reportText(rep, T.DEFAULT_LABELS);
+        assert(!text.includes('SECRET-TOKEN-123'));
+        const errs = rep.validation.flatMap(v => v.errors);
+        assert(errs.length > 0); assert(text.includes('missing title'));
+        errs.forEach(e => assert(text.includes(e), e));
+        assert(text.includes('initialize'));
+    }
+    { // labels
+        const keys = Object.keys(T.DEFAULT_LABELS);
+        assert(keys.length > 10);
+        keys.forEach(k => assert(typeof T.DEFAULT_LABELS[k] === 'string' && T.DEFAULT_LABELS[k].trim(), k));
+    }
     console.log('mcp-protocol-test: ok');
 }
 main().catch(e => { console.error(e); process.exit(1); });
