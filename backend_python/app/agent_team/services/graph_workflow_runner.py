@@ -918,6 +918,7 @@ class GraphWorkflowRunner:
         }
 
         # Node-level skill content resolution.
+        self.assertBoundSkillRunnable(config, self.clientSkills)
         skillContent = ''
         boundSkill = config.get('bound_skill')
         if not php_empty(boundSkill) and isinstance(boundSkill, dict):
@@ -925,11 +926,6 @@ class GraphWorkflowRunner:
             entry = self.clientSkills.get(dirName) if dirName != '' else None
             if dirName != '' and isinstance(entry, dict):
                 skillContent = php_strval(_coalesce(entry.get('skill_content'), ''))
-            if skillContent == '':
-                error_log(
-                    f"[GraphWorkflowRunner] bound_skill dir_name='{dirName}' has no inline client_skills "
-                    "entry — node will run without skill content."
-                )
         if skillContent == '':
             skillContent = php_trim(_coalesce(config.get('skill_content'), ''))
 
@@ -1296,6 +1292,17 @@ class GraphWorkflowRunner:
             'success': success,
             'error_text': None if success else outputText,
         })
+
+    @staticmethod
+    def assertBoundSkillRunnable(config: dict, clientSkills: dict) -> None:
+        """A node bound to a skill needs the browser that runs it: with no `client_skills` entry for its dir_name
+        (scheduled, event-triggered, robot and API runs) the run stops here instead of silently running the node
+        without its skill. Called before any LLM call."""
+        bs = config.get('bound_skill')
+        d = php_strval(_coalesce(bs.get('dir_name'), '')) if isinstance(bs, dict) else ''
+        if d == '' or isinstance((clientSkills or {}).get(d), dict):
+            return
+        raise RuntimeError(f'Skill "{d}" can only run from the editor or in a compiled program: this run has no browser to run it.')
 
     def _computeNodeCost(self, provider: str | None, inputTokens: int, outputTokens: int) -> float | None:
         """Compute USD cost for a node from its token usage and provider pricing (PHP 1134-1140).
@@ -1962,6 +1969,9 @@ class GraphWorkflowRunner:
                 self.parallelEmitted[nodeId] = True
                 continue
 
+            self.assertBoundSkillRunnable(config, self.clientSkills)
+
+            # Build initial context and task BEFORE emitting node_start (with merge strategy from config)
             mergeStrategy = _coalesce(config.get('merge_strategy'), 'labeled')
             context = self._buildContextForNode(nodeId, edges, executedNodes, mergeStrategy)
             task = f"Do your job on the following input:\n\n{context}" if not php_empty(context) else userPrompt

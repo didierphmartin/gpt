@@ -7,7 +7,10 @@ from __future__ import annotations
 
 from app.agent_team.services.active_workflow_service import ActiveWorkflowError, ActiveWorkflowService
 from app.agent_team.services.workflow_repository import WorkflowRepository
+from app.services.private_skills_refused import PrivateSkillsRefused
 from app.services.robot_ownership import RobotOwnership
+from app.services.robot_skill_policy import RobotSkillPolicy
+from app.services.skill_store import SkillStore
 from app.support.phpcompat import php_intval
 
 
@@ -20,13 +23,8 @@ class ActiveWorkflowController:
         self.workflows = WorkflowRepository(db)
 
     @staticmethod
-    def _skillPolicy(db, config):
-        """The RobotSkillPolicy the robot's activations check (PHP: new RobotSkillPolicy($db, $config, SkillStore::fromEnv($config)))."""
-        try:
-            from app.services.robot_skill_policy import RobotSkillPolicy
-            from app.services.skill_store import SkillStore
-        except ImportError:   # the skill store port lands with the skill-store routes
-            return None
+    def _skillPolicy(db, config) -> RobotSkillPolicy:
+        """The RobotSkillPolicy the robot's activations check."""
         return RobotSkillPolicy(db, config, SkillStore.fromEnv(config))
 
     @staticmethod
@@ -58,11 +56,8 @@ class ActiveWorkflowController:
                 return {'success': True, 'data': data, 'status_code': 200}
             except ActiveWorkflowError as e:
                 return {'success': False, 'error': str(e), 'kind': e.kind, 'error_code': e.kind, 'status_code': e.status}
-            except Exception as e:  # noqa: BLE001 -- PrivateSkillsRefused (the skill store port), re-raised otherwise
-                if type(e).__name__ == 'PrivateSkillsRefused':
-                    from app.services.robot_skill_policy import RobotSkillPolicy
-                    return RobotSkillPolicy.refusal(e.skills)
-                raise
+            except PrivateSkillsRefused as e:
+                return RobotSkillPolicy.refusal(e.skills)
         return self._guarded(request, fn)
 
     def deactivate(self, request: dict, id=None) -> dict:

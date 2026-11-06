@@ -75,7 +75,11 @@ from app.config import PHP_BACKEND
 from app.controllers.chat_attachment_controller import ChatAttachmentController as _ChatAttachmentController
 from app.services.llm_provider_resolver import LLMProviderResolver
 from app.services.mcp_tools_loader import MCPToolsLoader
+from app.services.private_skills_refused import PrivateSkillsRefused
+from app.services.robot_account import RobotAccount
 from app.services.robot_ownership import RobotOwnership
+from app.services.robot_skill_policy import RobotSkillPolicy
+from app.services.skill_store import SkillStore
 from app.support import phpjson
 from app.support.logger import error_log
 from app.support.phpcompat import (
@@ -409,6 +413,10 @@ class WorkflowController:
             if not self.workflowRepository.canUserAccess(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
                 return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
 
+            private = self._robotPrivateSkills(workflowId)
+            if private:
+                return RobotSkillPolicy.refusal(private)
+
             agentRepo = AgentRepository(self.db)
             # A packaged Start document is copied only from this user's own document storage.
             storagePath = self.config.get('storage_path')
@@ -417,7 +425,8 @@ class WorkflowController:
                 lambda: self.getUniversalFSAdapter(php_intval(userId)),
                 storagePath if storagePath is not None else str(PHP_BACKEND.parent / 'storage'),
             )
-            gen = LangGraphGenerator(self.db, self.workflowRepository, self.graphRepository, agentRepo, None, docStore)
+            gen = LangGraphGenerator(self.db, self.workflowRepository, self.graphRepository, agentRepo,
+                                     self._compileSkillsRoot(workflowId), docStore)
             a2a = (query.get('a2a') if query.get('a2a') is not None else '0') == '1'
             # A2A wins if both are set: the two are mutually exclusive in the editor's form.
             modular = not a2a and (query.get('modular') if query.get('modular') is not None else '0') == '1'
@@ -516,6 +525,9 @@ class WorkflowController:
             if not self.workflowRepository.canUserAccess(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
                 return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
             # (PHP refuses a zip without its ZipArchive extension; Python's zipfile is always there.)
+            private = self._robotPrivateSkills(workflowId)
+            if private:
+                return RobotSkillPolicy.refusal(private)
             # A packaged Start document is copied only from this user's own document storage.
             storagePath = self.config.get('storage_path')
             gen = generatorClass(
@@ -523,7 +535,7 @@ class WorkflowController:
                 self.workflowRepository,
                 self.graphRepository,
                 AgentRepository(self.db),
-                None,
+                self._compileSkillsRoot(workflowId),
                 StartDocumentStore(
                     self.getUserStorageFolder(php_intval(userId)),
                     lambda: self.getUniversalFSAdapter(php_intval(userId)),
@@ -786,6 +798,9 @@ class WorkflowController:
             try:
                 if not self.workflowRepository.canUserAccess(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
                     return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
+                private = self._robotPrivateSkills(workflowId)
+                if private:
+                    return RobotSkillPolicy.refusal(private)
                 locked = self._lockedGuard(workflowId)
                 if locked:
                     return locked
@@ -928,6 +943,11 @@ class WorkflowController:
         try:
             if not self.workflowRepository.canUserAccess(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
                 sseCallback({'type': 'error', 'error': 'Workflow not found or access denied'})
+                sse.send_data('[DONE]')
+                return None
+            private = self._robotPrivateSkills(workflowId)
+            if private:
+                sseCallback({'type': 'error', 'error': RobotSkillPolicy.MESSAGE, 'code': 'private_skills', 'skills': private})
                 sse.send_data('[DONE]')
                 return None
             locked = self._lockedGuard(workflowId)
@@ -1299,20 +1319,26 @@ class WorkflowController:
         except WorkflowTransferError as e:
             return {'success': False, 'error': str(e), 'error_code': e.kind, 'status_code': e.status,
                     **({'clashes': e.clashes} if e.clashes else {})}
-        except Exception as e:  # noqa: BLE001 -- PrivateSkillsRefused (the skill store port); anything else re-raised
-            if type(e).__name__ == 'PrivateSkillsRefused':
-                from app.services.robot_skill_policy import RobotSkillPolicy
-                return RobotSkillPolicy.refusal(e.skills)
-            raise
+        except PrivateSkillsRefused as e:
+            return RobotSkillPolicy.refusal(e.skills)
 
-    def _skillPolicy(self):
-        """The RobotSkillPolicy over the skill store (None until the skill store port lands)."""
-        try:
-            from app.services.robot_skill_policy import RobotSkillPolicy
-            from app.services.skill_store import SkillStore
-        except ImportError:
-            return None
+    def _skillPolicy(self) -> RobotSkillPolicy:
         return RobotSkillPolicy(self.db, self.config, SkillStore.fromEnv(self.config))
+
+    def _compileSkillsRoot(self, workflowId: int):
+        """Where a compile reads the skills from: None = the skills folder (LangGraphPackage.defaultSkillsRoot()); in
+        the Docker app the skill store, with the workflow owner's visibility (the robot's for a robot workflow)."""
+        store = SkillStore.fromEnv(self.config)
+        if store is None:
+            return None
+        row = self.db.fetch_one('SELECT user_id FROM agent_workflows WHERE id = ?', [workflowId])
+        owner = php_intval(row['user_id']) if row else 0
+        return store.compileResolver(owner, owner == RobotAccount.id(self.db))
+
+    def _robotPrivateSkills(self, workflowId: int) -> list:
+        """The private skills a robot-owned workflow binds (the robot can only use public ones), else []."""
+        row = self.db.fetch_one('SELECT user_id FROM agent_workflows WHERE id = ?', [workflowId])
+        return self._skillPolicy().privateSkills(workflowId) if row and php_intval(row['user_id']) == RobotAccount.id(self.db) else []
 
     def duplicate(self, request, id: int = 0) -> dict:
         """PHP 1241-1296."""

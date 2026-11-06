@@ -13,6 +13,7 @@ import pymysql
 import sqlite3
 
 from app.services.robot_account import RobotAccount
+from app.services.private_skills_refused import PrivateSkillsRefused
 from app.support.phpcompat import php_bool, php_intval, php_trim
 
 
@@ -76,7 +77,6 @@ class ActiveWorkflowService:
         if several and self.skills is not None:
             private = self.skills.privateSkills(workflowId)
             if private:
-                from app.services.private_skills_refused import PrivateSkillsRefused
                 raise PrivateSkillsRefused(private)
         before = None if several else self.get(userId)
         replaced = ({'workflow_id': php_intval(before['workflow_id']), 'workflow_name': before['workflow_name']}

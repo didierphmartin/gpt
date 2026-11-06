@@ -291,6 +291,8 @@ def _patch_stack(monkeypatch, workflow_repo, graph_runner_cls=None, workflow_run
     )
     monkeypatch.setattr(sc_mod, 'AIPortfolioAssistant', FakeAssistant2)
     monkeypatch.setattr(sc_mod, 'MCPToolsLoader', lambda db: object())
+    # no robot on this FakeDb install: the robot's private-skill check answers none without a query
+    monkeypatch.setattr(sc_mod.RobotSkillPolicy, 'privateSkillsForOwner', lambda self, ownerId, workflowId: [])
     monkeypatch.setattr(sc_mod, 'AgentRunner', lambda *a, **k: object())
     monkeypatch.setattr(sc_mod, 'GraphWorkflowRunner', graph_runner_cls or FakeRunner)
     monkeypatch.setattr(sc_mod, 'WorkflowRunner', workflow_runner_cls or FakeRunner)

@@ -352,13 +352,13 @@ def test_runByName_success_resolves_id_and_delegates_to_run():
 
     def fetch_one(sql, params=None):
         lookups.append((sql, params))
-        return {'id': 7}
+        return {'id': 7, 'user_id': 3}
 
     c.db.fetch_one = fetch_one
     r = c.runByName(ctx(body={'workflow': 'WF A'}))
     assert r['success'] is True
     assert r['status_code'] == 200
-    assert lookups == [(
+    assert lookups[:1] == [(
         "SELECT id FROM agent_workflows WHERE user_id = ? AND name = ? LIMIT 1",
         [3, 'WF A'],
     )]

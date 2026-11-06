@@ -36,6 +36,8 @@ from app.agent_team.services.agent_repository import AgentRepository
 from app.agent_team.services.agent_runner import AgentRunner
 from app.agent_team.services.graph_workflow_runner import GraphWorkflowRunner
 from app.agent_team.services.schedule_tick import ScheduleTick
+from app.services.robot_skill_policy import RobotSkillPolicy
+from app.services.skill_store import SkillStore
 from app.agent_team.services.scheduled_workflow_service import ScheduledWorkflowService
 from app.agent_team.services.workflow_repository import WorkflowRepository
 from app.agent_team.services.workflow_runner import WorkflowRunner
@@ -164,7 +166,8 @@ class SchedulerController:
 
         tick = ScheduleTick(
             self.scheduleService,
-            ScheduleTick.workflowRunner(workflowRepository, graphRepository, graphWorkflowRunner, workflowRunner),
+            ScheduleTick.workflowRunner(workflowRepository, graphRepository, graphWorkflowRunner, workflowRunner,
+                                        RobotSkillPolicy(self.db, self.config, SkillStore.fromEnv(self.config))),
         )
         # A missing active_workflows table (not migrated yet) must not break the tick: then nothing is due,
         # never every schedule.

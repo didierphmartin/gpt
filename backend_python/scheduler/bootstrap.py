@@ -21,6 +21,8 @@ from app.config import ConfigError, load_config
 from app.db import open_primary
 from app.services.mcp_tools_loader import MCPToolsLoader
 from app.support.logger import error_log
+from app.services.robot_skill_policy import RobotSkillPolicy
+from app.services.skill_store import SkillStore
 
 
 def boot() -> dict:
@@ -54,6 +56,7 @@ def boot() -> dict:
         'runSchedule': ScheduleTick.workflowRunner(
             workflowRepository, graphRepository,
             GraphWorkflowRunner(db, agentRepository, agentRunner, graphRepository, config),
-            WorkflowRunner(db, agentRepository, agentRunner, config)),
+            WorkflowRunner(db, agentRepository, agentRunner, config),
+            RobotSkillPolicy(db, config, SkillStore.fromEnv(config))),
         'close': close,
     }

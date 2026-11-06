@@ -322,6 +322,7 @@ def test_execute_agents_in_parallel_client_tool_round_trip_via_bridge(tmp_path, 
     runner.setStreamContext(stream)
 
     node = _agent_node(1, 'Skiller', provider='claude', extra_config={'bound_skill': {'dir_name': 'demo', 'source': 'local'}})
+    runner.clientSkills = {'demo': {'skill_content': 'demo skill'}}   # the browser sent the skill (assertBoundSkillRunnable)
 
     # writeResult from another thread, mirroring
     # test_skill_tool_bridge.py::test_await_sees_a_result_written_from_another_thread.

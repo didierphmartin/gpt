@@ -77,8 +77,9 @@ class ScheduleTick:
         return {'runs': runs, 'quiet_count': quietCount, 'execution_ids': executionIds}
 
     @staticmethod
-    def workflowRunner(workflows, graphRepository, graphRunner, linearRunner) -> Callable[[dict], dict]:
-        """The runSchedule callable both entry points use: load the workflow and run it once."""
+    def workflowRunner(workflows, graphRepository, graphRunner, linearRunner, skills=None) -> Callable[[dict], dict]:
+        """The runSchedule callable both entry points use: load the workflow and run it once. skills: a
+        RobotSkillPolicy (a robot run refuses private skills), or None."""
         def run(schedule: dict) -> dict:
             workflowId = php_intval(schedule['workflow_id'])
             workflow = workflows.findById(workflowId)
@@ -91,6 +92,11 @@ class ScheduleTick:
                 input['user_prompt'] = schedule['input_prompt']
                 input['prompt'] = schedule['input_prompt']
             userId = php_intval(schedule['user_id'])
+            if skills is not None:
+                private = skills.privateSkillsForOwner(userId, workflowId)
+                if private:
+                    from app.services.robot_skill_policy import RobotSkillPolicy
+                    return {'success': False, 'error': RobotSkillPolicy.MESSAGE, 'code': 'private_skills', 'skills': private}
             return (graphRunner.run(workflow, userId, input) if not php_empty(graphRepository.getNodes(workflowId))
                     else linearRunner.run(workflow, userId, input))
         return run

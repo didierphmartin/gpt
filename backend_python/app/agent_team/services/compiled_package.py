@@ -109,9 +109,7 @@ class CompiledPackage:
             req += cls.A2A_REQUIREMENTS
         # A playbook node runs the shared interpreter (langchain-core + langgraph + its provider's package).
         req += PlaybookEmit.requirementNames(analyzed)
-        for f in skillFiles or []:
-            if f['rel'] == 'SKILL.md':
-                req += LangGraphPackage.skillDependencies(f['bytes'])
+        req += LangGraphPackage.skillRequirementNames(skillFiles or [])
         req += PythonRequirements.documentNames(analyzed.get('startDocuments') or [])
         return req
 

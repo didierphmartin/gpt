@@ -12,6 +12,7 @@ from app.agent_team.services.active_workflow_service import ActiveWorkflowServic
 from app.agent_team.services.code_node_emit import CodeNodeEmit
 from app.agent_team.services.start_option_graph import StartOptionGraph
 from app.code_component.code_component_store import CodeComponentStore
+from app.services.private_skills_refused import PrivateSkillsRefused
 from app.support.phpcompat import php_empty, php_intval, php_strval
 
 
@@ -48,7 +49,6 @@ class WorkflowOwnerTransfer:
         if self.skills is not None:
             private = self.skills.privateSkills(workflowId)
             if private:
-                from app.services.private_skills_refused import PrivateSkillsRefused
                 raise PrivateSkillsRefused(private)
 
     def preview(self, callerId: int, workflowId: int) -> dict:
