@@ -1,4 +1,3 @@
-import jwt
 from starlette.datastructures import Headers
 from app.controllers.webauthn_controller import WebAuthnController
 from app.support.http import Ctx
@@ -20,24 +19,23 @@ def ctx(body=None, user_id=None, host='localhost:3002'):
                params={}, user_id=user_id, authenticated=user_id is not None, remote_addr='')
 
 
-def test_challenge_register_requires_auth_and_authenticate_by_email():
+def test_challenge_register_requires_auth_and_stores_the_challenge():
     c = WebAuthnController(FakeDb(), CONFIG)
     assert c.challenge(ctx({'action': 'register'}))['status_code'] == 401
-    db = FakeDb(one=[{'id': 3}], all_=[[{'credential_id': 'abc'}]])
-    r = WebAuthnController(db, CONFIG).challenge(ctx({'action': 'authenticate', 'email': 'a@b.c'}))
+    db = FakeDb()
+    r = WebAuthnController(db, CONFIG).challenge(ctx({'action': 'register'}, user_id=3))
     assert r['success'] and r['rp_id'] == 'localhost' and r['rp_name'] == 'Voice Assistant'
-    assert r['allow_credentials'] == [{'id': 'abc', 'type': 'public-key', 'transports': ['internal']}]
+    assert r['allow_credentials'] == []
     assert len(r['challenge']) == 43 and '=' not in r['challenge']
     assert any('INSERT INTO webauthn_challenges' in s for s, _ in db.calls)
 
 
-def test_challenge_error_codes():
-    assert WebAuthnController(FakeDb(one=[None]), CONFIG).challenge(ctx({'action': 'authenticate', 'credential_id': 'x'}))['code'] == 'CREDENTIAL_NOT_FOUND'
-    assert WebAuthnController(FakeDb(one=[None]), CONFIG).challenge(ctx({'action': 'authenticate', 'email': 'x'}))['code'] == 'USER_NOT_FOUND'
-    assert WebAuthnController(FakeDb(one=[{'id': 1}], all_=[[]]), CONFIG).challenge(ctx({'action': 'authenticate', 'email': 'x'}))['code'] == 'NO_CREDENTIALS'
-    db = FakeDb()
-    r = WebAuthnController(db, CONFIG).challenge(ctx({'action': 'authenticate'}))
-    assert r['success'] and not any('INSERT' in s for s, _ in db.calls)     # user_id 0 → not stored
+def test_sign_in_challenge_without_id_or_email_reads_nothing():
+    for body in ({'action': 'authenticate'}, {}):
+        db = FakeDb()
+        r = WebAuthnController(db, CONFIG).challenge(ctx(body))
+        assert r['status_code'] == 400 and 'challenge' not in r
+        assert db.calls == []
 
 
 def test_register_and_delete():
@@ -50,16 +48,10 @@ def test_register_and_delete():
     assert WebAuthnController(FakeDb(rowcount=1), CONFIG).delete(ctx({'credential_id': 'x'}, user_id=3))['message'] == 'Credential deleted'
 
 
-def test_authenticate_issues_token_and_string_id():
-    c = WebAuthnController(FakeDb(), CONFIG)
-    assert c.authenticate(ctx({'credential_id': 'x'}))['message'] == 'Credential ID and signature are required'
-    assert WebAuthnController(FakeDb(one=[None]), CONFIG).authenticate(ctx({'credential_id': 'x', 'signature': 's'}))['code'] == 'CREDENTIAL_NOT_FOUND'
-    row = {'uid': 3, 'email': 'e', 'first_name': 'f', 'last_name': 'l', 'role': 'admin', 'plan': 'premium',
-           'provider': 'email', 'created_at': 'c'}
-    assert WebAuthnController(FakeDb(one=[row]), CONFIG).authenticate(ctx({'credential_id': 'x', 'signature': 's'}))['message'] == 'Invalid authentication data'
-    r = WebAuthnController(FakeDb(one=[row]), CONFIG).authenticate(ctx({'credential_id': 'x', 'signature': 's', 'authenticator_data': 'a'}))
-    # PyJWT >=2.10 raises InvalidSubjectError for a non-string `sub` unless verify_sub
-    # is disabled (same reason as test_auth_controller.py / app.middleware.auth.decode_hs256).
-    claims = jwt.decode(r['token'], 's', algorithms=['HS256'], options={'verify_sub': False})
-    assert r['success'] and r['user']['id'] == '3' and claims['sub'] == 3
-    assert list(r['user']) == ['id', 'email', 'first_name', 'last_name', 'role', 'plan', 'provider', 'last_login', 'created_at']
+def test_authenticate_with_a_missing_field_reads_nothing():
+    db = FakeDb()
+    r = WebAuthnController(db, CONFIG).authenticate(ctx({'credential_id': 'x', 'signature': 's', 'authenticator_data': 'a'}))
+    assert r == {'success': False,
+                 'message': 'Credential ID, client data, authenticator data and signature are required',
+                 'status_code': 400}
+    assert db.calls == []

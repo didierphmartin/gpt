@@ -672,8 +672,8 @@ def test_build_documents_context_reads_a_real_attached_document(tmp_path):
     the full suite), buildDocumentsContext's PHP 2828-2860 body runs
     end-to-end for a node with an attached remote-storage text document."""
     runner, _, _ = _make_runner([], [], config={'storage_path': str(tmp_path)})
-    (tmp_path / 'docs').mkdir()
-    (tmp_path / 'docs' / 'a.txt').write_text('hello from disk', encoding='utf-8')
+    (tmp_path / 'synergyaichatroot' / 'docs').mkdir(parents=True)
+    (tmp_path / 'synergyaichatroot' / 'docs' / 'a.txt').write_text('hello from disk', encoding='utf-8')
 
     node = _node(1, 'agent', config={'documents': [
         {'name': 'a.txt', 'mimeType': 'text/plain', 'storage': 'remote', 'path': 'docs/a.txt'},

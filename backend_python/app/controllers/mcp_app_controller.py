@@ -7,12 +7,13 @@ Fetches MCP app HTML via the resources/read protocol and serves it directly.
 from __future__ import annotations
 
 import json
+import re
 
 import httpx
 
 from app.providers._http import SHARED_SSL_CONTEXT
 from app.services.mcp_endpoint import McpEndpoint
-from app.support.phpcompat import php_empty, php_floatval, php_trim
+from app.support.phpcompat import php_empty, php_floatval, php_strval, php_trim
 from app.support.phpjson import php_json_arrays as _php_json_arrays
 from app.support.phpjson import php_json_encode
 
@@ -33,6 +34,8 @@ class MCPAppController:
         query = request['query'] if request.get('query') is not None else {}
         serverUrl = query.get('server') if query.get('server') is not None else ''
         resourceUri = query.get('resource') if query.get('resource') is not None else ''
+        if not isinstance(serverUrl, str) or not isinstance(resourceUri, str):
+            return {'error': 'Invalid server or resource parameter', 'status_code': 400, 'content_type': 'text/plain'}
         west = query.get('west') if query.get('west') is not None else ''
         south = query.get('south') if query.get('south') is not None else ''
         east = query.get('east') if query.get('east') is not None else ''
@@ -45,6 +48,11 @@ class MCPAppController:
 
         if not resourceUri:
             return {'error': 'Missing resource parameter', 'status_code': 400, 'content_type': 'text/plain'}
+
+        # This route is public (an iframe cannot send the session header), so
+        # it only reaches MCP servers someone registered, never any URL.
+        if not self._isRegisteredServer(serverUrl):
+            return {'error': 'Unknown MCP server', 'status_code': 404, 'content_type': 'text/plain'}
 
         # Initialize MCP session
         initRequest = {
@@ -105,8 +113,10 @@ class MCPAppController:
         if not htmlContent:
             return {'error': 'No HTML content in MCP resource', 'status_code': 502, 'content_type': 'text/plain'}
 
-        # Inject initialization script with the tool arguments
-        initData = php_json_encode({
+        # Inject initialization script with the tool arguments (HEX flags: no
+        # '</script>' or quote in a value can end the script)
+        serverUrlJs = _json_encode_hex(serverUrl)
+        initData = _json_encode_hex({
             'west': php_floatval(west) if west != '' else None,
             'south': php_floatval(south) if south != '' else None,
             'east': php_floatval(east) if east != '' else None,
@@ -122,7 +132,7 @@ class MCPAppController:
             f"    window.MCP_INIT_DATA = {initData};\n"
             "\n"
             "    // Override the MCP server URL to point to the actual server\n"
-            f"    window.MCP_SERVER_URL = '{serverUrl}';\n"
+            f"    window.MCP_SERVER_URL = {serverUrlJs};\n"
             "\n"
             "    // Dispatch init event when DOM is ready\n"
             "    if (document.readyState === 'loading') {\n"
@@ -142,6 +152,12 @@ class MCPAppController:
             htmlContent = initScript + htmlContent
 
         return {'html': htmlContent, 'status_code': 200, 'content_type': 'text/html; charset=utf-8'}
+
+    def _isRegisteredServer(self, url: str) -> bool:
+        """Whether an enabled MCP server row has this URL (trailing slash ignored)."""
+        want = url.rstrip('/')
+        rows = self.db.fetch_all("SELECT url FROM mcp_servers WHERE enabled = 1")
+        return any(php_strval(row.get('url')).rstrip('/') == want for row in rows)
 
     # ─── sendMCPRequest (PHP 175-224) ───────────────────────────────────────
 
@@ -199,3 +215,12 @@ class MCPAppController:
 def _isset_error(value) -> bool:
     """`isset($response['error'])` for a decoded JSON-RPC dict (or None)."""
     return isinstance(value, dict) and value.get('error') is not None
+
+
+_HEX = {'<': '\\u003C', '>': '\\u003E', '&': '\\u0026', "'": '\\u0027', '\\"': '\\u0022'}
+
+
+def _json_encode_hex(value) -> str:
+    """json_encode($v, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT).
+    Escape pairs are matched first, so an escaped backslash is left alone."""
+    return re.sub(r'\\.|[<>&\']', lambda m: _HEX.get(m.group(0), m.group(0)), php_json_encode(value))

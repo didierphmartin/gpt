@@ -14,6 +14,7 @@ import time
 import httpx
 
 from app.controllers.mcp_server_controller import MCPServerController
+from app.controllers.requires_admin import require_admin
 from app.services.mcp_endpoint import McpEndpoint
 from app.providers._http import SHARED_SSL_CONTEXT
 from app.support.db_presence import DbPresence
@@ -84,9 +85,13 @@ class MCPProxyController:
     # ─── proxyRequest (PHP 75-168) ──────────────────────────────────────────
 
     def _proxyRequest(self, serverUrl, serverId, jsonrpc, userId: str) -> dict:
-        # Get server URL from ID if not provided directly
-        if not serverUrl and serverId:
-            serverUrl = self._getServerUrl(serverId, userId)
+        # A registered server is reached at its stored URL only: its stored
+        # headers (credentials) must never go to a URL the caller names.
+        if serverId:
+            server = self._usableServer(serverId, userId)
+            if server is None:
+                return self._unknownServer()
+            serverUrl = server['url']
 
         # Look up custom headers by server id (global or caller's user scope)
         extraHeaders = self._getServerHeaders(serverId, userId) if serverId else []
@@ -226,6 +231,12 @@ class MCPProxyController:
     # ─── discoverTools (PHP 230-313) ────────────────────────────────────────
 
     def _discoverTools(self, serverUrl: str, serverId, userId: str) -> dict:
+        server = None
+        if serverId:
+            server = self._usableServer(serverId, userId)
+            if server is None:
+                return self._unknownServer()
+            serverUrl = server['url']
         extraHeaders = self._getServerHeaders(serverId, userId) if serverId else []
         transport = self._getServerTransport(serverId, userId) if serverId else 'http'
         if not serverUrl:
@@ -287,8 +298,10 @@ class MCPProxyController:
         result = toolsResponse.get('result') if isinstance(toolsResponse, dict) else None
         tools = result.get('tools') if isinstance(result, dict) and result.get('tools') is not None else []
 
-        # Cache tools in database if we have a server ID
-        if serverId:
+        # Cache tools for the caller's own server; a global server's cached
+        # tools reach every user's model, so only an admin refreshes them.
+        if server is not None and (php_strval(server['user_id']) == userId if server.get('user_id') is not None
+                                   else require_admin(self.db, {'user_id': php_intval(userId)}) is None):
             self._cacheTools(serverId, tools)
 
         initResult = initResponse.get('result') if isinstance(initResponse, dict) else None
@@ -415,17 +428,18 @@ class MCPProxyController:
 
         return jsonData
 
-    # ─── getServerUrl (PHP 434-444) ─────────────────────────────────────────
+    # ─── usableServer / unknownServer ───────────────────────────────────────
 
-    def _getServerUrl(self, serverId: int, userId: str):
-        """Get server URL from database. NB: matches only servers OWNED by
-        this exact userId (`user_id = ?`, no `OR user_id IS NULL`) — a global
-        server can only be resolved by URL when the caller also sent
-        `server_url` directly (PHP 436-439, ported verbatim)."""
-        row = self.db.fetch_one(
-            "SELECT url FROM mcp_servers WHERE id = ? AND user_id = ? AND enabled = 1",
-            [serverId, userId])
-        return row.get('url') if row is not None else None
+    def _usableServer(self, serverId: int, userId: str) -> dict | None:
+        """An enabled server the caller may use (global or their own): url and
+        user_id, or None."""
+        return self.db.fetch_one(
+            "SELECT url, user_id FROM mcp_servers WHERE id = ? AND enabled = 1 AND (user_id IS NULL OR user_id = ?)"
+            " LIMIT 1", [serverId, userId])
+
+    @staticmethod
+    def _unknownServer() -> dict:
+        return {'success': False, 'error': {'code': -32602, 'message': 'Unknown MCP server'}, 'status_code': 404}
 
     # ─── getServerHeaders (PHP 450-476) ─────────────────────────────────────
 

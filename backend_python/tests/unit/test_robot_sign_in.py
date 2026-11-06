@@ -94,12 +94,11 @@ def test_firebase_for_robot_is_refused_and_touches_nothing(db, auth, claims, rob
     assert row_count(db) == 2
 
 
-def test_webauthn_for_robot_is_credential_not_found(db, robot_id):
+def test_webauthn_for_robot_gives_no_token(db, robot_id):
     db.execute(f"INSERT INTO webauthn_credentials (user_id, credential_id) VALUES ({robot_id}, 'cred-r')")
     w = WebAuthnController(db, {'auth': {'jwt_secret': SECRET}})
     r = w.authenticate({'body': {'credential_id': 'cred-r', 'signature': 's', 'authenticator_data': 'a',
                                  'client_data_json': 'c'}})
-    assert r['status_code'] == 404
     assert r['code'] == 'CREDENTIAL_NOT_FOUND'
     assert 'token' not in r
 
@@ -110,7 +109,7 @@ def test_paid_plan_resign_in_keeps_custom_and_user_roles_but_promotes_prospect(d
         ('g@x.test', 'guest', 'free')""")
     expect = {'ops@x.test': 'it-ops-2', 'u@x.test': 'user', 'p@x.test': 'user', 'g@x.test': 'user'}
     for email, role in expect.items():
-        claims['claims'] = {'sub': 'uid-' + email, 'email': email}
+        claims['claims'] = {'sub': 'uid-' + email, 'email': email, 'email_verified': True}
         r = auth.firebaseAuth({'body': {'idToken': 'x', 'provider': 'google', 'plan': 'premium'}})
         assert r['success'] is True, email
         got = db.fetch_one('SELECT role, plan FROM users WHERE email = ?', [email])

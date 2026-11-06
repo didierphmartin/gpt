@@ -14,8 +14,8 @@ config.py change needed). The route `/api/v1/scheduler/run` is public on
 both backends (PHP: MiddlewareProcessor::PUBLIC_ROUTES line 36; Python:
 app/middleware/processor.py PUBLIC_ROUTES, already present pre-Task-2)
 precisely so a cron job with only the token (no user session) can call it.
-Token comparison is plain `!=` (PHP uses `!==`, not `hash_equals` —
-SchedulerController.php:53), per constraints.md.
+Tokens are compared in constant time (hmac.compare_digest, PHP hash_equals),
+and a blank SCHEDULER_TOKEN never matches (PHP 0270343).
 
 `executeScheduler` (PHP 120-237, `private` -> `_executeScheduler` here)
 builds the same AIPortfolioAssistant/AgentRunner/WorkflowRunner/
@@ -28,6 +28,8 @@ equivalent — Guzzle clients die with the request) so `run()`'s outer
 WorkflowController.run/runStream (Phase 5).
 """
 from __future__ import annotations
+
+import hmac
 
 from app.agent_team.services.active_workflow_service import ActiveWorkflowService
 from app.agent_team.services.agent_repository import AgentRepository
@@ -71,8 +73,11 @@ class SchedulerController:
         if expectedToken is None:
             expectedToken = ''
 
-        # Either need valid user auth or valid scheduler token
-        if not userId and schedulerToken != expectedToken:
+        # Either need valid user auth or valid scheduler token (a blank
+        # SCHEDULER_TOKEN turns the token path off, it never matches '')
+        tokenOk = isinstance(schedulerToken, str) and isinstance(expectedToken, str) and expectedToken != '' \
+            and hmac.compare_digest(expectedToken.encode(), schedulerToken.encode())
+        if not userId and not tokenOk:
             return {'success': False, 'error': 'Authentication required', 'status_code': 401}
 
         try:
