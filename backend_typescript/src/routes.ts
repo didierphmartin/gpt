@@ -14,6 +14,7 @@ import { ContextController } from './Controllers/ContextController';
 import { MCPServerController } from './Controllers/MCPServerController';
 import { MCPAppController } from './Controllers/MCPAppController';
 import { MCPProxyController } from './Controllers/MCPProxyController';
+import { McpTestController } from './Controllers/McpTestController';
 import { HumeToolController } from './Controllers/HumeToolController';
 import { EVIWebhookController } from './Controllers/EVIWebhookController';
 import { SettingsController } from './Controllers/SettingsController';
@@ -69,6 +70,7 @@ const contexts = new ContextController();
 const mcpServers = new MCPServerController();
 const mcpApp = new MCPAppController();
 const mcpProxy = new MCPProxyController();
+const mcpTest = new McpTestController();
 const humeTools = new HumeToolController();
 const eviWebhook = new EVIWebhookController();
 const settings = new SettingsController();
@@ -227,6 +229,8 @@ router.get('/api/mcp-app.php', serveMcpApp); // Legacy path
 // MCP JSON-RPC proxy (protected) — forwards frontend requests to configured MCP
 // servers (tools/call, resources/read for MCP-UI apps). Mirrors PHP POST /api/v1/mcp/proxy.
 router.post('/api/v1/mcp/proxy', handle((ctx) => mcpProxy.forward(ctx)));
+// MCP Test tab: one JSON-RPC message relayed verbatim. Mirrors PHP POST /api/v1/mcp/test.
+router.post('/api/v1/mcp/test', handle((ctx) => mcpTest.test(ctx)));
 
 // MCP server management (protected)
 router.get('/api/v1/mcp/servers', handle((ctx) => mcpServers.list(ctx)));
@@ -370,6 +374,7 @@ router.post('/api/v1/admin/mcp/servers/update', handle((ctx) => admin.updateMCPS
 router.post('/api/v1/admin/mcp/servers/toggle', handle((ctx) => admin.toggleMCPServer(ctx)));
 router.post('/api/v1/admin/mcp/servers/refresh', handle((ctx) => admin.refreshMCPServerTools(ctx)));
 router.delete('/api/v1/admin/mcp/servers/:id(\\d+)', handle((ctx) => admin.deleteMCPServer(ctx)));
+router.post('/api/v1/admin/mcp/test', handle((ctx) => mcpTest.adminTest(ctx)));
 
 // Admin — capability packages (protected; PackageController gates on role=admin, unlike AdminController).
 // :role is a role key ([a-z0-9]+(?:-[a-z0-9]+)*, case-sensitive as in PHP), a RegExp route (see RoleKeyRoute).

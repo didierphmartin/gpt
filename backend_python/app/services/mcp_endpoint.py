@@ -10,6 +10,8 @@ addressed by query (http://localhost/servicenow/?profile=mock&toolset=jobs).
 """
 from __future__ import annotations
 
+import json
+import os
 import re
 
 
@@ -40,3 +42,48 @@ class McpEndpoint:
         """True for a decoded JSON-RPC reply (a result or an error). "jsonrpc"
         is not required: lenient servers omit it and have always been accepted."""
         return isinstance(decoded, dict) and ('result' in decoded or 'error' in decoded)
+
+    @staticmethod
+    def internal(url: str) -> str:
+        """The address this backend can reach for a registered URL. In the Docker
+        app servers are registered as the public gateway (http://localhost:8790/...)
+        but the web container reaches the supervisor as MCPS_GATEWAY (http://mcps:8790).
+        Both env values must be set; otherwise the URL is returned unchanged."""
+        gateway = os.environ.get('MCPS_GATEWAY', '')
+        public = os.environ.get('MCPS_PUBLIC_GATEWAY', '').rstrip('/')
+        if gateway == '' or public == '':
+            return url
+        for prefix in (public + '/', public.replace('//localhost', '//127.0.0.1') + '/'):
+            if url.startswith(prefix):
+                return gateway.rstrip('/') + '/' + url[len(prefix):]
+        return url
+
+    @staticmethod
+    def decodeStoredHeaders(raw) -> dict[str, str]:
+        """Stored headers JSON as name => value. Skips non-string names and
+        non-scalar values; strips CR/LF and ":" from names, CR/LF from values."""
+        if raw is None or raw == '':
+            return {}
+        try:
+            decoded = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+        except ValueError:
+            return {}
+        if not isinstance(decoded, dict):
+            return {}
+        out: dict[str, str] = {}
+        for name, value in decoded.items():
+            if not isinstance(name, str) or name == '' or not _is_scalar(value):
+                continue
+            out[re.sub(r'[\r\n:]', '', name)] = re.sub(r'[\r\n]', '', _scalar_str(value))
+        return out
+
+
+def _is_scalar(value) -> bool:
+    return isinstance(value, (str, int, float, bool))
+
+
+def _scalar_str(value) -> str:
+    """PHP (string) cast of a scalar: true → '1', false → ''."""
+    if isinstance(value, bool):
+        return '1' if value else ''
+    return str(value)

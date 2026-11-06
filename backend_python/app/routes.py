@@ -30,6 +30,7 @@ from app.controllers.hume_tool_controller import HumeToolController
 from app.controllers.login_admin_controller import LoginAdminController
 from app.controllers.mcp_app_controller import MCPAppController
 from app.controllers.mcp_proxy_controller import MCPProxyController
+from app.controllers.mcp_test_controller import McpTestController
 from app.controllers.mcp_server_controller import MCPServerController
 from app.controllers.model_catalog_controller import ModelCatalogController
 from app.controllers.package_controller import PackageController
@@ -86,6 +87,7 @@ CONTROLLERS = {
     'MCPAppController': MCPAppController,
     'MCPProxyController': MCPProxyController,
     'MCPServerController': MCPServerController,
+    'McpTestController': McpTestController,
     'ModelCatalogController': ModelCatalogController,
     'PackageController': PackageController,
     'PlaybookController': PlaybookController,
@@ -240,6 +242,8 @@ ROUTES = [
     ('DELETE', '/api/v1/me/mcp-servers/{serverId:\\d+}/override', ('MCPServerController', 'clearMyOverride')),
     # MCP PROXY (routes.php:279-281)
     ('POST', '/api/v1/mcp/proxy', ('MCPProxyController', 'forward')),
+    # MCP TEST TAB (routes.php:323) — one JSON-RPC message relayed verbatim
+    ('POST', '/api/v1/mcp/test', ('McpTestController', 'test')),
     # MCP APP (Public - serves HTML; routes.php:283-287)
     ('GET', '/api/v1/mcp/app', ('MCPAppController', 'getResource')),
     ('GET', '/api/mcp-app.php', ('MCPAppController', 'getResource')),  # Legacy path
@@ -320,6 +324,7 @@ ROUTES = [
     ('POST', '/api/v1/admin/mcp/servers/toggle', ('AdminController', 'toggleMCPServer')),
     ('POST', '/api/v1/admin/mcp/servers/refresh', ('AdminController', 'refreshMCPServerTools')),
     ('DELETE', '/api/v1/admin/mcp/servers/{id:\\d+}', ('AdminController', 'deleteMCPServer')),
+    ('POST', '/api/v1/admin/mcp/test', ('McpTestController', 'adminTest')),  # routes.php:249
     # ADMIN — USER MCP OVERRIDES (routes.php 235-238)
     ('GET', '/api/v1/admin/users/{id:\\d+}/mcp-servers', ('AdminController', 'getUserMCPServers')),
     ('PUT', '/api/v1/admin/users/{id:\\d+}/mcp-servers/{serverId:\\d+}/override',
