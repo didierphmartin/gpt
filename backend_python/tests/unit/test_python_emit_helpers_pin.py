@@ -41,9 +41,9 @@ def test_mcp_client_block_unchanged():
 def test_skill_deps_block_unchanged():
     """PHP testSkillDepsBlockUnchanged (lines 31-40)."""
     block = PythonEmitHelpers.skillDepsBlock()
-    assert len(block.encode('utf-8')) == 2423, 'skillDepsBlock byte length changed'
+    assert len(block.encode('utf-8')) == 5596, 'skillDepsBlock byte length changed'
     assert hashlib.sha256(block.encode('utf-8')).hexdigest() == (
-        '79f69500a85e9aa03f75f4336d93f8913bb954608a18e59885f90207af20948d'
+        'fb71cb1def36dc3a7f1e2f006cc8a4e9c0419290d01958f967907afccdd85719'
     ), 'skillDepsBlock content changed -- this alters generated Python for both generators'
 
 
@@ -57,11 +57,9 @@ def test_document_converter_block_unchanged():
 
 
 def test_skill_fs_sync_block_unchanged():
-    """PHP testSkillFsSyncBlockUnchanged (lines 53-62) -- pinned to the ACTUAL
-    live PHP output (6017 bytes / sha256 7b9543f3...), not the stale PHP test
-    fixture (5092 / 9ca556...). See module docstring."""
+    """PHP testSkillFsSyncBlockUnchanged -- same pin as the PHP test (6167 bytes)."""
     block = PythonEmitHelpers.skillFsSyncBlock()
-    assert len(block.encode('utf-8')) == 6017, 'skillFsSyncBlock byte length changed'
+    assert len(block.encode('utf-8')) == 6167, 'skillFsSyncBlock byte length changed'
     assert hashlib.sha256(block.encode('utf-8')).hexdigest() == (
-        '7b9543f387e0a7fce98aa2ed74c5304e452ddc9d6c06588ecf93d7adf4d03f50'
+        '3694c25fccfff1a432c965b48b8ad66889e2c84d0a85f3fd90d2796d9ef78769'
     ), 'skillFsSyncBlock content changed -- this alters generated Python for both generators'

@@ -246,6 +246,7 @@ skillRunnerBlock__py = (
     '    env = dict(\n'
     '        os.environ,\n'
     '        SYNERGYAI_OUTPUT_DIR=out_dir,\n'
+    '        SYNERGYAI_SKILLS_DIR=os.path.abspath(SKILLS_DIR),   # absolute (it may be ./skills): a skill that loads another skill\'s scripts finds it here\n'
     '        SYNERGYAI_SCRATCH_DIR=SKILL_SCRATCH_DIR,\n'
     '        SYNERGYAI_SKILL_DIR_NAME=dir_name,\n'
     '        SYNERGYAI_SKILL_GROUP=group,\n'
@@ -279,7 +280,7 @@ skillRunnerBlock__py = (
     'RUN_SKILL_SCRIPT_TOOL = FunctionTool(_run_skill_script)'
 )
 
-# backend/src/AgentTeam/Services/ADKGenerator.php:930
+# backend/src/AgentTeam/Services/ADKGenerator.php:931
 skillRunnerBlock__ret = r'''
 
 def _read_skill_md(dir_name: str) -> str:
@@ -352,7 +353,7 @@ class _SkillCaptureAgent(BaseAgent):
             turn_complete=True,
         )'''
 
-# backend/src/AgentTeam/Services/ADKGenerator.php:1041
+# backend/src/AgentTeam/Services/ADKGenerator.php:1042
 dataFlowDoc__ret = r'''HOW THIS FILE IS ORGANISED (top to bottom):
   1. _make_model(provider, model)  -- maps a node's provider+model to an ADK model
                                       (Gemini = native string; every other provider goes
@@ -392,7 +393,7 @@ A PLAYBOOK node is an interpreter, not an agent: the model re-decides each
 round from the running transcript of tool calls, and that transcript IS the
 node output, published to session.state like any other node's result.'''
 
-# backend/src/AgentTeam/Services/ADKGenerator.php:1291
+# backend/src/AgentTeam/Services/ADKGenerator.php:1292
 passThroughAgentBlock__ret = r'''class _PassThroughAgent(BaseAgent):
     """Output (fan-in) node: emit the parent(s) result VERBATIM -- no LLM -- so
     formatting such as HTML is preserved. A single parent is passed through
@@ -416,7 +417,7 @@ passThroughAgentBlock__ret = r'''class _PassThroughAgent(BaseAgent):
             turn_complete=True,
         )'''
 
-# backend/src/AgentTeam/Services/ADKGenerator.php:1328
+# backend/src/AgentTeam/Services/ADKGenerator.php:1329
 playbookAgentBlock__ret = r'''class _PlaybookAgent(BaseAgent):
     """Runs one playbook node and publishes its transcript as the node output."""
     node_id: str = ""
@@ -434,7 +435,7 @@ playbookAgentBlock__ret = r'''class _PlaybookAgent(BaseAgent):
             turn_complete=True,
         )'''
 
-# backend/src/AgentTeam/Services/ADKGenerator.php:1395
+# backend/src/AgentTeam/Services/ADKGenerator.php:1396
 dispatcherAgentBlock__ret = (
     'class _DispatcherAgent(BaseAgent):\n'
     '    """DISPATCHER node: run the chooser, then run ONLY the child it named.\n'
@@ -589,7 +590,7 @@ SHA256 = {
     'codeAgentBlock__ret': 'afe29ad56c25a6756f252671806dc5d7b0a734d3a89eaa2271f75770a81ea737',
     'gateAgentBlock__ret': '9a8c4b890236a666a2849499349b17bee6074ebb76b9dfc24462aa874441d162',
     'modelFactoryBlock__ret': 'b2945dd7071d98c427960bcf6a3e0e0f1985292d5e4d4e4211d832d90befe8ad',
-    'skillRunnerBlock__py': '4ad3e3b40bc3408cc0dd1ae47948f965b2db83a4f35a2d4082ef9fcce3562929',
+    'skillRunnerBlock__py': '363be419a1c6e7e525e8eef1c2e17022a41db1f9370fde83d1d219421aef32c7',
     'skillRunnerBlock__ret': '5e163f929f608ac74b31761df9bb996d4fda8fb46216fa71998aa0f1d563b967',
     'dataFlowDoc__ret': '8d62e5e875bad303abdd18de4775e3b28682a6d2201689ea4edab013e4e3b7b5',
     'passThroughAgentBlock__ret': '282fe3768ee5ad60e5c3c00a3ca45ab23e4dd6b0c4acd11602f0157d572d8090',

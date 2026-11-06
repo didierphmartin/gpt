@@ -3,7 +3,7 @@
 # ruff: noqa
 # fmt: off
 
-# backend/src/AgentTeam/Services/PlaybookEmit.php:245
+# backend/src/AgentTeam/Services/PlaybookEmit.php:249
 supportBlock__ret = r'''# ---------------------------------------------------------------------------
 # PLAYBOOK SUPPORT
 #
@@ -66,7 +66,7 @@ def _pb_inject_datetime(text: str) -> str:
     model's training era -- dates in approvals and SLAs come out wrong."""
     return ("Current date: " + time.strftime("%Y-%m-%d") + ". Treat this as 'now'.\n\n") + text'''
 
-# backend/src/AgentTeam/Services/PlaybookEmit.php:315
+# backend/src/AgentTeam/Services/PlaybookEmit.php:319
 supportBlock__ret_2 = r'''def _pb_request_text(parent_texts, request) -> str:
     """The REQUEST a playbook node interprets: its parents' output, or the
     original user request when it hangs straight off Start."""
@@ -111,7 +111,7 @@ async def run_playbook_node(pb: dict, request_text: str) -> str:
         run.emit(type="note", text=f"Round budget of {PLAYBOOK_MAX_ROUNDS} exhausted or run failed: {e}")
     return render_playbook_transcript(pb["title"], run.events, run.summary or text, run.status)'''
 
-# backend/src/AgentTeam/Services/PlaybookEmit.php:374
+# backend/src/AgentTeam/Services/PlaybookEmit.php:378
 runtimeBlock__ret = r'''# ---------------------------------------------------------------------------
 # PLAYBOOK RUNTIME
 #

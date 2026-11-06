@@ -3,7 +3,7 @@
 # ruff: noqa
 # fmt: off
 
-# backend/src/AgentTeam/Services/LangGraphGenerator.php:1762
+# backend/src/AgentTeam/Services/LangGraphGenerator.php:1763
 a2aOrchestratorDataFlowDoc__ret = r'''The orchestrator owns the graph and the human; the agents own the models,
 tools and playbooks. Every agent node is one A2A task on that node's
 server: the orchestrator sends the framed input (original prompt + labelled
@@ -12,7 +12,7 @@ parent outputs), relays status updates, answers gates, and takes the
 in the artifact's data part and drives a LangGraph conditional edge, so only
 that child runs. Start and Output nodes are local (no LLM).'''
 
-# backend/src/AgentTeam/Services/LangGraphGenerator.php:1855
+# backend/src/AgentTeam/Services/LangGraphGenerator.php:1856
 a2aOrchestratorBlock__ret = r'''# ==============================================================
 # MAIN EXECUTION -- the LangGraph state graph over A2A tasks
 # ==============================================================
@@ -75,7 +75,7 @@ if __name__ == "__main__":
         if not a.keep_serving:
             sup.stop()'''
 
-# backend/src/AgentTeam/Services/LangGraphGenerator.php:1926
+# backend/src/AgentTeam/Services/LangGraphGenerator.php:1927
 a2aRemoteBlock__ret = r'''# ==============================================================
 # AGENT SUPERVISOR
 # Starts one python process per local agent, relays its stdout with a
@@ -329,7 +329,7 @@ async def _run_remote_node(nid: str, request_text: str) -> dict:
 
 '''
 
-# backend/src/AgentTeam/Services/LangGraphGenerator.php:2375
+# backend/src/AgentTeam/Services/LangGraphGenerator.php:2376
 a2aAgentDataFlowDoc__ret = r'''This file serves ONE node of the workflow as an A2A agent. The orchestrator
 (orchestrator.py in the parent folder) builds the node input, sends it as a
 task, streams the status updates, answers gates, and reads the result
@@ -340,7 +340,7 @@ choice travels back as the artifact's "route"; a PLAYBOOK node = the playbook
 runtime (native verbs, gates, write-policed MCP actions), whose transcript is
 the text part of the result.'''
 
-# backend/src/AgentTeam/Services/LangGraphGenerator.php:2391
+# backend/src/AgentTeam/Services/LangGraphGenerator.php:2392
 a2aAgentServerBlock__ret = r'''# ==============================================================
 # A2A SERVING
 # Agent Card, the AgentExecutor (one task = one node run, paused at
@@ -538,7 +538,7 @@ def main() -> None:
 
 '''
 
-# backend/src/AgentTeam/Services/LangGraphGenerator.php:3520
+# backend/src/AgentTeam/Services/LangGraphGenerator.php:3527
 modularDataFlowDoc__ret = r'''This workflow is one Python package, run in ONE process. workflow.py owns the
 graph data; common.py's WorkflowGraph frames each node's input (original prompt
 + labelled parent outputs) and calls that node's module through workflow.py's
@@ -554,7 +554,7 @@ the text. common.py holds everything they share -- LLM factory, MCP client, tool
 builder, skills, dispatcher and playbook runtimes, the Node classes -- imported
 once instead of copied per node.'''
 
-# backend/src/AgentTeam/Services/LangGraphGenerator.php:3947
+# backend/src/AgentTeam/Services/LangGraphGenerator.php:3954
 modularRunnerBlock__ret = r'''# ==============================================================
 # NODE RUNNER
 # Every agent/playbook node goes through here: frame nothing (workflow.py
@@ -743,7 +743,7 @@ if __name__ == "__main__":
         Listener(mode, run_once, drains=drains, loop=runs, cron_expr=cron, trigger=watch, state=LoopState(),
                  lock_path=os.path.join(PACKAGE_DIR, ".run.lock"), verbosity=view.verbosity).run_blocking()'''
 
-# backend/src/AgentTeam/Services/LangGraphGenerator.php:4367
+# backend/src/AgentTeam/Services/LangGraphGenerator.php:4374
 dataFlowDoc__ret = r'''The script embeds the agents (AGENTS), playbooks (PLAYBOOKS), the MCP
 servers and tool schemas (MCP_SERVERS, TOOL_CATALOG) and the graph
 (EDGES, ORDER, NODE_TYPES), then builds a LangGraph StateGraph at run time.
@@ -772,7 +772,7 @@ Tools are called over the MCP protocol: initialize handshake (the URL as
 registered first, then with /mcp in its path), tools/call, JSON or SSE
 response, text content back to the model.'''
 
-# backend/src/AgentTeam/Services/LangGraphGenerator.php:4400
+# backend/src/AgentTeam/Services/LangGraphGenerator.php:4407
 stateBlock__ret = r'''def _merge(left: dict | None, right: dict | None) -> dict:
     """Reducer for node_outputs -- merges dicts from parallel branches.
 
@@ -800,7 +800,7 @@ class WFState(TypedDict, total=False):
     final_output: str
 '''
 
-# backend/src/AgentTeam/Services/LangGraphGenerator.php:4432
+# backend/src/AgentTeam/Services/LangGraphGenerator.php:4439
 datetimeInjectorBlock__ret = r'''def inject_datetime(system_prompt: str) -> str:
     """Inject current date/time into a system prompt.
 
@@ -831,7 +831,7 @@ datetimeInjectorBlock__ret = r'''def inject_datetime(system_prompt: str) -> str:
     return header + prompt
 '''
 
-# backend/src/AgentTeam/Services/LangGraphGenerator.php:4467
+# backend/src/AgentTeam/Services/LangGraphGenerator.php:4474
 contextBuilderBlock__ret = r'''def build_context(user_prompt: str, parent_ids: list[str], outputs: dict) -> str:
     """Build the HumanMessage content for an agent node.
 
@@ -858,7 +858,7 @@ contextBuilderBlock__ret = r'''def build_context(user_prompt: str, parent_ids: l
     return "\n".join(parts)
 '''
 
-# backend/src/AgentTeam/Services/LangGraphGenerator.php:4503
+# backend/src/AgentTeam/Services/LangGraphGenerator.php:4510
 singleRunBlock__ret = r'''# One Node per agent and playbook node -- provider/model come from the AGENTS
 # and PLAYBOOKS dicts, which the generator baked from each node's workflow config.
 # Each node builds its chat model on first use (Node.llm), not here.
@@ -905,7 +905,7 @@ async def run(user_prompt: str, graph: WorkflowGraph | None = None) -> str:
     RUN_OUT.once(f"[info] {len(catalog)} tools ready: {sorted(catalog.keys())}")
 '''
 
-# backend/src/AgentTeam/Services/LangGraphGenerator.php:4549
+# backend/src/AgentTeam/Services/LangGraphGenerator.php:4556
 singleRunBlock__ret_2 = r'''    return await (graph or build_graph()).run(user_prompt)
 
 

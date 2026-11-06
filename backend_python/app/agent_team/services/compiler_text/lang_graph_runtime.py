@@ -2882,15 +2882,64 @@ skillRuntimeBlock__block = (
     '                break\n'
     '            if s.lower().startswith("dependencies:"):\n'
     '                val = s.split(":", 1)[1].strip().strip("[]")\n'
-    '                deps = [d.strip().strip("\'").strip(\'"\') for d in val.split(",") if d.strip()]\n'
+    '                # Commas inside quotes stay in their item (\'numpy>=1.20,<2\'); one matching quote pair is\n'
+    '                # stripped (\'\' -> \' inside single quotes); an unterminated quote splits on every comma.\n'
+    '                items, cur, q, i = [], "", None, 0\n'
+    '                while i < len(val):\n'
+    '                    c = val[i]\n'
+    '                    if q:\n'
+    '                        cur += c\n'
+    '                        if c == q:\n'
+    '                            if q == "\'" and val[i + 1:i + 2] == "\'":\n'
+    '                                cur += "\'"\n'
+    '                                i += 1\n'
+    '                            else:\n'
+    '                                q = None\n'
+    '                    elif c in "\'\\"" and not cur.strip():\n'
+    '                        q, cur = c, cur + c\n'
+    '                    elif c == ",":\n'
+    '                        items.append(cur)\n'
+    '                        cur = ""\n'
+    '                    else:\n'
+    '                        cur += c\n'
+    '                    i += 1\n'
+    '                items.append(cur)\n'
+    '                if q:\n'
+    '                    deps = [d.strip().strip("\'").strip(\'"\') for d in val.split(",") if d.strip()]\n'
+    '                else:\n'
+    '                    for d in items:\n'
+    '                        d = d.strip()\n'
+    '                        if len(d) >= 2 and d[0] in "\'\\"" and d[-1] == d[0]:\n'
+    '                            d = d[1:-1].replace("\'\'", "\'") if d[0] == "\'" else d[1:-1]\n'
+    '                        if d:\n'
+    '                            deps.append(d)\n'
     '                break\n'
+    '        # A skill that carries its libraries (.wheels/native/, bundled at export) installs them from\n'
+    '        # there, in one pip call, without the internet.\n'
+    '        wheels = os.path.join(skill_dir, ".wheels", "native")\n'
+    '        offline = os.path.isdir(wheels) and any(f.endswith(".whl") for f in os.listdir(wheels))\n'
     '        with self._deps_lock:\n'
+    '            missing = []\n'
     '            for d in deps:\n'
     '                if d in self._installed_deps:\n'
     '                    continue\n'
     '                self._installed_deps.add(d)\n'
     '                if self._importable(d):   # requirements.txt (or the runner\'s venv) already has it\n'
     '                    continue\n'
+    '                missing.append(d)\n'
+    '            if offline and missing:\n'
+    '                names = " ".join(missing)\n'
+    '                try:\n'
+    '                    node_print(f"  [run_skill_script] installing {names} from the skill\'s own wheels")\n'
+    '                    r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-index", "--find-links", wheels,\n'
+    '                                        *missing], capture_output=True, text=True, timeout=600)\n'
+    '                    if r.returncode != 0:\n'
+    '                        node_print(f"  [run_skill_script] pip install {names} FAILED: "\n'
+    '                                   f"{(r.stderr or \'\')[-300:]}")\n'
+    '                except Exception as e:\n'
+    '                    node_print(f"  [run_skill_script] pip install {names} error: {e}")\n'
+    '                return\n'
+    '            for d in missing:\n'
     '                try:\n'
     '                    node_print(f"[warn] installing {d} (not in requirements.txt)")\n'
     '                    r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", d],\n'
@@ -3008,6 +3057,7 @@ skillRuntimeBlock__block = (
     '        env = dict(\n'
     '            os.environ,\n'
     '            SYNERGYAI_OUTPUT_DIR=out_dir,\n'
+    '            SYNERGYAI_SKILLS_DIR=os.path.abspath(self.skills_dir),   # absolute (it may be ./skills): a skill that loads another skill\'s scripts finds it here\n'
     '            SYNERGYAI_SCRATCH_DIR=self.scratch_dir,\n'
     '            SYNERGYAI_SKILL_DIR_NAME=dir_name,\n'
     '            SYNERGYAI_SKILL_GROUP=(dir_name.split("/")[0] if "/" in dir_name else ""),\n'
@@ -3142,7 +3192,7 @@ skillRuntimeBlock__block = (
     ')\n'
 )
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:3498
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:3548
 runEventsBlock__ret = r'''# ==============================================================
 # EVENT SINK + GATE RENDEZVOUS
 # Inert until a host installs a sink (see api.py). With no sink the
@@ -3228,7 +3278,7 @@ emit_event = EVENTS.emit
 resolve_gate = EVENTS.resolve_gate
 '''
 
-# backend/src/AgentTeam/Services/LangGraphRuntime.php:3603
+# backend/src/AgentTeam/Services/LangGraphRuntime.php:3653
 playbookBlock__ret = r'''# ---------------------------------------------------------------------------
 # PLAYBOOK RUNTIME
 #
@@ -3630,7 +3680,7 @@ SHA256 = {
     'documentConverterBlock__ret': 'db1d5dbeac20fc237d264a26865a34d74a3f80ddf8b49d7f1d363427a6318af9',
     'mcpClientBlock__ret': '6fe885d757dec3ae1d6ff9d79960e74737e69ef53430f5133a6043cac85cc246',
     'toolCatalogBlock__ret': '8111fa0bfa69791243302031580a894a1f6c823562f13919d77ba2fa3d8a9a5a',
-    'skillRuntimeBlock__block': '2ed666dd3acca161882f3a5e9adc402b654b0b33a6c73c6207fa1f99fd912b0d',
+    'skillRuntimeBlock__block': '6d554c551b83ded10c53aa07d150c14960896190ff37838f679817d4a21daea6',
     'runEventsBlock__ret': '8e3325f9c3930ae61a331d9ea9cea92462d1c0de889857f4230b42b9f5d909c0',
     'playbookBlock__ret': 'b4433d4a5cc7820cedb2793ad5674ddff497d88e31909d2fa3d8e5266961c9e9',
 }
