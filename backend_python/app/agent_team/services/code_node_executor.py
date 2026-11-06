@@ -14,6 +14,7 @@ import subprocess
 from app.agent_team.services.code_node_emit import CodeNodeEmit
 from app.config import PHP_BACKEND
 from app.support.phpcompat import php_bool, php_empty, php_strval, php_trim
+from app.services.mcp_endpoint import McpEndpoint
 
 RUNNER = PHP_BACKEND / 'scripts' / 'code_node_run.py'
 HARNESS_DIR = PHP_BACKEND.parent / 'frontend' / 'assets' / 'py'
@@ -71,7 +72,7 @@ class CodeNodeExecutor:
                 except (ValueError, TypeError):
                     decoded = None
                 headers = decoded if decoded else {}
-            out[CodeNodeEmit.slug(php_strval(r.get('name')))] = {'url': php_strval(r.get('url')), 'headers': _object(headers)}
+            out[CodeNodeEmit.slug(php_strval(r.get('name')))] = {'url': McpEndpoint.internal(php_strval(r.get('url'))), 'headers': _object(headers)}
         return out
 
     def _spawn(self, request: dict, killAfterS: int) -> dict:

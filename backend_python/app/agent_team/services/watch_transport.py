@@ -12,6 +12,7 @@ import time
 from typing import Protocol
 
 import httpx
+from app.services.mcp_endpoint import McpEndpoint
 
 
 class WatchTransport(Protocol):
@@ -43,7 +44,7 @@ class HttpWatchTransport:
             hdrs[name.strip()] = value.strip()
         try:
             with httpx.Client(timeout=httpx.Timeout(cls.TIMEOUT_S, connect=15)) as client:
-                r = client.post(url, content=body.encode('utf-8'), headers=hdrs)
+                r = client.post(McpEndpoint.internal(url), content=body.encode('utf-8'), headers=hdrs)
             return r.text, r.status_code, ''
         except Exception as e:  # noqa: BLE001 -- curl reports every transport failure as an error string
             return False, 0, str(e) or e.__class__.__name__

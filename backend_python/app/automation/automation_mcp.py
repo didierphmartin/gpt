@@ -15,6 +15,7 @@ import httpx
 
 from app.playbook.adapters.loader_mcp_executor import LoaderMcpExecutor
 from app.services.mcp_tools_loader import MCPToolsLoader
+from app.services.mcp_endpoint import McpEndpoint
 
 _SLUG = re.compile(r'[^a-z0-9]+', re.IGNORECASE)
 _DATA_LINE = re.compile(r'^data:\s?(.*)$', re.M)
@@ -48,7 +49,7 @@ class LiveAutomationMcp:
             headers[name.strip()] = value.strip()
         try:
             with httpx.Client(timeout=httpx.Timeout(timeoutSeconds, connect=15)) as client:
-                r = client.post(url, content=body.encode('utf-8'), headers=headers)
+                r = client.post(McpEndpoint.internal(url), content=body.encode('utf-8'), headers=headers)
         except Exception:  # noqa: BLE001 -- curl_exec false / curl_error
             return {'ok': False, 'error': 'unreachable'}
         if r.status_code >= 400:

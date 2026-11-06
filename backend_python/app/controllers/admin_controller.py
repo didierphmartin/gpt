@@ -50,6 +50,7 @@ from app.support.phpcompat import (
     php_values,
 )
 from app.support.phpjson import php_json_decode, php_json_encode
+from app.services.mcp_endpoint import McpEndpoint
 
 VALID_CATEGORIES = ('avatar', 'voice')
 
@@ -2190,7 +2191,7 @@ class AdminController:
         try:
             with httpx.Client(verify=SHARED_SSL_CONTEXT,
                               timeout=httpx.Timeout(30.0, connect=10.0)) as client:
-                resp = client.post(url, content=php_json_encode(requestBody), headers=headers,
+                resp = client.post(McpEndpoint.internal(url), content=php_json_encode(requestBody), headers=headers,
                                    follow_redirects=True)
         except Exception as e:  # noqa: BLE001
             return {'ok': False, 'error': str(e), 'data': None}

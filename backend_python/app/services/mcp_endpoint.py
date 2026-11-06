@@ -32,10 +32,12 @@ class McpEndpoint:
         trimmed = path.rstrip('/')
 
         if transport == 'sse' and trimmed.endswith('/sse'):
-            return [trimmed[:-4] + '/mcp' + rest]
+            return [McpEndpoint.internal(trimmed[:-4] + '/mcp' + rest)]
         if trimmed.endswith('/mcp') or trimmed.endswith('.php'):
-            return [serverUrl]
-        return [serverUrl, trimmed + '/mcp' + rest]
+            raw = [serverUrl]
+        else:
+            raw = [serverUrl, trimmed + '/mcp' + rest]
+        return [McpEndpoint.internal(u) for u in raw]
 
     @staticmethod
     def isJsonRpcReply(decoded) -> bool:

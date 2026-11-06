@@ -30,6 +30,7 @@ from app.controllers.hume_tool_controller import HumeToolController
 from app.controllers.login_admin_controller import LoginAdminController
 from app.controllers.mcp_app_controller import MCPAppController
 from app.controllers.mcp_proxy_controller import MCPProxyController
+from app.controllers.mcp_host_controller import McpHostController
 from app.controllers.mcp_test_controller import McpTestController
 from app.controllers.mcp_server_controller import MCPServerController
 from app.controllers.model_catalog_controller import ModelCatalogController
@@ -87,6 +88,7 @@ CONTROLLERS = {
     'MCPAppController': MCPAppController,
     'MCPProxyController': MCPProxyController,
     'MCPServerController': MCPServerController,
+    'McpHostController': McpHostController,
     'McpTestController': McpTestController,
     'ModelCatalogController': ModelCatalogController,
     'PackageController': PackageController,
@@ -236,6 +238,16 @@ ROUTES = [
     ('POST', '/api/v1/mcp/servers/update', ('MCPServerController', 'update')),
     ('POST', '/api/v1/mcp/servers/toggle', ('MCPServerController', 'toggle')),
     ('DELETE', '/api/v1/mcp/servers', ('MCPServerController', 'delete')),
+    # Docker app only: relay to the server supervisor (404 'no server host' elsewhere)
+    ('GET', '/api/v1/mcp/host', ('McpHostController', 'info')),
+    ('GET', '/api/v1/mcp/host/servers', ('McpHostController', 'list')),
+    ('POST', '/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/install', ('McpHostController', 'install')),
+    ('POST', '/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/restart', ('McpHostController', 'restart')),
+    ('POST', '/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/enabled', ('McpHostController', 'enabled')),
+    ('GET', '/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/settings', ('McpHostController', 'getSettings')),
+    ('PUT', '/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/settings', ('McpHostController', 'putSettings')),
+    ('GET', '/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/source', ('McpHostController', 'source')),
+    ('DELETE', '/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}', ('McpHostController', 'delete')),
     ('PUT', '/api/v1/me/mcp-settings', ('MCPServerController', 'setMasterSetting')),
     ('GET', '/api/v1/me/mcp-servers', ('MCPServerController', 'listMine')),
     ('PUT', '/api/v1/me/mcp-servers/{serverId:\\d+}/override', ('MCPServerController', 'setMyOverride')),

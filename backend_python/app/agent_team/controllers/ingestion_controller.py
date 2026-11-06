@@ -71,6 +71,7 @@ from app.services.mcp_tools_loader import MCPToolsLoader
 from app.support import phpjson
 from app.support.logger import error_log
 from app.support.phpcompat import mb_substr, php_bool, php_empty, php_intval, php_strval, php_trim, php_values
+from app.services.mcp_endpoint import McpEndpoint
 
 _MCP_STORE_RE = re.compile(r'^mcp:(\d+)$', re.ASCII)
 _RUN_ID_RE = re.compile(r'^[a-f0-9]{16}$')
@@ -1108,7 +1109,7 @@ class IngestionController:
         no side effects); not replicated, since skipping it produces
         byte-identical behavior (see task report)."""
         try:
-            resp = client.post(url, json=payload, headers=headers)
+            resp = client.post(McpEndpoint.internal(url), json=payload, headers=headers)
         except httpx.RequestError as e:
             return {'error': True, 'message': f"MCP connection failed: {e}"}, None
         if resp.status_code >= 400:
