@@ -4,6 +4,8 @@
     AddType application/manifest+json .webmanifest
     AddType application/javascript .js
     AddType image/svg+xml .svg
+    # Pyodide (vendor/pyodide/): without it Chrome refuses to compile the wasm and loadPyodide() never settles.
+    AddType application/wasm .wasm
 </IfModule>
 
 # Don't cache the service worker registration script — browsers should
