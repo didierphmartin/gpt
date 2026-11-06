@@ -21,6 +21,12 @@ from app.agent_team.services.python_requirements import PythonRequirements
 from app.agent_team.services.start_document_store import StartDocumentStore
 
 
+# PHP trim()'s default characters
+_WS = ' \t\n\r\0\x0b'
+_SKILL_NAME = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)?\Z')
+_QUOTED = re.compile(r"'([^'\n\\]*)'|\"([^\"\n\\]*)\"")
+
+
 def _unique(items: list) -> list:
     out = []
     for x in items:
@@ -55,7 +61,7 @@ class LangGraphPackage:
         return home + '/Documents/synergyAI/skills'
 
     @classmethod
-    def files(cls, facts: dict, skillsRoot: str, documents=None) -> list:
+    def files(cls, facts: dict, skillsRoot, documents=None) -> list:
         """The package's own files (the code modules, agents and code/ files are the generator's)."""
         skills = cls.skillFiles(facts, skillsRoot)
         out = cls._docFiles(facts, 'modular', skills,
@@ -125,59 +131,301 @@ class LangGraphPackage:
         return list(dirs.keys())
 
     @classmethod
-    def skillFiles(cls, facts: dict, skillsRoot: str) -> list:
-        """Every file of every used skill folder (skipping __pycache__, .DS_Store, *.pyc, .env*, dot-directories), sorted."""
+    def skillFiles(cls, facts: dict, skillsRoot) -> list:
+        """Every file of every used skill folder (skipping __pycache__, .DS_Store, *.pyc, .env*, dot-directories), sorted,
+        plus the skill's native wheels (.wheels/native/: the program installs its libraries from there, offline);
+        never the browser's (.wheels/pyodide/). Each used skill brings the skills it requires (requiredSkills(),
+        transitively): they are copied the same way, after the bound ones, at skills/<leaf>/ (a grouped one too).
+
+        skillsRoot: the folder holding the skills, or (the Docker app's skill store) a resolver
+        (dir, from) -> folder | None giving each skill's own folder, None when the owner cannot see it."""
         out = []
-        root = os.path.realpath(skillsRoot) if os.path.exists(skillsRoot) else None
-        for d in cls.skillDirs(facts):
-            # dir_name comes from the client-saved node config: plain segments, none starting with ".",
-            # resolved inside the root.
-            segments = StartDocumentStore.safeSegments(d)
-            safe = segments is not None and not [s for s in segments if s.startswith('.')]
-            cand = os.path.join(root, d) if (safe and root is not None) else None
-            base = os.path.realpath(cand) if cand is not None and os.path.exists(cand) else None
-            if base is None or not base.startswith(root + os.sep) or not os.path.isdir(base):
-                raise RuntimeError(f'Skill folder "{d}" is not available on this server, so it can\'t be packaged.')
-            found = []
-            for dirpath, dirnames, filenames in os.walk(base):   # RecursiveDirectoryIterator does not enter a symlinked folder
-                dirnames[:] = [n for n in dirnames if n not in cls.SKIP_NAMES and not n.endswith('.pyc')
-                               and not n.startswith('.env') and not n.startswith('.')]
-                for fn in filenames:
-                    if fn in cls.SKIP_NAMES or fn.endswith('.pyc') or fn.startswith('.env'):
-                        continue
-                    p = os.path.join(dirpath, fn)
-                    real = os.path.realpath(p) if os.path.isfile(p) else None
-                    # A file is copied only if it really lives in the skill folder (a symlink may point elsewhere).
-                    if real is not None and real.startswith(base + os.sep):
-                        found.append(p[len(base) + 1:])
+        if isinstance(skillsRoot, str):
+            root = os.path.realpath(skillsRoot) if os.path.exists(skillsRoot) else False
+        else:
+            root = None
+        # [skill, who needs it, where it goes]: a bound skill at its own path; a required one at skills/<leaf>/, where
+        # the scripts that need it look (SKILLS_ROOT/<leaf>/...).
+        queue = [[d, None, d] for d in cls.skillDirs(facts)]
+        done: dict = {}
+        installed = None   # the skill paths a folder root holds (read once, when a skill needs it)
+        while queue:
+            d, by, as_ = queue.pop(0)
+            if as_ in done:
+                if done[as_] != d:   # two different skills would land in one folder
+                    raise RuntimeError(f'Skills "{done[as_]}" and "{d}" both need to be available as \'{as_}\'; rename one.')
+                continue
+            done[as_] = d
+            base = cls._skillBase(d, skillsRoot, root, by)
+            if base is False:
+                raise RuntimeError(f'Skill folder "{d}" is not available on this server, so it can\'t be packaged.' if by is None
+                                   else f'Skill "{by}" needs skill "{d}", which is not available on this server, so it can\'t be packaged.')
+            found = cls._folderFiles(base, base)
+            own = {}
+            for rel in found:
+                if rel == 'SKILL.md' or rel.startswith('scripts/'):
+                    with open(os.path.join(base, rel), 'rb') as fh:
+                        own[rel] = fh.read()
+            if os.path.isdir(f'{base}/.wheels/native'):
+                found += cls._folderFiles(base, f'{base}/.wheels/native')
             found.sort(key=lambda s: s.encode('utf-8'))
             for rel in found:
                 with open(os.path.join(base, rel), 'rb') as fh:
                     data = fh.read()
-                out.append({'dir': d, 'rel': rel, 'bytes': data, 'entry': cls._entry(f'skills/{d}/{rel}', data)})
+                out.append({'dir': as_, 'rel': rel, 'bytes': data, 'entry': cls._entry(f'skills/{as_}/{rel}', data)})
+            if root is not None:
+                if installed is None:
+                    installed = [] if root is False else cls._installedSkills(root)
+                names = installed
+            else:
+                names = cls._probedSkills(d, own, skillsRoot)
+            req = cls.requiredSkills(d, own, names)
+            for m in req['missing']:
+                raise RuntimeError(f'Skill "{d}" needs skill "{m}", which is not available on this server, so it can\'t be packaged.')
+            for q in req['requires']:
+                queue.append([q, d, q.rsplit('/', 1)[-1]])
         return out
 
     @staticmethod
-    def skillDependencies(skillMd) -> list:
+    def _skillBase(d: str, skillsRoot, root, frm: str | None = None):
+        """The real folder of skill d (inside the root, or from the store resolver), False when unsafe or absent."""
+        # dir_name comes from the client-saved node config: plain segments ("GEO/geo-report" for a grouped
+        # skill; none empty, "." or "..", none starting with "." (.git, .superpowers), no "\"), resolved
+        # inside the root.
+        segments = StartDocumentStore.safeSegments(d)
+        safe = segments is not None and not [s for s in segments if s.startswith('.')]
+        if not safe:
+            return False
+        if root is None:
+            dir_ = skillsRoot(d, frm)   # frm: the skill that needs it (a store resolver prefers its group)
+            base = False if dir_ is None or not os.path.exists(dir_) else os.path.realpath(dir_)
+        else:
+            cand = os.path.join(root, d) if root is not False else None
+            base = os.path.realpath(cand) if cand is not None and os.path.exists(cand) else False
+            base = base if base is not False and base.startswith(root + os.sep) else False
+        return base if base is not False and os.path.isdir(base) else False
+
+    @staticmethod
+    def _installedSkills(root: str) -> list:
+        """The skill paths under a skills root: folders (one or two levels, no dot-folder) holding a SKILL.md."""
+        out = []
+        for a in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+            if a.startswith('.') or not os.path.isdir(f'{root}/{a}'):
+                continue
+            if os.path.isfile(f'{root}/{a}/SKILL.md'):
+                out.append(a)
+                continue
+            for b in sorted(os.listdir(f'{root}/{a}')):
+                if not b.startswith('.') and os.path.isfile(f'{root}/{a}/{b}/SKILL.md'):
+                    out.append(f'{a}/{b}')
+        out.sort(key=lambda s: s.encode('utf-8'))
+        return out
+
+    @classmethod
+    def _probedSkills(cls, self_: str, files: dict, resolve) -> list:
+        """The store has no listing here, only the resolver: every name the skill could mean (its requires-skills,
+        else each exact quoted literal and each /segment/ of its scripts) that resolves to a skill the owner sees
+        (the resolver also finds a grouped skill by its leaf)."""
+        md = cls._text(files.get('SKILL.md', ''))
+        cands = list(cls._declaredSkillsOrNull(md) or [])
+        if not cls.declaresSkills(md):   # declared (even []) replaces scanning
+            for lit in cls._quotedLiterals(files):
+                cands.append(lit)                     # an exact literal
+                segs = lit.split('/')
+                for i in range(1, len(segs) - 1):     # a /segment/ with a slash on both sides
+                    cands.append(segs[i])
+        out = []
+        for c in _unique(cands):
+            if c == self_ or not _SKILL_NAME.match(c):
+                continue
+            dir_ = resolve(c, self_)
+            if dir_ is not None and os.path.isfile(dir_ + '/SKILL.md'):
+                out.append(c)
+        out.sort(key=lambda s: s.encode('utf-8'))
+        return out
+
+    @staticmethod
+    def _text(v) -> str:
+        return v.decode('utf-8', errors='replace') if isinstance(v, bytes) else str(v if v is not None else '')
+
+    @staticmethod
+    def _quotedLiterals(files: dict) -> list:
+        """The quoted string literals ('…' / "…", one line) of a skill's scripts/** text files."""
+        lits = []
+        for rel, data in files.items():
+            rel = str(rel)
+            if not rel.startswith('scripts/') or '__pycache__' in rel.split('/') or rel.endswith('.pyc'):
+                continue
+            if isinstance(data, bytes):
+                try:
+                    text = data.decode('utf-8')
+                except UnicodeDecodeError:
+                    continue
+            else:
+                text = str(data)
+            for m in _QUOTED.finditer(text):
+                lits.append(m.group(2) if (m.group(2) or '') != '' else (m.group(1) or ''))
+        return lits
+
+    @classmethod
+    def declaredSkills(cls, skillMd) -> list:
+        """`requires-skills:` of a SKILL.md frontmatter (list or single form, parsed as `dependencies:`); [] when absent."""
+        return cls._frontmatterList(skillMd, 'requires-skills:')
+
+    @classmethod
+    def declaresSkills(cls, skillMd) -> bool:
+        """Whether the frontmatter has a `requires-skills:` line: `requires-skills: []` says "none" and stops scanning."""
+        return cls._declaredSkillsOrNull(skillMd) is not None
+
+    @classmethod
+    def _declaredSkillsOrNull(cls, skillMd):
+        return cls._frontmatterListOrNull(skillMd, 'requires-skills:')
+
+    @staticmethod
+    def resolveSkillName(name: str, installed: list, frm: str) -> str | None:
+        """The installed skill a name means: the exact path, else by leaf (same group as frm, then top level, then the first)."""
+        if name in installed:
+            return name
+        leaf = name.rsplit('/', 1)[-1]
+        hits = [p for p in installed if p.rsplit('/', 1)[-1] == leaf]
+        if not hits:
+            return None
+        group = frm.split('/')[0] if '/' in frm else ''
+        for p in hits:
+            if (p.split('/')[0] if '/' in p else '') == group:
+                return p
+        for p in hits:
+            if '/' not in p:
+                return p
+        return sorted(hits, key=lambda s: s.encode('utf-8'))[0]
+
+    @classmethod
+    def requiredSkills(cls, path: str, files: dict, installed: list) -> dict:
+        """The skills skill `path` requires (one level; twin of SkillRequires.direct in frontend/assets/js/skill-requires.js):
+        its `requires-skills:` when declared (replaces scanning), else every OTHER installed skill whose leaf folder
+        name is an exact quoted string of its scripts/** text files or a /leaf/ segment (slash on both sides) inside
+        one. Unknown declared names are missing. Returns {requires: [paths], missing: [names]}."""
+        lst = [p for p in installed if p != path]
+        out: dict = {}
+        missing = []
+        declared = cls._declaredSkillsOrNull(cls._text(files.get('SKILL.md', '')))
+        if declared is not None:   # a declared list (even []) replaces scanning
+            for name in declared:
+                hit = cls.resolveSkillName(name, lst, path)
+                if hit is None:
+                    missing.append(name)
+                else:
+                    out[hit] = True
+        else:
+            lits = cls._quotedLiterals(files)
+            exact = set(lits)
+            for leaf in _unique([p.rsplit('/', 1)[-1] for p in lst]):
+                hit = leaf in exact or any(f'/{leaf}/' in l for l in lits)
+                if hit:
+                    out[cls.resolveSkillName(leaf, lst, path)] = True
+        return {'requires': sorted((str(k) for k in out), key=lambda s: s.encode('utf-8')), 'missing': missing}
+
+    @classmethod
+    def _folderFiles(cls, base: str, frm: str) -> list:
+        """The files under frm (paths relative to the skill folder base), skipping junk, .env* and dot-directories."""
+        found = []
+        for dirpath, dirnames, filenames in os.walk(frm):   # RecursiveDirectoryIterator does not enter a symlinked folder
+            dirnames[:] = [n for n in dirnames if n not in cls.SKIP_NAMES and not n.endswith('.pyc')
+                           and not n.startswith('.env') and not n.startswith('.')]   # .git/, .pytest_cache/, .wheels/ ...
+            for fn in filenames:
+                if fn in cls.SKIP_NAMES or fn.endswith('.pyc') or fn.startswith('.env'):
+                    continue
+                p = os.path.join(dirpath, fn)
+                real = os.path.realpath(p) if os.path.isfile(p) else None
+                # A file is copied only if it really lives in the skill folder (a symlink may point elsewhere).
+                if real is not None and real.startswith(base + os.sep):
+                    found.append(p[len(base) + 1:])
+        return found
+
+    @classmethod
+    def skillRequirementNames(cls, skillFiles: list) -> list:
+        """The SKILL.md dependencies a package's requirements.txt lists: those of each skill without bundled wheels.
+        A skill that carries .wheels/native/*.whl installs its libraries from there, offline, at its first use."""
+        bundled = {f['dir'] for f in skillFiles if f['rel'].startswith('.wheels/native/') and f['rel'].endswith('.whl')}
+        req = []
+        for f in skillFiles:
+            if f['rel'] == 'SKILL.md' and f['dir'] not in bundled:
+                req += cls.skillDependencies(f['bytes'])
+        return req
+
+    @classmethod
+    def skillDependencies(cls, skillMd) -> list:
         """`dependencies:` of a SKILL.md's frontmatter, parsed as SkillRuntime.ensure_deps parses it."""
-        if isinstance(skillMd, bytes):
-            skillMd = skillMd.decode('utf-8', errors='replace')
-        lines = re.split(r'\r\n|\r|\n', skillMd)
-        if not lines or lines[0].strip(' \t\n\r\0\x0b') != '---':
-            return []
+        return cls._frontmatterList(skillMd, 'dependencies:')
+
+    @classmethod
+    def _frontmatterList(cls, skillMd, key: str) -> list:
+        """A frontmatter list field (key with its colon): `key: a, b` or `key: [a, "b"]`; [] when absent."""
+        v = cls._frontmatterListOrNull(skillMd, key)
+        return [] if v is None else v
+
+    @classmethod
+    def _frontmatterListOrNull(cls, skillMd, key: str):
+        """_frontmatterList, but None when the field is absent (or there is no frontmatter)."""
+        lines = re.split(r'\r\n|\r|\n', cls._text(skillMd))
+        if not lines or lines[0].strip(_WS) != '---':
+            return None
         for line in lines[1:]:
-            s = line.strip(' \t\n\r\0\x0b')
+            s = line.strip(_WS)
             if s == '---':
                 break
-            if s.lower().startswith('dependencies:'):
-                val = s.split(':', 1)[1].strip(' \t\n\r\0\x0b').strip('[]')
-                deps = []
-                for d in val.split(','):
-                    d = d.strip(' \t\n\r\0\x0b').strip("'").strip('"')
-                    if d != '':
-                        deps.append(d)
-                return deps
-        return []
+            if s.lower().startswith(key):
+                return cls.listItems(s.split(':', 1)[1])
+        return None
+
+    @staticmethod
+    def listItems(raw: str) -> list:
+        """Items of a frontmatter list value (`a, b` or `[a, 'b,c']`): split on commas outside single/double quotes,
+        then one matching quote pair is stripped ('' -> ' inside single quotes). An unterminated quote falls back
+        to splitting on every comma. Twin of SkillRequires.listItems (JS) and the emitted Python readers."""
+        val = raw.strip(_WS).strip('[]')
+        items = []
+        cur = ''
+        q = None
+        n = len(val)
+        i = 0
+        while i < n:
+            c = val[i]
+            if q is not None:
+                cur += c
+                if c == q:
+                    if q == "'" and i + 1 < n and val[i + 1] == "'":
+                        i += 1
+                        cur += val[i]
+                    else:
+                        q = None
+            elif c in ('"', "'") and cur.strip(_WS) == '':
+                q = c
+                cur += c
+            elif c == ',':
+                items.append(cur)
+                cur = ''
+            else:
+                cur += c
+            i += 1
+        items.append(cur)
+        out = []
+        if q is not None:
+            for d in val.split(','):
+                d = d.strip(_WS).strip("'").strip('"')
+                if d != '':
+                    out.append(d)
+            return out
+        for d in items:
+            d = d.strip(_WS)
+            k = d[0] if d else ''
+            if len(d) >= 2 and k in ("'", '"') and d[-1] == k:
+                d = d[1:-1]
+                if k == "'":
+                    d = d.replace("''", "'")
+            if d != '':
+                out.append(d)
+        return out
 
     @staticmethod
     def _providers(facts: dict) -> list:
@@ -203,9 +451,7 @@ class LangGraphPackage:
         for p in cls._providers(facts):
             if p in cls.PROVIDER_REQUIREMENTS:
                 req.append(cls.PROVIDER_REQUIREMENTS[p])
-        for f in skillFiles or []:
-            if f['rel'] == 'SKILL.md':
-                req += cls.skillDependencies(f['bytes'])
+        req += cls.skillRequirementNames(skillFiles or [])
         req += PythonRequirements.documentNames(facts.get('startDocuments') or [])
         return req
 

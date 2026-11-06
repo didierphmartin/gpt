@@ -45,6 +45,7 @@ from app.controllers.roles_controller import RolesController
 from app.controllers.root_controller import RootController
 from app.controllers.settings_controller import SettingsController
 from app.controllers.setup_controller import SetupController
+from app.controllers.skill_store_controller import SkillStoreController
 from app.controllers.system_settings_controller import SystemSettingsController
 from app.controllers.tools_controller import ToolsController
 from app.controllers.traces_controller import TracesController
@@ -103,6 +104,7 @@ CONTROLLERS = {
     'RootController': RootController,
     'SettingsController': SettingsController,
     'SetupController': SetupController,
+    'SkillStoreController': SkillStoreController,
     'SystemSettingsController': SystemSettingsController,
     'ToolsController': ToolsController,
     'TracesController': TracesController,
@@ -250,6 +252,18 @@ ROUTES = [
     ('PUT', '/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/settings', ('McpHostController', 'putSettings')),
     ('GET', '/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/source', ('McpHostController', 'source')),
     ('DELETE', '/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}', ('McpHostController', 'delete')),
+    # The Docker app's skills volume (404 'no skill store' in folder mode, except /store and /native-wheels)
+    ('GET', '/api/v1/skills/store', ('SkillStoreController', 'store')),
+    ('GET', '/api/v1/skills', ('SkillStoreController', 'list')),
+    ('GET', '/api/v1/skills/files', ('SkillStoreController', 'files')),
+    ('GET', '/api/v1/skills/listing', ('SkillStoreController', 'listing')),
+    ('GET', '/api/v1/skills/file', ('SkillStoreController', 'readFile')),
+    ('PUT', '/api/v1/skills/file', ('SkillStoreController', 'writeFile')),
+    ('POST', '/api/v1/skills/native-wheels', ('SkillStoreController', 'nativeWheels')),
+    ('POST', '/api/v1/skills/import', ('SkillStoreController', 'import')),
+    ('PUT', '/api/v1/skills/visibility', ('SkillStoreController', 'visibility')),
+    ('POST', '/api/v1/skills/move', ('SkillStoreController', 'move')),
+    ('DELETE', '/api/v1/skills', ('SkillStoreController', 'delete')),
     ('PUT', '/api/v1/me/mcp-settings', ('MCPServerController', 'setMasterSetting')),
     ('GET', '/api/v1/me/mcp-servers', ('MCPServerController', 'listMine')),
     ('PUT', '/api/v1/me/mcp-servers/{serverId:\\d+}/override', ('MCPServerController', 'setMyOverride')),
