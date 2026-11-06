@@ -1,7 +1,17 @@
-import { test } from 'node:test';
+import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { installFakeDb } from './support/fakeDb';
 import { MCPAppController } from '../src/Controllers/MCPAppController';
 import type { Ctx } from '../src/Support/Http';
+
+// The route only reaches enabled, registered servers (twin of MCPAppRegisteredServerTest.php).
+beforeEach(() => {
+  const d = new DatabaseSync(':memory:');
+  d.exec('CREATE TABLE mcp_servers (id INTEGER PRIMARY KEY, url TEXT, enabled INTEGER)');
+  d.exec("INSERT INTO mcp_servers (url, enabled) VALUES ('https://x.example/', 1), ('http://127.0.0.1:1/off', 0)");
+  installFakeDb((sqlText, params) => d.prepare(sqlText).all(...(params as any[])) as any[]);
+});
 
 function ctx(query: Record<string, unknown>): Ctx {
   return {
@@ -81,4 +91,39 @@ test('MCP init failure → 502', async () => {
   } finally {
     globalThis.fetch = original;
   }
+});
+
+test('unregistered or disabled server → 404 Unknown MCP server, no request sent', async () => {
+  const original = globalThis.fetch;
+  let sent = 0;
+  globalThis.fetch = (async () => { sent++; return new Response('', { status: 500 }); }) as any;
+  try {
+    for (const server of ['http://169.254.169.254/latest', 'http://127.0.0.1:1/off']) {
+      const r = await new MCPAppController().getResource(ctx({ server, resource: 'ui://x' }));
+      assert.equal(r.status_code, 404, server);
+      assert.equal(r.raw_body, 'Unknown MCP server');
+      assert.match(r.headers['Content-Type'], /text\/plain/);
+    }
+    assert.equal(sent, 0);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('array server/resource parameter → 400', async () => {
+  const r = await new MCPAppController().getResource(ctx({ server: ['http://x'], resource: 'ui://x' }));
+  assert.equal(r.status_code, 400);
+  assert.equal(r.raw_body, 'Invalid server or resource parameter');
+  const r2 = await new MCPAppController().getResource(ctx({ server: 'https://x.example', resource: { a: '1' } }));
+  assert.equal(r2.status_code, 400);
+});
+
+test('every answer carries the CSP sandbox header', async () => {
+  const r = await new MCPAppController().getResource(ctx({}));
+  assert.equal(r.headers['Content-Security-Policy'], 'sandbox allow-scripts allow-forms allow-downloads allow-modals');
+});
+
+test('injected values are JSON with PHP HEX flags', () => {
+  assert.equal(MCPAppController.jsonHex(`</script>'"&/é`), '"\\u003C\\/script\\u003E\\u0027\\u0022\\u0026\\/\\u00e9"');
+  assert.equal(MCPAppController.jsonHex({ a: 'x\\', b: 1 }), '{"a":"x\\\\","b":1}');
 });

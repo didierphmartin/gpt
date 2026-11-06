@@ -117,8 +117,9 @@ export const config = {
     default_voice: 'Eve',
   },
 
-  // Gemini Voice (Google Live API) — Gemini connects direct to Google; the backend only brokers the
-  // key via /voice/config. Mirrors config/ai_config.php 'gemini_voice' (lines 127-131).
+  // Gemini Voice (Google Live API) — the server's last-resort Gemini voice key (GeminiVoiceKey);
+  // the browser only gets a single-use Live token from /voice/token. Mirrors config/ai_config.php
+  // 'gemini_voice'.
   gemini_voice: {
     api_key: process.env.GEMINI_VOICE_API_KEY ?? '',
     model: 'gemini-2.5-flash-native-audio-preview-12-2025',

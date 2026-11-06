@@ -10,6 +10,7 @@ import { Edition } from '../Services/Edition';
 import { SqlConn, connectSql } from '../Services/LoginDb';
 import { DbConfig } from '../config/env';
 import { phpEmpty } from '../Playbook/php';
+import { AuthMiddleware } from '../Middleware/AuthMiddleware';
 
 /** debugAuth reports PHP_VERSION; mirrored constant (XAMPP's PHP), like backend_python. */
 export const PHP_VERSION = '8.2.4';
@@ -74,10 +75,6 @@ export class AuthController {
     const access_token = jwt.sign({ iss: 'gpt-chat', sub: userId, type: 'access' }, secret, { algorithm: 'HS256', expiresIn: config.auth.jwtExpiry });
     const refresh_token = jwt.sign({ iss: 'gpt-chat', sub: userId, type: 'refresh' }, secret, { algorithm: 'HS256', expiresIn: config.auth.refreshExpiry });
     return { access_token, refresh_token, expires_in: config.auth.jwtExpiry };
-  }
-
-  private verifyJwt(token: string): { sub?: number | string } {
-    return jwt.verify(token, config.auth.jwtSecret, { algorithms: ['HS256'] }) as any;
   }
 
   private appKeyPepper(): string {
@@ -177,8 +174,9 @@ export class AuthController {
     const m = header ? /Bearer\s+(.*)$/i.exec(header) : null;
     if (!m) return { status_code: 401, success: false, message: 'Authorization token required' };
     try {
-      const decoded = this.verifyJwt(m[1]);
-      return { success: true, message: 'Token is valid', data: { user_id: decoded.sub } };
+      const userId = AuthMiddleware.accessTokenSubject(m[1], config.auth.jwtSecret);
+      if (userId === null) throw new Error('not a gpt access token');
+      return { success: true, message: 'Token is valid', data: { user_id: userId } };
     } catch {
       return { status_code: 401, success: false, message: 'Invalid or expired token' };
     }
@@ -471,6 +469,25 @@ export class AuthController {
       .executeTakeFirst();
     if (existing && isServiceUser(existing)) {
       return { status_code: 401, success: false, message: 'Invalid or expired authentication token' };
+    }
+
+    // An existing account is reached by its email only when Firebase has verified that address:
+    // email/password sign-up lets anyone create a Firebase user for any address. The account's own
+    // Firebase user and a matching (SMS-verified) phone number still sign in, and so does the
+    // Firebase user scripts/firebase-auth-export.php imported for this row.
+    if (
+      existing &&
+      String(existing.firebase_uid ?? '') !== firebaseUid &&
+      firebaseUid !== 'local-' + existing.id &&
+      !(hasPhone && (existing.phone ?? null) === phoneNumber) &&
+      (claims.email_verified ?? false) !== true
+    ) {
+      return {
+        status_code: 401,
+        success: false,
+        message: 'Verify your email address first, then sign in again.',
+        code: 'EMAIL_NOT_VERIFIED',
+      };
     }
 
     let userId: number;

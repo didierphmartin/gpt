@@ -2,14 +2,16 @@ import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { config } from '../config/env';
 import { Ctx, ControllerResult } from '../Support/Http';
+import { GeminiVoiceKey } from '../Services/GeminiVoiceKey';
 
 /**
  * VoiceController — faithful TS mirror of src/Controllers/VoiceController.php.
  *
  * Handles voice usage tracking for Grok and Gemini Live API sessions, plus secure ephemeral-token
- * generation for client-side Grok voice connections. (The retired Hume/EVI path is NOT ported.)
+ * generation for client-side Grok and Gemini voice connections. (The retired Hume/EVI path is NOT ported.)
  *
- *   POST /api/v1/voice/token  -> getEphemeralToken (Grok ephemeral client_secret from xAI)
+ *   POST /api/v1/voice/token  -> getEphemeralToken (Grok client_secret from xAI, or a single-use
+ *                                 Gemini Live token minted with the user's Gemini key)
  *   POST /api/v1/voice/usage  -> logUsage
  *   GET  /api/v1/voice/stats  -> getStats
  *   GET  /api/v1/voice/config -> getConfig
@@ -61,6 +63,7 @@ const VOICE_PRICING: Record<string, { input: number; output: number }> = {
 };
 
 export class VoiceController {
+  constructor(private readonly cfg: typeof config = config) {}
   /**
    * Log voice usage from frontend clients.
    * POST /api/v1/voice/usage
@@ -257,8 +260,8 @@ export class VoiceController {
   }
 
   /**
-   * Generate ephemeral token for Grok Voice (xAI Realtime API).
-   * POST /api/v1/voice/token — Body: { "provider": "grok" }
+   * Generate ephemeral token for Grok Voice (xAI Realtime API) or Gemini Live.
+   * POST /api/v1/voice/token — Body: { "provider": "grok" | "gemini" }
    */
   async getEphemeralToken(ctx: Ctx): Promise<ControllerResult> {
     try {
@@ -268,11 +271,13 @@ export class VoiceController {
       // Authentication is optional for voice token generation; the user ID is logged if available.
       const provider = body.provider ?? 'grok';
 
-      // Currently only Grok supports ephemeral tokens.
+      if (provider === 'gemini') {
+        return await this.generateGeminiEphemeralToken(ctx);
+      }
       if (provider !== 'grok') {
         return {
           success: false,
-          error: 'Ephemeral tokens are currently only supported for Grok provider',
+          error: 'Unknown voice provider',
           status_code: 400,
         };
       }
@@ -288,9 +293,80 @@ export class VoiceController {
     }
   }
 
+  /** The Gemini key this request's user voices with ('' when none). */
+  private async geminiKey(ctx: Ctx): Promise<string> {
+    const userId = ctx.user_id ?? null;
+    if (userId === null || !/^\s*-?\d+(\.\d+)?\s*$/.test(String(userId))) return '';
+    return GeminiVoiceKey.resolve(Math.trunc(Number(userId)), this.cfg);
+  }
+
+  /**
+   * Mint a single-use Gemini Live token with the user's Gemini key, so the browser opens a Live
+   * session without ever holding the key. The token starts one session within a minute and lasts
+   * 30 minutes.
+   */
+  private async generateGeminiEphemeralToken(ctx: Ctx): Promise<ControllerResult> {
+    if (ctx.user_id === null || ctx.user_id === undefined) {
+      return { success: false, error: 'Authentication required', status_code: 401 };
+    }
+    const apiKey = await this.geminiKey(ctx);
+    if (apiKey === '') {
+      return { success: false, error: 'No Gemini key for voice', code: 'NO_GEMINI_KEY', status_code: 404 };
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const iso = (t: number) => new Date(t * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30000);
+    let response: Response;
+    try {
+      // The key goes in a header, never the URL, so no error or log line can carry it.
+      response = await fetch('https://generativelanguage.googleapis.com/v1alpha/auth_tokens', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        body: JSON.stringify({ uses: 1, expireTime: iso(now + 1800), newSessionExpireTime: iso(now + 60) }),
+        signal: controller.signal,
+      });
+    } catch {
+      console.error('[VoiceController] HTTP error minting a Gemini voice token');
+      return { success: false, error: 'Network error while obtaining ephemeral token', status_code: 503 };
+    } finally {
+      clearTimeout(timer);
+    }
+
+    const statusCode = response.status;
+    let responseBody: any = null;
+    try {
+      const text = await response.text();
+      responseBody = text ? JSON.parse(text) : null;
+    } catch {
+      responseBody = null;
+    }
+    const isObj = responseBody !== null && typeof responseBody === 'object';
+    const token = isObj ? String(responseBody.name ?? '') : '';
+    if (statusCode !== 200 || !token.startsWith('auth_tokens/')) {
+      const errorMessage = isObj ? String(responseBody.error?.message ?? 'Unknown error') : 'Unknown error';
+      console.error(`[VoiceController] Gemini token error: ${statusCode}`);
+      return {
+        success: false,
+        error: `Failed to obtain ephemeral token: ${errorMessage}`,
+        status_code: statusCode !== 200 ? statusCode : 502,
+      };
+    }
+
+    return {
+      success: true,
+      provider: 'gemini',
+      client_secret: token,
+      expires_at: iso(now + 1800),
+      model: this.cfg.gemini_voice?.model ?? 'gemini-2.5-flash-native-audio-preview-12-2025',
+      status_code: 200,
+    };
+  }
+
   /** Generate Grok ephemeral token by calling the xAI API — mirrors PHP generateGrokEphemeralToken. */
   private async generateGrokEphemeralToken(userId: string | null): Promise<ControllerResult> {
-    const grokVoiceConfig: any = config.grok_voice ?? {};
+    const grokVoiceConfig: any = this.cfg.grok_voice ?? {};
     const apiKey = grokVoiceConfig.api_key ?? '';
 
     if (phpEmpty(apiKey)) {
@@ -382,7 +458,7 @@ export class VoiceController {
   }
 
   /**
-   * Get voice provider configuration (public info only, no API keys except gemini-brokered key).
+   * Get voice provider configuration (public info and whether a key exists, never a key).
    * GET /api/v1/voice/config — Query: ?provider=grok|gemini
    */
   async getConfig(ctx: Ctx): Promise<ControllerResult> {
@@ -400,7 +476,7 @@ export class VoiceController {
           Sal: 'Neutral, smooth and balanced',
           Leo: 'Male, authoritative and strong',
         },
-        default_voice: config.grok_voice?.default_voice ?? 'Eve',
+        default_voice: this.cfg.grok_voice?.default_voice ?? 'Eve',
         supports_ephemeral_token: true,
         websocket_url: 'wss://api.x.ai/v1/realtime',
       },
@@ -408,9 +484,9 @@ export class VoiceController {
         provider: 'gemini',
         name: 'Gemini Voice',
         voices: ['Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Aoede'],
-        default_voice: config.gemini_voice?.default_voice ?? 'Zephyr',
-        model: config.gemini_voice?.model ?? 'gemini-2.5-flash-native-audio-preview',
-        supports_ephemeral_token: false, // Gemini uses different auth
+        default_voice: this.cfg.gemini_voice?.default_voice ?? 'Zephyr',
+        model: this.cfg.gemini_voice?.model ?? 'gemini-2.5-flash-native-audio-preview',
+        supports_ephemeral_token: true,
       },
     };
 
@@ -418,15 +494,10 @@ export class VoiceController {
       return { success: false, error: 'Unknown voice provider', status_code: 400 };
     }
 
-    // Gemini has no ephemeral-token endpoint, so a browser client needs the raw key to open a Live
-    // session. Only expose it to JWT users or to app keys carrying the 'voice:config' scope.
+    // Never a key: only whether this user has one (the mic shows only then).
+    configs.grok.available = String(this.cfg.grok_voice?.api_key ?? '').trim() !== '';
     if (provider === 'gemini') {
-      const authType = ctx.auth_type ?? null;
-      const scopes: any[] = (ctx as any).app_key_scopes ?? [];
-      const mayReadKey = authType !== 'app_key' || (Array.isArray(scopes) && scopes.includes('voice:config'));
-      if (mayReadKey) {
-        configs.gemini.api_key = config.gemini_voice?.api_key ?? null;
-      }
+      configs.gemini.available = (await this.geminiKey(ctx)) !== '';
     }
 
     return {

@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Ctx } from '../Support/Http';
 import { config } from '../config/env';
 import { ScheduledWorkflowService } from '../AgentTeam/ScheduledWorkflowService';
@@ -27,6 +28,15 @@ import { WorkflowRunner } from '../AgentTeam/WorkflowRunner';
 export class SchedulerController {
   private scheduleService = new ScheduledWorkflowService();
 
+  constructor(private readonly schedulerCfg: { token?: string } = config.scheduler) {}
+
+  /** PHP hash_equals: constant-time for equal lengths, false when the lengths differ. */
+  private static hashEquals(known: string, user: string): boolean {
+    const a = Buffer.from(known);
+    const b = Buffer.from(user);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
+
   /**
    * POST /api/v1/scheduler/run
    * Manually trigger the scheduler to run due workflows. Requires user auth OR a valid scheduler
@@ -38,10 +48,13 @@ export class SchedulerController {
 
     // Check for scheduler token in body (allows cron/external trigger). Express lower-cases header names.
     const schedulerToken = ctx.body?.token ?? ctx.headers?.['x-scheduler-token'] ?? null;
-    const expectedToken = config.scheduler?.token ?? '';
+    const expectedToken = String(this.schedulerCfg?.token ?? '');
 
-    // Either need valid user auth or valid scheduler token
-    if (!userId && schedulerToken !== expectedToken) {
+    // Either need valid user auth or valid scheduler token (a blank SCHEDULER_TOKEN turns the
+    // token path off, it never matches '')
+    const tokenOk = typeof schedulerToken === 'string' && expectedToken !== ''
+      && SchedulerController.hashEquals(expectedToken, schedulerToken);
+    if (!userId && !tokenOk) {
       return {
         success: false,
         error: 'Authentication required',

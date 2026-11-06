@@ -2,6 +2,7 @@ import { db } from '../db/pools';
 import { McpEndpoint } from '../Services/McpEndpoint';
 import { Ctx, ControllerResult } from '../Support/Http';
 import { phpStr } from '../Playbook/php';
+import { requireAdmin } from './RequiresAdmin';
 
 /** Per-call error slot so concurrent requests don't clobber each other's message. */
 interface ErrRef {
@@ -64,9 +65,12 @@ export class MCPProxyController {
     jsonrpc: any,
     userId: string,
   ): Promise<ControllerResult> {
-    // Get server URL from ID if not provided directly
-    if (!serverUrl && serverId) {
-      serverUrl = await this.getServerUrl(serverId, userId);
+    // A registered server is reached at its stored URL only: its stored headers (credentials)
+    // must never go to a URL the caller names.
+    if (serverId) {
+      const server = await this.usableServer(serverId, userId);
+      if (server === null) return this.unknownServer();
+      serverUrl = server.url;
     }
 
     // Look up custom headers by server id (global or caller's user scope)
@@ -213,6 +217,12 @@ export class MCPProxyController {
     serverId: number | null,
     userId: string,
   ): Promise<ControllerResult> {
+    let server: { url: string; user_id: string | number | null } | null = null;
+    if (serverId) {
+      server = await this.usableServer(serverId, userId);
+      if (server === null) return this.unknownServer();
+      serverUrl = server.url;
+    }
     const extraHeaders = serverId ? await this.getServerHeaders(serverId, userId) : {};
 
     const initRequest = {
@@ -273,8 +283,11 @@ export class MCPProxyController {
 
     const tools: any[] = toolsResponse.result?.tools ?? [];
 
-    // Cache tools in database if we have a server ID
-    if (serverId) {
+    // Cache tools for the caller's own server; a global server's cached tools reach every
+    // user's model, so only an admin refreshes them.
+    if (server !== null && serverId && (server.user_id !== null
+      ? String(server.user_id) === userId
+      : (await requireAdmin({ user_id: Number(userId) || null } as Ctx)) === null)) {
       await this.cacheTools(serverId, tools);
     }
 
@@ -395,16 +408,25 @@ export class MCPProxyController {
     return [null, false];
   }
 
-  /** Get server URL from database (caller-scoped, enabled servers only). */
-  private async getServerUrl(serverId: number, userId: string): Promise<string | null> {
+  /** An enabled server the caller may use (global or their own): url and user_id, or null. */
+  private async usableServer(serverId: number, userId: string): Promise<{ url: string; user_id: string | number | null } | null> {
     const row = await db
       .selectFrom('mcp_servers')
-      .select('url')
+      .select(['url', 'user_id'])
       .where('id', '=', serverId)
-      .where('user_id', '=', userId)
       .where('enabled', '=', 1)
+      .where((eb) => eb.or([eb('user_id', 'is', null), eb('user_id', '=', userId)]))
+      .limit(1)
       .executeTakeFirst();
-    return row?.url ?? null;
+    return row ? { url: row.url, user_id: row.user_id ?? null } : null;
+  }
+
+  private unknownServer(): ControllerResult {
+    return {
+      success: false,
+      error: { code: -32602, message: 'Unknown MCP server' },
+      status_code: 404,
+    };
   }
 
   /**

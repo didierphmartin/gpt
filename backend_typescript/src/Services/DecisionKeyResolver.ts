@@ -91,6 +91,8 @@ export const DecisionKeyResolver = {
   },
 
   userIdOf,
+  packageEntry,
+  userRow,
 };
 
 /**
