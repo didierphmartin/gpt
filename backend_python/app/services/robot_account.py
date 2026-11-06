@@ -5,6 +5,8 @@ runs unattended work) and its built-in `robot` role. Never signs in: no password
 """
 from __future__ import annotations
 
+from app.support.phpcompat import php_strval
+
 
 class RobotAccount:
     EMAIL = 'robot@synergyai.invalid'
@@ -36,4 +38,4 @@ class RobotAccount:
             return
         copy = db.fetch_one('SELECT capabilities FROM packages WHERE role = ?', ['user'])
         db.execute('INSERT INTO packages (role, name, builtin, capabilities) VALUES (?, ?, 1, ?)',
-                   [cls.ROLE, 'Robot', '{}' if copy is None else str(copy['capabilities'])])
+                   [cls.ROLE, 'Robot', '{}' if copy is None else php_strval(copy['capabilities'])])

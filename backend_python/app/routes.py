@@ -40,6 +40,7 @@ from app.controllers.playbooks_controller import PlaybooksController
 from app.controllers.prompt_library_controller import PromptLibraryController
 from app.controllers.provider_controller import ProviderController
 from app.controllers.robot_controller import RobotController
+from app.controllers.robot_servers_controller import RobotServersController
 from app.controllers.roles_controller import RolesController
 from app.controllers.root_controller import RootController
 from app.controllers.settings_controller import SettingsController
@@ -97,6 +98,7 @@ CONTROLLERS = {
     'PromptLibraryController': PromptLibraryController,
     'ProviderController': ProviderController,
     'RobotController': RobotController,
+    'RobotServersController': RobotServersController,
     'RolesController': RolesController,
     'RootController': RootController,
     'SettingsController': SettingsController,
@@ -479,6 +481,13 @@ ROUTES = [
     ('GET', '/api/v1/robot', ('RobotController', 'show')),
     ('GET', '/api/v1/robot/playbooks', ('RobotController', 'playbooks')),
     ('DELETE', '/api/v1/robot/playbooks/{id:\\d+}', ('RobotController', 'unpublish')),
+    ('GET', '/api/v1/robot/mcp-servers', ('RobotServersController', 'index')),
+    ('GET', '/api/v1/robot/mcp-servers/compile-env', ('RobotServersController', 'compileEnv')),
+    ('POST', '/api/v1/robot/mcp-servers', ('RobotServersController', 'create')),
+    ('POST', '/api/v1/robot/mcp-servers/{id:\\d+}', ('RobotServersController', 'update')),
+    ('DELETE', '/api/v1/robot/mcp-servers/{id:\\d+}', ('RobotServersController', 'destroy')),
+    ('POST', '/api/v1/robot/mcp-servers/{id:\\d+}/call', ('RobotServersController', 'call')),
+    ('POST', '/api/v1/robot/mcp-servers/{id:\\d+}/key', ('RobotServersController', 'saveKey')),
     # WORKFLOW SCHEMAS (routes.php:395-399)
     ('GET', '/api/v1/workflow-schemas', ('AgentTeam:WorkflowSchemaController', 'index')),
     ('POST', '/api/v1/workflow-schemas', ('AgentTeam:WorkflowSchemaController', 'create')),

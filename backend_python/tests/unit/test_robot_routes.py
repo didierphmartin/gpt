@@ -18,6 +18,13 @@ def test_role_key_routes_take_digits_and_dashes():
         ('GET', '/api/v1/robot', ('RobotController', 'show'), {}),
         ('GET', '/api/v1/robot/playbooks', ('RobotController', 'playbooks'), {}),
         ('DELETE', '/api/v1/robot/playbooks/7', ('RobotController', 'unpublish'), {'id': '7'}),
+        ('GET', '/api/v1/robot/mcp-servers', ('RobotServersController', 'index'), {}),
+        ('GET', '/api/v1/robot/mcp-servers/compile-env', ('RobotServersController', 'compileEnv'), {}),
+        ('POST', '/api/v1/robot/mcp-servers', ('RobotServersController', 'create'), {}),
+        ('POST', '/api/v1/robot/mcp-servers/7', ('RobotServersController', 'update'), {'id': '7'}),
+        ('DELETE', '/api/v1/robot/mcp-servers/7', ('RobotServersController', 'destroy'), {'id': '7'}),
+        ('POST', '/api/v1/robot/mcp-servers/7/call', ('RobotServersController', 'call'), {'id': '7'}),
+        ('POST', '/api/v1/robot/mcp-servers/7/key', ('RobotServersController', 'saveKey'), {'id': '7'}),
     ]:
         r = d.dispatch(method, uri)
         assert (r.status, r.handler, r.params) == ('FOUND', handler, params), uri
