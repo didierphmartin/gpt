@@ -35,10 +35,12 @@ class WorkflowRepository:
 
         return workflow
 
-    def findByUser(self, user_id: int, include_graph: bool = False) -> list[Workflow]:
-        """PHP 65-83."""
+    def findByUser(self, user_id: int, include_graph: bool = False, robotId: int | None = None) -> list[Workflow]:
+        """PHP findByUser: the user's workflows, plus the robot's when `robotId` is given."""
         rows = self.db.fetch_all(
-            "SELECT * FROM agent_workflows WHERE user_id = ? ORDER BY name ASC", [user_id]
+            "SELECT * FROM agent_workflows WHERE user_id = ? ORDER BY name ASC" if robotId is None
+            else "SELECT * FROM agent_workflows WHERE user_id = ? OR user_id = ? ORDER BY name ASC",
+            [user_id] if robotId is None else [user_id, robotId],
         )
 
         workflows = []
@@ -135,18 +137,18 @@ class WorkflowRepository:
         self.db.execute("DELETE FROM agent_workflows WHERE id = ?", [id])
         return True
 
-    def canUserAccess(self, user_id: int, workflow_id: int) -> bool:
-        """PHP 196-204."""
+    def canUserAccess(self, user_id: int, workflow_id: int, robotId: int | None = None) -> bool:
+        """PHP canUserAccess: the owner, or anyone given `robotId` when the robot owns it."""
         workflow = self.findById(workflow_id)
         if not workflow:
             return False
 
-        return workflow.getUserId() == user_id
+        return workflow.getUserId() == user_id or (robotId is not None and workflow.getUserId() == robotId)
 
-    def isOwner(self, user_id: int, workflow_id: int) -> bool:
-        """PHP 209-213."""
+    def isOwner(self, user_id: int, workflow_id: int, robotId: int | None = None) -> bool:
+        """PHP isOwner (same robot rule as canUserAccess)."""
         workflow = self.findById(workflow_id)
-        return bool(workflow) and workflow.getUserId() == user_id
+        return bool(workflow) and (workflow.getUserId() == user_id or (robotId is not None and workflow.getUserId() == robotId))
 
     def countByUser(self, user_id: int) -> int:
         """PHP 218-225."""
@@ -166,6 +168,50 @@ class WorkflowRepository:
 
         copy = Workflow(original.toArray())
         copy.setUserId(new_user_id)
-        copy.setName(new_name if new_name is not None else original.getName() + ' (Copy)')
+        copy.setName(new_name if new_name is not None else self._freeCopyName(original.getName(), new_user_id))
 
-        return self.create(copy)
+        # the graph is copied too (node ids remapped); a personal instance of a robot workflow, for one
+        self.db.begin()
+        try:
+            created = self.create(copy)
+            newId = created.getId()
+
+            nodeMap: dict[int, int] = {}
+            for n in self.db.fetch_all('SELECT * FROM workflow_nodes WHERE workflow_id = ? ORDER BY id', [workflow_id]):
+                nodeMap[php_intval(n['id'])] = php_intval(self.db.insert(
+                    'INSERT INTO workflow_nodes (workflow_id, node_type, agent_id, config, pos_x, pos_y, drawflow_node_id)\n'
+                    '                 VALUES (?, ?, ?, ?, ?, ?, ?)',
+                    [newId, n.get('node_type'), n.get('agent_id'), n.get('config'), n.get('pos_x'), n.get('pos_y'), n.get('drawflow_node_id')]))
+
+            for e in self.db.fetch_all('SELECT * FROM workflow_edges WHERE workflow_id = ? ORDER BY id', [workflow_id]):
+                frm = nodeMap.get(php_intval(e['from_node_id']))
+                to = nodeMap.get(php_intval(e['to_node_id']))
+                if frm is None or to is None:
+                    continue
+                self.db.execute('INSERT INTO workflow_edges (workflow_id, from_node_id, to_node_id, from_port, to_port, condition_expr)\n'
+                                '                 VALUES (?, ?, ?, ?, ?, ?)',
+                                [newId, frm, to, e.get('from_port'), e.get('to_port'), e.get('condition_expr')])
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
+
+        self._copySchedules(workflow_id, newId, new_user_id)
+        return created
+
+    def _freeCopyName(self, name: str, userId: int) -> str:
+        n = 1
+        while True:
+            candidate = name + (' (Copy)' if n == 1 else f' (Copy {n})')
+            if not self.db.fetch_one('SELECT 1 FROM agent_workflows WHERE user_id = ? AND name = ?', [userId, candidate]):
+                return candidate
+            n += 1
+
+    def _copySchedules(self, fromWorkflowId: int, toWorkflowId: int, userId: int) -> None:
+        """The source's schedules, as the copier's and paused (a copy never fires on its own)."""
+        for r in self.db.fetch_all('SELECT * FROM scheduled_workflows WHERE workflow_id = ? ORDER BY id', [fromWorkflowId]):
+            self.db.execute("INSERT INTO scheduled_workflows (user_id, workflow_id, input_prompt, scheduled_time, status, repeat_type,\n"
+                            "                repeat_interval, cron, event_trigger, trigger_component_id, next_run)\n"
+                            "             VALUES (?, ?, ?, ?, 'paused', ?, ?, ?, ?, ?, ?)",
+                            [userId, toWorkflowId, r.get('input_prompt'), r.get('scheduled_time'), r.get('repeat_type'),
+                             r.get('repeat_interval'), r.get('cron'), r.get('event_trigger'), r.get('trigger_component_id'), r.get('next_run')])

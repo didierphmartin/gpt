@@ -35,6 +35,8 @@ from app.agent_team.controllers.agent_controller import AgentController
 from app.agent_team.models.agent import Agent
 from app.support.http import Ctx
 
+pytestmark = pytest.mark.usefixtures('no_robot')
+
 CFG = {'auth': {'jwt_secret': 'S'}, 'database': {}, 'contexts_database': {}}
 
 
@@ -104,21 +106,24 @@ class FakeAgentRepository:
     def _log(self, name, *args):
         self.calls.append((name, args))
 
-    def findAccessibleByUser(self, user_id, filters):
+    def findAccessibleByUser(self, user_id, filters, robotId=None):
         self._log('findAccessibleByUser', user_id, filters)
         return self.accessible_agents
 
-    def countAccessible(self, user_id):
+    def countAccessible(self, user_id, robotId=None):
         self._log('countAccessible', user_id)
         return self.accessible_total
 
-    def canUserAccess(self, user_id, agent_id):
+    def canUserAccess(self, user_id, agent_id, robotId=None):
         self._log('canUserAccess', user_id, agent_id)
         return self.access.get(agent_id, False)
 
-    def isOwner(self, user_id, agent_id):
+    def isOwner(self, user_id, agent_id, robotId=None):
         self._log('isOwner', user_id, agent_id)
         return self.owner.get(agent_id, False)
+
+    def findOwnedByName(self, name, user_id):
+        return None   # no other agent of this owner holds the name
 
     def findById(self, agent_id):
         self._log('findById', agent_id)

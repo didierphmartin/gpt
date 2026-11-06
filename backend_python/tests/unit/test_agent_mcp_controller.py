@@ -34,6 +34,8 @@ import pytest
 from app.agent_team.controllers.agent_mcp_controller import AgentMCPController
 from app.agent_team.models.agent import Agent
 
+pytestmark = pytest.mark.usefixtures('no_robot')
+
 CFG = {'auth': {'jwt_secret': 'S'}, 'database': {}, 'contexts_database': {}}
 
 AGENT_ROW = {
@@ -77,15 +79,15 @@ class FakeAgentRepository:
     def _log(self, name, *args):
         self.calls.append((name, args))
 
-    def findAccessibleByUser(self, user_id, filters):
+    def findAccessibleByUser(self, user_id, filters, robotId=None):
         self._log('findAccessibleByUser', user_id, filters)
         return self.accessible_agents
 
-    def canUserAccess(self, user_id, agent_id):
+    def canUserAccess(self, user_id, agent_id, robotId=None):
         self._log('canUserAccess', user_id, agent_id)
         return self.access.get(agent_id, False)
 
-    def isOwner(self, user_id, agent_id):
+    def isOwner(self, user_id, agent_id, robotId=None):
         self._log('isOwner', user_id, agent_id)
         return self.owner.get(agent_id, False)
 

@@ -60,6 +60,8 @@ class Env:
     def __init__(self):
         self.t = 1000.0
         self.db = S.create(lambda: time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(int(self.t))))
+        self.db.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'person')")
+        self.db.execute("INSERT INTO users (id, kind) VALUES (3, 'person'), (4, 'person'), (9, 'service')")
         S.option(self.db, 1, 3)
         S.workflow(self.db, 64, 3, 1)
         self.row = S.row(self.db, 64, 3, 'event', 1)
@@ -76,8 +78,9 @@ class Env:
     def active(self, user=3, wf=64):
         ActiveWorkflowService(self.db).activate(user, wf)
 
-    def state(self, user=3) -> list:
-        r = self.db.fetch_one(f'SELECT watch_state, watch_message FROM active_workflows WHERE user_id = {user}')
+    def state(self, user=3, wf=None) -> list:
+        r = self.db.fetch_one(f'SELECT watch_state, watch_message FROM active_workflows WHERE user_id = {user}'
+                              + (f' AND workflow_id = {wf}' if wf else ''))
         return [r['watch_state'], r['watch_message']] if r else []
 
     def step(self, after=0.0):
@@ -87,9 +90,9 @@ class Env:
     def running(self):
         self.active()
         self.step()
-        self.tr.answer(3, {'status': 'ready'})
+        self.tr.answer('3:64', {'status': 'ready'})
         self.step(1)
-        assert self.w.slots()[3]['state'] == 'running'
+        assert self.w.slots()['3:64']['state'] == 'running'
 
     def editWatch(self, folder):
         watch = json.loads(json.dumps(S.WATCH))
@@ -116,23 +119,23 @@ def test_nothing_active_nothing_open(e):
 def test_an_active_option_workflow_waits_and_runs_on_ready(e):
     e.active()
     e.step()
-    assert 3 in e.tr.open
+    assert '3:64' in e.tr.open
     assert e.state()[0] == 'waiting'
-    e.tr.answer(3, {'status': 'ready', 'via': 'event', 'events': 'on'})
+    e.tr.answer('3:64', {'status': 'ready', 'via': 'event', 'events': 'on'})
     e.step(1)
-    assert e.runs.started == [[3, e.row]]
+    assert e.runs.started == [['3:64', e.row]]
     assert e.state()[0] == 'running'
-    assert 3 not in e.tr.open          # no wait during a run
-    e.runs.ended[3] = 0
+    assert '3:64' not in e.tr.open          # no wait during a run
+    e.runs.ended['3:64'] = 0
     e.step(1)
-    assert 3 in e.tr.open             # waiting again
+    assert '3:64' in e.tr.open             # waiting again
     assert e.state() == ['waiting', None]
 
 
 def test_a_timeout_waits_again(e):
     e.active()
     e.step()
-    e.tr.answer(3, {'status': 'timeout', 'events': 'off'})
+    e.tr.answer('3:64', {'status': 'timeout', 'events': 'off'})
     e.step(1)
     assert e.tr.started == 2
     assert e.state() == ['waiting', 'fallback']   # events off: the 15-min fallback
@@ -143,36 +146,36 @@ def test_an_error_backs_off_doubling_to_the_cap(e):
     e.step()
     delays = []
     for _ in range(5):
-        e.tr.answer(3, {'error': 'reconnect_needed'})
+        e.tr.answer('3:64', {'error': 'reconnect_needed'})
         e.step(1)
-        delays.append(e.w.slots()[3]['backoff'])
+        delays.append(e.w.slots()['3:64']['backoff'])
         assert e.state() == ['error', 'reconnect_needed']
-        e.step(e.w.slots()[3]['until'] - e.t - 0.5)   # not yet
-        assert 3 not in e.tr.open
+        e.step(e.w.slots()['3:64']['until'] - e.t - 0.5)   # not yet
+        assert '3:64' not in e.tr.open
         e.step(1)                                      # due: wait again
-        assert 3 in e.tr.open
+        assert '3:64' in e.tr.open
     assert delays == [30, 60, 120, 240, 300]
-    e.tr.answer(3, {'status': 'timeout'})
+    e.tr.answer('3:64', {'status': 'timeout'})
     e.step(1)
-    assert e.w.slots()[3]['backoff'] == 0              # a good answer resets it
+    assert e.w.slots()['3:64']['backoff'] == 0              # a good answer resets it
 
 
 def test_a_failed_run_keeps_the_watch_after_a_backoff(e):
     e.active()
     e.step()
-    e.tr.answer(3, {'status': 'ready'})
+    e.tr.answer('3:64', {'status': 'ready'})
     e.step(1)
-    e.runs.ended[3] = 1
+    e.runs.ended['3:64'] = 1
     e.step(1)
     assert e.state() == ['error', 'run_failed']
-    assert 3 not in e.tr.open                          # no wait at once: no ready -> fail loop
+    assert '3:64' not in e.tr.open                          # no wait at once: no ready -> fail loop
     e.step(EventWorker.BACKOFF_MIN_S)
-    assert 3 in e.tr.open
+    assert '3:64' in e.tr.open
     assert e.state() == ['waiting', 'run_failed']
-    e.tr.answer(3, {'status': 'timeout', 'events': 'off'})
+    e.tr.answer('3:64', {'status': 'timeout', 'events': 'off'})
     e.step(1)
     assert e.state() == ['waiting', 'run_failed']      # a timeout does not clear it
-    assert e.w.slots()[3]['backoff'] == 30
+    assert e.w.slots()['3:64']['backoff'] == 30
 
 
 def test_failed_runs_back_off_doubling_and_a_success_resets(e):
@@ -180,25 +183,25 @@ def test_failed_runs_back_off_doubling_and_a_success_resets(e):
     e.step()
     delays = []
     for _ in range(2):
-        e.tr.answer(3, {'status': 'ready', 'via': 'event', 'events': 'on'})
+        e.tr.answer('3:64', {'status': 'ready', 'via': 'event', 'events': 'on'})
         e.step(1)
-        assert e.w.slots()[3]['state'] == 'running'
-        e.runs.ended[3] = 1
+        assert e.w.slots()['3:64']['state'] == 'running'
+        e.runs.ended['3:64'] = 1
         e.step(1)
-        delays.append(e.w.slots()[3]['backoff'])
+        delays.append(e.w.slots()['3:64']['backoff'])
         assert e.state() == ['error', 'run_failed']
-        e.step(e.w.slots()[3]['until'] - e.t - 0.5)
-        assert 3 not in e.tr.open
+        e.step(e.w.slots()['3:64']['until'] - e.t - 0.5)
+        assert '3:64' not in e.tr.open
         e.step(1)
-        assert 3 in e.tr.open
+        assert '3:64' in e.tr.open
     assert delays == [30, 60]
     assert len(e.runs.started) == 2
-    e.tr.answer(3, {'status': 'ready'})
+    e.tr.answer('3:64', {'status': 'ready'})
     e.step(1)
-    e.runs.ended[3] = 0
+    e.runs.ended['3:64'] = 0
     e.step(1)
-    assert e.w.slots()[3]['backoff'] == 0              # a run that succeeds resets it
-    assert 3 in e.tr.open
+    assert e.w.slots()['3:64']['backoff'] == 0              # a run that succeeds resets it
+    assert '3:64' in e.tr.open
     assert e.state() == ['waiting', None]
 
 
@@ -216,19 +219,19 @@ def test_a_run_that_cannot_start_backs_off(e):
     w = e.worker(runs=BadRuns(), log=lines.append)
     e.active()
     w.step()
-    e.tr.answer(3, {'status': 'ready'})
+    e.tr.answer('3:64', {'status': 'ready'})
     e.t += 1
     w.step()
     assert e.state() == ['error', 'run_failed']
-    assert w.slots()[3]['backoff'] == 30
-    assert lines == ['event worker: run start (user 3): RuntimeError: proc_open failed']
+    assert w.slots()['3:64']['backoff'] == 30
+    assert lines == ['event worker: run start (3:64): RuntimeError: proc_open failed']
 
 
 def test_a_ready_after_deactivation_starts_no_run(e):
     e.active()
     e.step()
     ActiveWorkflowService(e.db).deactivate(3, 64)
-    e.tr.answers[3] = (json.dumps({'result': {'structuredContent': {'status': 'ready'}}}), 200, '')
+    e.tr.answers['3:64'] = (json.dumps({'result': {'structuredContent': {'status': 'ready'}}}), 200, '')
     e.step(EventWorker.RECONCILE_S)
     assert e.runs.started == []
     assert e.tr.open == {}
@@ -238,11 +241,11 @@ def test_a_ready_after_deactivation_starts_no_run(e):
 def test_deactivating_during_a_run_opens_no_new_wait(e):
     e.active()
     e.step()
-    e.tr.answer(3, {'status': 'ready'})
+    e.tr.answer('3:64', {'status': 'ready'})
     e.step(1)
     ActiveWorkflowService(e.db).deactivate(3, 64)
     e.step(EventWorker.RECONCILE_S)
-    e.runs.ended[3] = 0
+    e.runs.ended['3:64'] = 0
     e.step(1)
     assert e.tr.open == {}
     assert e.w.slots() == {}
@@ -259,7 +262,7 @@ def test_no_links_is_idle_and_resumes_when_fixed(e):
     e.db.execute('INSERT INTO workflow_edges (workflow_id, from_node_id, to_node_id) VALUES (?, ?, ?)',
                  [x['workflow_id'], x['from_node_id'], x['to_node_id']])
     e.step(EventWorker.RECONCILE_S)
-    assert 3 in e.tr.open
+    assert '3:64' in e.tr.open
 
 
 def test_a_missing_server_is_an_error_with_backoff(e):
@@ -267,7 +270,7 @@ def test_a_missing_server_is_an_error_with_backoff(e):
     e.active()
     e.step()
     assert e.state() == ['error', 'server_missing']
-    assert e.w.slots()[3]['backoff'] == 30
+    assert e.w.slots()['3:64']['backoff'] == 30
 
 
 def test_schedule_mode_is_scheduled_and_ticks_every_minute(e):
@@ -308,11 +311,11 @@ def test_an_idle_schedule_mode_workflow_does_not_tick(e):
 def test_an_edited_watch_reopens_the_wait(e):
     e.active()
     e.step()
-    assert '"Inbox"' in e.tr.open[3]
+    assert '"Inbox"' in e.tr.open['3:64']
     e.editWatch('Archive')
     e.step(EventWorker.RECONCILE_S)
     assert e.tr.started == 2
-    assert '"Archive"' in e.tr.open[3]
+    assert '"Archive"' in e.tr.open['3:64']
     e.step(EventWorker.RECONCILE_S)
     assert e.tr.started == 2                     # unchanged since: the wait stays
 
@@ -322,11 +325,11 @@ def test_a_watch_edited_during_a_run_is_used_after_it(e):
     e.editWatch('Archive')
     e.step(EventWorker.RECONCILE_S)
     assert e.tr.open == {}
-    e.runs.ended[3] = 0
+    e.runs.ended['3:64'] = 0
     e.step(1)
     e.step(1)
-    assert 3 in e.tr.open
-    assert '"Archive"' in e.tr.open[3]
+    assert '3:64' in e.tr.open
+    assert '"Archive"' in e.tr.open['3:64']
     assert len(e.runs.started) == 1
 
 
@@ -339,7 +342,7 @@ def test_a_swallowed_error_is_logged_once_a_minute(e):
         w.step()
         e.t += 10
     assert len(lines) == 1
-    assert 'state write (user 3)' in lines[0]
+    assert 'state write (3:64)' in lines[0]
     assert 'locked' in lines[0]
     e.t += 10                                    # 60 s after the first: logged again
     w.step()
@@ -359,13 +362,13 @@ def test_two_users_are_independent(e):
     e.active()
     e.active(4, 80)
     e.step()
-    e.tr.answer(3, {'error': 'reconnect_needed'})
-    e.tr.answer(4, {'status': 'ready'})
+    e.tr.answer('3:64', {'error': 'reconnect_needed'})
+    e.tr.answer('4:80', {'status': 'ready'})
     e.step(1)
     assert e.state(3)[0] == 'error'
     assert e.state(4)[0] == 'running'
-    assert e.w.slots()[3]['backoff'] == 30
-    assert e.w.slots()[4]['backoff'] == 0
+    assert e.w.slots()['3:64']['backoff'] == 30
+    assert e.w.slots()['4:80']['backoff'] == 0
 
 
 def test_switching_the_active_workflow_cancels_the_old_wait(e):
@@ -375,8 +378,9 @@ def test_switching_the_active_workflow_cancels_the_old_wait(e):
     e.step()
     e.active(3, 66)
     e.step(EventWorker.RECONCILE_S)
-    assert e.w.slots()[3]['workflow_id'] == 66
-    assert e.w.slots()[3]['schedule_id'] == other
+    assert e.w.slots()['3:66']['workflow_id'] == 66
+    assert e.w.slots()['3:66']['schedule_id'] == other
+    assert list(e.tr.open.keys()) == ['3:66']          # the old wait was cancelled
     assert e.tr.started == 2
 
 
@@ -387,14 +391,14 @@ def test_switching_during_a_run_starts_nothing_until_it_ends(e):
     e.active(3, 66)
     e.step(EventWorker.RECONCILE_S)
     assert e.tr.open == {}
-    assert e.w.slots()[3]['workflow_id'] == 64
-    assert e.w.slots()[3]['state'] == 'running'
-    e.runs.ended[3] = 0
+    assert e.w.slots()['3:64']['workflow_id'] == 64
+    assert e.w.slots()['3:64']['state'] == 'running'
+    e.runs.ended['3:64'] = 0
     e.step(1)
     assert e.tr.open == {}                       # re-evaluated first
     e.step(1)
-    assert 3 in e.tr.open
-    assert e.w.slots()[3]['workflow_id'] == 66
+    assert '3:66' in e.tr.open
+    assert e.w.slots()['3:66']['workflow_id'] == 66
     assert e.tr.started == 2
     assert len(e.runs.started) == 1
 
@@ -403,7 +407,7 @@ def test_disabling_during_a_run_idles_after_it(e):
     e.running()
     e.db.execute('UPDATE agent_workflows SET enabled = 0')
     e.step(EventWorker.RECONCILE_S)
-    e.runs.ended[3] = 0
+    e.runs.ended['3:64'] = 0
     e.step(1)
     e.step(1)
     assert e.tr.open == {}
@@ -418,11 +422,11 @@ def test_reenabling_during_a_run_opens_no_wait_until_it_ends(e):
     e.db.execute('UPDATE agent_workflows SET enabled = 1')
     e.step(EventWorker.RECONCILE_S)
     assert e.tr.open == {}
-    assert e.w.slots()[3]['state'] == 'running'
-    e.runs.ended[3] = 0
+    assert e.w.slots()['3:64']['state'] == 'running'
+    e.runs.ended['3:64'] = 0
     e.step(1)
     e.step(1)
-    assert 3 in e.tr.open
+    assert '3:64' in e.tr.open
     assert len(e.runs.started) == 1
 
 
@@ -438,16 +442,16 @@ def test_a_throwing_server_lookup_backs_off_without_blocking_others(e):
     e.active(4, 80)
     w.step()
     assert e.state(3) == ['error', 'unreachable']
-    assert w.slots()[3]['backoff'] == 30
-    assert 4 in e.tr.open
-    assert 3 not in e.tr.open
+    assert w.slots()['3:64']['backoff'] == 30
+    assert '4:80' in e.tr.open
+    assert '3:64' not in e.tr.open
 
 
 def test_a_ready_between_deactivation_and_reconcile_starts_no_run(e):
     e.active()
     e.step()
     ActiveWorkflowService(e.db).deactivate(3, 64)
-    e.tr.answer(3, {'status': 'ready'})
+    e.tr.answer('3:64', {'status': 'ready'})
     e.step(1)
     assert e.runs.started == []
     assert e.w.slots() == {}
@@ -459,10 +463,10 @@ def test_a_failed_state_write_does_not_lose_a_run_end(e):
     e.db.execute('INSERT INTO flag VALUES (1)')
     e.db.execute("CREATE TRIGGER no_update BEFORE UPDATE ON active_workflows WHEN (SELECT v FROM flag) = 1"
                  " BEGIN SELECT RAISE(ABORT, 'locked'); END")
-    e.runs.ended[3] = 0
+    e.runs.ended['3:64'] = 0
     e.step(1)
-    assert e.w.slots()[3]['state'] == 'waiting'     # the run end was taken
-    assert 3 in e.tr.open
+    assert e.w.slots()['3:64']['state'] == 'waiting'     # the run end was taken
+    assert '3:64' in e.tr.open
     assert e.state()[0] == 'running'                # the write failed
     e.db.execute('UPDATE flag SET v = 0')
     e.step(EventWorker.HEARTBEAT_S + 1)
@@ -473,23 +477,23 @@ def test_a_long_failed_run_still_records_run_failed(e):
     e.running()
     e.step(EventWorker.RECONCILE_S)
     e.step(EventWorker.RECONCILE_S)
-    e.runs.ended[3] = 1
+    e.runs.ended['3:64'] = 1
     e.step(1)
     e.step(1)
     assert e.state() == ['error', 'run_failed']
     e.step(EventWorker.BACKOFF_MIN_S)
     assert e.state() == ['waiting', 'run_failed']
-    assert 3 in e.tr.open
+    assert '3:64' in e.tr.open
 
 
 def test_a_ready_after_a_disable_before_the_next_reconcile_starts_no_run(e):
     e.active()
     e.step()
     e.db.execute('UPDATE agent_workflows SET enabled = 0')
-    e.tr.answer(3, {'status': 'ready'})
+    e.tr.answer('3:64', {'status': 'ready'})
     e.step(1)
     assert e.runs.started == []
-    assert 3 not in e.tr.open
+    assert '3:64' not in e.tr.open
 
 
 def test_a_row_whose_check_throws_does_not_stop_the_others(e):
@@ -506,4 +510,67 @@ def test_a_row_whose_check_throws_does_not_stop_the_others(e):
         return real(sql, params)
     e.db.fetch_column = fetch_column
     e.step()
-    assert 4 in e.tr.open
+    assert '4:80' in e.tr.open
+
+
+def test_the_robot_watches_several_workflows_and_cancels_only_the_removed_one(e):
+    S.option(e.db, 2, 9)
+    S.workflow(e.db, 75, 9, 2)
+    r75 = S.row(e.db, 75, 9, 'event', 2)
+    S.workflow(e.db, 76, 9, 2)
+    S.row(e.db, 76, 9, 'event', 2)
+    e.db.execute("INSERT INTO mcp_servers (user_id, name, url, headers) VALUES (9, 'Outlook', 'http://robot/mcp', '{}')")
+    e.active(9, 75)
+    e.active(9, 76)
+    e.step()
+    assert list(e.w.slots().keys()) == ['9:75', '9:76']
+    assert list(e.tr.open.keys()) == ['9:75', '9:76']
+    assert [e.state(9, 75)[0], e.state(9, 76)[0]] == ['waiting', 'waiting']
+    e.tr.answer('9:75', {'status': 'ready'})
+    e.step(1)
+    assert e.runs.started == [['9:75', r75]]
+    assert [e.state(9, 75)[0], e.state(9, 76)[0]] == ['running', 'waiting']
+    ActiveWorkflowService(e.db).deactivate(9, 76)
+    e.step(EventWorker.RECONCILE_S)
+    assert list(e.w.slots().keys()) == ['9:75']
+    assert e.tr.open == {}                       # 76's wait cancelled; 75 runs
+    e.runs.ended['9:75'] = 0
+    e.step(1)
+    assert list(e.tr.open.keys()) == ['9:75']    # 75 waits again
+
+
+def robot_workflows(e):
+    """Two robot event workflows (75, 76) on option 2, and the robot's Outlook server."""
+    S.option(e.db, 2, 9)
+    S.workflow(e.db, 75, 9, 2)
+    S.row(e.db, 75, 9, 'event', 2)
+    S.workflow(e.db, 76, 9, 2)
+    S.row(e.db, 76, 9, 'event', 2)
+    e.db.execute("INSERT INTO mcp_servers (user_id, name, url, headers) VALUES (9, 'Outlook', 'http://robot/mcp', '{}')")
+
+
+def test_a_robot_workflow_activated_during_another_ones_run_opens_at_once(e):
+    robot_workflows(e)
+    e.active(9, 75)
+    e.step()
+    e.tr.answer('9:75', {'status': 'ready'})
+    e.step(1)
+    assert e.w.slots()['9:75']['state'] == 'running'
+    ActiveWorkflowService(e.db).deactivate(9, 75)   # unlocked mid-run
+    e.active(9, 76)
+    e.step(EventWorker.RECONCILE_S)
+    assert list(e.tr.open.keys()) == ['9:76']        # not held back by 75's run
+    assert e.w.slots()['9:75']['state'] == 'running'
+
+
+def test_a_failed_run_of_a_removed_row_leaves_no_carry(e):
+    e.running()
+    ActiveWorkflowService(e.db).deactivate(3, 64)
+    e.step(EventWorker.RECONCILE_S)
+    e.runs.ended['3:64'] = 1                         # fails after its row went: carried
+    e.step(1)
+    e.step(1)                                        # the row is not back: the carry is dropped
+    e.active()
+    e.step(EventWorker.RECONCILE_S)
+    assert '3:64' in e.tr.open
+    assert e.state() == ['waiting', None]            # starts clean, no old run_failed

@@ -42,8 +42,11 @@ import base64
 import io
 import os
 import re
+import sqlite3
 import time
 import zipfile
+
+import pymysql
 
 from app.agent_team.models.workflow import Workflow
 from app.agent_team.services.active_workflow_service import ActiveWorkflowService
@@ -72,6 +75,7 @@ from app.config import PHP_BACKEND
 from app.controllers.chat_attachment_controller import ChatAttachmentController as _ChatAttachmentController
 from app.services.llm_provider_resolver import LLMProviderResolver
 from app.services.mcp_tools_loader import MCPToolsLoader
+from app.services.robot_ownership import RobotOwnership
 from app.support import phpjson
 from app.support.logger import error_log
 from app.support.phpcompat import (
@@ -194,6 +198,30 @@ class WorkflowController:
             config,
         )
 
+    _ownershipObj: RobotOwnership | None = None
+
+    def _ownership(self) -> RobotOwnership:
+        if self._ownershipObj is None:
+            self._ownershipObj = RobotOwnership(self.db, self.config)
+        return self._ownershipObj
+
+    @staticmethod
+    def lockedResponse(name: str) -> dict:
+        """The 423 a locked (running robot) workflow answers to every edit."""
+        return {
+            'success': False,
+            'error_code': 'locked',
+            'error': f'{name} is running as the robot. Unlock it first.',
+            'status_code': 423,
+        }
+
+    def _lockedGuard(self, workflowId: int) -> dict | None:
+        """The 423 body when this workflow is robot-owned and active, else None."""
+        if not self._ownership().isLocked(workflowId):
+            return None
+        row = self.db.fetch_one('SELECT name FROM agent_workflows WHERE id = ?', [workflowId])
+        return self.lockedResponse('' if row is None else php_strval(row['name']))
+
     # ========================================================================
     # GET /api/v1/workflows
     # ========================================================================
@@ -206,15 +234,28 @@ class WorkflowController:
             return {'success': False, 'error': 'Authentication required', 'status_code': 401}
 
         try:
-            workflows = self.workflowRepository.findByUser(userId, False)
+            robotFor = self._ownership().robotFor(php_intval(userId))
+            workflows = self.workflowRepository.findByUser(userId, False, robotFor)
 
             ids = [w.getId() for w in workflows]
             realtimeIds = self.graphRepository.findRealtimeWorkflowIds(ids)
             realtimeSet = set(realtimeIds)
 
+            # Robot marks and locks for the whole list in at most one query (no per-row lookups on a remote DB):
+            # robot rows are listed only for a caller who may use the robot.
+            robotIds = [] if robotFor is None else [w.getId() for w in workflows if w.getUserId() == robotFor]
+            lockedSet = set()
+            if robotIds:
+                lockedSet = {php_intval(v) for v in self.db.fetch_column(
+                    'SELECT workflow_id FROM active_workflows WHERE workflow_id IN (' + ','.join(['?'] * len(robotIds)) + ')',
+                    robotIds)}
+            robotSet = set(robotIds)
+
             data = []
             for workflow in workflows:
                 arr = workflow.toApiArray()
+                arr['is_robot'] = workflow.getId() in robotSet
+                arr['locked'] = workflow.getId() in lockedSet
                 arr['runtime_mode'] = 'realtime' if workflow.getId() in realtimeSet else 'batch'
                 data.append(arr)
 
@@ -264,9 +305,10 @@ class WorkflowController:
         if hasGraph:
             nodes, edges = self._graphParts(body)
             try:
-                resolved = WorkflowRefResolver(self.db).resolve(php_intval(userId), nodes, edges)
+                resolved = WorkflowRefResolver(self.db).resolve(php_intval(userId), nodes, edges,
+                                                                  self._ownership().robotFor(php_intval(userId)))
             except UnresolvedRefsException as e:
-                return {'success': False, 'error': 'unknown references', 'missing': e.missing, 'status_code': 422}
+                return {'success': False, 'error': 'unknown references', 'error_code': 'unknown_references', 'missing': e.missing, 'status_code': 422}
 
         try:
             workflow = Workflow()
@@ -333,7 +375,7 @@ class WorkflowController:
                 'status_code': 201,
             }
         except UnresolvedRefsException as e:
-            return {'success': False, 'error': 'unknown references', 'missing': e.missing, 'status_code': 422}
+            return {'success': False, 'error': 'unknown references', 'error_code': 'unknown_references', 'missing': e.missing, 'status_code': 422}
         except Exception as e:  # noqa: BLE001
             return {'success': False, 'error': str(e), 'status_code': 500}
 
@@ -364,7 +406,7 @@ class WorkflowController:
             return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
 
         try:
-            if not self.workflowRepository.canUserAccess(userId, workflowId):
+            if not self.workflowRepository.canUserAccess(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
                 return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
 
             agentRepo = AgentRepository(self.db)
@@ -471,7 +513,7 @@ class WorkflowController:
                                     or not php_empty(q.get('package'))) else 'single'))
         zip_ = (q.get('format') if q.get('format') is not None else '') == 'zip'
         try:
-            if not self.workflowRepository.canUserAccess(userId, workflowId):
+            if not self.workflowRepository.canUserAccess(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
                 return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
             # (PHP refuses a zip without its ZipArchive extension; Python's zipfile is always there.)
             # A packaged Start document is copied only from this user's own document storage.
@@ -528,7 +570,7 @@ class WorkflowController:
             return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
 
         try:
-            if not self.workflowRepository.canUserAccess(userId, workflowId):
+            if not self.workflowRepository.canUserAccess(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
                 return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
 
             includeGraph = (query.get('include_graph') if query.get('include_graph') is not None else 'true') != 'false'
@@ -537,7 +579,9 @@ class WorkflowController:
             if not workflow:
                 return {'success': False, 'error': 'Workflow not found', 'status_code': 404}
 
-            return {'success': True, 'data': workflow.toArray(), 'status_code': 200}
+            return {'success': True, 'data': {**workflow.toArray(),
+                                              'is_robot': self._ownership().isRobotOwned(workflowId),
+                                              'locked': self._ownership().isLocked(workflowId)}, 'status_code': 200}
         except Exception as e:  # noqa: BLE001
             return {'success': False, 'error': str(e), 'status_code': 500}
 
@@ -558,8 +602,11 @@ class WorkflowController:
             return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
 
         try:
-            if not self.workflowRepository.isOwner(userId, workflowId):
+            if not self.workflowRepository.isOwner(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
                 return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
+            locked = self._lockedGuard(workflowId)
+            if locked:
+                return locked
 
             workflow = self.workflowRepository.findById(workflowId)
 
@@ -602,10 +649,14 @@ class WorkflowController:
                         'status_code': 400,
                     }
 
-            updated = self.workflowRepository.update(workflow)
+            # Names are unique per owner (uq_workflows_user_name): a robot workflow renamed onto another robot workflow's name.
+            if body.get('name') is not None and self._nameTaken(workflow.getUserId(), php_strval(body['name']), workflowId):
+                return self._nameTakenResponse(php_strval(body['name']))
 
-            error_log(f"[WorkflowController] Update - hasGraph: {'true' if hasGraph else 'false'}")
-
+            # Links resolve against the workflow's OWNER (and the robot's rows when the owner is the robot or may use
+            # it), never the editor's own rows; a robot workflow may link only what the robot can use. Checked before
+            # anything is written.
+            resolved = None
             if hasGraph:
                 graphData = body.get('definition')
                 if graphData is None:
@@ -621,10 +672,28 @@ class WorkflowController:
                 if edges is None:
                     edges = []
 
-                error_log(f'[WorkflowController] Updating graph with {len(nodes)} nodes and {len(edges)} edges')
+                owner = workflow.getUserId()
+                refs = WorkflowRefResolver(self.db)
+                resolved = refs.resolve(owner, nodes, edges, self._ownership().linkRobotFor(owner))
+                if owner == self._ownership().robotId():
+                    foreign = refs.foreignToRobot(owner, resolved['nodes'])
+                    if foreign:
+                        raise UnresolvedRefsException(foreign)
+
+            # Update the workflow metadata
+            try:
+                updated = self.workflowRepository.update(workflow)
+            except (pymysql.err.IntegrityError, sqlite3.IntegrityError):   # PDOException SQLSTATE 23000
+                if body.get('name') is not None:
+                    return self._nameTakenResponse(php_strval(body['name']))   # lost a race for the name
+                raise
+
+            error_log(f"[WorkflowController] Update - hasGraph: {'true' if hasGraph else 'false'}")
+
+            if resolved is not None:
+                error_log(f"[WorkflowController] Updating graph with {len(resolved['nodes'])} nodes and {len(resolved['edges'])} edges")
 
                 try:
-                    resolved = WorkflowRefResolver(self.db).resolve(php_intval(userId), nodes, edges)
                     self.graphRepository.saveGraph(workflowId, resolved['nodes'], resolved['edges'])
                     error_log('[WorkflowController] Graph updated successfully')
                 except Exception as e:  # noqa: BLE001
@@ -640,9 +709,19 @@ class WorkflowController:
                 'status_code': 200,
             }
         except UnresolvedRefsException as e:
-            return {'success': False, 'error': 'unknown references', 'missing': e.missing, 'status_code': 422}
+            return {'success': False, 'error': 'unknown references', 'error_code': 'unknown_references',
+                    'missing': e.missing, 'status_code': 422}
         except Exception as e:  # noqa: BLE001
             return {'success': False, 'error': str(e), 'status_code': 500}
+
+    def _nameTaken(self, ownerId: int, name: str, workflowId: int) -> bool:
+        """Another workflow of this owner already has the name."""
+        return self.db.fetch_one('SELECT 1 FROM agent_workflows WHERE user_id = ? AND name = ? AND id <> ?',
+                                 [ownerId, name, workflowId]) is not None
+
+    @staticmethod
+    def _nameTakenResponse(name: str) -> dict:
+        return {'success': False, 'error_code': 'name_taken', 'error': f'A workflow named "{name}" already exists.', 'status_code': 409}
 
     # ========================================================================
     # DELETE /api/v1/workflows/{id}
@@ -660,8 +739,11 @@ class WorkflowController:
             return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
 
         try:
-            if not self.workflowRepository.isOwner(userId, workflowId):
+            if not self.workflowRepository.isOwner(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
                 return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
+            locked = self._lockedGuard(workflowId)
+            if locked:
+                return locked
 
             self.workflowRepository.delete(workflowId)
 
@@ -702,8 +784,11 @@ class WorkflowController:
                     }
 
             try:
-                if not self.workflowRepository.canUserAccess(userId, workflowId):
+                if not self.workflowRepository.canUserAccess(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
                     return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
+                locked = self._lockedGuard(workflowId)
+                if locked:
+                    return locked
 
                 workflow = self.workflowRepository.findById(workflowId)
 
@@ -733,10 +818,12 @@ class WorkflowController:
                 hasGraphNodes = self.graphRepository.getNodes(workflowId)
                 isGraphWorkflow = not php_empty(hasGraphNodes)
 
+                # Run the workflow with the appropriate runner: a robot workflow runs (and is recorded) as the robot
+                runAs = self._ownership().runAs(php_intval(userId), workflowId)
                 if isGraphWorkflow:
-                    result = self.graphWorkflowRunner.run(workflow, userId, inputVariables)
+                    result = self.graphWorkflowRunner.run(workflow, runAs, inputVariables)
                 else:
-                    result = self.workflowRunner.run(workflow, userId, inputVariables)
+                    result = self.workflowRunner.run(workflow, runAs, inputVariables)
 
                 result = dict(result)
                 result['status_code'] = 200 if result.get('success') else 500
@@ -777,6 +864,9 @@ class WorkflowController:
             "SELECT id FROM agent_workflows WHERE user_id = ? AND name = ? LIMIT 1",
             [userId, name],
         )
+        robot = self._ownership().robotFor(php_intval(userId))
+        if row is None and robot is not None:
+            row = self.db.fetch_one("SELECT id FROM agent_workflows WHERE user_id = ? AND name = ? LIMIT 1", [robot, name])
 
         if row is None:
             return {
@@ -836,8 +926,13 @@ class WorkflowController:
             return None
 
         try:
-            if not self.workflowRepository.canUserAccess(userId, workflowId):
+            if not self.workflowRepository.canUserAccess(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
                 sseCallback({'type': 'error', 'error': 'Workflow not found or access denied'})
+                sse.send_data('[DONE]')
+                return None
+            locked = self._lockedGuard(workflowId)
+            if locked:
+                sseCallback({'type': 'error', 'error': locked['error']})
                 sse.send_data('[DONE]')
                 return None
 
@@ -893,11 +988,14 @@ class WorkflowController:
                 streamContext = StreamContext(sseCallback, userId)
                 self.graphWorkflowRunner.setStreamContext(streamContext)
 
+                # Run the graph workflow with streaming; a robot workflow runs (and is recorded) as the robot.
+                # The stream context keeps the caller: the browser at the editor answers its client tools.
                 self.graphWorkflowRunner.run(
-                    workflow, userId, inputVariables, clientSkills, inlineDocuments, scratchFiles)
+                    workflow, self._ownership().runAs(php_intval(userId), workflowId), inputVariables, clientSkills,
+                    inlineDocuments, scratchFiles)
             else:
                 sseCallback({'type': 'info', 'message': 'Step-based workflow - running without streaming'})
-                result = self.workflowRunner.run(workflow, userId, inputVariables)
+                result = self.workflowRunner.run(workflow, self._ownership().runAs(php_intval(userId), workflowId), inputVariables)
                 sseCallback({
                     'type': 'workflow_complete',
                     'success': result.get('success') if result.get('success') is not None else False,
@@ -931,6 +1029,15 @@ class WorkflowController:
             sse.send('error', {'error': 'Authentication required'})
             return None
 
+        # A locked robot workflow's node does not run (checked after access: runAs is the caller's otherwise).
+        workflowId = php_intval(body.get('workflow_id') if body.get('workflow_id') is not None else 0)
+        if workflowId > 0:
+            locked = self._ownership().lockedRunName(userId, workflowId)
+            if locked is not None:
+                sse.status_code = 423
+                sse.send('error', self.lockedResponse(locked))
+                return None
+
         nodeConfig = dict(body.get('node_config')) if isinstance(body.get('node_config'), dict) else {}
         prompt = php_strval(body.get('prompt') if body.get('prompt') is not None else '')
         # The first parent's text names the playbook and the job (as on the server engine); the prompt when absent.
@@ -953,7 +1060,7 @@ class WorkflowController:
                     reason = src['reason']
             elif nodeConfig.get('playbook_id') is not None:
                 # A node linked to the collection sends playbook_id; the text is read here, for its owner.
-                pb = PlaybookStore(self.db).get(userId, php_intval(nodeConfig['playbook_id']))
+                pb = PlaybookStore(self.db).get(userId, php_intval(nodeConfig['playbook_id']), self._ownership().robotFor(userId))
                 if pb is None:
                     raise RuntimeError(f"Playbook #{nodeConfig['playbook_id']} not found")
                 nodeConfig['playbook'] = pb['text']
@@ -962,8 +1069,10 @@ class WorkflowController:
             if reason is None:
                 try:
                     runner = PlaybookNodeRunner(self.config)
-                    # Attended: gates go to the person at the editor.
-                    result = runner.run(userId, nodeConfig, prompt, sseCallback)
+                    # Attended: gates go to the person at the editor. A robot workflow's node (workflow_id)
+                    # takes its tools from the robot's MCP servers; the run and its gates stay the caller's.
+                    mcpUser = self._ownership().runAs(userId, workflowId) if workflowId > 0 else userId
+                    result = runner.run(userId, nodeConfig, prompt, sseCallback, False, mcpUser)
                     transcript = php_strval(result.get('output') if result.get('output') is not None else '')
                     reason = PlaybookOutcome.reason(php_strval(result.get('status') if result.get('status') is not None else ''),
                                                     result.get('gate'))
@@ -1022,7 +1131,7 @@ class WorkflowController:
             return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
 
         try:
-            if not self.workflowRepository.canUserAccess(userId, workflowId):
+            if not self.workflowRepository.canUserAccess(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
                 return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
 
             limit = php_intval(query['limit']) if query.get('limit') is not None else 50
@@ -1061,17 +1170,19 @@ class WorkflowController:
                 sse.send(event, data)
 
         handled = {'streaming_handled': True}
-        if not userId or not workflowId or not self.workflowRepository.canUserAccess(userId, workflowId):
+        if not userId or not workflowId or not self.workflowRepository.canUserAccess(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
             emit('error', {'error': 'Workflow not found or access denied' if userId else 'Authentication required'})
             return handled
         log = WorkflowRunLog(WorkflowRunLog.defaultDir(self.config))
         active = ActiveWorkflowService(self.db)
+        activeOwner = self._ownership().runAs(php_intval(userId), workflowId)
         query = request.get('query') or {}
         cursor = php_strval(query['cursor']) if query.get('cursor') is not None else None
         try:
             LiveStream.run(
                 lambda c: LiveFeed.next(log, workflowId, c),
-                lambda: active.get(userId),
+                # a person's own row (whichever workflow it is, as GET /workflows/active); a robot workflow's own row of the robot's several
+                (lambda: active.get(userId)) if activeOwner == php_intval(userId) else (lambda: active.forWorkflow(workflowId)),
                 emit,
                 lambda s: time.sleep(s),
                 lambda: time.time(),
@@ -1139,8 +1250,11 @@ class WorkflowController:
             return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
 
         try:
-            if not self.workflowRepository.isOwner(userId, workflowId):
+            if not self.workflowRepository.isOwner(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
                 return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
+            locked = self._lockedGuard(workflowId)
+            if locked:
+                return locked
 
             self.workflowRepository.toggleEnabled(workflowId)
             workflow = self.workflowRepository.findById(workflowId)
@@ -1158,6 +1272,48 @@ class WorkflowController:
     # POST /api/v1/workflows/{id}/duplicate
     # ========================================================================
 
+    def owner(self, request, id: int = 0) -> dict:
+        """PUT /api/v1/workflows/{id}/owner  body {owner: 'robot', confirm: bool}
+        confirm false: what the transfer would do (WorkflowOwnerTransfer.preview); true: move it to the robot."""
+        from app.agent_team.services.workflow_owner_transfer import WorkflowOwnerTransfer, WorkflowTransferError
+        from app.services.robot_account import RobotAccount
+        from app.services.robot_policy import RobotPolicy
+        userId = php_intval(request.get('user_id') if request.get('user_id') is not None else 0)
+        params = request.get('params') or {}
+        workflowId = php_intval(params.get('id') if params.get('id') is not None else id)
+        body = request.get('body') if isinstance(request.get('body'), dict) else {}
+        if userId <= 0:
+            return {'success': False, 'error': 'Authentication required', 'status_code': 401}
+        if body.get('owner') != 'robot':
+            return {'success': False, 'error': "owner must be 'robot'", 'error_code': 'invalid', 'status_code': 422}
+        if RobotPolicy(self.db, self.config).canUse(userId):
+            RobotAccount.ensure(self.db)   # before _ownership() reads the robot's id
+        try:
+            transfer = WorkflowOwnerTransfer(self.db, self._ownership(), self._skillPolicy())
+            preview = transfer.preview(userId, workflowId)
+            locked = self._lockedGuard(workflowId)
+            if locked:
+                return locked
+            data = transfer.toRobot(userId, workflowId) if body.get('confirm', False) is True else preview
+            return {'success': True, 'data': data, 'status_code': 200}
+        except WorkflowTransferError as e:
+            return {'success': False, 'error': str(e), 'error_code': e.kind, 'status_code': e.status,
+                    **({'clashes': e.clashes} if e.clashes else {})}
+        except Exception as e:  # noqa: BLE001 -- PrivateSkillsRefused (the skill store port); anything else re-raised
+            if type(e).__name__ == 'PrivateSkillsRefused':
+                from app.services.robot_skill_policy import RobotSkillPolicy
+                return RobotSkillPolicy.refusal(e.skills)
+            raise
+
+    def _skillPolicy(self):
+        """The RobotSkillPolicy over the skill store (None until the skill store port lands)."""
+        try:
+            from app.services.robot_skill_policy import RobotSkillPolicy
+            from app.services.skill_store import SkillStore
+        except ImportError:
+            return None
+        return RobotSkillPolicy(self.db, self.config, SkillStore.fromEnv(self.config))
+
     def duplicate(self, request, id: int = 0) -> dict:
         """PHP 1241-1296."""
         userId = request['user_id'] if request.get('user_id') is not None else 0
@@ -1171,7 +1327,7 @@ class WorkflowController:
             return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
 
         try:
-            if not self.workflowRepository.canUserAccess(userId, workflowId):
+            if not self.workflowRepository.canUserAccess(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
                 return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
 
             newName = body.get('name')
@@ -1182,7 +1338,7 @@ class WorkflowController:
 
             return {
                 'success': True,
-                'data': duplicated.toArray(),
+                'data': {'id': duplicated.getId(), 'name': duplicated.getName()},
                 'message': 'Workflow duplicated successfully',
                 'status_code': 201,
             }
@@ -1205,11 +1361,12 @@ class WorkflowController:
             return {'success': False, 'error': 'Workflow ID is required', 'status_code': 400}
 
         try:
-            if not self.workflowRepository.canUserAccess(userId, workflowId):
+            if not self.workflowRepository.canUserAccess(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
                 return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
 
             outputStorage = WorkflowOutputStorage(self.db, self.config)
-            result = outputStorage.listOutputs(workflowId, userId)
+            # a robot workflow's outputs are the robot's runs': read as the robot
+            result = outputStorage.listOutputs(workflowId, self._ownership().runAs(php_intval(userId), workflowId))
 
             merged = dict(result)
             merged['status_code'] = 200
@@ -1233,11 +1390,12 @@ class WorkflowController:
             return {'success': False, 'error': 'Workflow ID and filename are required', 'status_code': 400}
 
         try:
-            if not self.workflowRepository.canUserAccess(userId, workflowId):
+            if not self.workflowRepository.canUserAccess(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
                 return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
 
             outputStorage = WorkflowOutputStorage(self.db, self.config)
-            result = outputStorage.getOutput(workflowId, userId, filename)
+            # a robot workflow's outputs are the robot's runs': read as the robot
+            result = outputStorage.getOutput(workflowId, self._ownership().runAs(php_intval(userId), workflowId), filename)
 
             merged = dict(result)
             merged['status_code'] = 200 if result.get('success') else 404
@@ -1266,8 +1424,11 @@ class WorkflowController:
         if not workflowId or not nodeIdInt:
             return {'success': False, 'error': 'Workflow ID and Node ID are required', 'status_code': 400}
 
-        if not self.workflowRepository.isOwner(userId, workflowId):
+        if not self.workflowRepository.isOwner(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
             return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
+        locked = self._lockedGuard(workflowId)
+        if locked:
+            return locked
 
         node = self.graphRepository.getNode(nodeIdInt)
         if not node or php_intval(node.get('workflow_id')) != workflowId:
@@ -1341,8 +1502,11 @@ class WorkflowController:
         if not workflowId or not nodeIdInt:
             return {'success': False, 'error': 'Workflow ID and Node ID are required', 'status_code': 400}
 
-        if not self.workflowRepository.isOwner(userId, workflowId):
+        if not self.workflowRepository.isOwner(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
             return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
+        locked = self._lockedGuard(workflowId)
+        if locked:
+            return locked
 
         node = self.graphRepository.getNode(nodeIdInt)
         if not node or php_intval(node.get('workflow_id')) != workflowId:
@@ -1395,7 +1559,7 @@ class WorkflowController:
         if not workflowId or not nodeIdInt:
             return {'success': False, 'error': 'Workflow ID and Node ID are required', 'status_code': 400}
 
-        if not self.workflowRepository.canUserAccess(userId, workflowId):
+        if not self.workflowRepository.canUserAccess(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
             return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
 
         node = self.graphRepository.getNode(nodeIdInt)
@@ -1423,8 +1587,11 @@ class WorkflowController:
                 'status_code': 400,
             }
 
-        if not self.workflowRepository.isOwner(userId, workflowId):
+        if not self.workflowRepository.isOwner(userId, workflowId, self._ownership().robotFor(php_intval(userId))):
             return {'success': False, 'error': 'Workflow not found or access denied', 'status_code': 404}
+        locked = self._lockedGuard(workflowId)
+        if locked:
+            return locked
 
         node = self.graphRepository.getNode(nodeIdInt)
         if not node or php_intval(node.get('workflow_id')) != workflowId:

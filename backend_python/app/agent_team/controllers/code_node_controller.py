@@ -5,6 +5,7 @@ POST /api/v1/workflows/code-node/tool-call -- a code node's call_tool from the e
 Runs server.tool(args) with the logged-in user's MCP servers and returns the raw MCP result
 (the harness needs structuredContent and isError). The declared-tools check is the harness's,
 so it is identical when compiled; this endpoint gives the user no more than their own MCP access.
+With the run's workflow_id, a robot workflow's call uses the robot's servers (RobotOwnership.runAs).
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from typing import Callable
 
 from app.playbook.adapters.loader_mcp_executor import LoaderMcpExecutor
 from app.services.mcp_tools_loader import MCPToolsLoader
+from app.services.robot_ownership import RobotOwnership
 from app.support.phpcompat import php_intval
 
 _SERVER_RE = re.compile(r'^[a-z0-9_]{1,64}$')
@@ -21,6 +23,7 @@ _TOOL_RE = re.compile(r'^[A-Za-z0-9_.-]{1,128}$')
 
 class CodeNodeController:
     def __init__(self, db, config: dict | None = None, callerFor: Callable | None = None):
+        self.ownership = RobotOwnership(db, config or {})
         def default_caller_for(userId: int):
             loader = MCPToolsLoader(db)
             loader.loadToolsForUser(str(userId))
@@ -46,4 +49,11 @@ class CodeNodeController:
         if (not isinstance(server, str) or not _SERVER_RE.match(server)
                 or not isinstance(tool, str) or not _TOOL_RE.match(tool) or not isinstance(args, (dict, list))):
             return {'ok': False, 'error': 'body must be {server: slug, tool: name, args: object}', 'status_code': 400}
-        return self.callerFor(userId)(server, tool, args)
+        workflowId = php_intval(body.get('workflow_id') if body.get('workflow_id') is not None else 0)
+        if workflowId > 0:
+            locked = self.ownership.lockedRunName(userId, workflowId)
+            if locked is not None:
+                from app.agent_team.controllers.workflow_controller import WorkflowController
+                return WorkflowController.lockedResponse(locked)
+        actor = self.ownership.runAs(userId, workflowId) if workflowId > 0 else userId
+        return self.callerFor(actor)(server, tool, args)

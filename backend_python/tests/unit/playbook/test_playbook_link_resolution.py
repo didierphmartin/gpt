@@ -11,6 +11,14 @@ from app.playbook.playbook_store import PlaybookStore
 from tests.unit.playbook.conftest import OKTA
 
 
+@pytest.fixture
+def pbc_db(pbc_db):
+    # RobotOwnership asks these (who may use the robot; the robot's id): empty here, so nothing is shared
+    pbc_db.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, email TEXT, role TEXT, kind TEXT NOT NULL DEFAULT 'person')")
+    pbc_db.execute('CREATE TABLE IF NOT EXISTS packages (role TEXT PRIMARY KEY, name TEXT, builtin INTEGER, capabilities TEXT, updated_at TEXT)')
+    return pbc_db
+
+
 def test_get_nodes_fills_the_linked_text_for_the_workflow_owner(pbc_db):
     id_ = PlaybookStore(pbc_db).save(3, None, OKTA, 'okta-reset')['id']
     pbc_db.execute("INSERT INTO agent_workflows (user_id, name) VALUES ('3', 'Bridge')")

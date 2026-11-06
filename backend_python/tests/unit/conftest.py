@@ -82,3 +82,13 @@ def create_app():
 @pytest.fixture(scope='session')
 def client(create_app, config, db_factory):
     return TestClient(create_app(config, db_factory=db_factory))
+
+
+@pytest.fixture
+def no_robot(monkeypatch):
+    """No robot on this install: RobotOwnership answers without a query (for FakeDb tests whose queued replies a
+    robot lookup would consume). robotFor/linkRobotFor None, nothing robot-owned or locked, runs as the caller."""
+    from app.services.robot_ownership import RobotOwnership
+    from app.services.robot_policy import RobotPolicy
+    monkeypatch.setattr(RobotOwnership, 'robotId', lambda self: None)
+    monkeypatch.setattr(RobotPolicy, 'canUse', lambda self, userId: False)

@@ -34,18 +34,21 @@ class AgentRepository:
         )
         return Agent(row) if row else None
 
-    def findAccessibleByUser(self, user_id: int, filters: dict | None = None) -> list[Agent]:
-        """PHP 60-123."""
+    def findAccessibleByUser(self, user_id: int, filters: dict | None = None, robotId: int | None = None) -> list[Agent]:
+        """PHP findAccessibleByUser. robotId: the robot's agents are shared with a caller who may use the robot."""
         filters = filters if filters is not None else {}
 
         sql = (
             "SELECT * FROM agents WHERE (\n"
-            "            user_id = :user_id\n"
+            "            user_id = :user_id"
+            + (" OR user_id = :robot_id" if robotId is not None else '') + "\n"
             "            OR visibility = 'public'\n"
             "            OR visibility = 'workspace'\n"
             "        ) AND enabled = 1"
         )
         params: dict = {'user_id': user_id}
+        if robotId is not None:
+            params['robot_id'] = robotId
 
         # Filter by agent type
         if not php_empty(filters.get('agent_type')):
@@ -333,14 +336,14 @@ class AgentRepository:
         self.db.execute("DELETE FROM agents WHERE id = ?", [id])
         return True
 
-    def canUserAccess(self, user_id: int, agent_id: int) -> bool:
-        """PHP 476-499."""
+    def canUserAccess(self, user_id: int, agent_id: int, robotId: int | None = None) -> bool:
+        """PHP canUserAccess."""
         agent = self.findById(agent_id)
         if not agent:
             return False
 
-        # Owner always has access
-        if agent.getUserId() == user_id:
+        # Owner always has access; so does a caller who may use the robot, to the robot's agents
+        if agent.getUserId() == user_id or (robotId is not None and agent.getUserId() == robotId):
             return True
 
         # Public agents are accessible to all
@@ -353,23 +356,23 @@ class AgentRepository:
 
         return False
 
-    def isOwner(self, user_id: int, agent_id: int) -> bool:
-        """PHP 504-508."""
+    def isOwner(self, user_id: int, agent_id: int, robotId: int | None = None) -> bool:
+        """PHP isOwner (a robot agent too, for a robot-permitted caller)."""
         agent = self.findById(agent_id)
-        return bool(agent) and agent.getUserId() == user_id
+        return bool(agent) and (agent.getUserId() == user_id or (robotId is not None and agent.getUserId() == robotId))
 
     def countByUser(self, user_id: int) -> int:
         """PHP 513-520."""
         col = self.db.fetch_column("SELECT COUNT(*) FROM agents WHERE user_id = ?", [user_id])
         return php_intval(col[0]) if col else 0
 
-    def countAccessible(self, user_id: int) -> int:
-        """PHP 525-534."""
+    def countAccessible(self, user_id: int, robotId: int | None = None) -> int:
+        """PHP countAccessible."""
         col = self.db.fetch_column(
             "SELECT COUNT(*) FROM agents\n"
-            "             WHERE (user_id = ? OR visibility IN ('public', 'workspace'))\n"
+            "             WHERE (user_id = ? OR user_id = ? OR visibility IN ('public', 'workspace'))\n"
             "             AND enabled = 1",
-            [user_id],
+            [user_id, robotId if robotId is not None else user_id],
         )
         return php_intval(col[0]) if col else 0
 

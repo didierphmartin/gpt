@@ -189,7 +189,7 @@ def create_app(config: dict | None = None, *, controllers: dict | None = None, r
                 # the controller thread's next send() call.
                 sse.mark_aborted()
 
-        return StreamingResponse(gen(), status_code=200, media_type='text/event-stream',
+        return StreamingResponse(gen(), status_code=sse.status_code, media_type='text/event-stream',
                                  headers={**SSE_HEADERS, **cors_headers})
 
     return app

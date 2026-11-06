@@ -2,7 +2,8 @@
 
 The code components collection: the only code that touches `code_components`. A component is a
 code node's body (code, exits, MCP servers, timeout) under a name unique per user; workflow code
-nodes link to it by config.code_component_id. Owner-scoped throughout.
+nodes link to it by config.code_component_id. Owner-scoped throughout; a robot-permitted caller also sees the robot's
+rows (is_robot), shared with every such user.
 """
 from __future__ import annotations
 
@@ -48,7 +49,7 @@ def _unique_key(v):
 
 class CodeComponentStore:
     NAME_MAX = 191
-    COLS = 'id, name, description, code, exits, mcp_servers, timeout_s, start_trigger, args, provides, updated_at'
+    COLS = 'id, user_id, name, description, code, exits, mcp_servers, timeout_s, start_trigger, args, provides, updated_at'
     LABEL_MAX = 60
     PASS_ARGS_MAX = 20
     DECLS_MAX = 20
@@ -56,27 +57,58 @@ class CodeComponentStore:
     def __init__(self, db):
         self.db = db
 
-    def list(self, userId: int) -> list[dict]:
-        rows = [self._row(r) for r in self.db.fetch_all(
-            'SELECT ' + self.COLS + ' FROM code_components WHERE user_id = ? ORDER BY name', [userId])]
+    @staticmethod
+    def _owners(userId: int, robotId: int | None) -> list[int]:
+        """The owners whose rows a caller sees: the user, and the robot when the caller may use it."""
+        return [userId] if robotId is None or robotId == userId else [userId, robotId]
+
+    @staticmethod
+    def _in(ids: list) -> str:
+        return ','.join(['?'] * len(ids))
+
+    def list(self, userId: int, robotId: int | None = None) -> list[dict]:
+        """robotId: also the robot's rows (is_robot = True), for a caller who may use the robot."""
+        o = self._owners(userId, robotId)
+        rows = [self._row(r, robotId) for r in self.db.fetch_all(
+            'SELECT ' + self.COLS + ' FROM code_components WHERE user_id IN (' + self._in(o) + ') ORDER BY name', o)]
+        links = self._linkedNodesOf(userId, [r['id'] for r in rows], robotId)   # one scan for the whole list
         for r in rows:
-            r['used_by'] = len(self.usedBy(userId, r['id']))
+            r['used_by'] = len(links[r['id']])
         return rows
 
-    def get(self, userId: int, id: int) -> dict | None:
-        r = self.db.fetch_one('SELECT ' + self.COLS + ' FROM code_components WHERE id = ? AND user_id = ?', [id, userId])
-        return None if r is None else self._row(r)
+    def get(self, userId: int, id: int, robotId: int | None = None) -> dict | None:
+        o = self._owners(userId, robotId)
+        r = self.db.fetch_one('SELECT ' + self.COLS + ' FROM code_components WHERE id = ? AND user_id IN (' + self._in(o) + ')',
+                              [id, *o])
+        return None if r is None else self._row(r, robotId)
 
-    def getByName(self, userId: int, name: str) -> dict | None:
-        r = self.db.fetch_one('SELECT ' + self.COLS + ' FROM code_components WHERE name = ? AND user_id = ?', [name, userId])
-        return None if r is None else self._row(r)
+    def getByName(self, userId: int, name: str, robotId: int | None = None) -> dict | None:
+        o = self._owners(userId, robotId)
+        found = None
+        for r in self.db.fetch_all('SELECT ' + self.COLS + ' FROM code_components WHERE name = ? AND user_id IN (' + self._in(o) + ')',
+                                   [name, *o]):   # the user's own row wins over the robot's
+            if found is None or php_intval(r['user_id']) == userId:
+                found = r
+        return None if found is None else self._row(found, robotId)
 
-    def save(self, userId: int, id: int | None, data: dict) -> dict:
+    def _isRobotComponent(self, id: int, robotId: int | None) -> bool:
+        if robotId is None:
+            return False
+        return self.db.fetch_one('SELECT 1 FROM code_components WHERE id = ? AND user_id = ?', [id, robotId]) is not None
+
+    def _ownerOf(self, userId: int, id: int, robotId: int | None) -> int:
+        """Whose row `id` is: the robot's when the caller sees it as the robot's, else the caller."""
+        return robotId if (self.get(userId, id, robotId) or {}).get('is_robot') else userId
+
+    def save(self, userId: int, id: int | None, data: dict, robotId: int | None = None) -> dict:
         """Create (id None; an existing name updates that row, as agents do) or update by id."""
         c = self._validate(data)
-        before = None if id is None else self.get(userId, id)
+        caller = userId
+        before = None if id is None else self.get(userId, id, robotId)
         if id is not None and before is None:
             raise CodeComponentError('not_found', f'Code component #{id} not found', 404)
+        # a robot component stays the robot's (updated by id); a new one is always the caller's
+        userId = robotId if before is not None and before['is_robot'] else userId
         clash = self.getByName(userId, c['name'])
         if id is None and clash is not None:
             id = clash['id']
@@ -92,9 +124,10 @@ class CodeComponentStore:
                 raise CodeComponentError('start_exit',
                                          f'MCP server "{t["watch"]["server"]}" starts workflows: keep it or change the Start option first.', 422)
         if before is not None and before['exits'] != c['exits'] and php_empty(data.get('confirm_drop_links')):
-            lost = self.droppedLinks(userId, id, before['exits'], c['exits'])
+            lost = self.droppedLinks(caller, id, before['exits'], c['exits'], robotId)
             if lost:
-                what = [f'"{l["exit"]}" on {l["node_name"]} in "{l["workflow_name"]}"' for l in lost]
+                what = [self._others(l['others']) if 'others' in l
+                        else f'"{l["exit"]}" on {l["node_name"]} in "{l["workflow_name"]}"' for l in lost]
                 raise CodeComponentError('links_dropped', 'Removing these exits removes the links on '
                                          + ', '.join(what) + '. Save again to confirm.', 409, lost)
         # absent args/provides keep the stored lists (a save from an older client must not wipe them)
@@ -113,33 +146,38 @@ class CodeComponentStore:
                 self.db.execute('UPDATE code_components SET name = ?, description = ?, code = ?, exits = ?, mcp_servers = ?, timeout_s = ?, args = ?, provides = ?,\n'
                                 '                    updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?', [*vals, id, userId])
                 if before['exits'] != c['exits']:
-                    self._remapExits(userId, id, before['exits'], c['exits'])
+                    self._remapExits(userId, id, before['exits'], c['exits'], robotId)
                 if outer:
                     self.db.commit()
             except BaseException:
                 if outer:
                     self.db.rollback()
                 raise
-        return self.get(userId, id)
+        return self.get(userId, id, robotId)
 
-    def delete(self, userId: int, id: int) -> None:
-        c = self.get(userId, id)
+    def delete(self, userId: int, id: int, robotId: int | None = None) -> None:
+        c = self.get(userId, id, robotId)
         if c is None:
             raise CodeComponentError('not_found', f'Code component #{id} not found', 404)
+        caller = userId
+        userId = robotId if c['is_robot'] else userId
         if c['start_trigger'] is not None:
             raise CodeComponentError('is_option', 'This code component is a Start option: remove the option first.', 409)
-        used = self.usedBy(userId, id)
+        used = self.usedBy(caller, id, robotId)   # every link refuses; only the caller's visible ones are named
         if used:
-            names = [f'node "{n["node_name"]}" in workflow "{n["workflow_name"]}"' for n in used]
+            names = [self._others(n['others']) if 'others' in n
+                     else f'node "{n["node_name"]}" in workflow "{n["workflow_name"]}"' for n in used]
             raise CodeComponentError('in_use', 'This code component is used by ' + ', '.join(names) + '.', 409)
         self.db.execute('DELETE FROM code_components WHERE id = ? AND user_id = ?', [id, userId])
 
-    def setStartTrigger(self, userId: int, id: int, trigger: dict) -> dict:
+    def setStartTrigger(self, userId: int, id: int, trigger: dict, robotId: int | None = None) -> dict:
         """Make the component a Start option (spec §1); the trigger is validated against the component."""
-        c = self.get(userId, id)
+        c = self.get(userId, id, robotId)
         if c is None:
             raise CodeComponentError('not_found', f'Code component #{id} not found', 404)
+        userId = robotId if c['is_robot'] else userId
         t = self._validateStartTrigger(c, trigger)
+        robot = c['is_robot']
         outer = not _in_tx(self.db)
         if outer:
             self.db.begin()
@@ -148,8 +186,8 @@ class CodeComponentStore:
                             [_json_unescaped(t), id, userId])
             # the schedules already on this option carry a copy of its watch: an edit reaches them too
             watch = php_json_decode(_json_unescaped(t['watch']))
-            rows = self.db.fetch_all('SELECT id, workflow_id FROM scheduled_workflows WHERE user_id = ? AND trigger_component_id = ?',
-                                     [userId, id])
+            rows = self.db.fetch_all('SELECT id, workflow_id FROM scheduled_workflows WHERE trigger_component_id = ?'
+                                     + ('' if robot else ' AND user_id = ?'), [id] if robot else [id, userId])
             for r in rows:   # each keeps its own Start's args
                 self.db.execute('UPDATE scheduled_workflows SET event_trigger = ? WHERE id = ?', [
                     ScheduledWorkflowService.eventTrigger(_json_unescaped(
@@ -160,36 +198,44 @@ class CodeComponentStore:
             if outer:
                 self.db.rollback()
             raise
-        return self.get(userId, id)
+        return self.get(userId, id, robotId)
 
-    def startTriggerImpact(self, userId: int, id: int) -> list[dict]:
+    def startTriggerImpact(self, userId: int, id: int, robotId: int | None = None) -> list[dict]:
         """The user's workflows on this option: their schedule runs on it, or their Start shows its exits."""
-        rows = self.db.fetch_all('SELECT DISTINCT s.workflow_id, w.name FROM scheduled_workflows s\n'
-                                 '            JOIN agent_workflows w ON w.id = s.workflow_id\n'
-                                 '            WHERE s.user_id = ? AND s.trigger_component_id = ?', [userId, id])
-        names: dict[int, str] = {}
-        for r in rows:
-            names[php_intval(r['workflow_id'])] = php_strval(r['name'])
-        for n in self._linkedNodes(userId, id):
+        caller = userId
+        userId = self._ownerOf(userId, id, robotId)
+        robot = self._isRobotComponent(id, robotId)   # a robot option is scheduled by any permitted user
+        rows: dict[int, dict] = {}
+        for r in self.db.fetch_all('SELECT DISTINCT s.workflow_id, w.name, w.user_id FROM scheduled_workflows s\n'
+                                   '            JOIN agent_workflows w ON w.id = s.workflow_id\n'
+                                   '            WHERE s.trigger_component_id = ?' + ('' if robot else ' AND s.user_id = ?'),
+                                   [id] if robot else [id, userId]):
+            rows[php_intval(r['workflow_id'])] = {'workflow_id': php_intval(r['workflow_id']), 'workflow_name': php_strval(r['name']),
+                                                   'owner': php_intval(r['user_id'])}
+        for n in self._linkedNodes(caller, id, robotId):
             if n['is_start']:
-                names[n['workflow_id']] = n['workflow_name']
-        ordered = sorted(names.items(), key=lambda kv: kv[1])   # asort: by name, keys kept
-        return [{'workflow_id': wid, 'workflow_name': name} for wid, name in ordered]
+                rows[n['workflow_id']] = {'workflow_id': n['workflow_id'], 'workflow_name': n['workflow_name'], 'owner': n['owner']}
+        shown, others = self._split(list(rows.values()), caller, robotId)
+        shown.sort(key=lambda r: (r['workflow_name'], r['workflow_id']))
+        out = [{'workflow_id': r['workflow_id'], 'workflow_name': r['workflow_name']} for r in shown]
+        return [*out, {'others': others}] if others > 0 else out
 
-    def clearStartTrigger(self, userId: int, id: int) -> list[dict]:
+    def clearStartTrigger(self, userId: int, id: int, robotId: int | None = None) -> list[dict]:
         """Remove the option: its schedule rows are deleted (a 'none' row would still run once at its time) and the
         component stops being an option. Start nodes on it go back to one port (revertStarts); linked code nodes stay."""
-        c = self.get(userId, id)
+        c = self.get(userId, id, robotId)
         if c is None:
             raise CodeComponentError('not_found', f'Code component #{id} not found', 404)
-        impact = self.startTriggerImpact(userId, id)
+        impact = self.startTriggerImpact(userId, id, robotId)   # as the caller sees it
+        userId = robotId if c['is_robot'] else userId
         outer = not _in_tx(self.db)
         if outer:
             self.db.begin()
         try:
-            self.db.execute('DELETE FROM scheduled_workflows WHERE user_id = ? AND trigger_component_id = ?', [userId, id])
+            self.db.execute('DELETE FROM scheduled_workflows WHERE trigger_component_id = ?' + ('' if c['is_robot'] else ' AND user_id = ?'),
+                            [id] if c['is_robot'] else [id, userId])
             if c['start_trigger'] is not None:
-                self._revertStarts(userId, id, c['exits'], c['start_trigger']['work_exit'])
+                self._revertStarts(userId, id, c['exits'], c['start_trigger']['work_exit'], robotId)
             self.db.execute('UPDATE code_components SET start_trigger = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?',
                             [id, userId])
             if outer:
@@ -253,37 +299,77 @@ class CodeComponentStore:
         nt = nodeType if nodeType is not None else ''
         return nt == 'code' if nt != '' else (isinstance(cfg, dict) and cfg.get('type') == 'code')
 
-    def usedBy(self, userId: int, id: int) -> list[dict]:
-        """The user's workflow code nodes that link to the component, and the Start nodes on its option."""
-        return [{k: v for k, v in n.items() if k not in ('node_id', 'is_start')} for n in self._linkedNodes(userId, id)]
+    def usedBy(self, userId: int, id: int, robotId: int | None = None) -> list[dict]:
+        """The user's workflow code nodes that link to the component, and the Start nodes on its option. A robot
+        component is linked from every user's workflows: only the caller's own and the robot's are named, the rest
+        end the list as one {others: number of workflows}."""
+        shown, others = self._split(self._linkedNodes(userId, id, robotId), userId, robotId)
+        out = [{k: v for k, v in n.items() if k not in ('node_id', 'is_start', 'owner')} for n in shown]
+        return [*out, {'others': others}] if others > 0 else out
 
-    def _linkedNodes(self, userId: int, id: int) -> list[dict]:
-        """usedBy plus each node's workflow_nodes.id."""
+    @staticmethod
+    def _split(rows: list, caller: int, robotId: int | None) -> tuple[list, int]:
+        """(the rows on workflows the caller may open (their own, the robot's), the number of other workflows)."""
+        shown = []
+        hidden: dict = {}
+        for r in rows:
+            if r['owner'] == caller or (robotId is not None and r['owner'] == robotId):
+                shown.append(r)
+            else:
+                hidden[r['workflow_id']] = True
+        return shown, len(hidden)
+
+    @staticmethod
+    def _others(n: int) -> str:
+        """"2 other workflows", for a message."""
+        return '1 other workflow' if n == 1 else f'{n} other workflows'
+
+    def _linkedNodes(self, userId: int, id: int, robotId: int | None = None) -> list[dict]:
+        """usedBy, unfiltered, plus each node's workflow_nodes.id and its workflow's owner."""
+        return self._linkedNodesOf(userId, [id], robotId)[id]
+
+    def _linkedNodesOf(self, userId: int, ids: list, robotId: int | None) -> dict:
+        """_linkedNodes of several components, in one scan of the workflow nodes: id => nodes."""
+        out: dict = {i: [] for i in ids}
+        if not ids:
+            return out
+        o = self._owners(userId, robotId)
+        # A robot component is linked from any permitted user's workflows: scan them all.
+        robots: set = set()
+        if robotId is not None:
+            robots = {php_intval(v) for v in self.db.fetch_column(
+                'SELECT id FROM code_components WHERE user_id = ? AND id IN (' + self._in(ids) + ')', [robotId, *ids])}
+        all_ = bool(robots)
         # The link lives in the node's config JSON: decoded here, so the query stays portable (MySQL and SQLite).
-        rows = self.db.fetch_all('SELECT n.id AS node_id, n.node_type, n.config, w.id AS workflow_id, w.name AS workflow_name\n'
-                                 '            FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id\n'
-                                 '            WHERE w.user_id = ? ORDER BY w.name, n.id', [str(userId)])
-        nodes = []
+        rows = self.db.fetch_all('SELECT n.id AS node_id, n.node_type, n.config, w.id AS workflow_id, w.name AS workflow_name, w.user_id AS owner\n'
+                                 '            FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id'
+                                 + ('' if all_ else ' WHERE w.user_id IN (' + self._in(o) + ')') + ' ORDER BY w.name, n.id',
+                                 [] if all_ else [str(x) for x in o])
         for r in rows:
             cfg = _decode(r['config'])
             linked = cfg.get('code_component_id') if isinstance(cfg, dict) else None
-            code = self.isCodeNode(r['node_type'], cfg) and php_intval(linked if linked is not None else 0) == id
-            start = (not code and isinstance(cfg, dict)
-                     and StartOptionGraph.optionId({'node_type': r['node_type'], 'config': cfg}) == id)
-            if code or start:
-                name = cfg.get('name') if isinstance(cfg, dict) and cfg.get('name') is not None else 'Code'
-                nodes.append({'workflow_id': php_intval(r['workflow_id']), 'workflow_name': php_strval(r['workflow_name']),
-                              'node_name': 'Start' if start else php_strval(name), 'node_id': php_intval(r['node_id']),
-                              'is_start': start})
-        return nodes
+            code = php_intval(linked if linked is not None else 0) if self.isCodeNode(r['node_type'], cfg) else 0
+            start = None if (code in out or not isinstance(cfg, dict)) else StartOptionGraph.optionId(
+                {'node_type': r['node_type'], 'config': cfg})
+            id = code if code in out else start
+            owner = php_intval(r['owner'])
+            # a personal component's links are on the owners' workflows only (the full scan reads everyone's)
+            if id is None or id not in out or (id not in robots and owner not in o):
+                continue
+            isStart = id != code
+            name = cfg.get('name') if isinstance(cfg, dict) and cfg.get('name') is not None else 'Code'
+            out[id].append({'workflow_id': php_intval(r['workflow_id']), 'workflow_name': php_strval(r['workflow_name']),
+                            'node_name': 'Start' if isStart else php_strval(name), 'node_id': php_intval(r['node_id']),
+                            'is_start': isStart, 'owner': owner})
+        return out
 
-    def droppedLinks(self, userId: int, id: int, oldExits: list, newExits: list) -> list[dict]:
+    def droppedLinks(self, userId: int, id: int, oldExits: list, newExits: list, robotId: int | None = None) -> list[dict]:
         """The links an exit change would remove (remapExits' rules): [{workflow_id, workflow_name, node_name, exit,
         count}], one per linked node and removed exit that has links. Collapsing to one exit removes none."""
         if len(newExits) == 1 or len(oldExits) == 1:
             return []
         lost = []
-        for node in self._linkedNodes(userId, id):
+        for node in self._linkedNodes(userId, id, robotId):
             for k, exit in enumerate(oldExits):
                 if exit in newExits:
                     continue
@@ -292,14 +378,19 @@ class CodeComponentStore:
                 n = php_intval(n[0] if n else 0)
                 if n > 0:
                     lost.append({'workflow_id': node['workflow_id'], 'workflow_name': node['workflow_name'],
-                                 'node_name': node['node_name'], 'exit': exit, 'count': n})
-        return lost
+                                 'node_name': node['node_name'], 'exit': exit, 'count': n, 'owner': node['owner']})
+        # other users' workflows are counted, not named: one {others: workflows, count: links} ends the list
+        shown, others = self._split(lost, userId, robotId)
+        out = [{k: v for k, v in l.items() if k != 'owner'} for l in shown]
+        if others > 0:
+            out.append({'others': others, 'count': sum(l['count'] for l in lost) - sum(l['count'] for l in shown)})
+        return out
 
-    def _revertStarts(self, userId: int, id: int, exits: list, workExit: str) -> None:
+    def _revertStarts(self, userId: int, id: int, exits: list, workExit: str, robotId: int | None = None) -> None:
         """Start nodes on the option go back to a plain Start: one port, holding the work exit's links; the other
         exits' links are removed, and so is config.start_option."""
         work = 'output_' + str((exits.index(workExit) if workExit in exits else 0) + 1)
-        for node in self._linkedNodes(userId, id):
+        for node in self._linkedNodes(userId, id, robotId):
             if not node['is_start']:
                 continue
             for e in self.db.fetch_all('SELECT id, from_port FROM workflow_edges WHERE from_node_id = ?', [node['node_id']]):
@@ -313,13 +404,13 @@ class CodeComponentStore:
             cfg.pop('start_option', None)
             self.db.execute('UPDATE workflow_nodes SET config = ? WHERE id = ?', [php_json_encode(php_array(cfg)), node['node_id']])
 
-    def _remapExits(self, userId: int, id: int, oldExits: list, newExits: list) -> None:
+    def _remapExits(self, userId: int, id: int, oldExits: list, newExits: list, robotId: int | None = None) -> None:
         """Edges are stored by port index (output_k = exit k), so an exit change moves each linked node's
         edges BY NAME, as the editor's CodeNode.remapExits does: a surviving exit keeps its edges on its
         new port, a removed exit's edges go; one exit left moves every edge onto output_1 (duplicates
         dropped); one exit before lands on output_1 unless its name survives. Ports beyond the old exits
         are left alone."""
-        for node in self._linkedNodes(userId, id):
+        for node in self._linkedNodes(userId, id, robotId):
             edges = []
             for e in self.db.fetch_all('SELECT id, to_node_id, to_port, from_port FROM workflow_edges WHERE from_node_id = ? ORDER BY id',
                                        [node['node_id']]):
@@ -460,9 +551,9 @@ class CodeComponentStore:
         return {'label': label, 'watch': watch, 'work_exit': exit, 'pass_args': passArgs}
 
     @staticmethod
-    def _row(r: dict) -> dict:
+    def _row(r: dict, robotId: int | None = None) -> dict:
         st = r.get('start_trigger')
-        return {'id': php_intval(r['id']), 'name': php_strval(r['name']),
+        return {'id': php_intval(r['id']), 'is_robot': robotId is not None and php_intval(r.get('user_id')) == robotId, 'name': php_strval(r['name']),
                 'description': php_strval(r.get('description') if r.get('description') is not None else ''),
                 'code': php_strval(r['code']), 'exits': php_json_decode(php_strval(r['exits'])) or [],
                 'mcp_servers': php_json_decode(php_strval(r['mcp_servers'])) or [], 'timeout_s': php_intval(r['timeout_s']),

@@ -28,9 +28,10 @@ def create(now) -> SqliteDb:
                  " input_prompt TEXT, scheduled_time TEXT, status TEXT DEFAULT 'pending', repeat_type TEXT DEFAULT 'none',"
                  " repeat_interval INTEGER DEFAULT 1, cron TEXT, event_trigger TEXT, trigger_component_id INTEGER,"
                  " last_run TEXT, next_run TEXT, running_since TEXT, created_at TEXT, error_message TEXT)")
-    conn.execute("CREATE TABLE active_workflows (user_id INTEGER PRIMARY KEY, workflow_id INTEGER NOT NULL"
+    conn.execute("CREATE TABLE active_workflows (user_id INTEGER NOT NULL, workflow_id INTEGER NOT NULL"
                  " REFERENCES agent_workflows (id) ON DELETE CASCADE, mode TEXT NOT NULL, trigger_component_id INTEGER,"
-                 " activated_at TEXT NOT NULL, watch_state TEXT NOT NULL DEFAULT 'starting', watch_message TEXT, watch_checked_at TEXT)")
+                 " activated_at TEXT NOT NULL, watch_state TEXT NOT NULL DEFAULT 'starting', watch_message TEXT, watch_checked_at TEXT,"
+                 " PRIMARY KEY (user_id, workflow_id))")
     conn.commit()
     return SqliteDb(conn)
 

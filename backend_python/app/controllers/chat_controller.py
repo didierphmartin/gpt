@@ -33,7 +33,7 @@ from app.services.llm_provider_resolver import LLMProviderResolver
 from app.services.sse_hub_client import SSEHubClient
 from app.services.usage_logger import UsageLogger
 from app.support.logger import error_log
-from app.support.phpcompat import is_numeric, mb_substr, php_bool, php_crc32, php_date, php_empty, php_intval, php_uniqid
+from app.support.phpcompat import is_numeric, mb_substr, php_bool, php_crc32, php_date, php_empty, php_intval, php_strval, php_uniqid
 from app.support.phpjson import dumps
 
 
@@ -43,6 +43,8 @@ class ChatController:
         self.config = config
         # Memoized enabled provider_keys from system_llm_settings (per request).
         self.enabledProviderKeysCache: list[str] | None = None
+        # A robot workflow's agent node loads its MCP tools from the robot's servers (chat() sets it).
+        self.mcpUserId: str | None = None
 
     # ------------------------------------------------------------------
     # Enabled provider keys
@@ -1091,6 +1093,25 @@ class ChatController:
                 'status_code': 400,
             }
 
+        # A workflow run's agent node names its workflow: a robot workflow's MCP tools load from the robot's
+        # servers (each requested one must have a robot server of its slug). Keys, memory and usage stay the caller's.
+        workflowId = php_intval(input_.get('workflow_id') if input_.get('workflow_id') is not None else 0)
+        if workflowId > 0 and re.fullmatch(r'[0-9]+', php_strval(userId)):
+            from app.agent_team.controllers.workflow_controller import WorkflowController
+            from app.services.robot_mcp_servers import RobotMcpServers
+            from app.services.robot_ownership import RobotOwnership
+            ownership = RobotOwnership(self.db, self.config)
+            locked = ownership.lockedRunName(php_intval(userId), workflowId)
+            if locked is not None:
+                return WorkflowController.lockedResponse(locked)
+            actor = str(ownership.runAs(php_intval(userId), workflowId))
+            if actor != php_strval(userId):
+                missing = RobotMcpServers.missing(self.db, php_strval(userId), actor,
+                                                  list(toolsFilter.values()) if isinstance(toolsFilter, dict) else toolsFilter)
+                if missing:
+                    return RobotMcpServers.missingResponse(missing[0])
+                self.mcpUserId = actor
+
         # Per-node overrides from the workflow agent form. When present they WIN over
         # the provider-config defaults (system_llm_settings). Null = use provider default.
         maxTokensOverride = php_intval(input_['max_tokens']) if is_numeric(input_.get('max_tokens')) else None
@@ -1794,7 +1815,7 @@ class ChatController:
             if wantsMcp:
                 error_log(f"[ChatController] Loading MCP tools for user: {userId}")
                 mcpToolsLoader = MCPToolsLoader(self.db)
-                mcpToolsLoader.loadToolsForUser(userId)
+                mcpToolsLoader.loadToolsForUser(self.mcpUserId if self.mcpUserId is not None else userId)
                 error_log("[ChatController] MCP hasTools: " + ('yes' if mcpToolsLoader.hasTools() else 'no'))
             else:
                 error_log("[MCP] Skipped MCP load: node selected no MCP tools")
@@ -2629,7 +2650,7 @@ class ChatController:
         try:
             if wantsMcp:
                 mcpToolsLoader = MCPToolsLoader(self.db)
-                mcpToolsLoader.loadToolsForUser(userId)
+                mcpToolsLoader.loadToolsForUser(self.mcpUserId if self.mcpUserId is not None else userId)
             else:
                 error_log("[MCP] Skipped MCP load: node selected no MCP tools")
 

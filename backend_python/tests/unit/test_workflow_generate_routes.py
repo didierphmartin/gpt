@@ -26,6 +26,8 @@ from app.agent_team.controllers.workflow_controller import WorkflowController
 from app.agent_team.services.start_document_store import StartDocumentStore
 from app.support.http import Ctx
 
+pytestmark = pytest.mark.usefixtures('no_robot')
+
 CFG = {'auth': {'jwt_secret': 'S'}, 'database': {}, 'contexts_database': {}}
 
 
@@ -66,7 +68,7 @@ def ctx(query=None, params=None, user_id=3):
 
 def controller(access=True) -> WorkflowController:
     c = WorkflowController(FakeDb(), CFG)
-    c.workflowRepository.canUserAccess = lambda uid, wid: access
+    c.workflowRepository.canUserAccess = lambda uid, wid, robotId=None: access
     return c
 
 

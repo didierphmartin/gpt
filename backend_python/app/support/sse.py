@@ -48,6 +48,8 @@ class SseStream:
         self.started = False
         self.ended = False
         self.aborted = False
+        # PHP http_response_code() before the first frame (e.g. 423 on a locked robot workflow); read once the stream starts
+        self.status_code = 200
 
     def start(self) -> None:
         if self.started:

@@ -429,10 +429,10 @@ def test_agent_count_accessible():
     call = db.calls[0]
     assert norm(call[1]) == norm(
         "SELECT COUNT(*) FROM agents"
-        " WHERE (user_id = ? OR visibility IN ('public', 'workspace'))"
+        " WHERE (user_id = ? OR user_id = ? OR visibility IN ('public', 'workspace'))"
         " AND enabled = 1"
     )
-    assert call[2] == [1]
+    assert call[2] == [1, 1]   # no robot: the owner twice
 
 
 def test_agent_get_stats():
@@ -961,8 +961,9 @@ def test_workflow_toggle_enabled():
 
 
 def test_workflow_duplicate():
+    # findById, the free-name check ('WF (Copy)' is free), the reload
     copy_row = {**WORKFLOW_ROW, 'id': 2, 'user_id': 2, 'name': 'WF (Copy)'}
-    db = FakeDb(one=[WORKFLOW_ROW, copy_row], insert_id=2)
+    db = FakeDb(one=[WORKFLOW_ROW, None, copy_row], insert_id=2)
     copy = WorkflowRepository(db).duplicate(1, 2)
     assert copy.getName() == 'WF (Copy)'
     assert copy.getUserId() == 2

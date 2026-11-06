@@ -7,6 +7,8 @@ from app.agent_team.services.live_feed import LiveFeed, LiveStream
 from app.agent_team.services.start_option_graph import StartOptionGraph
 from app.agent_team.services.workflow_run_log import WorkflowRunLog
 
+pytestmark = pytest.mark.usefixtures('no_robot')
+
 A = 'a' * 32
 B = 'b' * 32
 
@@ -260,6 +262,6 @@ def test_live_refuses_without_a_user_or_access():
     sse = FakeSse()
     request = ctx(params={'id': 64}, user_id=3)
     request['sse'] = sse
-    c.workflowRepository.canUserAccess = lambda u, w: False
+    c.workflowRepository.canUserAccess = lambda u, w, robotId=None: False
     c.live(request)
     assert sse.frames == [('error', {'error': 'Workflow not found or access denied'})]

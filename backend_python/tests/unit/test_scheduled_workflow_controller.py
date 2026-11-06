@@ -12,6 +12,9 @@ from starlette.datastructures import Headers
 
 from app.agent_team.controllers.scheduled_workflow_controller import ScheduledWorkflowController
 from app.support.http import Ctx
+import pytest
+
+pytestmark = pytest.mark.usefixtures('no_robot')
 
 
 def ctx(body=None, user_id=3, params=None):
@@ -97,6 +100,10 @@ class FakeWorkflowRepository:
 
     def findById(self, id):
         return self.by_id.get(id)
+
+    def canUserAccess(self, userId, id, robotId=None):
+        w = self.by_id.get(id)
+        return w is not None and w.getUserId() in (userId, robotId)
 
 
 def controller():
@@ -295,7 +302,8 @@ def test_update_not_found():
     fake.updated = None
     r = c.update(ctx(body={'input_prompt': 'x'}), 1)
     assert r == {'success': False, 'error': 'Schedule not found', 'status_code': 404}
-    assert fake.calls == [('update', 1, 3, {'input_prompt': 'x'})]
+    # the robot-owner lookups read the schedule's workflow first (lockedGuardForSchedule, ownerForSchedule)
+    assert [c for c in fake.calls if c[0] != 'findById'] == [('update', 1, 3, {'input_prompt': 'x'})]
 
 
 def test_update_success():
@@ -341,7 +349,7 @@ def test_destroy_success():
     fake.deleted = True
     r = c.destroy(ctx(), 1)
     assert r == {'success': True, 'message': 'Schedule deleted successfully', 'status_code': 200}
-    assert fake.calls == [('delete', 1, 3)]
+    assert [c for c in fake.calls if c[0] != 'findById'] == [('delete', 1, 3)]
 
 
 def test_destroy_exception():
@@ -377,7 +385,7 @@ def test_pause_success():
     fake.paused = True
     r = c.pause(ctx(), 1)
     assert r == {'success': True, 'message': 'Schedule paused successfully', 'status_code': 200}
-    assert fake.calls == [('pause', 1, 3)]
+    assert [c for c in fake.calls if c[0] != 'findById'] == [('pause', 1, 3)]
 
 
 def test_pause_exception():
@@ -409,7 +417,7 @@ def test_resume_success():
     fake.resumed = True
     r = c.resume(ctx(), 1)
     assert r == {'success': True, 'message': 'Schedule resumed successfully', 'status_code': 200}
-    assert fake.calls == [('resume', 1, 3)]
+    assert [c for c in fake.calls if c[0] != 'findById'] == [('resume', 1, 3)]
 
 
 def test_resume_exception():

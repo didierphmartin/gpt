@@ -63,33 +63,57 @@ class PlaybookStore:
             i += 1
         return key
 
-    def list(self, userId: int) -> list:
-        """PHP 33-43."""
+    @staticmethod
+    def _owners(userId: int, robotId: int | None) -> list:
+        """The owners whose rows a caller sees: the user, and the robot when the caller may use it."""
+        return [userId] if robotId is None or robotId == userId else [userId, robotId]
+
+    @staticmethod
+    def _scope(userId: int, robotId: int | None) -> tuple:
+        """The rows a caller sees, as a WHERE fragment and its parameters: the user's, plus with robotId the robot's
+        shared rows. The robot's published copies (source_id set: the ServiceNow bridge's frozen set, managed by
+        publish / robotList / unpublish) are never shared rows."""
+        if robotId is None:
+            return 'user_id = ?', [userId]
+        if robotId == userId:
+            return 'user_id = ? AND source_id IS NULL', [userId]
+        return '(user_id = ? OR user_id = ? AND source_id IS NULL)', [userId, robotId]
+
+    def list(self, userId: int, robotId: int | None = None) -> list:
+        """robotId: also the robot's rows (is_robot = True), for a caller who may use the robot."""
+        where, args = self._scope(userId, robotId)
         # automation_id: the automation that manages the playbook (None = none); save_playbook_agent checks it on a key clash.
-        rows = self.db.fetch_all(f'SELECT {_COLS}, automation_id FROM playbooks WHERE user_id = ? ORDER BY title', [userId])
+        rows = self.db.fetch_all(f'SELECT id, user_id, pkey, title, text, updated_at, automation_id FROM playbooks WHERE {where} ORDER BY title',
+                                 args)
         out = []
         for r in rows:
             r = dict(r)
             r['id'] = int(r['id'])
+            r['is_robot'] = robotId is not None and php_intval(r['user_id']) == robotId
+            del r['user_id']
             r['automation_id'] = None if r['automation_id'] is None else int(r['automation_id'])
-            used = self.usedBy(userId, r['id'])
+            used = self._links(userId, r['id'], robotId)   # every link counts, named or not
             r['used_by'] = len(used['agents']) + len(used['nodes'])
             out.append(r)
         return out
 
-    def get(self, userId: int, id: int):
-        """PHP 45-50."""
-        row = self.db.fetch_one(f'SELECT {_COLS} FROM playbooks WHERE id = ? AND user_id = ?', [id, userId])
-        return None if not row else {**row, 'id': int(row['id'])}
+    def get(self, userId: int, id: int, robotId: int | None = None):
+        where, args = self._scope(userId, robotId)
+        row = self.db.fetch_one(f'SELECT id, user_id, pkey, title, text, updated_at FROM playbooks WHERE id = ? AND {where}', [id, *args])
+        if not row:
+            return None
+        row = dict(row)
+        row['is_robot'] = robotId is not None and php_intval(row['user_id']) == robotId
+        del row['user_id']
+        return {**row, 'id': int(row['id'])}
 
     def getByKey(self, userId: int, pkey: str):
         """PHP 52-57."""
         row = self.db.fetch_one(f'SELECT {_COLS} FROM playbooks WHERE pkey = ? AND user_id = ?', [pkey, userId])
         return None if not row else {**row, 'id': int(row['id'])}
 
-    def save(self, userId: int, id, text: str, pkey) -> dict:
-        """PHP 59-90. Create (id None) or update. The text must parse; the key
-        defaults to the title's (create) or stays (update)."""
+    def save(self, userId: int, id, text: str, pkey, robotId: int | None = None) -> dict:
+        """Create (id None) or update. The text must parse; the key defaults to the title's (create) or stays (update)."""
         try:
             title = PlaybookDocument.fromConsoleText(text).title
         except ValueError as e:
@@ -97,9 +121,11 @@ class PlaybookStore:
         if len(title) > self.TITLE_MAX:
             raise PlaybookStoreError(
                 'invalid_text', f'The title is longer than 255 characters ({len(title)}); shorten the "Title:" line.', 422)
-        current = None if id is None else self.get(userId, id)
+        current = None if id is None else self.get(userId, id, robotId)
         if id is not None and current is None:
             raise PlaybookStoreError('not_found', f'Playbook #{id} not found', 404)
+        # a robot playbook stays the robot's (updated by id); a new one is always the caller's
+        userId = robotId if current is not None and current['is_robot'] else userId
         key = pkey if pkey is not None else (current['pkey'] if current is not None else self.keyFromTitle(title))
         if not self.isValidKey(key):
             raise PlaybookStoreError(
@@ -118,7 +144,7 @@ class PlaybookStore:
                 'UPDATE playbooks SET pkey = ?, title = ?, text = ?, updated_at = CURRENT_TIMESTAMP '
                 'WHERE id = ? AND user_id = ?',
                 [key, title, text, id, userId])
-        return self.get(userId, id)
+        return self.get(userId, id, robotId)
 
     def publish(self, userId: int, id: int, robotId: int, confirmReplace: bool) -> dict:
         """Publish the user's playbook to the robot as a frozen copy (one version). A source
@@ -197,33 +223,63 @@ class PlaybookStore:
         name = php_trim(php_trim(str(u['first_name'] or '')) + ' ' + php_trim(str(u['last_name'] or '')))
         return name if name != '' else str(u['email'] or '')
 
-    def delete(self, userId: int, id: int) -> None:
-        """PHP 92-107."""
-        if self.get(userId, id) is None:
+    def delete(self, userId: int, id: int, robotId: int | None = None) -> None:
+        current = self.get(userId, id, robotId)
+        if current is None:
             raise PlaybookStoreError('not_found', f'Playbook #{id} not found', 404)
-        used = self.usedBy(userId, id)
-        names = ([f'agent "{a["name"]}"' for a in used['agents']]
-                 + [f'node "{n["node_name"]}" in workflow "{n["workflow_name"]}"' for n in used['nodes']])
+        # every link refuses; only those on the caller's and the robot's agents and workflows are named
+        agents, nodes, otherAgents, otherWorkflows = self._split(self._links(userId, id, robotId), userId, robotId)
+        userId = robotId if current['is_robot'] else userId
+        names = ([f'agent "{a["name"]}"' for a in agents]
+                 + [f'node "{n["node_name"]}" in workflow "{n["workflow_name"]}"' for n in nodes]
+                 + ([] if otherWorkflows == 0 else ['1 other workflow' if otherWorkflows == 1 else f'{otherWorkflows} other workflows'])
+                 + ([] if otherAgents == 0 else ['1 other agent' if otherAgents == 1 else f'{otherAgents} other agents']))
         if names:
             raise PlaybookStoreError('in_use', 'This playbook is used by ' + ', '.join(names) + '.', 409)
         self.db.execute('DELETE FROM playbooks WHERE id = ? AND user_id = ?', [id, userId])
 
-    def usedBy(self, userId: int, id: int) -> dict:
-        """PHP 109-132. The agents and workflow nodes (the user's own) that link to the playbook."""
-        rows = self.db.fetch_all('SELECT id, name FROM agents WHERE user_id = ? AND playbook_id = ? ORDER BY name',
-                                 [userId, id])
-        agents = [{'id': int(a['id']), 'name': str(a['name'])} for a in rows]
+    def usedBy(self, userId: int, id: int, robotId: int | None = None) -> dict:
+        """The agents and workflow nodes (the user's own) that link to the playbook. A robot playbook is linked from
+        every user's: only the caller's and the robot's are named; `others` counts the other agents and workflows."""
+        agents, nodes, otherAgents, otherWorkflows = self._split(self._links(userId, id, robotId), userId, robotId)
+
+        def strip(r):
+            return {k: v for k, v in r.items() if k != 'owner'}
+        return {'agents': [strip(a) for a in agents], 'nodes': [strip(n) for n in nodes], 'others': otherAgents + otherWorkflows}
+
+    @staticmethod
+    def _split(links: dict, caller: int, robotId: int | None) -> tuple:
+        """(agents and nodes the caller may open (their own, the robot's), the number of other agents, of other workflows)."""
+        def sees(r):
+            return r['owner'] == caller or (robotId is not None and r['owner'] == robotId)
+        hiddenNodes = [n for n in links['nodes'] if not sees(n)]
+        seenAgents = [a for a in links['agents'] if sees(a)]
+        return (seenAgents, [n for n in links['nodes'] if sees(n)], len(links['agents']) - len(seenAgents),
+                len({n['workflow_id'] for n in hiddenNodes}))
+
+    def _links(self, userId: int, id: int, robotId: int | None) -> dict:
+        """usedBy, unfiltered, with each row's owner."""
+        o = self._owners(userId, robotId)
+        in_ = ','.join(['?'] * len(o))
+        # a robot playbook (not a published copy) is linked from any permitted user's agents and workflows: scan them all
+        all_ = False
+        if robotId is not None:
+            all_ = self.db.fetch_one('SELECT 1 FROM playbooks WHERE id = ? AND user_id = ? AND source_id IS NULL', [id, robotId]) is not None
+        rows = self.db.fetch_all('SELECT id, name, user_id FROM agents WHERE ' + ('' if all_ else f'user_id IN ({in_}) AND ')
+                                 + 'playbook_id = ? ORDER BY name', [id] if all_ else [*o, id])
+        agents = [{'id': int(a['id']), 'name': str(a['name']), 'owner': php_intval(a['user_id'])} for a in rows]
 
         # The node's link lives in its config JSON: decoded here, so the query stays portable (MySQL and SQLite).
         rows = self.db.fetch_all(
-            "SELECT n.config, w.id AS workflow_id, w.name AS workflow_name "
-            "FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id "
-            "WHERE w.user_id = ? AND n.node_type = 'playbook' ORDER BY w.name, n.id",
-            [str(userId)])
+            "SELECT n.config, w.id AS workflow_id, w.name AS workflow_name, w.user_id AS owner\n"
+            "            FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id\n"
+            "            WHERE " + ('' if all_ else f'w.user_id IN ({in_}) AND ') + "n.node_type = 'playbook' ORDER BY w.name, n.id",
+            [] if all_ else [str(x) for x in o])
         nodes = []
         for r in rows:
             cfg = php_json_decode(r['config'] if r['config'] is not None else '')
             if isinstance(cfg, dict) and php_intval(cfg.get('playbook_id') if cfg.get('playbook_id') is not None else 0) == id:
                 nodes.append({'workflow_id': int(r['workflow_id']), 'workflow_name': str(r['workflow_name']),
-                              'node_name': str(cfg['name']) if cfg.get('name') is not None else 'Playbook'})
+                              'node_name': str(cfg['name']) if cfg.get('name') is not None else 'Playbook',
+                              'owner': php_intval(r['owner'])})
         return {'agents': agents, 'nodes': nodes}

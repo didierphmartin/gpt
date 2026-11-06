@@ -22,6 +22,10 @@ Routing them in app/routes.py is guarded — see the `run`/`chat` docstrings.
 """
 from __future__ import annotations
 
+import sqlite3
+
+import pymysql
+
 from app.agent_team.models.agent import Agent
 from app.agent_team.services.agent_repository import AgentRepository
 from app.agent_team.services.agent_runner import AgentRunner
@@ -99,8 +103,9 @@ class AgentController:
         # Remove null filters (PHP: array_filter($filters, fn($v) => $v !== null))
         filters = {k: v for k, v in filters.items() if v is not None}
 
-        agents = self.repository.findAccessibleByUser(userId, filters)
-        total = self.repository.countAccessible(userId)
+        robotId = self._robotFor(userId)
+        agents = self.repository.findAccessibleByUser(userId, filters, robotId)
+        total = self.repository.countAccessible(userId, robotId)
 
         return {
             'success': True,
@@ -187,7 +192,7 @@ class AgentController:
         userId = self.getUserId(request)
         agentId = php_intval(id)
 
-        if not self.repository.canUserAccess(userId, agentId):
+        if not self.repository.canUserAccess(userId, agentId, self._robotFor(userId)):
             return self.error('Agent not found', 404)
 
         agent = self.repository.findById(agentId)
@@ -211,11 +216,17 @@ class AgentController:
         agentId = php_intval(id)
         data = request.get('body') if request.get('body') is not None else {}
 
-        # Check ownership (only owner can update)
-        if not self.repository.isOwner(userId, agentId):
+        # Check ownership (only owner can update; a robot agent is also editable by robot-permitted users, by id)
+        if not self.repository.isOwner(userId, agentId, self._robotFor(userId)):
             return self.error('Agent not found or access denied', 404)
 
         agent = self.repository.findById(agentId)
+
+        # Names are unique per owner: a robot agent renamed onto another robot agent's name.
+        if data.get('name') is not None:
+            holder = self.repository.findOwnedByName(php_strval(data['name']), agent.getUserId())
+            if holder is not None and holder.getId() != agentId:
+                return self._nameTaken(php_strval(data['name']))
 
         # Update fields (isset -> `is not None`; array_key_exists -> `in data`)
         if data.get('name') is not None:
@@ -251,7 +262,12 @@ class AgentController:
 
         # Only a playbook agent has a playbook; a linked agent keeps its text in the collection only.
         if 'playbook_id' in data and data['playbook_id'] is not None and agent.getAgentType() == 'playbook':
-            if self._findPlaybook(userId, php_intval(data['playbook_id'])) is None:
+            # a robot agent links only the robot's playbooks (it runs as the robot); a person's, theirs or the robot's
+            robotId = self._robotFor(userId)
+            pb = (self._findPlaybook(robotId, php_intval(data['playbook_id']), robotId)
+                  if robotId is not None and agent.getUserId() == robotId
+                  else self._findPlaybook(userId, php_intval(data['playbook_id']), robotId))
+            if pb is None:
                 return self.error('Playbook #' + str(php_intval(data['playbook_id'])) + ' not found', 404)
             agent.setPlaybookId(php_intval(data['playbook_id']))
         elif 'playbook_id' in data and data['playbook_id'] is None:
@@ -277,6 +293,10 @@ class AgentController:
                 'data': updated.toArray(),
                 'message': f"Agent '{updated.getName()}' updated successfully",
             }
+        except (pymysql.err.IntegrityError, sqlite3.IntegrityError) as e:   # PDOException SQLSTATE 23000
+            if data.get('name') is not None:
+                return self._nameTaken(php_strval(data['name']))   # lost a race for the name
+            return self.error(f'Failed to update agent: {e}', 500)
         except Exception as e:  # noqa: BLE001
             return self.error(f'Failed to update agent: {e}', 500)
 
@@ -289,7 +309,7 @@ class AgentController:
         userId = self.getUserId(request)
         agentId = php_intval(id)
 
-        if not self.repository.isOwner(userId, agentId):
+        if not self.repository.isOwner(userId, agentId, self._robotFor(userId)):
             return self.error('Agent not found or access denied', 404)
 
         agent = self.repository.findById(agentId)
@@ -492,7 +512,7 @@ class AgentController:
         agentId = php_intval(id)
         data = request.get('body') if request.get('body') is not None else {}
 
-        if not self.repository.canUserAccess(userId, agentId):
+        if not self.repository.canUserAccess(userId, agentId, self._robotFor(userId)):
             return self.error('Agent not found', 404)
 
         newName = data.get('name')
@@ -520,7 +540,7 @@ class AgentController:
         userId = self.getUserId(request)
         agentId = php_intval(id)
 
-        if not self.repository.isOwner(userId, agentId):
+        if not self.repository.isOwner(userId, agentId, self._robotFor(userId)):
             return self.error('Agent not found or access denied', 404)
 
         try:
@@ -549,7 +569,7 @@ class AgentController:
         userId = self.getUserId(request)
         agentId = php_intval(id)
 
-        if not self.repository.isOwner(userId, agentId):
+        if not self.repository.isOwner(userId, agentId, self._robotFor(userId)):
             return self.error('Agent not found or access denied', 404)
 
         try:
@@ -796,10 +816,18 @@ class AgentController:
         """PHP 782-785."""
         return php_intval(request.get('user_id') if request.get('user_id') is not None else 0)
 
-    def _findPlaybook(self, userId: int, id: int):
-        """PHP findPlaybook: the user's own playbook row, or None."""
+    def _findPlaybook(self, userId: int, id: int, robotId: int | None = None):
+        """PHP findPlaybook: the user's playbook row (or the robot's shared one with robotId), or None."""
         from app.playbook.playbook_store import PlaybookStore
-        return PlaybookStore(self.db).get(userId, id)
+        return PlaybookStore(self.db).get(userId, id, robotId)
+
+    def _robotFor(self, userId: int) -> int | None:
+        """The robot's id when the caller may use the robot (its agents are shared), else None."""
+        from app.services.robot_ownership import RobotOwnership
+        return RobotOwnership(self.db, self.config).robotFor(userId)
+
+    def _nameTaken(self, name: str) -> dict:
+        return {'error_code': 'name_taken', **self.error(f'An agent named "{name}" already exists.', 409)}
 
     def _playbookAgentToolsForUser(self, user_id: int, text: str) -> list:
         """Port of PlaybookAgentTools::forUser (backend/src/AgentTeam/Services/

@@ -14,7 +14,7 @@ from typing import Protocol
 
 
 class RunSpawner(Protocol):
-    def start(self, key: int, scheduleId: int) -> None:
+    def start(self, key: str, scheduleId: int) -> None:
         """Start the run of schedule `scheduleId` for key (a user id)."""
 
     def done(self) -> dict:
@@ -33,7 +33,7 @@ class ProcRunSpawner:
         self.backendDir = backendDir
         self.runLimitS = runLimitS
         self.log = log if log is not None else (lambda line: None)
-        self.runs: dict[int, dict] = {}
+        self.runs: dict[str, dict] = {}
         self.tick: subprocess.Popen | None = None
         self.tickStarted = 0.0
 
@@ -43,13 +43,13 @@ class ProcRunSpawner:
         except OSError:
             return None
 
-    def start(self, key: int, scheduleId: int) -> None:
+    def start(self, key: str, scheduleId: int) -> None:
         if key in self.runs:
-            self.log(f'run for user {key} is still in flight: schedule {scheduleId} not started')
-            raise RuntimeError(f'a run for user {key} is still in flight')
+            self.log(f'run {key} is still in flight: schedule {scheduleId} not started')
+            raise RuntimeError(f'a run {key} is still in flight')
         proc = self._spawn([self.RUN_MODULE, str(scheduleId)])
         if proc is None:
-            self.log(f'run for user {key} (schedule {scheduleId}) could not start')
+            self.log(f'run {key} (schedule {scheduleId}) could not start')
         self.runs[key] = {'proc': proc, 'started': time.time()}
 
     def done(self) -> dict:
@@ -63,7 +63,7 @@ class ProcRunSpawner:
                 continue
             code = proc.poll()
             if code is None and time.time() - r['started'] > self.runLimitS:
-                self.log(f'run for user {key} passed {self.runLimitS} s: killed')
+                self.log(f'run {key} passed {self.runLimitS} s: killed')
                 proc.kill()
                 proc.wait()
                 code = 137

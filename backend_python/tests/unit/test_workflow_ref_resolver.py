@@ -10,6 +10,8 @@ from app.agent_team.services.workflow_ref_resolver import UnresolvedRefsExceptio
 from app.agent_team.services.workflow_repository import WorkflowRepository
 from tests.unit.code_component_schema import schema_db
 
+pytestmark = pytest.mark.usefixtures('no_robot')
+
 
 def comp(db, user, name, exits):
     db.execute("INSERT INTO code_components (user_id, name, code, exits, mcp_servers) VALUES (?, ?, 'c', ?, '[]')",
@@ -119,6 +121,7 @@ def ctl():
     c = WorkflowController.__new__(WorkflowController)   # PHP: newInstanceWithoutConstructor
     repo = WorkflowRepository(db)
     c.db = db
+    c.config = {}
     c.workflowRepository = repo
     c.graphRepository = repo.getGraphRepository()
     return c

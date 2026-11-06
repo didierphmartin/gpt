@@ -21,6 +21,7 @@ from app.code_component.code_component_error import CodeComponentError
 from app.code_component.code_component_store import CodeComponentStore
 from app.exceptions.invalid_argument import InvalidArgumentException
 from app.support.logger import error_log
+from app.services.robot_ownership import RobotOwnership
 from app.support.phpcompat import php_coalesce, php_empty, php_intval, php_strval, php_trim
 
 _VALID_REPEAT_TYPES = ScheduledWorkflowService.REPEAT_TYPES
@@ -33,6 +34,33 @@ class ScheduledWorkflowController:
         self.config = config
         self.scheduleService = ScheduledWorkflowService(db)
         self.workflowRepository = WorkflowRepository(db)
+
+    def _lockedGuard(self, userId: int, workflowId: int) -> dict | None:
+        """The 423 body when the workflow is a running robot workflow, else None."""
+        from app.agent_team.controllers.workflow_controller import WorkflowController
+        own = RobotOwnership(self.db, self.config)
+        # only a caller who may see the workflow learns it is locked; everyone else gets the usual 404 below
+        if (workflowId <= 0 or not self.workflowRepository.canUserAccess(userId, workflowId, own.robotFor(userId))
+                or not own.isLocked(workflowId)):
+            return None
+        row = self.db.fetch_one('SELECT name FROM agent_workflows WHERE id = ?', [workflowId])
+        return WorkflowController.lockedResponse('' if row is None else php_strval(row['name']))
+
+    def _owner(self, userId: int, workflowId: int) -> int:
+        """Who a schedule of this workflow belongs to: the robot for a robot workflow the caller may use, else the caller."""
+        return RobotOwnership(self.db, self.config).runAs(userId, workflowId) if workflowId > 0 else userId
+
+    def _scheduleWorkflowId(self, scheduleId: int) -> int:
+        row = self.scheduleService.findById(scheduleId) or {}
+        return php_intval(row.get('workflow_id') if row.get('workflow_id') is not None else 0)
+
+    def _ownerForSchedule(self, userId: int, scheduleId: int) -> int:
+        """The schedule's owner as _owner() decides it for its workflow."""
+        return self._owner(userId, self._scheduleWorkflowId(scheduleId))
+
+    def _lockedGuardForSchedule(self, userId: int, scheduleId: int) -> dict | None:
+        """The 423 body when the schedule belongs to a running robot workflow, else None."""
+        return self._lockedGuard(userId, self._scheduleWorkflowId(scheduleId))
 
     # ========================================================================
     # GET /api/v1/schedules
@@ -63,8 +91,11 @@ class ScheduledWorkflowController:
         if not userId:
             return {'success': False, 'error': 'Authentication required', 'status_code': 401}
 
+        # a robot workflow's schedule is the robot's, and so is its Start option
+        owner = self._owner(php_intval(userId), php_intval(body.get('workflow_id') if body.get('workflow_id') is not None else 0))
+
         try:   # a Start option names its component; the component supplies the event (spec §3)
-            body = CodeComponentStore(self.db).scheduleBody(php_intval(userId), body)
+            body = CodeComponentStore(self.db).scheduleBody(owner, body)
         except CodeComponentError as e:
             return {'success': False, 'error': str(e), 'kind': e.kind, 'status_code': e.status}
 
@@ -74,9 +105,13 @@ class ScheduledWorkflowController:
         if php_empty(body.get('scheduled_time')):
             return {'success': False, 'error': 'Scheduled time is required', 'status_code': 400}
 
+        locked = self._lockedGuard(php_intval(userId), php_intval(body['workflow_id']))
+        if locked:
+            return locked
+
         # Verify the workflow exists and belongs to the user
         workflow = self.workflowRepository.findById(php_intval(body['workflow_id']))
-        if not workflow or workflow.getUserId() != userId:
+        if not workflow or workflow.getUserId() != owner:
             return {'success': False, 'error': 'Workflow not found', 'status_code': 404}
 
         # Validate repeat_type if provided
@@ -98,7 +133,7 @@ class ScheduledWorkflowController:
 
         try:
             schedule = self.scheduleService.create({
-                'user_id': userId,
+                'user_id': owner,
                 'workflow_id': php_intval(body['workflow_id']),
                 'input_prompt': body.get('input_prompt'),
                 'scheduled_time': body['scheduled_time'],
@@ -134,7 +169,7 @@ class ScheduledWorkflowController:
         try:
             schedule = self.scheduleService.findById(scheduleId)
 
-            if not schedule or schedule['user_id'] != userId:
+            if not schedule or php_intval(schedule['user_id']) != self._owner(php_intval(userId), php_intval(schedule.get('workflow_id'))):
                 return {'success': False, 'error': 'Schedule not found', 'status_code': 404}
 
             return {'success': True, 'data': schedule, 'status_code': 200}
@@ -154,10 +189,15 @@ class ScheduledWorkflowController:
         if not userId:
             return {'success': False, 'error': 'Authentication required', 'status_code': 401}
 
+        locked = self._lockedGuardForSchedule(php_intval(userId), scheduleId)
+        if locked:
+            return locked
+
         try:   # a Start option names its component; the component supplies the event (spec §3)
             existingRow = self.scheduleService.findById(scheduleId) if not php_empty(body.get('trigger_component_id')) else None
             body = CodeComponentStore(self.db).scheduleBody(
-                php_intval(userId), body, php_intval((existingRow or {}).get('workflow_id') or 0))
+                self._ownerForSchedule(php_intval(userId), scheduleId), body,
+                php_intval((existingRow or {}).get('workflow_id') or 0))
         except CodeComponentError as e:
             return {'success': False, 'error': str(e), 'kind': e.kind, 'status_code': e.status}
 
@@ -175,7 +215,7 @@ class ScheduledWorkflowController:
                 return {'success': False, 'error': 'Invalid cron expression', 'status_code': 400}
 
         try:
-            schedule = self.scheduleService.update(scheduleId, userId, body)
+            schedule = self.scheduleService.update(scheduleId, self._ownerForSchedule(php_intval(userId), scheduleId), body)
 
             if not schedule:
                 return {'success': False, 'error': 'Schedule not found', 'status_code': 404}
@@ -204,8 +244,12 @@ class ScheduledWorkflowController:
         if not userId:
             return {'success': False, 'error': 'Authentication required', 'status_code': 401}
 
+        locked = self._lockedGuardForSchedule(php_intval(userId), scheduleId)
+        if locked:
+            return locked
+
         try:
-            deleted = self.scheduleService.delete(scheduleId, userId)
+            deleted = self.scheduleService.delete(scheduleId, self._ownerForSchedule(php_intval(userId), scheduleId))
 
             if not deleted:
                 return {'success': False, 'error': 'Schedule not found', 'status_code': 404}
@@ -227,8 +271,12 @@ class ScheduledWorkflowController:
         if not userId:
             return {'success': False, 'error': 'Authentication required', 'status_code': 401}
 
+        locked = self._lockedGuardForSchedule(php_intval(userId), scheduleId)
+        if locked:
+            return locked
+
         try:
-            paused = self.scheduleService.pause(scheduleId, userId)
+            paused = self.scheduleService.pause(scheduleId, self._ownerForSchedule(php_intval(userId), scheduleId))
 
             if not paused:
                 return {
@@ -254,8 +302,12 @@ class ScheduledWorkflowController:
         if not userId:
             return {'success': False, 'error': 'Authentication required', 'status_code': 401}
 
+        locked = self._lockedGuardForSchedule(php_intval(userId), scheduleId)
+        if locked:
+            return locked
+
         try:
-            resumed = self.scheduleService.resume(scheduleId, userId)
+            resumed = self.scheduleService.resume(scheduleId, self._ownerForSchedule(php_intval(userId), scheduleId))
 
             if not resumed:
                 return {
@@ -307,7 +359,7 @@ class ScheduledWorkflowController:
             return {'success': False, 'error': 'Authentication required', 'status_code': 401}
 
         try:
-            schedules = self.scheduleService.findByWorkflow(workflowId, userId)
+            schedules = self.scheduleService.findByWorkflow(workflowId, self._owner(php_intval(userId), workflowId))
             return {'success': True, 'data': schedules, 'count': len(schedules), 'status_code': 200}
         except Exception as e:  # noqa: BLE001
             return {'success': False, 'error': str(e), 'status_code': 500}

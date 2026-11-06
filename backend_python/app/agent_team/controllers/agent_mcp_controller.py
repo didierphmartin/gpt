@@ -43,6 +43,12 @@ class AgentMCPController:
     SERVER_NAME = 'AgentTeam'
     SERVER_VERSION = '1.0.0'
 
+    def _robotFor(self, userId) -> int | None:
+        """The robot's id when the caller may use the robot (its agents are shared), else None."""
+        from app.services.robot_ownership import RobotOwnership
+        from app.support.phpcompat import php_intval
+        return RobotOwnership(self.db, self.config).robotFor(php_intval(userId))
+
     def __init__(self, db, config):
         """PHP 46-70."""
         self.db = db
@@ -190,7 +196,7 @@ class AgentMCPController:
             raise _InvalidArgument('agent_id is required')
 
         agentId = php_intval(agentId)
-        if not self.repository.canUserAccess(userId, agentId):
+        if not self.repository.canUserAccess(userId, agentId, self._robotFor(userId)):
             raise _InvalidArgument('Agent not found')
 
         agent = self.repository.findById(agentId)
@@ -234,7 +240,7 @@ class AgentMCPController:
             raise _InvalidArgument('agent_id is required')
 
         agentId = php_intval(agentId)
-        if not self.repository.isOwner(userId, agentId):
+        if not self.repository.isOwner(userId, agentId, self._robotFor(userId)):
             raise _InvalidArgument('Agent not found or access denied')
 
         agent = self.repository.findById(agentId)
@@ -279,7 +285,7 @@ class AgentMCPController:
             raise _InvalidArgument('agent_id is required')
 
         agentId = php_intval(agentId)
-        if not self.repository.isOwner(userId, agentId):
+        if not self.repository.isOwner(userId, agentId, self._robotFor(userId)):
             raise _InvalidArgument('Agent not found or access denied')
 
         self.repository.delete(agentId)

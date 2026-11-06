@@ -16,10 +16,10 @@ from app.services.mcp_endpoint import McpEndpoint
 
 
 class WatchTransport(Protocol):
-    def start(self, key: int, url: str, headers: list[str], body: str) -> None:
+    def start(self, key: str, url: str, headers: list[str], body: str) -> None:
         """headers: header lines ("Name: value")."""
 
-    def cancel(self, key: int) -> None: ...
+    def cancel(self, key: str) -> None: ...
 
     def done(self) -> dict:
         """{key: (body | False, http code, error)} for the requests that finished since the last call."""
@@ -33,7 +33,7 @@ class HttpWatchTransport:
 
     def __init__(self, max_workers: int = 64):
         self._pool = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='watch')
-        self._handles: dict[int, concurrent.futures.Future] = {}
+        self._handles: dict[str, concurrent.futures.Future] = {}
         self._lock = threading.Lock()
 
     @classmethod
@@ -49,12 +49,12 @@ class HttpWatchTransport:
         except Exception as e:  # noqa: BLE001 -- curl reports every transport failure as an error string
             return False, 0, str(e) or e.__class__.__name__
 
-    def start(self, key: int, url: str, headers: list[str], body: str) -> None:
+    def start(self, key: str, url: str, headers: list[str], body: str) -> None:
         self.cancel(key)
         with self._lock:
             self._handles[key] = self._pool.submit(self._post, url, headers, body)
 
-    def cancel(self, key: int) -> None:
+    def cancel(self, key: str) -> None:
         # A request already on the wire cannot be interrupted from here: it is forgotten, so its answer is dropped.
         with self._lock:
             f = self._handles.pop(key, None)

@@ -43,6 +43,6 @@ def test_update_used_by_and_delete(c):
     id_ = c.create(req({'text': OKTA}))['data']['id']
     u = c.update(req({'text': OKTA, 'pkey': 'okta-reset'}, {'id': id_}))
     assert u['data']['pkey'] == 'okta-reset'
-    assert c.usedBy(req({}, {'id': id_}))['data'] == {'agents': [], 'nodes': []}
+    assert c.usedBy(req({}, {'id': id_}))['data'] == {'agents': [], 'nodes': [], 'others': 0}
     assert c.destroy(req({}, {'id': id_}))['success'] is True
     assert c.index(req())['data'] == []

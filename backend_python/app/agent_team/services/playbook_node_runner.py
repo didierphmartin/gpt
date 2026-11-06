@@ -65,8 +65,9 @@ class PlaybookNodeRunner:
         self.pdoFactory = pdoFactory
 
     def run(self, userId: int, nodeConfig: dict, requestText: str, emit: Callable[[dict], None],
-            unattended: bool = False) -> dict:
-        """unattended: no human present, any gate ends the run as handed_off.
+            unattended: bool = False, mcpUserId: int | None = None) -> dict:
+        """unattended: no human present, any gate ends the run as handed_off. mcpUserId: whose MCP servers the tools
+        come from (a robot workflow's: the robot); default userId.
         @return {output: str, run_id: int, status: str, gate: str|None}"""
         # PHP sets default_socket_timeout / mysqlnd.net_read_timeout to 30s here
         # (playbook legs are long-lived and a dead connection with no read
@@ -88,7 +89,8 @@ class PlaybookNodeRunner:
             doc = PlaybookDocument.fromArray(arr)
 
         pdo = self.pdoFactory() if self.pdoFactory is not None else self._defaultPdo()
-        mcp = self.mcpFactory(pdo, userId) if self.mcpFactory is not None else self._defaultMcp(pdo, userId)
+        mcpUser = mcpUserId if mcpUserId is not None else userId
+        mcp = self.mcpFactory(pdo, mcpUser) if self.mcpFactory is not None else self._defaultMcp(pdo, mcpUser)
 
         # Bound agent.* targets have no real invocation path yet (see
         # PlaybookActionSpace's constructor comment), so there is no need to

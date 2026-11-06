@@ -438,6 +438,7 @@ ROUTES = [
     ('GET', '/api/v1/workflows/runs/{runId:[a-f0-9]{32}}/events', ('AgentTeam:WorkflowController', 'runEvents')),
     ('POST', '/api/v1/workflows/{id:\\d+}/toggle', ('AgentTeam:WorkflowController', 'toggle')),
     ('POST', '/api/v1/workflows/{id:\\d+}/duplicate', ('AgentTeam:WorkflowController', 'duplicate')),
+    ('PUT', '/api/v1/workflows/{id:\\d+}/owner', ('AgentTeam:WorkflowController', 'owner')),
     ('GET', '/api/v1/workflows/{id:\\d+}/outputs', ('AgentTeam:WorkflowController', 'listOutputs')),
     ('GET', '/api/v1/workflows/{id:\\d+}/outputs/{filename}', ('AgentTeam:WorkflowController', 'getOutput')),
     ('POST', '/api/v1/workflows/{id:\\d+}/nodes/{nodeId:\\d+}/documents',
@@ -528,6 +529,7 @@ ROUTES = [
     ('GET', '/api/v1/workflows/active', ('AgentTeam:ActiveWorkflowController', 'show')),
     ('POST', '/api/v1/workflows/{id:\\d+}/activate', ('AgentTeam:ActiveWorkflowController', 'activate')),
     ('DELETE', '/api/v1/workflows/{id:\\d+}/activate', ('AgentTeam:ActiveWorkflowController', 'deactivate')),
+    ('GET', '/api/v1/workflows/{id:\\d+}/active', ('AgentTeam:ActiveWorkflowController', 'forWorkflow')),
     # SCHEDULER (routes.php:464-465. `/scheduler/run` is public — see
     # app/middleware/processor.py PUBLIC_ROUTES.)
     ('POST', '/api/v1/scheduler/run', ('AgentTeam:SchedulerController', 'run')),

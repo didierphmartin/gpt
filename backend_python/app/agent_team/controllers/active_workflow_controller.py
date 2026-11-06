@@ -1,10 +1,13 @@
 """Port of backend/src/AgentTeam/Controllers/ActiveWorkflowController.php.
 
-▶ on Start activates the workflow the event worker runs (spec 2026-10-14 event-worker §2). One per user.
+▶ on Start activates the workflow the event worker runs (spec 2026-10-14 event-worker §2). One per person; a robot
+workflow's row is the robot's, and every user who may use the robot activates and deactivates (= Unlock) it.
 """
 from __future__ import annotations
 
 from app.agent_team.services.active_workflow_service import ActiveWorkflowError, ActiveWorkflowService
+from app.agent_team.services.workflow_repository import WorkflowRepository
+from app.services.robot_ownership import RobotOwnership
 from app.support.phpcompat import php_intval
 
 
@@ -12,7 +15,19 @@ class ActiveWorkflowController:
     # main.py passes path params positionally too (`fn(ctx, *params)`); the id is read from
     # request['params'] as in PHP, so the positional copy is accepted and ignored.
     def __init__(self, db, config):
-        self.active = ActiveWorkflowService(db)
+        self.active = ActiveWorkflowService(db, self._skillPolicy(db, config))
+        self.ownership = RobotOwnership(db, config)
+        self.workflows = WorkflowRepository(db)
+
+    @staticmethod
+    def _skillPolicy(db, config):
+        """The RobotSkillPolicy the robot's activations check (PHP: new RobotSkillPolicy($db, $config, SkillStore::fromEnv($config)))."""
+        try:
+            from app.services.robot_skill_policy import RobotSkillPolicy
+            from app.services.skill_store import SkillStore
+        except ImportError:   # the skill store port lands with the skill-store routes
+            return None
+        return RobotSkillPolicy(db, config, SkillStore.fromEnv(config))
 
     @staticmethod
     def _user(request: dict) -> int:
@@ -24,26 +39,45 @@ class ActiveWorkflowController:
         return php_intval(params.get('id') if params.get('id') is not None else 0)
 
     def show(self, request: dict) -> dict:
-        """GET /api/v1/workflows/active"""
+        """GET /api/v1/workflows/active: the caller's own row."""
         userId = self._user(request)
         if not userId:
             return {'success': False, 'error': 'Authentication required', 'status_code': 401}
         return {'success': True, 'data': self.active.get(userId), 'status_code': 200}
 
+    def forWorkflow(self, request: dict, id=None) -> dict:
+        """GET /api/v1/workflows/{id}/active: the workflow's row, the robot's for a robot workflow."""
+        return self._guarded(request, lambda userId, workflowId:
+                             {'success': True, 'data': self.active.forWorkflow(workflowId), 'status_code': 200})
+
     def activate(self, request: dict, id=None) -> dict:
         """POST /api/v1/workflows/{id}/activate"""
-        userId = self._user(request)
-        if not userId:
-            return {'success': False, 'error': 'Authentication required', 'status_code': 401}
-        try:
-            return {'success': True, 'data': self.active.activate(userId, self._id(request)), 'status_code': 200}
-        except ActiveWorkflowError as e:
-            return {'success': False, 'error': str(e), 'kind': e.kind, 'status_code': e.status}
+        def fn(userId: int, workflowId: int) -> dict:
+            try:
+                data = self.active.activate(self.ownership.runAs(userId, workflowId), workflowId)
+                return {'success': True, 'data': data, 'status_code': 200}
+            except ActiveWorkflowError as e:
+                return {'success': False, 'error': str(e), 'kind': e.kind, 'error_code': e.kind, 'status_code': e.status}
+            except Exception as e:  # noqa: BLE001 -- PrivateSkillsRefused (the skill store port), re-raised otherwise
+                if type(e).__name__ == 'PrivateSkillsRefused':
+                    from app.services.robot_skill_policy import RobotSkillPolicy
+                    return RobotSkillPolicy.refusal(e.skills)
+                raise
+        return self._guarded(request, fn)
 
     def deactivate(self, request: dict, id=None) -> dict:
         """DELETE /api/v1/workflows/{id}/activate"""
+        def fn(userId: int, workflowId: int) -> dict:
+            self.active.deactivate(self.ownership.runAs(userId, workflowId), workflowId)
+            return {'success': True, 'status_code': 200}
+        return self._guarded(request, fn)
+
+    def _guarded(self, request: dict, fn) -> dict:
+        """Authenticated, and the workflow is the caller's or a robot workflow the caller may use; else 404, nothing more."""
         userId = self._user(request)
         if not userId:
             return {'success': False, 'error': 'Authentication required', 'status_code': 401}
-        self.active.deactivate(userId, self._id(request))
-        return {'success': True, 'status_code': 200}
+        workflowId = self._id(request)
+        if not self.workflows.canUserAccess(userId, workflowId, self.ownership.robotFor(userId)):
+            return {'success': False, 'error': 'Workflow not found', 'kind': 'not_found', 'status_code': 404}
+        return fn(userId, workflowId)

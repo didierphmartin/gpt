@@ -7,6 +7,7 @@ from __future__ import annotations
 from app.playbook.playbook_store import PlaybookStore, PlaybookStoreError
 from app.services.robot_account import RobotAccount
 from app.services.robot_policy import RobotPolicy
+from app.services.robot_ownership import RobotOwnership
 from app.support.phpcompat import php_intval, php_trim
 
 
@@ -17,10 +18,11 @@ class PlaybooksController:
         self.db = db
         self.store = PlaybookStore(db)
         self.policy = RobotPolicy(db, config)
+        self.ownership = RobotOwnership(db, config)
 
     def index(self, request: dict) -> dict:
         def action(u):
-            rows = self.store.list(u)
+            rows = self.store.list(u, self.ownership.robotFor(u))
             # `published` only for a caller who can use the robot.
             if self.policy.canUse(u):
                 robotId = RobotAccount.id(self.db)
@@ -43,7 +45,7 @@ class PlaybooksController:
     def show(self, request: dict, id: int = 0) -> dict:
         def action(u):
             id = self._id(request)
-            row = self.store.get(u, id)
+            row = self.store.get(u, id, self.ownership.robotFor(u))
             if row is None:
                 raise PlaybookStoreError('not_found', f'Playbook #{id} not found', 404)
             return {'success': True, 'data': row}
@@ -51,24 +53,26 @@ class PlaybooksController:
 
     def create(self, request: dict) -> dict:
         return self._guard(request, lambda u: {
-            'success': True, 'data': self.store.save(u, None, self._text(request), self._key(request))})
+            'success': True, 'data': self.store.save(u, None, self._text(request), self._key(request), self.ownership.robotFor(u))})
 
     def update(self, request: dict, id: int = 0) -> dict:
         return self._guard(request, lambda u: {
-            'success': True, 'data': self.store.save(u, self._id(request), self._text(request), self._key(request))})
+            'success': True, 'data': self.store.save(u, self._id(request), self._text(request), self._key(request),
+                                                    self.ownership.robotFor(u))})
 
     def destroy(self, request: dict, id: int = 0) -> dict:
         def action(u):
-            self.store.delete(u, self._id(request))
+            self.store.delete(u, self._id(request), self.ownership.robotFor(u))
             return {'success': True}
         return self._guard(request, action)
 
     def usedBy(self, request: dict, id: int = 0) -> dict:
         def action(u):
             id = self._id(request)
-            if self.store.get(u, id) is None:
+            robot = self.ownership.robotFor(u)
+            if self.store.get(u, id, robot) is None:
                 raise PlaybookStoreError('not_found', f'Playbook #{id} not found', 404)
-            return {'success': True, 'data': self.store.usedBy(u, id)}
+            return {'success': True, 'data': self.store.usedBy(u, id, robot)}
         return self._guard(request, action)
 
     @staticmethod

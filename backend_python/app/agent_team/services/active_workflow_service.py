@@ -1,13 +1,18 @@
 """Port of backend/src/AgentTeam/Services/ActiveWorkflowService.php and ActiveWorkflowError.php.
 
 The workflow each user activated with ▶ on Start (spec 2026-10-14 event-worker): the event worker runs it on its
-schedule, or on its Start option's event. One per user. Ticking a mode never activates; a mode change deactivates.
+schedule, or on its Start option's event. One per person; the robot keeps one per workflow (several robot workflows
+watch at once). Ticking a mode never activates; a mode change deactivates.
 """
 from __future__ import annotations
 
 import json
 from datetime import datetime
 
+import pymysql
+import sqlite3
+
+from app.services.robot_account import RobotAccount
 from app.support.phpcompat import php_bool, php_intval, php_trim
 
 
@@ -28,8 +33,10 @@ def _ts(v) -> int:
 class ActiveWorkflowService:
     TIMED = ['none', 'hourly', 'daily', 'weekly', 'monthly', 'cron']
 
-    def __init__(self, db):
+    def __init__(self, db, skills=None):
+        """skills: a RobotSkillPolicy (the robot's activations refuse private skills), or None."""
         self.db = db
+        self.skills = skills
 
     def mode(self, workflowId: int) -> dict:
         """The workflow's input mode, read from its saved data as the editor's StartOptions.active() reads it: the
@@ -65,28 +72,50 @@ class ActiveWorkflowService:
             raise ActiveWorkflowError('no_trigger', 'Pick Set Schedule or a code option first', 422)
         if not self.startHasLinks(workflowId):
             raise ActiveWorkflowError('no_links', 'Start has no links', 422)
-        before = self.get(userId)
+        several = RobotAccount.id(self.db) == userId
+        if several and self.skills is not None:
+            private = self.skills.privateSkills(workflowId)
+            if private:
+                from app.services.private_skills_refused import PrivateSkillsRefused
+                raise PrivateSkillsRefused(private)
+        before = None if several else self.get(userId)
         replaced = ({'workflow_id': php_intval(before['workflow_id']), 'workflow_name': before['workflow_name']}
                     if before and php_intval(before['workflow_id']) != workflowId else None)
         self.db.begin()
         try:
-            self.db.execute('DELETE FROM active_workflows WHERE user_id = ?', [userId])
+            # a person's other active workflow is replaced; the robot's other rows stay
+            self.db.execute('DELETE FROM active_workflows WHERE user_id = ?' + (' AND workflow_id = ?' if several else ''),
+                            [userId, workflowId] if several else [userId])
             self.db.execute("INSERT INTO active_workflows (user_id, workflow_id, mode, trigger_component_id, activated_at, watch_state)\n"
                             "                VALUES (?, ?, ?, ?, NOW(), 'starting')",
                             [userId, workflowId, mode['mode'], mode['component_id']])
             self.db.commit()
-        except BaseException:
+        except BaseException as e:
             self.db.rollback()
+            # Until 2026-10-29_active_workflows_per_workflow.sql runs, the table is keyed by user alone: the robot's
+            # second workflow is a duplicate key there, a refusal and not a server error.
+            if several and isinstance(e, (pymysql.err.IntegrityError, sqlite3.IntegrityError)):
+                raise ActiveWorkflowError('robot_busy', 'The robot can run one workflow at a time until the database is updated.', 409)
             raise
-        return {'active': self.get(userId), 'replaced': replaced}
+        return {'active': self._row(userId, workflowId), 'replaced': replaced}
 
     def deactivate(self, userId: int, workflowId: int) -> None:
         self.db.execute('DELETE FROM active_workflows WHERE user_id = ? AND workflow_id = ?', [userId, workflowId])
 
     def get(self, userId: int) -> dict | None:
-        """The user's active row, or None; ages in seconds from the database's NOW() (the worker's clock)."""
+        """The user's active row (a person has one), or None; ages in seconds from the database's NOW() (the worker's clock)."""
+        return self._fetchAged('a.user_id = ? ORDER BY a.workflow_id', [userId])
+
+    def forWorkflow(self, workflowId: int) -> dict | None:
+        """The workflow's active row, whoever's it is (the robot's for a robot workflow), or None; ages as get()."""
+        return self._fetchAged('a.workflow_id = ? ORDER BY a.user_id', [workflowId])
+
+    def _row(self, userId: int, workflowId: int) -> dict | None:
+        return self._fetchAged('a.user_id = ? AND a.workflow_id = ?', [userId, workflowId])
+
+    def _fetchAged(self, where: str, params: list) -> dict | None:
         row = self.db.fetch_one('SELECT a.*, w.name AS workflow_name, NOW() AS db_now FROM active_workflows a\n'
-                                '            LEFT JOIN agent_workflows w ON w.id = a.workflow_id WHERE a.user_id = ?', [userId])
+                                '            LEFT JOIN agent_workflows w ON w.id = a.workflow_id WHERE ' + where + ' LIMIT 1', params)
         if not row:
             return None
         now = _ts(row['db_now'])
@@ -96,9 +125,11 @@ class ActiveWorkflowService:
         return row
 
     def all(self) -> list[dict]:
-        """Every active row with its workflow's owner and enabled flag (the worker's reconcile)."""
-        return self.db.fetch_all('SELECT a.*, w.user_id AS owner_id, w.enabled FROM active_workflows a\n'
-                                 '            JOIN agent_workflows w ON w.id = a.workflow_id ORDER BY a.user_id')
+        """Every active row with its workflow's owner, enabled flag and the row user's kind ('service' = the robot):
+        the worker's reconcile."""
+        return self.db.fetch_all('SELECT a.*, w.user_id AS owner_id, w.enabled, u.kind AS user_kind FROM active_workflows a\n'
+                                 '            JOIN agent_workflows w ON w.id = a.workflow_id LEFT JOIN users u ON u.id = a.user_id\n'
+                                 '            ORDER BY a.user_id, a.workflow_id')
 
     def check(self, row: dict) -> dict:
         """Whether the worker may serve the row now; a row that may not is idle, not deactivated (fixing it resumes it)."""
@@ -126,9 +157,9 @@ class ActiveWorkflowService:
                 gone.append(php_intval(row['workflow_id']))
         return gone
 
-    def setState(self, userId: int, state: str, message: str | None) -> None:
-        self.db.execute('UPDATE active_workflows SET watch_state = ?, watch_message = ?, watch_checked_at = NOW() WHERE user_id = ?',
-                        [state, message, userId])
+    def setState(self, userId: int, workflowId: int, state: str, message: str | None) -> None:
+        self.db.execute('UPDATE active_workflows SET watch_state = ?, watch_message = ?, watch_checked_at = NOW()\n'
+                        '            WHERE user_id = ? AND workflow_id = ?', [state, message, userId, workflowId])
 
     def scheduleWorkflowIds(self) -> list[int]:
         """The schedule-mode workflows the scheduler tick may run: only the rows that qualify now (check(): enabled,

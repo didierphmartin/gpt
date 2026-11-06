@@ -18,6 +18,8 @@ from app.agent_team.controllers.workflow_controller import WorkflowController
 from app.agent_team.services.workflow_run_log import WorkflowRunLog
 from app.support.http import Ctx
 
+pytestmark = pytest.mark.usefixtures('no_robot')
+
 
 class FakeDb:
     """Records every statement so tests can assert SQL/params. Queued return
@@ -498,7 +500,7 @@ def test_duplicate_not_found_returns_500():
 
 
 def test_duplicate_success_default_name():
-    db = FakeDb(one=[WORKFLOW_ROW, WORKFLOW_ROW, {**WORKFLOW_ROW, 'id': 2, 'name': 'WF A (Copy)'}], insert_id=2)
+    db = FakeDb(one=[WORKFLOW_ROW, WORKFLOW_ROW, None, {**WORKFLOW_ROW, 'id': 2, 'name': 'WF A (Copy)'}], insert_id=2)
     r = wc(db).duplicate(ctx(), 1)
     assert r['success'] is True
     assert r['status_code'] == 201

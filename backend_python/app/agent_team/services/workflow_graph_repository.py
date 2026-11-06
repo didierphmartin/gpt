@@ -5,6 +5,8 @@ Works alongside WorkflowRepository for the parent workflow entity.
 """
 from __future__ import annotations
 
+import os
+
 import time
 
 import pymysql
@@ -48,8 +50,27 @@ class WorkflowGraphRepository:
         rows = self.db.fetch_all(sql, ids)
         return [php_intval(row['workflow_id']) for row in rows]
 
+    def _linkScope(self, workflow_id: int):
+        """Whose rows a workflow's links resolve against, computed once on first use: (owner id, robot id or None).
+        The robot's id when the workflow's owner may use the robot (or is the robot), else None, so a guessed robot
+        id in a node never reveals the robot's code."""
+        scope: dict = {}
+
+        def get() -> tuple:
+            if 'v' not in scope:
+                ownerRow = self.db.fetch_one('SELECT user_id FROM agent_workflows WHERE id = ?', [workflow_id])
+                owner = php_intval(ownerRow['user_id']) if ownerRow else 0
+                from app.services.robot_ownership import RobotOwnership
+                own = RobotOwnership(self.db, {'edition': os.environ.get('GPT_EDITION', '')})
+                scope['v'] = (owner, own.linkRobotFor(owner))
+            return scope['v']
+        return get
+
     def getNodes(self, workflow_id: int) -> list[dict]:
-        """PHP 50-61."""
+        return self._nodesIn(workflow_id, self._linkScope(workflow_id))
+
+    def _nodesIn(self, workflow_id: int, scope) -> list[dict]:
+        """getNodes, with the links resolved in `scope` (_linkScope)."""
         rows = self.db.fetch_all(
             "SELECT * FROM workflow_nodes WHERE workflow_id = ? ORDER BY id", [workflow_id]
         )
@@ -61,19 +82,13 @@ class WorkflowGraphRepository:
 
         # Linked nodes are filled for the workflow's owner, so every reader (compilers, docs) keeps
         # receiving the node's own fields: playbook text, and a code component's body.
-        owner = {'id': None}
-
-        def ownerId() -> int:
-            if owner['id'] is None:
-                ownerRow = self.db.fetch_one('SELECT user_id FROM agent_workflows WHERE id = ?', [workflow_id])
-                owner['id'] = php_intval(ownerRow['user_id']) if ownerRow else 0
-            return owner['id']
+        # links resolve against the owner's rows or the robot's (a personal workflow may link robot rows)
         store = PlaybookStore(self.db)
         for row in result:
             cfg = row['config']
             if row.get('node_type') != 'playbook' or not isinstance(cfg, dict) or cfg.get('playbook_id') is None:
                 continue
-            pb = store.get(ownerId(), php_intval(cfg['playbook_id']))
+            pb = store.get(scope()[0], php_intval(cfg['playbook_id']), scope()[1])
             if pb is None:
                 cfg.pop('playbook', None)
                 cfg['playbook_missing'] = True
@@ -88,7 +103,7 @@ class WorkflowGraphRepository:
             if (not CodeComponentStore.isCodeNode(row.get('node_type'), cfg) or not isinstance(cfg, dict)
                     or php_empty(cfg.get('code_component_id'))):
                 continue
-            c = codeStore.get(ownerId(), php_intval(cfg['code_component_id']))
+            c = codeStore.get(scope()[0], php_intval(cfg['code_component_id']), scope()[1])
             for k in ('code', 'exits', 'mcp_servers', 'timeout_s', 'arg_decls', 'provides', 'code_component_missing'):
                 cfg.pop(k, None)
             if c is None:
@@ -106,7 +121,7 @@ class WorkflowGraphRepository:
             cfg = row['config']
             for k in ('exits', 'start_option_label', 'start_option_missing'):
                 cfg.pop(k, None)
-            c = codeStore.get(ownerId(), cid)
+            c = codeStore.get(scope()[0], cid, scope()[1])
             if c is None or c['start_trigger'] is None:
                 cfg['start_option_missing'] = True
             else:
@@ -124,18 +139,15 @@ class WorkflowGraphRepository:
     def getGraph(self, workflow_id: int) -> dict:
         """Full graph (nodes + edges) for a workflow, as runners and compilers read it: a Start on a Start
         option is expanded into Start -> the option's code node (StartOptionGraph)."""
+        scope = self._linkScope(workflow_id)   # one owner and robot lookup for the nodes and the expansion
         graph = {
-            'nodes': self.getNodes(workflow_id),
+            'nodes': self._nodesIn(workflow_id, scope),
             'edges': self.getEdges(workflow_id),
         }
-        owner = {'id': None}
         codeStore = CodeComponentStore(self.db)
 
         def componentFor(id: int):
-            if owner['id'] is None:
-                ownerRow = self.db.fetch_one('SELECT user_id FROM agent_workflows WHERE id = ?', [workflow_id])
-                owner['id'] = php_intval(ownerRow['user_id']) if ownerRow else 0
-            return codeStore.get(owner['id'], id)
+            return codeStore.get(scope()[0], id, scope()[1])
         return StartOptionGraph.expand(graph, componentFor)
 
     def createNode(self, workflow_id: int, node_data: dict) -> int:

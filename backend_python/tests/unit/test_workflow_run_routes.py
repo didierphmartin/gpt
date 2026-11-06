@@ -34,6 +34,8 @@ from app.agent_team.controllers.workflow_controller import WorkflowController
 from app.agent_team.models.workflow import Workflow
 from app.support.http import Ctx
 
+pytestmark = pytest.mark.usefixtures('no_robot')
+
 CFG = {'auth': {'jwt_secret': 'S'}, 'database': {}, 'contexts_database': {}}
 
 
@@ -90,7 +92,7 @@ def controller(access=True, wf=None, nodes=None) -> WorkflowController:
     a non-empty list -> graph-based (`getNodes()` non-empty)."""
     c = WorkflowController(FakeDb(), CFG)
     wf = wf if wf is not None else workflow()
-    c.workflowRepository.canUserAccess = lambda uid, wid: access
+    c.workflowRepository.canUserAccess = lambda uid, wid, robotId=None: access
     c.workflowRepository.findById = lambda wid, include_graph=False: (wf if access else None)
     c.graphRepository.getNodes = lambda wid: (nodes if nodes is not None else [])
     return c
@@ -145,7 +147,7 @@ class FakePlaybookNodeRunner:
         self.raise_ = None
         FakePlaybookNodeRunner.last_instance = self
 
-    def run(self, userId, nodeConfig, requestText, emit):
+    def run(self, userId, nodeConfig, requestText, emit, unattended=False, mcpUserId=None):
         self.run_calls.append((userId, nodeConfig, requestText))
         if self.raise_:
             raise self.raise_
@@ -269,7 +271,7 @@ def test_run_failure_status_code_500():
 def test_run_exception_returns_500():
     c = controller()
 
-    def boom(uid, wid):
+    def boom(uid, wid, robotId=None):
         raise RuntimeError('db down')
 
     c.workflowRepository.canUserAccess = boom
@@ -297,7 +299,7 @@ def test_run_closes_assistant_on_success():
 def test_run_closes_assistant_on_exception():
     c = controller()
 
-    def boom(uid, wid):
+    def boom(uid, wid, robotId=None):
         raise RuntimeError('db down')
 
     c.workflowRepository.canUserAccess = boom

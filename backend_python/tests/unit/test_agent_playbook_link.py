@@ -41,6 +41,9 @@ def db():
     d = _Db(make_sqlite_db().conn)
     d.execute(PLAYBOOKS_DDL)
     d.execute(AGENTS_DDL)
+    # RobotOwnership asks these (who may use the robot; the robot's id): empty here, so nothing is shared
+    d.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, email TEXT, role TEXT, kind TEXT NOT NULL DEFAULT 'person')")
+    d.execute('CREATE TABLE IF NOT EXISTS packages (role TEXT PRIMARY KEY, name TEXT, builtin INTEGER, capabilities TEXT, updated_at TEXT)')
     return d
 
 
