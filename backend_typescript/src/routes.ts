@@ -295,8 +295,8 @@ router.post('/api/v1/admin/llm-settings/seed', handle((ctx) => systemSettings.se
 router.get('/api/v1/admin/llm-settings/:key', handle((ctx) => systemSettings.getLLMProvider(ctx)));
 router.delete('/api/v1/admin/llm-settings/:key', handle((ctx) => systemSettings.deleteLLMProvider(ctx)));
 
-// Admin — users (protected; AUTHENTICATION ONLY — AdminController.php has NO admin-role check, so
-// these mirror that: no role gate beyond the global auth middleware). :id is digits-only. The
+// Admin — users (protected; every AdminController method checks the caller's admin role in the
+// database first, as PHP's RequiresAdmin does). :id is digits-only. The
 // literal POST /users/update route is distinct from the digit param routes (different method/path).
 router.get('/api/v1/admin/users', handle((ctx) => admin.listUsers(ctx)));
 router.post('/api/v1/admin/users', handle((ctx) => admin.createUser(ctx)));
@@ -377,7 +377,7 @@ router.post('/api/v1/admin/costs/refresh', handle((ctx) => admin.refreshAllCosts
 router.post('/api/v1/admin/costs/refresh-provider', handle((ctx) => admin.refreshProviderCosts(ctx)));
 router.post('/api/v1/admin/exchange-rates/refresh', handle((ctx) => admin.refreshExchangeRates(ctx)));
 
-// Admin — MCP servers (protected; AUTHENTICATION ONLY — AdminController.php has NO admin-role check).
+// Admin — MCP servers (protected; admin-gated in AdminController, as in PHP).
 // Global/per-user MCP server CRUD, distinct from the per-user /api/v1/mcp/servers (MCPServerController).
 // Literal sub-paths (/update, /toggle, /refresh) are registered before the digit-param DELETE route.
 router.get('/api/v1/admin/mcp/servers', handle((ctx) => admin.listMCPServers(ctx)));
