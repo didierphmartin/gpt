@@ -25,6 +25,8 @@ export interface StartTrigger {
 
 export interface CodeComponent {
   id: number;
+  /** The robot's row, as a caller who may use the robot sees it. */
+  is_robot: boolean;
   name: string;
   description: string;
   code: string;
@@ -58,6 +60,8 @@ export interface LinkedNode {
   node_name: string;
   node_id: number;
   is_start: boolean;
+  /** The workflow's owner. */
+  owner: number;
 }
 
 const NAME_MAX = 191;
@@ -66,7 +70,7 @@ const PASS_ARGS_MAX = 20;
 const DECLS_MAX = 20;
 /** An argument or provided name: an identifier (no trailing-newline loophole: JS `$` without the m flag). */
 const DECL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const COLS = sql.raw('id, name, description, code, exits, mcp_servers, timeout_s, start_trigger, args, provides, updated_at');
+const COLS = sql.raw('id, user_id, name, description, code, exits, mcp_servers, timeout_s, start_trigger, args, provides, updated_at');
 
 function isObj(v: unknown): v is Record<string, any> {
   return v !== null && typeof v === 'object';
@@ -134,32 +138,58 @@ export class CodeComponentStore {
     return this.ex.transaction().execute((trx) => fn(new CodeComponentStore(trx)));
   }
 
-  async list(userId: number): Promise<CodeComponent[]> {
-    const rows = (await sql<any>`SELECT ${COLS} FROM code_components WHERE user_id = ${userId} ORDER BY name`.execute(this.ex)).rows
-      .map((r) => this.row(r));
+  /** The owners whose rows a caller sees: the user, and the robot when the caller may use it. */
+  private static owners(userId: number, robotId: number | null): number[] {
+    return robotId === null || robotId === userId ? [userId] : [userId, robotId];
+  }
+
+  /** robotId: also the robot's rows (is_robot = true), for a caller who may use the robot. */
+  async list(userId: number, robotId: number | null = null): Promise<CodeComponent[]> {
+    const o = CodeComponentStore.owners(userId, robotId);
+    const rows = (await sql<any>`SELECT ${COLS} FROM code_components WHERE user_id IN (${sql.join(o)}) ORDER BY name`.execute(this.ex)).rows
+      .map((r) => this.row(r, robotId));
+    const links = await this.linkedNodesOf(userId, rows.map((r) => r.id), robotId); // one scan for the whole list
     for (const r of rows) {
-      r.used_by = (await this.usedBy(userId, r.id)).length;
+      r.used_by = (links.get(r.id) ?? []).length;
     }
     return rows;
   }
 
-  async get(userId: number, id: number): Promise<CodeComponent | null> {
-    const r = (await sql<any>`SELECT ${COLS} FROM code_components WHERE id = ${id} AND user_id = ${userId}`.execute(this.ex)).rows[0];
-    return r ? this.row(r) : null;
+  async get(userId: number, id: number, robotId: number | null = null): Promise<CodeComponent | null> {
+    const o = CodeComponentStore.owners(userId, robotId);
+    const r = (await sql<any>`SELECT ${COLS} FROM code_components WHERE id = ${id} AND user_id IN (${sql.join(o)})`.execute(this.ex)).rows[0];
+    return r ? this.row(r, robotId) : null;
   }
 
-  async getByName(userId: number, name: string): Promise<CodeComponent | null> {
-    const r = (await sql<any>`SELECT ${COLS} FROM code_components WHERE name = ${name} AND user_id = ${userId}`.execute(this.ex)).rows[0];
-    return r ? this.row(r) : null;
+  async getByName(userId: number, name: string, robotId: number | null = null): Promise<CodeComponent | null> {
+    const o = CodeComponentStore.owners(userId, robotId);
+    let found: any = null;
+    for (const r of (await sql<any>`SELECT ${COLS} FROM code_components WHERE name = ${name} AND user_id IN (${sql.join(o)})`.execute(this.ex)).rows) {
+      if (found === null || intval(r.user_id) === userId) found = r; // the user's own row wins over the robot's
+    }
+    return found === null ? null : this.row(found, robotId);
+  }
+
+  private async isRobotComponent(id: number, robotId: number | null): Promise<boolean> {
+    if (robotId === null) return false;
+    return (await sql<any>`SELECT 1 AS one FROM code_components WHERE id = ${id} AND user_id = ${robotId}`.execute(this.ex)).rows.length > 0;
+  }
+
+  /** Whose row id is: the robot's when the caller sees it as the robot's, else the caller. */
+  private async ownerOf(userId: number, id: number, robotId: number | null): Promise<number> {
+    return (await this.get(userId, id, robotId))?.is_robot ? (robotId as number) : userId;
   }
 
   /** Create (id null; an existing name updates that row, as agents do) or update by id. */
-  async save(userId: number, id: number | null, data: Record<string, any>): Promise<CodeComponent> {
+  async save(userId: number, id: number | null, data: Record<string, any>, robotId: number | null = null): Promise<CodeComponent> {
     const c = CodeComponentStore.validate(data);
-    let before = id === null ? null : await this.get(userId, id);
+    const caller = userId;
+    let before = id === null ? null : await this.get(userId, id, robotId);
     if (id !== null && before === null) {
       throw new CodeComponentError('not_found', `Code component #${id} not found`, 404);
     }
+    // a robot component stays the robot's (updated by id); a new one is always the caller's
+    if (before !== null && before.is_robot) userId = robotId as number;
     const clash = await this.getByName(userId, c.name);
     if (id === null && clash !== null) {
       id = clash.id;
@@ -179,9 +209,10 @@ export class CodeComponentStore {
       }
     }
     if (before !== null && !same(before.exits, c.exits) && phpEmpty(data.confirm_drop_links)) {
-      const lost = await this.droppedLinks(userId, id as number, before.exits, c.exits);
+      const lost = await this.droppedLinks(caller, id as number, before.exits, c.exits, robotId);
       if (lost.length > 0) {
-        const what = lost.map((l) => `"${l.exit}" on ${l.node_name} in "${l.workflow_name}"`);
+        const what = lost.map((l) => (l.others !== undefined ? CodeComponentStore.others(l.others)
+          : `"${l.exit}" on ${l.node_name} in "${l.workflow_name}"`));
         throw new CodeComponentError('links_dropped', 'Removing these exits removes the links on '
           + what.join(', ') + '. Save again to confirm.', 409, lost);
       }
@@ -202,80 +233,97 @@ export class CodeComponentStore {
         await sql`UPDATE code_components SET name = ${c.name}, description = ${c.description}, code = ${c.code}, exits = ${exits},
           mcp_servers = ${servers}, timeout_s = ${c.timeout_s}, args = ${args}, provides = ${provides}, updated_at = CURRENT_TIMESTAMP WHERE id = ${cid} AND user_id = ${userId}`.execute(s.ex);
         if (!same(oldExits, c.exits)) {
-          await s.remapExits(userId, cid, oldExits, c.exits);
+          await s.remapExits(userId, cid, oldExits, c.exits, robotId);
         }
       });
     }
-    return (await this.get(userId, id))!;
+    return (await this.get(userId, id, robotId))!;
   }
 
-  async delete(userId: number, id: number): Promise<void> {
-    const c = await this.get(userId, id);
+  async delete(userId: number, id: number, robotId: number | null = null): Promise<void> {
+    const c = await this.get(userId, id, robotId);
     if (c === null) {
       throw new CodeComponentError('not_found', `Code component #${id} not found`, 404);
     }
+    const caller = userId;
+    if (c.is_robot) userId = robotId as number;
     if (c.start_trigger !== null) {
       throw new CodeComponentError('is_option', 'This code component is a Start option: remove the option first.', 409);
     }
-    const used = await this.usedBy(userId, id);
+    const used = await this.usedBy(caller, id, robotId); // every link refuses; only the caller's visible ones are named
     if (used.length > 0) {
-      const names = used.map((n) => `node "${n.node_name}" in workflow "${n.workflow_name}"`);
+      const names = used.map((n: any) => (n.others !== undefined ? CodeComponentStore.others(n.others)
+        : `node "${n.node_name}" in workflow "${n.workflow_name}"`));
       throw new CodeComponentError('in_use', 'This code component is used by ' + names.join(', ') + '.', 409);
     }
     await sql`DELETE FROM code_components WHERE id = ${id} AND user_id = ${userId}`.execute(this.ex);
   }
 
   /** Make the component a Start option (spec §1); the trigger is validated against the component. */
-  async setStartTrigger(userId: number, id: number, trigger: Record<string, any>): Promise<CodeComponent> {
-    const c = await this.get(userId, id);
+  async setStartTrigger(userId: number, id: number, trigger: Record<string, any>, robotId: number | null = null): Promise<CodeComponent> {
+    const c = await this.get(userId, id, robotId);
     if (c === null) throw new CodeComponentError('not_found', `Code component #${id} not found`, 404);
+    if (c.is_robot) userId = robotId as number;
     const t = CodeComponentStore.validateStartTrigger(c, trigger);
+    const robot = c.is_robot;
     await this.inTx(async (s) => {
       await sql`UPDATE code_components SET start_trigger = ${JSON.stringify(t)}, updated_at = CURRENT_TIMESTAMP
         WHERE id = ${id} AND user_id = ${userId}`.execute(s.ex);
       // the schedules already on this option carry a copy of its watch: an edit reaches them too
       const watch = JSON.parse(JSON.stringify(t.watch));
-      const rows = (await sql<any>`SELECT id, workflow_id FROM scheduled_workflows WHERE user_id = ${userId} AND trigger_component_id = ${id}`
-        .execute(s.ex)).rows;
+      const rows = (robot
+        ? await sql<any>`SELECT id, workflow_id FROM scheduled_workflows WHERE trigger_component_id = ${id}`.execute(s.ex)
+        : await sql<any>`SELECT id, workflow_id FROM scheduled_workflows WHERE trigger_component_id = ${id} AND user_id = ${userId}`.execute(s.ex)
+      ).rows;
       for (const r of rows) { // each keeps its own Start's args
         const et = ScheduledWorkflowService.eventTrigger(JSON.stringify(await s.watchWithStartArgs(watch, intval(r.workflow_id), t.pass_args)));
         await sql`UPDATE scheduled_workflows SET event_trigger = ${et} WHERE id = ${r.id}`.execute(s.ex);
       }
     });
-    return (await this.get(userId, id))!;
+    return (await this.get(userId, id, robotId))!;
   }
 
   /** The user's workflows on this option: their schedule runs on it, or their Start shows its exits. */
-  async startTriggerImpact(userId: number, id: number): Promise<Array<{ workflow_id: number; workflow_name: string }>> {
-    const rows = (await sql<any>`SELECT DISTINCT s.workflow_id, w.name FROM scheduled_workflows s
-      JOIN agent_workflows w ON w.id = s.workflow_id
-      WHERE s.user_id = ${userId} AND s.trigger_component_id = ${id}`.execute(this.ex)).rows;
-    const names = new Map<number, string>();
+  async startTriggerImpact(userId: number, id: number, robotId: number | null = null): Promise<Array<{ workflow_id: number; workflow_name: string } | { others: number }>> {
+    const caller = userId;
+    userId = await this.ownerOf(userId, id, robotId);
+    const robot = await this.isRobotComponent(id, robotId); // a robot option is scheduled by any permitted user
+    const rows = (robot
+      ? await sql<any>`SELECT DISTINCT s.workflow_id, w.name, w.user_id FROM scheduled_workflows s
+          JOIN agent_workflows w ON w.id = s.workflow_id WHERE s.trigger_component_id = ${id}`.execute(this.ex)
+      : await sql<any>`SELECT DISTINCT s.workflow_id, w.name, w.user_id FROM scheduled_workflows s
+          JOIN agent_workflows w ON w.id = s.workflow_id WHERE s.trigger_component_id = ${id} AND s.user_id = ${userId}`.execute(this.ex)
+    ).rows;
+    const byWorkflow = new Map<number, { workflow_id: number; workflow_name: string; owner: number }>();
     for (const r of rows) {
-      names.set(intval(r.workflow_id), str(r.name));
+      byWorkflow.set(intval(r.workflow_id), { workflow_id: intval(r.workflow_id), workflow_name: str(r.name), owner: intval(r.user_id) });
     }
-    for (const n of await this.linkedNodes(userId, id)) {
+    for (const n of await this.linkedNodes(caller, id, robotId)) {
       if (n.is_start) {
-        names.set(n.workflow_id, n.workflow_name);
+        byWorkflow.set(n.workflow_id, { workflow_id: n.workflow_id, workflow_name: n.workflow_name, owner: n.owner });
       }
     }
-    return [...names.entries()]
-      .sort((a, b) => phpCompare(a[1], b[1]))
-      .map(([wid, name]) => ({ workflow_id: wid, workflow_name: name }));
+    const [shown, others] = CodeComponentStore.split([...byWorkflow.values()], caller, robotId);
+    shown.sort((a, b) => phpCompare(a.workflow_name, b.workflow_name) || a.workflow_id - b.workflow_id);
+    const out: Array<{ workflow_id: number; workflow_name: string } | { others: number }> =
+      shown.map((r) => ({ workflow_id: r.workflow_id, workflow_name: r.workflow_name }));
+    return others > 0 ? [...out, { others }] : out;
   }
 
   /**
    * Remove the option: its schedule rows are deleted (a 'none' row would still run once at its time) and the
    * component stops being an option. Start nodes on it go back to one port (revertStarts); linked code nodes stay.
    */
-  async clearStartTrigger(userId: number, id: number): Promise<Array<{ workflow_id: number; workflow_name: string }>> {
-    const c = await this.get(userId, id);
+  async clearStartTrigger(userId: number, id: number, robotId: number | null = null): Promise<Array<{ workflow_id: number; workflow_name: string } | { others: number }>> {
+    const c = await this.get(userId, id, robotId);
     if (c === null) throw new CodeComponentError('not_found', `Code component #${id} not found`, 404);
-    const impact = await this.startTriggerImpact(userId, id);
+    const impact = await this.startTriggerImpact(userId, id, robotId); // as the caller sees it
+    if (c.is_robot) userId = robotId as number;
     await this.inTx(async (s) => {
-      await sql`DELETE FROM scheduled_workflows WHERE user_id = ${userId} AND trigger_component_id = ${id}`.execute(s.ex);
+      if (c.is_robot) await sql`DELETE FROM scheduled_workflows WHERE trigger_component_id = ${id}`.execute(s.ex);
+      else await sql`DELETE FROM scheduled_workflows WHERE trigger_component_id = ${id} AND user_id = ${userId}`.execute(s.ex);
       if (c.start_trigger !== null) {
-        await s.revertStarts(userId, id, c.exits, c.start_trigger.work_exit);
+        await s.revertStarts(userId, id, c.exits, c.start_trigger.work_exit, robotId);
       }
       await sql`UPDATE code_components SET start_trigger = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ${id} AND user_id = ${userId}`
         .execute(s.ex);
@@ -341,42 +389,87 @@ export class CodeComponentStore {
     return (nodeType ?? '') !== '' ? nodeType === 'code' : isObj(cfg) && (cfg.type ?? null) === 'code';
   }
 
-  /** The user's workflow code nodes that link to the component, and the Start nodes on its option. */
-  async usedBy(userId: number, id: number): Promise<Array<{ workflow_id: number; workflow_name: string; node_name: string }>> {
-    return (await this.linkedNodes(userId, id)).map(({ node_id: _n, is_start: _s, ...rest }) => rest);
+  /**
+   * The user's workflow code nodes that link to the component, and the Start nodes on its option. A robot component
+   * is linked from every user's workflows: only the caller's own and the robot's are named, the rest end the list as
+   * one {others: number of workflows}.
+   */
+  async usedBy(userId: number, id: number, robotId: number | null = null): Promise<Array<{ workflow_id: number; workflow_name: string; node_name: string } | { others: number }>> {
+    const [shown, others] = CodeComponentStore.split(await this.linkedNodes(userId, id, robotId), userId, robotId);
+    const out: Array<{ workflow_id: number; workflow_name: string; node_name: string } | { others: number }> =
+      shown.map(({ node_id: _n, is_start: _s, owner: _o, ...rest }) => rest);
+    return others > 0 ? [...out, { others }] : out;
   }
 
-  /** usedBy plus each node's workflow_nodes.id. */
-  private async linkedNodes(userId: number, id: number): Promise<LinkedNode[]> {
-    // The link lives in the node's config JSON: decoded here, so the query stays portable (MySQL and SQLite).
-    const rows = (await sql<any>`SELECT n.id AS node_id, n.node_type, n.config, w.id AS workflow_id, w.name AS workflow_name
-      FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id
-      WHERE w.user_id = ${String(userId)} ORDER BY w.name, n.id`.execute(this.ex)).rows;
-    const nodes: LinkedNode[] = [];
+  /** [the rows on workflows the caller may open (their own, the robot's), the number of other workflows]. */
+  private static split<T extends { owner: number; workflow_id: number }>(rows: T[], caller: number, robotId: number | null): [T[], number] {
+    const shown: T[] = [];
+    const hidden = new Set<number>();
     for (const r of rows) {
-      const cfg = decodeJson(r.config);
-      const code = CodeComponentStore.isCodeNode(r.node_type, cfg) && intval(isObj(cfg) ? (cfg.code_component_id ?? 0) : 0) === id;
-      const start = !code && isObj(cfg) && StartOptionGraph.optionId({ node_type: r.node_type, config: cfg }) === id;
-      if (code || start) {
-        nodes.push({
-          workflow_id: intval(r.workflow_id), workflow_name: str(r.workflow_name),
-          node_name: start ? 'Start' : str(cfg?.name ?? 'Code'), node_id: intval(r.node_id), is_start: start,
-        });
+      if (r.owner === caller || (robotId !== null && r.owner === robotId)) shown.push(r);
+      else hidden.add(r.workflow_id);
+    }
+    return [shown, hidden.size];
+  }
+
+  /** "2 other workflows", for a message. */
+  private static others(n: number): string {
+    return n === 1 ? '1 other workflow' : `${n} other workflows`;
+  }
+
+  /** usedBy, unfiltered, plus each node's workflow_nodes.id and its workflow's owner. */
+  private async linkedNodes(userId: number, id: number, robotId: number | null = null): Promise<LinkedNode[]> {
+    return (await this.linkedNodesOf(userId, [id], robotId)).get(id) ?? [];
+  }
+
+  /** linkedNodes of several components, in one scan of the workflow nodes: id => nodes. */
+  private async linkedNodesOf(userId: number, ids: number[], robotId: number | null): Promise<Map<number, LinkedNode[]>> {
+    const out = new Map<number, LinkedNode[]>(ids.map((i) => [i, []]));
+    if (ids.length === 0) return out;
+    const o = CodeComponentStore.owners(userId, robotId);
+    // A robot component is linked from any permitted user's workflows: scan them all.
+    const robots = new Set<number>();
+    if (robotId !== null) {
+      for (const r of (await sql<any>`SELECT id FROM code_components WHERE user_id = ${robotId} AND id IN (${sql.join(ids)})`.execute(this.ex)).rows) {
+        robots.add(intval(r.id));
       }
     }
-    return nodes;
+    const all = robots.size > 0;
+    // The link lives in the node's config JSON: decoded here, so the query stays portable (MySQL and SQLite).
+    const rows = (all
+      ? await sql<any>`SELECT n.id AS node_id, n.node_type, n.config, w.id AS workflow_id, w.name AS workflow_name, w.user_id AS owner
+          FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id ORDER BY w.name, n.id`.execute(this.ex)
+      : await sql<any>`SELECT n.id AS node_id, n.node_type, n.config, w.id AS workflow_id, w.name AS workflow_name, w.user_id AS owner
+          FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id
+          WHERE w.user_id IN (${sql.join(o.map(String))}) ORDER BY w.name, n.id`.execute(this.ex)
+    ).rows;
+    for (const r of rows) {
+      const cfg = decodeJson(r.config);
+      const code = CodeComponentStore.isCodeNode(r.node_type, cfg) ? intval(isObj(cfg) ? (cfg.code_component_id ?? 0) : 0) : 0;
+      const start = out.has(code) || !isObj(cfg) ? null : StartOptionGraph.optionId({ node_type: r.node_type, config: cfg });
+      const cid = out.has(code) ? code : start;
+      const owner = intval(r.owner);
+      // a personal component's links are on the owners' workflows only (the full scan reads everyone's)
+      if (cid === null || !out.has(cid) || (!robots.has(cid) && !o.includes(owner))) continue;
+      const isStart = cid !== code;
+      out.get(cid)!.push({
+        workflow_id: intval(r.workflow_id), workflow_name: str(r.workflow_name),
+        node_name: isStart ? 'Start' : str(cfg?.name ?? 'Code'), node_id: intval(r.node_id), is_start: isStart, owner,
+      });
+    }
+    return out;
   }
 
   /**
    * The links an exit change would remove (remapExits' rules): [{workflow_id, workflow_name, node_name, exit,
    * count}], one per linked node and removed exit that has links. Collapsing to one exit removes none.
    */
-  async droppedLinks(userId: number, id: number, oldExits: string[], newExits: string[]): Promise<any[]> {
+  async droppedLinks(userId: number, id: number, oldExits: string[], newExits: string[], robotId: number | null = null): Promise<any[]> {
     if (newExits.length === 1 || oldExits.length === 1) {
       return [];
     }
     const lost: any[] = [];
-    for (const node of await this.linkedNodes(userId, id)) {
+    for (const node of await this.linkedNodes(userId, id, robotId)) {
       for (let k = 0; k < oldExits.length; k++) {
         const exit = oldExits[k];
         if (newExits.includes(exit)) {
@@ -386,20 +479,27 @@ export class CodeComponentStore {
           .execute(this.ex)).rows[0];
         const n = intval(r?.n ?? 0);
         if (n > 0) {
-          lost.push({ workflow_id: node.workflow_id, workflow_name: node.workflow_name, node_name: node.node_name, exit, count: n });
+          lost.push({ workflow_id: node.workflow_id, workflow_name: node.workflow_name, node_name: node.node_name, exit, count: n, owner: node.owner });
         }
       }
     }
-    return lost;
+    // other users' workflows are counted, not named: one {others: workflows, count: links} ends the list
+    const [shown, others] = CodeComponentStore.split(lost, userId, robotId);
+    const out: any[] = shown.map(({ owner: _o, ...rest }) => rest);
+    if (others > 0) {
+      const sum = (xs: any[]) => xs.reduce((a, l) => a + l.count, 0);
+      out.push({ others, count: sum(lost) - sum(shown) });
+    }
+    return out;
   }
 
   /**
    * Start nodes on the option go back to a plain Start: one port, holding the work exit's links; the other
    * exits' links are removed, and so is config.start_option.
    */
-  private async revertStarts(userId: number, id: number, exits: string[], workExit: string): Promise<void> {
+  private async revertStarts(userId: number, id: number, exits: string[], workExit: string, robotId: number | null = null): Promise<void> {
     const work = 'output_' + (Math.max(exits.indexOf(workExit), 0) + 1);
-    for (const node of await this.linkedNodes(userId, id)) {
+    for (const node of await this.linkedNodes(userId, id, robotId)) {
       if (!node.is_start) {
         continue;
       }
@@ -428,8 +528,8 @@ export class CodeComponentStore {
    * dropped); one exit before lands on output_1 unless its name survives. Ports beyond the old exits
    * are left alone.
    */
-  private async remapExits(userId: number, id: number, oldExits: string[], newExits: string[]): Promise<void> {
-    for (const node of await this.linkedNodes(userId, id)) {
+  private async remapExits(userId: number, id: number, oldExits: string[], newExits: string[], robotId: number | null = null): Promise<void> {
+    for (const node of await this.linkedNodes(userId, id, robotId)) {
       const rows = (await sql<any>`SELECT id, to_node_id, to_port, from_port FROM workflow_edges WHERE from_node_id = ${node.node_id} ORDER BY id`
         .execute(this.ex)).rows;
       const edges: any[] = [];
@@ -607,11 +707,11 @@ export class CodeComponentStore {
     return phpEmpty(d) || !Array.isArray(d) ? [] : d;
   }
 
-  private row(r: Record<string, any>): CodeComponent {
+  private row(r: Record<string, any>, robotId: number | null = null): CodeComponent {
     const exits = decodeJson(r.exits);
     const servers = decodeJson(r.mcp_servers);
     return {
-      id: intval(r.id), name: str(r.name), description: str(r.description ?? ''),
+      id: intval(r.id), is_robot: robotId !== null && intval(r.user_id) === robotId, name: str(r.name), description: str(r.description ?? ''),
       code: str(r.code), exits: phpEmpty(exits) ? [] : exits,
       mcp_servers: phpEmpty(servers) ? [] : servers, timeout_s: intval(r.timeout_s),
       start_trigger: (r.start_trigger ?? null) && r.start_trigger !== '0' ? decodeJson(r.start_trigger) : null,

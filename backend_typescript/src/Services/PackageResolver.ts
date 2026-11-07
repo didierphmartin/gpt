@@ -81,8 +81,15 @@ export class PackageResolver {
       };
       updatedAt = null;
     } else {
-      // mysql2 already parsed the `json` column into an object — use as-is.
-      const decoded = row.capabilities;
+      // mysql2 already parsed the `json` column into an object — use as-is; a text column (PHP json_decode) is decoded.
+      let decoded = row.capabilities;
+      if (typeof decoded === 'string') {
+        try {
+          decoded = JSON.parse(decoded);
+        } catch {
+          decoded = null;
+        }
+      }
       capabilities = decoded !== null && typeof decoded === 'object' ? decoded : {};
       updatedAt = row.updated_at;
     }

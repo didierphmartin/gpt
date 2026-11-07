@@ -22,6 +22,9 @@ import { buildMemoryBlock } from '../AgentTeam/UserMemoryRepository';
 import { MemoryAutoUpdater } from '../AgentTeam/MemoryAutoUpdater';
 import { SessionSearchService } from '../AgentTeam/SessionSearchService';
 import { mbLen, mbSub, phpBool, phpEmpty, uniqid } from '../Playbook/php';
+import { RobotOwnership, lockedResponse } from '../Services/RobotOwnership';
+import { RobotMcpServers } from '../Services/RobotMcpServers';
+import { config as appEnvConfig } from '../config/env';
 
 /**
  * Event-renaming SSE adapter for the /verify and /compare panes. The TS providers emit generic
@@ -129,6 +132,8 @@ interface ChatInput {
   toolsFilter: string[] | null;
   maxTokens: number | null;
   temperature: number | null;
+  /** Whose MCP servers this request's tools load from: the robot for a robot workflow's node, else the caller (null). */
+  mcpUserId?: number | null;
 }
 
 /** PHP is_numeric(). */
@@ -370,7 +375,10 @@ export class ChatController {
    * A tools filter that names no mcp_* tool skips the MCP load entirely; `mcpAllowlist` is the
    * package's server allowlist (verify / compare pass it, the chat paths do not).
    */
-  private async loadToolSet(userId: number | null, opts: { sessionSearch: boolean; toolsFilter?: string[] | null; mcpAllowlist?: string[] | null } ): Promise<ToolSet> {
+  private async loadToolSet(
+    userId: number | null,
+    opts: { sessionSearch: boolean; toolsFilter?: string[] | null; mcpAllowlist?: string[] | null; mcpUserId?: number | null }
+  ): Promise<ToolSet> {
     const toolsManager = new ToolsManager();
     SearchFunctions.register(toolsManager);
     if (opts.sessionSearch && userId !== null) SessionSearchService.registerAsTool(toolsManager, userId);
@@ -380,8 +388,8 @@ export class ChatController {
     let mcpLoader: MCPToolsLoader | null = null;
     if (wantsMcp) {
       try {
-        mcpLoader = new MCPToolsLoader();
-        await mcpLoader.loadToolsForUser(userId, opts.mcpAllowlist);
+        mcpLoader = this.newMcpToolsLoader();
+        await mcpLoader.loadToolsForUser(opts.mcpUserId ?? userId, opts.mcpAllowlist);
       } catch (e: any) {
         console.error('[MCP] Failed to load MCP tools: ' + (e?.message ?? e));
         mcpLoader = null;
@@ -390,6 +398,11 @@ export class ChatController {
       console.error('[MCP] Skipped MCP load: node selected no MCP tools');
     }
     return { toolsManager, mcpLoader };
+  }
+
+  /** The MCP tools loader of a chat turn (a seam for tests). */
+  protected newMcpToolsLoader(): MCPToolsLoader {
+    return new MCPToolsLoader();
   }
 
   /** The executor offering the policy's server tools; a tools filter is an exact allow-list over base + MCP. */
@@ -561,7 +574,7 @@ export class ChatController {
     const started = Date.now();
     const sessionId = uniqidMore('chat_');
     try {
-      const tools = await this.loadToolSet(userId, { sessionSearch: true, toolsFilter: input.toolsFilter });
+      const tools = await this.loadToolSet(userId, { sessionSearch: true, toolsFilter: input.toolsFilter, mcpUserId: input.mcpUserId ?? null });
       const executor = ChatController.executorFor(tools, plan.serverTools, input.toolsFilter);
       // PHP's streaming path never applies the max_tokens / temperature overrides.
       const resolved = await this.resolveProvider(provider, userId, executor);
@@ -653,7 +666,7 @@ export class ChatController {
     const provider = input.provider;
     let started = Date.now();
     try {
-      const tools = await this.loadToolSet(userId, { sessionSearch: true, toolsFilter: input.toolsFilter });
+      const tools = await this.loadToolSet(userId, { sessionSearch: true, toolsFilter: input.toolsFilter, mcpUserId: input.mcpUserId ?? null });
       const executor = ChatController.executorFor(tools, plan.serverTools, input.toolsFilter);
       const resolved = await this.resolveProvider(provider, userId, executor, { max_tokens: input.maxTokens, temperature: input.temperature });
       if (!resolved) throw new Error(`Provider '${provider}' not found`);
@@ -1079,6 +1092,31 @@ export class ChatController {
 
     const input = this.parseChatInput(body);
     const userId = typeof ctx.user_id === 'number' ? ctx.user_id : null;
+
+    // A workflow run's agent node names its workflow: a robot workflow's MCP tools load from the robot's
+    // servers (each requested one must have a robot server of its slug). Keys, memory and usage stay the caller's.
+    const workflowId = Math.trunc(Number(body.workflow_id ?? 0)) || 0;
+    if (workflowId > 0 && userId !== null && userId > 0) {
+      const ownership = new RobotOwnership(appEnvConfig);
+      const locked = await ownership.lockedRunName(userId, workflowId);
+      const refusal = locked !== null ? lockedResponse(locked) : null;
+      if (refusal === null) {
+        const actor = await ownership.runAs(userId, workflowId);
+        if (actor !== userId) {
+          const missing = await RobotMcpServers.missing(String(userId), String(actor), input.toolsFilter);
+          if (missing.length > 0) {
+            const { status_code = 422, ...rest } = RobotMcpServers.missingResponse(missing[0]);
+            res.status(status_code).json(rest);
+            return;
+          }
+          input.mcpUserId = actor;
+        }
+      } else {
+        const { status_code = 423, ...rest } = refusal;
+        res.status(status_code).json(rest);
+        return;
+      }
+    }
     const attachments: { image_attachments?: NativeAttachment[]; pdf_attachments?: NativeAttachment[] } = {};
     const skillModeActive = input.skillMetadata !== null || input.availableSkills.length > 0;
     input.message = await this.applyAttachments(body, userId, input.provider, skillModeActive, input.message, attachments, 'ChatController');
@@ -1440,3 +1478,4 @@ export class ChatController {
     }
   }
 }
+

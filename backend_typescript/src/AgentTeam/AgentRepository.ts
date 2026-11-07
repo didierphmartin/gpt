@@ -266,9 +266,12 @@ export class AgentRepository {
   }
 
   /** Find all agents accessible by a user (with optional filters). */
-  async findAccessibleByUser(userId: number, filters: AgentFilters = {}): Promise<Agent[]> {
+  async findAccessibleByUser(userId: number, filters: AgentFilters = {}, robotId: number | null = null): Promise<Agent[]> {
+    // robotId: the robot's agents are shared with a caller who may use the robot
     const conditions: any[] = [
-      sql`(user_id = ${userId} OR visibility = 'public' OR visibility = 'workspace')`,
+      robotId !== null
+        ? sql`(user_id = ${userId} OR user_id = ${robotId} OR visibility = 'public' OR visibility = 'workspace')`
+        : sql`(user_id = ${userId} OR visibility = 'public' OR visibility = 'workspace')`,
       sql`enabled = 1`,
     ];
 
@@ -460,27 +463,28 @@ export class AgentRepository {
   }
 
   /** Whether a user can access an agent (owner, public, or workspace). */
-  async canUserAccess(userId: number, agentId: number): Promise<boolean> {
+  async canUserAccess(userId: number, agentId: number, robotId: number | null = null): Promise<boolean> {
     const agent = await this.findById(agentId);
     if (!agent) return false;
-    if (agent.userId === userId) return true;
+    // Owner always has access; so does a caller who may use the robot, to the robot's agents
+    if (agent.userId === userId || (robotId !== null && agent.userId === robotId)) return true;
     if (agent.visibility === 'public') return true;
     if (agent.visibility === 'workspace') return true; // simplified (no workspace membership check)
     return false;
   }
 
   /** Whether a user owns an agent. */
-  async isOwner(userId: number, agentId: number): Promise<boolean> {
+  async isOwner(userId: number, agentId: number, robotId: number | null = null): Promise<boolean> {
     const agent = await this.findById(agentId);
-    return !!agent && agent.userId === userId;
+    return !!agent && (agent.userId === userId || (robotId !== null && agent.userId === robotId));
   }
 
   /** Count all accessible agents for a user. */
-  async countAccessible(userId: number): Promise<number> {
+  async countAccessible(userId: number, robotId: number | null = null): Promise<number> {
     const row = (
       await sql<{ c: number }>`
         SELECT COUNT(*) as c FROM agents
-        WHERE (user_id = ${userId} OR visibility IN ('public', 'workspace'))
+        WHERE (user_id = ${userId} OR user_id = ${robotId ?? userId} OR visibility IN ('public', 'workspace'))
         AND enabled = 1`.execute(db)
     ).rows[0];
     return phpIntval(row?.c ?? 0);

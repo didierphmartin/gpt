@@ -100,6 +100,9 @@ function controllerDb(): void {
   d.exec(`CREATE TABLE agent_workflows (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, workspace_id INTEGER, name TEXT,
     description TEXT, steps TEXT, triggers TEXT, variables TEXT, enabled INTEGER DEFAULT 1, output_storage_enabled INTEGER DEFAULT 0,
     output_folder TEXT, orchestration TEXT DEFAULT 'workflow', automation_id INTEGER, created_at TEXT, updated_at TEXT)`);
+  // the controller asks whether the caller may use the robot (RobotOwnership): a person without use_robot, no robot
+  d.exec(`INSERT INTO users (id, role) VALUES (3, 'user');
+    INSERT INTO packages (role, name, builtin, capabilities) VALUES ('user', 'User', 1, '{}');`);
 }
 const ctx = (body: any, id?: number): any => ({ body, user_id: 3, params: id ? { id: String(id) } : {}, query: {}, headers: {} });
 const create = (nodes: any[], edges: any[] = []) => new WorkflowController().create(ctx({ name: 'Reset', definition: { nodes, edges } }));
@@ -129,7 +132,7 @@ test('create: a valid named graph creates the workflow with resolved ids; update
 
   const id = Number((d.prepare('SELECT id FROM agent_workflows').get() as any).id);
   const bad = await new WorkflowController().update(ctx({ definition: { nodes: [{ id: '1', node_type: 'code', config: { code_component_ref: 'Ghost' } }], edges: [] } }, id));
-  assert.deepEqual(bad, { success: false, error: 'unknown references', missing: ["code component 'Ghost'"], status_code: 422 });
+  assert.deepEqual(bad, { success: false, error: 'unknown references', error_code: 'unknown_references', missing: ["code component 'Ghost'"], status_code: 422 });
   const ok = await new WorkflowController().update(ctx({ definition: { nodes: [{ id: '1', node_type: 'code', config: { code_component_ref: 'Poll' } },
     { id: '2', node_type: 'agent', config: {} }], edges: [{ from: '1', to: '2', from_port_name: 'error' }] } }, id));
   assert.equal(ok.status_code, 200, JSON.stringify(ok));

@@ -309,7 +309,7 @@ export class MCPProxyController {
    * found: its error is reported, no further candidate is tried. Returns the
    * reply, or null (reason in err.lastError) when no candidate answered.
    */
-  private async sendToMCPServer(
+  protected async sendToMCPServer(
     serverUrl: string,
     request: unknown,
     expectResponse = true,

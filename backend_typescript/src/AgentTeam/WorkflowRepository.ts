@@ -2,6 +2,8 @@ import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { PlaybookStore } from '../Playbook/PlaybookStore';
 import { CodeComponentStore } from '../CodeComponent/CodeComponentStore';
+import { RobotOwnership } from '../Services/RobotOwnership';
+import { config as appConfig } from '../config/env';
 import { StartOptionGraph } from './StartOptionGraph';
 
 /**
@@ -310,6 +312,11 @@ export class WorkflowGraphRepository {
 
   /** Mirrors getNodes(): raw rows with `config` json-decoded. */
   async getNodes(workflowId: number): Promise<any[]> {
+    return this.nodesIn(workflowId, this.linkScope(workflowId));
+  }
+
+  /** getNodes, with the links resolved in scope (linkScope). */
+  private async nodesIn(workflowId: number, scope: () => Promise<[number, number | null]>): Promise<any[]> {
     const rows = (
       await sql<any>`SELECT * FROM workflow_nodes WHERE workflow_id = ${workflowId} ORDER BY id`.execute(db)
     ).rows;
@@ -319,7 +326,7 @@ export class WorkflowGraphRepository {
 
     // Linked nodes are filled for the workflow's owner, so every reader (runners, compilers, docs) keeps
     // receiving the node's own fields: playbook text, and a code component's body.
-    const ownerId = this.ownerOf(workflowId);
+    // links resolve against the owner's rows or the robot's (a personal workflow may link robot rows)
     const store = new PlaybookStore();
     for (const row of rows) {
       const cfg = row.config;
@@ -327,7 +334,8 @@ export class WorkflowGraphRepository {
         || cfg.playbook_id === undefined || cfg.playbook_id === null) {
         continue;
       }
-      const pb = await store.get(await ownerId(), phpIntval(cfg.playbook_id));
+      const [owner, robot] = await scope();
+      const pb = await store.get(owner, phpIntval(cfg.playbook_id), robot);
       if (pb === null) {
         delete cfg.playbook;
         cfg.playbook_missing = true;
@@ -344,7 +352,8 @@ export class WorkflowGraphRepository {
         || phpEmpty(cfg.code_component_id)) {
         continue;
       }
-      const c = await codeStore.get(await ownerId(), phpIntval(cfg.code_component_id));
+      const [owner, robot] = await scope();
+      const c = await codeStore.get(owner, phpIntval(cfg.code_component_id), robot);
       for (const k of ['code', 'exits', 'mcp_servers', 'timeout_s', 'arg_decls', 'provides', 'code_component_missing']) delete cfg[k];
       if (c === null) {
         cfg.code_component_missing = true;
@@ -362,7 +371,8 @@ export class WorkflowGraphRepository {
       }
       const cfg = row.config;
       for (const k of ['exits', 'start_option_label', 'start_option_missing']) delete cfg[k];
-      const c = await codeStore.get(await ownerId(), cid);
+      const [owner, robot] = await scope();
+      const c = await codeStore.get(owner, cid, robot);
       if (c === null || c.start_trigger === null) {
         cfg.start_option_missing = true;
       } else {
@@ -373,15 +383,20 @@ export class WorkflowGraphRepository {
     return rows;
   }
 
-  /** The workflow's owner (agent_workflows.user_id), read once and only when a linked node needs it. */
-  private ownerOf(workflowId: number): () => Promise<number> {
-    let owner: number | null = null;
+  /**
+   * Whose rows a workflow's links resolve against, computed once on first use: [owner id, robot id or null]. The
+   * robot's id when the workflow's owner may use the robot (or is the robot), else null, so a guessed robot id in a
+   * node never reveals the robot's code.
+   */
+  private linkScope(workflowId: number): () => Promise<[number, number | null]> {
+    let scope: [number, number | null] | null = null;
     return async () => {
-      if (owner === null) {
+      if (scope === null) {
         const r = (await sql<any>`SELECT user_id FROM agent_workflows WHERE id = ${workflowId}`.execute(db)).rows[0];
-        owner = phpIntval(r?.user_id ?? 0);
+        const owner = phpIntval(r?.user_id ?? 0);
+        scope = [owner, await new RobotOwnership(appConfig).linkRobotFor(owner)];
       }
-      return owner;
+      return scope;
     };
   }
 
@@ -497,13 +512,16 @@ export class WorkflowGraphRepository {
    * them: a Start on a Start option is expanded into Start -> the option's code node (StartOptionGraph).
    */
   async getGraph(workflowId: number): Promise<{ nodes: any[]; edges: any[] }> {
+    const scope = this.linkScope(workflowId); // one owner and robot lookup for the nodes and the expansion
     const graph = {
-      nodes: await this.getNodes(workflowId),
+      nodes: await this.nodesIn(workflowId, scope),
       edges: await this.getEdges(workflowId),
     };
-    const ownerId = this.ownerOf(workflowId);
     const codeStore = new CodeComponentStore();
-    return StartOptionGraph.expand(graph, async (id) => codeStore.get(await ownerId(), id));
+    return StartOptionGraph.expand(graph, async (id) => {
+      const [owner, robot] = await scope();
+      return codeStore.get(owner, id, robot);
+    });
   }
 
   /** Mirrors getGraphForFrontend(): Drawflow-compatible nodes/edges. */
@@ -670,10 +688,12 @@ export class WorkflowRepository {
     return workflow;
   }
 
-  /** Find all workflows for a user, optionally loading graph data per workflow. */
-  async findByUser(userId: number, includeGraph = false): Promise<Workflow[]> {
+  /** Find all workflows for a user (and the robot's, when robotId is given), optionally loading graph data per workflow. */
+  async findByUser(userId: number, includeGraph = false, robotId: number | null = null): Promise<Workflow[]> {
     const rows = (
-      await sql<any>`SELECT * FROM agent_workflows WHERE user_id = ${userId} ORDER BY name ASC`.execute(db)
+      robotId === null
+        ? await sql<any>`SELECT * FROM agent_workflows WHERE user_id = ${userId} ORDER BY name ASC`.execute(db)
+        : await sql<any>`SELECT * FROM agent_workflows WHERE user_id = ${userId} OR user_id = ${robotId} ORDER BY name ASC`.execute(db)
     ).rows;
 
     const result: Workflow[] = [];
@@ -729,17 +749,17 @@ export class WorkflowRepository {
     await sql`DELETE FROM agent_workflows WHERE id = ${id}`.execute(db);
   }
 
-  /** Whether a user can access a workflow (owner only). */
-  async canUserAccess(userId: number, workflowId: number): Promise<boolean> {
+  /** Whether a user can access a workflow (the owner, or a robot-permitted caller for a robot workflow). */
+  async canUserAccess(userId: number, workflowId: number, robotId: number | null = null): Promise<boolean> {
     const workflow = await this.findById(workflowId);
     if (!workflow) return false;
-    return workflow.userId === userId;
+    return workflow.userId === userId || (robotId !== null && workflow.userId === robotId);
   }
 
-  /** Whether a user owns a workflow. */
-  async isOwner(userId: number, workflowId: number): Promise<boolean> {
+  /** Whether a user owns a workflow (a robot workflow counts for a robot-permitted caller). */
+  async isOwner(userId: number, workflowId: number, robotId: number | null = null): Promise<boolean> {
     const workflow = await this.findById(workflowId);
-    return !!workflow && workflow.userId === userId;
+    return !!workflow && (workflow.userId === userId || (robotId !== null && workflow.userId === robotId));
   }
 
   /** Toggle the enabled flag. */
@@ -747,16 +767,70 @@ export class WorkflowRepository {
     await sql`UPDATE agent_workflows SET enabled = NOT enabled WHERE id = ${id}`.execute(db);
   }
 
-  /** Duplicate a workflow (metadata only — graph is NOT copied, mirroring PHP). */
+  /**
+   * Copy a workflow for newUserId: the row, every node and edge (raw rows, ids remapped, so component and
+   * playbook links stay as they are) and its schedules, paused. No active_workflows row: a copy starts inactive.
+   * Name: "<name> (Copy)", then "(Copy 2)", "(Copy 3)"... until free for that owner.
+   */
   async duplicate(workflowId: number, newUserId: number, newName: string | null = null): Promise<Workflow | null> {
     const original = await this.findById(workflowId);
     if (!original) return null;
 
     const copy = hydrateWorkflow(workflowToArray(original));
     copy.userId = newUserId;
-    copy.name = newName ?? original.name + ' (Copy)';
+    copy.name = newName ?? (await this.freeCopyName(original.name, newUserId));
 
-    return this.create(copy);
+    const created = await db.transaction().execute(async (trx) => {
+      const data = workflowToArray(copy);
+      const res = await sql`
+        INSERT INTO agent_workflows
+          (user_id, workspace_id, name, description, steps, triggers, variables, enabled, output_storage_enabled, output_folder, orchestration)
+        VALUES
+          (${data.user_id}, ${data.workspace_id}, ${data.name}, ${data.description},
+           ${JSON.stringify(data.steps)}, ${JSON.stringify(data.triggers)}, ${JSON.stringify(data.variables)},
+           ${data.enabled ? 1 : 0}, ${data.output_storage_enabled ? 1 : 0}, ${data.output_folder}, ${data.orchestration ?? 'workflow'})
+      `.execute(trx);
+      const newId = Number(res.insertId);
+      const nodeMap = new Map<number, number>();
+      const nodes = (await sql<any>`SELECT * FROM workflow_nodes WHERE workflow_id = ${workflowId} ORDER BY id`.execute(trx)).rows;
+      for (const n of nodes) {
+        const config = jsonText(n.config);
+        const r = await sql`INSERT INTO workflow_nodes (workflow_id, node_type, agent_id, config, pos_x, pos_y, drawflow_node_id)
+          VALUES (${newId}, ${n.node_type}, ${n.agent_id}, ${config}, ${n.pos_x}, ${n.pos_y}, ${n.drawflow_node_id})`.execute(trx);
+        nodeMap.set(Number(n.id), Number(r.insertId));
+      }
+      const edges = (await sql<any>`SELECT * FROM workflow_edges WHERE workflow_id = ${workflowId} ORDER BY id`.execute(trx)).rows;
+      for (const e of edges) {
+        const from = nodeMap.get(Number(e.from_node_id));
+        const to = nodeMap.get(Number(e.to_node_id));
+        if (from === undefined || to === undefined) continue;
+        await sql`INSERT INTO workflow_edges (workflow_id, from_node_id, to_node_id, from_port, to_port, condition_expr)
+          VALUES (${newId}, ${from}, ${to}, ${e.from_port}, ${e.to_port}, ${e.condition_expr})`.execute(trx);
+      }
+      return newId;
+    });
+
+    await this.copySchedules(workflowId, created, newUserId);
+    return (await this.findById(created))!;
+  }
+
+  private async freeCopyName(name: string, userId: number): Promise<string> {
+    for (let n = 1; ; n++) {
+      const candidate = name + (n === 1 ? ' (Copy)' : ` (Copy ${n})`);
+      const taken = (await sql<any>`SELECT 1 AS one FROM agent_workflows WHERE user_id = ${userId} AND name = ${candidate}`.execute(db)).rows.length > 0;
+      if (!taken) return candidate;
+    }
+  }
+
+  /** The source's schedules, as the copier's and paused (a copy never fires on its own). */
+  private async copySchedules(fromWorkflowId: number, toWorkflowId: number, userId: number): Promise<void> {
+    const rows = (await sql<any>`SELECT * FROM scheduled_workflows WHERE workflow_id = ${fromWorkflowId} ORDER BY id`.execute(db)).rows;
+    for (const r of rows) {
+      await sql`INSERT INTO scheduled_workflows (user_id, workflow_id, input_prompt, scheduled_time, status, repeat_type,
+          repeat_interval, cron, event_trigger, trigger_component_id, next_run)
+        VALUES (${userId}, ${toWorkflowId}, ${r.input_prompt}, ${r.scheduled_time}, 'paused', ${r.repeat_type},
+          ${r.repeat_interval}, ${r.cron}, ${jsonText(r.event_trigger)}, ${r.trigger_component_id}, ${r.next_run})`.execute(db);
+    }
   }
 
   /**
@@ -779,4 +853,9 @@ export class WorkflowRepository {
         LIMIT ${sql.lit(phpIntval(limit))} OFFSET ${sql.lit(phpIntval(offset))}`.execute(db)
     ).rows;
   }
+}
+
+/** A raw row value written back as is; a JSON column mysql2 decoded is encoded again. */
+function jsonText(v: any): any {
+  return v !== null && typeof v === 'object' ? JSON.stringify(v) : v;
 }

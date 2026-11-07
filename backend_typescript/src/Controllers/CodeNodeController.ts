@@ -1,6 +1,8 @@
 import { Ctx, ControllerResult } from '../Support/Http';
 import { MCPToolsLoader } from '../Services/MCPToolsLoader';
 import { CodeNodeEmit } from '../AgentTeam/CodeNodeEmit';
+import { RobotOwnership, lockedResponse } from '../Services/RobotOwnership';
+import { config } from '../config/env';
 
 /**
  * POST /api/v1/workflows/code-node/tool-call -- a code node's call_tool from the editor.
@@ -9,11 +11,15 @@ import { CodeNodeEmit } from '../AgentTeam/CodeNodeEmit';
  * Runs server.tool(args) with the logged-in user's MCP servers and returns the raw MCP result (the
  * harness needs structuredContent and isError). The declared-tools check is the harness's, so it is
  * identical when compiled; this endpoint gives the user no more than their own MCP access.
+ * With the run's workflow_id, a robot workflow's call uses the robot's servers (RobotOwnership.runAs).
  */
 export type ToolCaller = (server: string, tool: string, args: Record<string, any>) => Promise<Record<string, any>>;
 
 export class CodeNodeController {
-  constructor(private callerFor: (userId: number) => Promise<ToolCaller> = defaultCallerFor) {}
+  constructor(
+    private callerFor: (userId: number) => Promise<ToolCaller> = defaultCallerFor,
+    private ownershipFactory: () => RobotOwnership = () => new RobotOwnership(config)
+  ) {}
 
   async toolCall(ctx: Ctx): Promise<ControllerResult> {
     const userId = Math.trunc(Number(ctx.user_id ?? 0)) || 0;
@@ -31,7 +37,12 @@ export class CodeNodeController {
     ) {
       return { ok: false, error: 'body must be {server: slug, tool: name, args: object}', status_code: 400 };
     }
-    return (await this.callerFor(userId))(server, tool, args);
+    const workflowId = Math.trunc(Number(body.workflow_id ?? 0)) || 0;
+    const own = this.ownershipFactory();
+    const locked = workflowId > 0 ? await own.lockedRunName(userId, workflowId) : null;
+    if (locked !== null) return lockedResponse(locked);
+    const actor = workflowId > 0 ? await own.runAs(userId, workflowId) : userId;
+    return (await this.callerFor(actor))(server, tool, args);
   }
 }
 

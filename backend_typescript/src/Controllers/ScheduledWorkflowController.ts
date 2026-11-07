@@ -5,6 +5,10 @@ import { ActiveWorkflowService } from '../AgentTeam/ActiveWorkflowService';
 import { WorkflowRepository, phpEmpty, phpIntval } from '../AgentTeam/WorkflowRepository';
 import { CodeComponentStore } from '../CodeComponent/CodeComponentStore';
 import { CodeComponentError } from '../CodeComponent/CodeComponentError';
+import { RobotOwnership, lockedResponse } from '../Services/RobotOwnership';
+import { config } from '../config/env';
+import { sql } from 'kysely';
+import { db } from '../db/pools';
 
 /**
  * Faithful mirror of src/AgentTeam/Controllers/ScheduledWorkflowController.php.
@@ -31,6 +35,32 @@ export class ScheduledWorkflowController {
 
   private getId(ctx: Ctx): number {
     return phpIntval(ctx.params?.id ?? 0);
+  }
+
+  /** The 423 body when the workflow is a running robot workflow, else null. */
+  private async lockedGuard(userId: number, workflowId: number): Promise<ControllerResult | null> {
+    const own = new RobotOwnership(config);
+    // only a caller who may see the workflow learns it is locked; everyone else gets the usual 404 below
+    if (workflowId <= 0 || !(await this.workflowRepository.canUserAccess(userId, workflowId, await own.robotFor(userId))) || !(await own.isLocked(workflowId))) {
+      return null;
+    }
+    const r = (await sql<any>`SELECT name FROM agent_workflows WHERE id = ${workflowId}`.execute(db)).rows[0];
+    return lockedResponse(String(r?.name ?? ''));
+  }
+
+  /** Who a schedule of this workflow belongs to: the robot for a robot workflow the caller may use, else the caller. */
+  private async owner(userId: number, workflowId: number): Promise<number> {
+    return workflowId > 0 ? new RobotOwnership(config).runAs(userId, workflowId) : userId;
+  }
+
+  /** The schedule's owner as owner() decides it for its workflow. */
+  private async ownerForSchedule(userId: number, scheduleId: number): Promise<number> {
+    return this.owner(userId, phpIntval((await this.scheduleService.findById(scheduleId))?.workflow_id ?? 0));
+  }
+
+  /** The 423 body when the schedule belongs to a running robot workflow, else null. */
+  private async lockedGuardForSchedule(userId: number, scheduleId: number): Promise<ControllerResult | null> {
+    return this.lockedGuard(userId, phpIntval((await this.scheduleService.findById(scheduleId))?.workflow_id ?? 0));
   }
 
   /** GET /api/v1/schedules */
@@ -64,8 +94,11 @@ export class ScheduledWorkflowController {
       return { success: false, error: 'Authentication required', status_code: 401 };
     }
 
+    // a robot workflow's schedule is the robot's, and so is its Start option
+    const owner = await this.owner(userId, phpIntval(body.workflow_id ?? 0));
+
     try { // a Start option names its component; the component supplies the event (spec §3)
-      body = await new CodeComponentStore().scheduleBody(userId, body);
+      body = await new CodeComponentStore().scheduleBody(owner, body);
     } catch (e) {
       if (!(e instanceof CodeComponentError)) throw e;
       return { success: false, error: e.message, kind: e.kind, status_code: e.status };
@@ -80,9 +113,12 @@ export class ScheduledWorkflowController {
       return { success: false, error: 'Scheduled time is required', status_code: 400 };
     }
 
-    // Verify the workflow exists and belongs to the user
+    const locked = await this.lockedGuard(userId, phpIntval(body.workflow_id));
+    if (locked) return locked;
+
+    // Verify the workflow exists and belongs to the user (the robot, for a robot workflow)
     const workflow = await this.workflowRepository.findById(phpIntval(body.workflow_id));
-    if (!workflow || workflow.userId !== userId) {
+    if (!workflow || workflow.userId !== owner) {
       return { success: false, error: 'Workflow not found', status_code: 404 };
     }
 
@@ -108,7 +144,7 @@ export class ScheduledWorkflowController {
 
     try {
       const schedule = await this.scheduleService.create({
-        user_id: userId,
+        user_id: owner,
         workflow_id: phpIntval(body.workflow_id),
         input_prompt: body.input_prompt ?? null,
         scheduled_time: body.scheduled_time,
@@ -143,7 +179,7 @@ export class ScheduledWorkflowController {
     try {
       const schedule = await this.scheduleService.findById(id);
 
-      if (!schedule || schedule.user_id !== userId) {
+      if (!schedule || phpIntval(schedule.user_id) !== (await this.owner(userId, phpIntval(schedule.workflow_id)))) {
         return { success: false, error: 'Schedule not found', status_code: 404 };
       }
 
@@ -163,8 +199,11 @@ export class ScheduledWorkflowController {
       return { success: false, error: 'Authentication required', status_code: 401 };
     }
 
+    const locked = await this.lockedGuardForSchedule(userId, id);
+    if (locked) return locked;
+
     try { // a Start option names its component; the component supplies the event (spec §3)
-      body = await new CodeComponentStore().scheduleBody(userId, body,
+      body = await new CodeComponentStore().scheduleBody(await this.ownerForSchedule(userId, id), body,
         phpIntval((await this.scheduleService.findById(id))?.workflow_id ?? 0));
     } catch (e) {
       if (!(e instanceof CodeComponentError)) throw e;
@@ -189,7 +228,7 @@ export class ScheduledWorkflowController {
     }
 
     try {
-      const schedule = await this.scheduleService.update(id, userId, body);
+      const schedule = await this.scheduleService.update(id, await this.ownerForSchedule(userId, id), body);
 
       if (!schedule) {
         return { success: false, error: 'Schedule not found', status_code: 404 };
@@ -219,8 +258,11 @@ export class ScheduledWorkflowController {
       return { success: false, error: 'Authentication required', status_code: 401 };
     }
 
+    const locked = await this.lockedGuardForSchedule(userId, id);
+    if (locked) return locked;
+
     try {
-      const deleted = await this.scheduleService.delete(id, userId);
+      const deleted = await this.scheduleService.delete(id, await this.ownerForSchedule(userId, id));
 
       if (!deleted) {
         return { success: false, error: 'Schedule not found', status_code: 404 };
@@ -242,8 +284,11 @@ export class ScheduledWorkflowController {
       return { success: false, error: 'Authentication required', status_code: 401 };
     }
 
+    const locked = await this.lockedGuardForSchedule(userId, id);
+    if (locked) return locked;
+
     try {
-      const paused = await this.scheduleService.pause(id, userId);
+      const paused = await this.scheduleService.pause(id, await this.ownerForSchedule(userId, id));
 
       if (!paused) {
         return {
@@ -269,8 +314,11 @@ export class ScheduledWorkflowController {
       return { success: false, error: 'Authentication required', status_code: 401 };
     }
 
+    const locked = await this.lockedGuardForSchedule(userId, id);
+    if (locked) return locked;
+
     try {
-      const resumed = await this.scheduleService.resume(id, userId);
+      const resumed = await this.scheduleService.resume(id, await this.ownerForSchedule(userId, id));
 
       if (!resumed) {
         return {
@@ -323,7 +371,7 @@ export class ScheduledWorkflowController {
     }
 
     try {
-      const schedules = await this.scheduleService.findByWorkflow(workflowId, userId);
+      const schedules = await this.scheduleService.findByWorkflow(workflowId, await this.owner(userId, workflowId));
 
       return {
         success: true,

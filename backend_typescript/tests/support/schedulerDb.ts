@@ -60,13 +60,15 @@ export function eventWorkerSchema(d: DatabaseSync): void {
   d.exec('CREATE TABLE workflow_nodes (id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_id INTEGER, node_type TEXT, config TEXT)');
   d.exec(`CREATE TABLE workflow_edges (id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_id INTEGER, from_node_id INTEGER,
     to_node_id INTEGER, from_port TEXT DEFAULT 'output_1', to_port TEXT DEFAULT 'input_1')`);
-  d.exec('CREATE TABLE code_components (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT, start_trigger TEXT, args TEXT, provides TEXT)');
+  d.exec(`CREATE TABLE code_components (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT, start_trigger TEXT,
+    description TEXT, code TEXT, exits TEXT, mcp_servers TEXT, timeout_s INTEGER DEFAULT 30, args TEXT, provides TEXT, created_at TEXT, updated_at TEXT)`);
   d.exec(`CREATE TABLE mcp_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, name TEXT, url TEXT,
     headers TEXT, enabled INTEGER DEFAULT 1)`);
   d.exec(SCHEDULES_DDL);
-  d.exec(`CREATE TABLE active_workflows (user_id INTEGER PRIMARY KEY, workflow_id INTEGER NOT NULL
+  d.exec(`CREATE TABLE active_workflows (user_id INTEGER NOT NULL, workflow_id INTEGER NOT NULL
     REFERENCES agent_workflows (id) ON DELETE CASCADE, mode TEXT NOT NULL, trigger_component_id INTEGER,
-    activated_at TEXT NOT NULL, watch_state TEXT NOT NULL DEFAULT 'starting', watch_message TEXT, watch_checked_at TEXT)`);
+    activated_at TEXT NOT NULL, watch_state TEXT NOT NULL DEFAULT 'starting', watch_message TEXT, watch_checked_at TEXT,
+    PRIMARY KEY (user_id, workflow_id))`);
 }
 
 export const WATCH = { server: 'Outlook', tool: 'wait_for_new', args: { args: { folder: 'Inbox' } } };

@@ -51,6 +51,7 @@ import { GenesisController } from './Controllers/GenesisController';
 import { AgentMCPController } from './Controllers/AgentMCPController';
 import { RolesController } from './Controllers/RolesController';
 import { RobotController } from './Controllers/RobotController';
+import { RobotServersController } from './Controllers/RobotServersController';
 import { LoginAdminController } from './Controllers/LoginAdminController';
 import { SetupController } from './Controllers/SetupController';
 import { VideoEditorController } from './Controllers/VideoEditorController';
@@ -87,6 +88,7 @@ const codeComponents = new CodeComponentsController(new CodeComponentStore(), as
 const activeWorkflows = new ActiveWorkflowController();
 const roles = new RolesController();
 const robot = new RobotController();
+const robotServers = new RobotServersController();
 const loginAdmin = new LoginAdminController();
 const videoEditor = new VideoEditorController();
 const root = new RootController();
@@ -490,6 +492,14 @@ router.delete('/api/v1/code-components/:id(\\d+)/start-option', handle((ctx) => 
 router.get('/api/v1/robot', handle((ctx) => robot.show(ctx)));
 router.get('/api/v1/robot/playbooks', handle((ctx) => robot.playbooks(ctx)));
 router.delete('/api/v1/robot/playbooks/:id(\\d+)', handle((ctx) => robot.unpublish(ctx)));
+// The robot's own MCP connections (use_robot; header NAMES only, except compile-env). RobotServersController.
+router.get('/api/v1/robot/mcp-servers', handle((ctx) => robotServers.index(ctx)));
+router.get('/api/v1/robot/mcp-servers/compile-env', handle((ctx) => robotServers.compileEnv(ctx)));
+router.post('/api/v1/robot/mcp-servers', handle((ctx) => robotServers.create(ctx)));
+router.post('/api/v1/robot/mcp-servers/:id(\\d+)', handle((ctx) => robotServers.update(ctx)));
+router.delete('/api/v1/robot/mcp-servers/:id(\\d+)', handle((ctx) => robotServers.destroy(ctx)));
+router.post('/api/v1/robot/mcp-servers/:id(\\d+)/call', handle((ctx) => robotServers.call(ctx)));
+router.post('/api/v1/robot/mcp-servers/:id(\\d+)/key', handle((ctx) => robotServers.saveKey(ctx)));
 
 // Agents (protected) — the AgentTeam module's agent management. Literal sub-paths
 // (tools/reorder/categories/categories/rename) are registered BEFORE the :id param routes
@@ -540,10 +550,12 @@ router.post('/api/v1/workflows/tool-result', handle((ctx) => workflows.toolResul
 router.post('/api/v1/workflows/code-node/tool-call', handle((ctx) => codeNode.toolCall(ctx)));
 // Run the caller's workflow named in the body (literal path, before the :id routes).
 router.post('/api/v1/workflows/run', handle((ctx) => workflows.runByName(ctx)));
-// The workflow the event worker runs (one per user): show, activate (▶ on Start), deactivate.
+// The workflow the event worker runs (one per person, one per workflow for the robot): show, activate (▶ on Start),
+// deactivate (= Unlock for a robot workflow), the workflow's own row.
 router.get('/api/v1/workflows/active', handle((ctx) => activeWorkflows.show(ctx)));
 router.post('/api/v1/workflows/:id(\\d+)/activate', handle((ctx) => activeWorkflows.activate(ctx)));
 router.delete('/api/v1/workflows/:id(\\d+)/activate', handle((ctx) => activeWorkflows.deactivate(ctx)));
+router.get('/api/v1/workflows/:id(\\d+)/active', handle((ctx) => activeWorkflows.forWorkflow(ctx)));
 // The live overlay (SSE): the workflow's run events, its active row, pings, then bye with the cursor.
 router.get('/api/v1/workflows/:id(\\d+)/live', (req: Request, res: Response) => {
   workflows.live(req, res).catch((err) => {
@@ -565,6 +577,7 @@ router.put('/api/v1/workflows/:id(\\d+)', handle((ctx) => workflows.update(ctx))
 router.delete('/api/v1/workflows/:id(\\d+)', handle((ctx) => workflows.destroy(ctx)));
 router.post('/api/v1/workflows/:id(\\d+)/toggle', handle((ctx) => workflows.toggle(ctx)));
 router.post('/api/v1/workflows/:id(\\d+)/duplicate', handle((ctx) => workflows.duplicate(ctx)));
+router.put('/api/v1/workflows/:id(\\d+)/owner', handle((ctx) => workflows.owner(ctx)));
 router.get('/api/v1/workflows/:id(\\d+)/executions', handle((ctx) => workflows.executions(ctx)));
 // Per-run JSONL replay (WorkflowRunLog). Registered among the workflow literals — the runId param is
 // hex-constrained so it can't collide with the numeric :id(\d+) routes above.

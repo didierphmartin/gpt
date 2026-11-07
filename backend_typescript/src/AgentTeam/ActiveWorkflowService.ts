@@ -1,7 +1,9 @@
 import { sql } from 'kysely';
+import { isDuplicateKey } from '../Support/DbErrors';
 import { db } from '../db/pools';
 import { phpIntval } from './WorkflowRepository';
 import { parseSqlDateTime } from './CronExpression';
+import { RobotAccount } from '../Services/RobotAccount';
 
 /** A refused activation: kind for the editor, status for the API. Mirrors ActiveWorkflowError.php. */
 export class ActiveWorkflowError extends Error {
@@ -16,7 +18,8 @@ const seconds = (v: any): number => Math.floor(parseSqlDateTime(String(v)).getTi
 
 /**
  * The workflow each user activated with ▶ on Start: the event worker runs it on its schedule, or on its
- * Start option's event. One per user. Ticking a mode never activates; a mode change deactivates.
+ * Start option's event. One per person; the robot keeps one per workflow (several robot workflows watch at once).
+ * Ticking a mode never activates; a mode change deactivates.
  * Mirrors backend/src/AgentTeam/Services/ActiveWorkflowService.php.
  */
 export class ActiveWorkflowService {
@@ -61,25 +64,50 @@ export class ActiveWorkflowService {
     if (!(await this.startHasLinks(workflowId))) {
       throw new ActiveWorkflowError('no_links', 'Start has no links', 422);
     }
-    const before = await this.get(userId);
+    const several = (await RobotAccount.id()) === userId;
+    const before = several ? null : await this.get(userId);
     const replaced = before && phpIntval(before.workflow_id) !== workflowId
       ? { workflow_id: phpIntval(before.workflow_id), workflow_name: before.workflow_name } : null;
-    await db.transaction().execute(async (trx) => {
-      await sql`DELETE FROM active_workflows WHERE user_id = ${userId}`.execute(trx);
-      await sql`INSERT INTO active_workflows (user_id, workflow_id, mode, trigger_component_id, activated_at, watch_state)
-        VALUES (${userId}, ${workflowId}, ${mode.mode}, ${mode.component_id}, NOW(), 'starting')`.execute(trx);
-    });
-    return { active: await this.get(userId), replaced };
+    try {
+      await db.transaction().execute(async (trx) => {
+        // a person's other active workflow is replaced; the robot's other rows stay
+        if (several) await sql`DELETE FROM active_workflows WHERE user_id = ${userId} AND workflow_id = ${workflowId}`.execute(trx);
+        else await sql`DELETE FROM active_workflows WHERE user_id = ${userId}`.execute(trx);
+        await sql`INSERT INTO active_workflows (user_id, workflow_id, mode, trigger_component_id, activated_at, watch_state)
+          VALUES (${userId}, ${workflowId}, ${mode.mode}, ${mode.component_id}, NOW(), 'starting')`.execute(trx);
+      });
+    } catch (e: any) {
+      // Until 2026-10-29_active_workflows_per_workflow.sql runs, the table is keyed by user alone: the robot's
+      // second workflow is a duplicate key there, a refusal and not a server error.
+      if (several && isDuplicateKey(e)) {
+        throw new ActiveWorkflowError('robot_busy', 'The robot can run one workflow at a time until the database is updated.', 409);
+      }
+      throw e;
+    }
+    return { active: await this.row(userId, workflowId), replaced };
   }
 
   async deactivate(userId: number, workflowId: number): Promise<void> {
     await sql`DELETE FROM active_workflows WHERE user_id = ${userId} AND workflow_id = ${workflowId}`.execute(db);
   }
 
-  /** The user's active row, or null; ages in seconds from the database's NOW() (the worker's clock). */
+  /** The user's active row (a person has one), or null; ages in seconds from the database's NOW() (the worker's clock). */
   async get(userId: number): Promise<Record<string, any> | null> {
+    return this.fetchAged(sql`a.user_id = ${userId} ORDER BY a.workflow_id`);
+  }
+
+  /** The workflow's active row, whoever's it is (the robot's for a robot workflow), or null; ages as get(). */
+  async forWorkflow(workflowId: number): Promise<Record<string, any> | null> {
+    return this.fetchAged(sql`a.workflow_id = ${workflowId} ORDER BY a.user_id`);
+  }
+
+  private async row(userId: number, workflowId: number): Promise<Record<string, any> | null> {
+    return this.fetchAged(sql`a.user_id = ${userId} AND a.workflow_id = ${workflowId}`);
+  }
+
+  private async fetchAged(where: ReturnType<typeof sql>): Promise<Record<string, any> | null> {
     const row = (await sql<any>`SELECT a.*, w.name AS workflow_name, NOW() AS db_now FROM active_workflows a
-      LEFT JOIN agent_workflows w ON w.id = a.workflow_id WHERE a.user_id = ${userId}`.execute(db)).rows[0];
+      LEFT JOIN agent_workflows w ON w.id = a.workflow_id WHERE ${where} LIMIT 1`.execute(db)).rows[0];
     if (!row) return null;
     const now = seconds(row.db_now);
     row.checked_age_s = row.watch_checked_at ? now - seconds(row.watch_checked_at) : null;
@@ -88,10 +116,11 @@ export class ActiveWorkflowService {
     return row;
   }
 
-  /** Every active row with its workflow's owner and enabled flag (the worker's reconcile). */
+  /** Every active row with its workflow's owner, enabled flag and the row user's kind ('service' = the robot): the worker's reconcile. */
   async all(): Promise<Record<string, any>[]> {
-    return (await sql<any>`SELECT a.*, w.user_id AS owner_id, w.enabled FROM active_workflows a
-      JOIN agent_workflows w ON w.id = a.workflow_id ORDER BY a.user_id`.execute(db)).rows;
+    return (await sql<any>`SELECT a.*, w.user_id AS owner_id, w.enabled, u.kind AS user_kind FROM active_workflows a
+      JOIN agent_workflows w ON w.id = a.workflow_id LEFT JOIN users u ON u.id = a.user_id
+      ORDER BY a.user_id, a.workflow_id`.execute(db)).rows;
   }
 
   /** Whether the worker may serve the row now; a row that may not is idle, not deactivated (fixing it resumes it). */
@@ -119,8 +148,9 @@ export class ActiveWorkflowService {
     return gone;
   }
 
-  async setState(userId: number, state: string, message: string | null): Promise<void> {
-    await sql`UPDATE active_workflows SET watch_state = ${state}, watch_message = ${message}, watch_checked_at = NOW() WHERE user_id = ${userId}`.execute(db);
+  async setState(userId: number, workflowId: number, state: string, message: string | null): Promise<void> {
+    await sql`UPDATE active_workflows SET watch_state = ${state}, watch_message = ${message}, watch_checked_at = NOW()
+      WHERE user_id = ${userId} AND workflow_id = ${workflowId}`.execute(db);
   }
 
   /**

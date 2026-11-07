@@ -160,7 +160,6 @@ test('node runner: the transcript mirrors the overlay', () => {
 
 function collection(): void {
   createCollectionTables(d);
-  d.exec('CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT)');
 }
 const robot = () => Number(d.prepare("INSERT INTO users (kind) VALUES ('service')").run().lastInsertRowid);
 const pb = (user: number, key: string, text: string) => d.prepare('INSERT INTO playbooks (user_id, pkey, title, text) VALUES (?, ?, ?, ?)').run(user, key, key, text);
@@ -362,7 +361,6 @@ async function go(pbConfig: Record<string, any>, codeOutput: string, opts: { wit
   const db = new DatabaseSync(':memory:');
   createRunTables(db);
   createCollectionTables(db);
-  db.exec('CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT)');
   db.exec("INSERT INTO users (kind) VALUES ('service')");
   db.exec('CREATE TABLE mcp_servers (id INTEGER PRIMARY KEY, user_id TEXT, name TEXT, url TEXT, headers TEXT, enabled INTEGER)');
   opts.seed?.(db);

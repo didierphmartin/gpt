@@ -65,7 +65,7 @@ export function parseTitle(text: string): string {
   return title;
 }
 
-export type PlaybookRow = { id: number; pkey: string; title: string; text: string; updated_at: string };
+export type PlaybookRow = { id: number; pkey: string; title: string; text: string; updated_at: string; is_robot?: boolean };
 
 const COLS = sql`id, pkey, title, text, updated_at`;
 
@@ -101,21 +101,50 @@ export class PlaybookStore {
   /** `ex` is the pool, or the transaction a publish runs in. */
   constructor(private readonly ex: Kysely<DB> = db) {}
 
-  async list(userId: number): Promise<any[]> {
+  /** The owners whose rows a caller sees: the user, and the robot when the caller may use it. */
+  private static owners(userId: number, robotId: number | null): number[] {
+    return robotId === null || robotId === userId ? [userId] : [userId, robotId];
+  }
+
+  /**
+   * The rows a caller sees, as a WHERE fragment: the user's, plus with robotId the robot's shared rows. The robot's
+   * published copies (source_id set: the ServiceNow bridge's frozen set, managed by publish / robotList / unpublish)
+   * are never shared rows.
+   */
+  private static scope(userId: number, robotId: number | null) {
+    if (robotId === null) return sql`user_id = ${userId}`;
+    if (robotId === userId) return sql`user_id = ${userId} AND source_id IS NULL`;
+    return sql`(user_id = ${userId} OR user_id = ${robotId} AND source_id IS NULL)`;
+  }
+
+  /** robotId: also the robot's rows (is_robot = true), for a caller who may use the robot. */
+  async list(userId: number, robotId: number | null = null): Promise<any[]> {
     // automation_id: the automation that manages the playbook (null = none); save_playbook_agent checks it on a key clash.
-    const rows = (await sql<any>`SELECT ${COLS}, automation_id FROM playbooks WHERE user_id = ${userId} ORDER BY title`.execute(this.ex)).rows.map(norm);
+    const rows = (await sql<any>`SELECT id, user_id, pkey, title, text, updated_at, automation_id FROM playbooks
+      WHERE ${PlaybookStore.scope(userId, robotId)} ORDER BY title`.execute(this.ex)).rows;
     const out: any[] = [];
     for (const r of rows) {
-      const used = await this.usedBy(userId, r.id);
-      const automationId = (r as any).automation_id;
-      out.push({ ...r, automation_id: automationId === null || automationId === undefined ? null : Number(automationId), used_by: used.agents.length + used.nodes.length });
+      const { user_id, ...rest } = r;
+      const id = Number(r.id);
+      const used = await this.links(userId, id, robotId); // every link counts, named or not
+      const automationId = r.automation_id;
+      out.push({
+        ...rest,
+        id,
+        automation_id: automationId === null || automationId === undefined ? null : Number(automationId),
+        is_robot: robotId !== null && Number(user_id) === robotId,
+        used_by: used.agents.length + used.nodes.length,
+      });
     }
     return out;
   }
 
-  async get(userId: number, id: number): Promise<PlaybookRow | null> {
-    const r = (await sql<any>`SELECT ${COLS} FROM playbooks WHERE id = ${id} AND user_id = ${userId}`.execute(this.ex)).rows[0];
-    return r ? norm(r) : null;
+  async get(userId: number, id: number, robotId: number | null = null): Promise<PlaybookRow | null> {
+    const r = (await sql<any>`SELECT id, user_id, pkey, title, text, updated_at FROM playbooks
+      WHERE id = ${id} AND ${PlaybookStore.scope(userId, robotId)}`.execute(this.ex)).rows[0];
+    if (!r) return null;
+    const { user_id, ...rest } = r;
+    return { ...norm(rest), is_robot: robotId !== null && Number(user_id) === robotId };
   }
 
   async getByKey(userId: number, pkey: string): Promise<PlaybookRow | null> {
@@ -134,10 +163,12 @@ export class PlaybookStore {
   }
 
   /** Create (id null) or update. The text must parse; the key defaults to the title's (create) or stays (update). */
-  async save(userId: number, id: number | null, text: string, pkey: string | null): Promise<PlaybookRow> {
+  async save(userId: number, id: number | null, text: string, pkey: string | null, robotId: number | null = null): Promise<PlaybookRow> {
     const title = parseTitle(text);
-    const current = id === null ? null : await this.get(userId, id);
+    const current = id === null ? null : await this.get(userId, id, robotId);
     if (id !== null && current === null) throw new PlaybookStoreError('not_found', `Playbook #${id} not found`, 404);
+    // a robot playbook stays the robot's (updated by id); a new one is always the caller's
+    if (current !== null && current.is_robot) userId = robotId as number;
     const key = pkey ?? current?.pkey ?? keyFromTitle(title);
     if (!isValidKey(key)) {
       throw new PlaybookStoreError('invalid_key',
@@ -155,7 +186,7 @@ export class PlaybookStore {
       await sql`UPDATE playbooks SET pkey = ${key}, title = ${title}, text = ${text}, updated_at = CURRENT_TIMESTAMP
         WHERE id = ${id} AND user_id = ${userId}`.execute(this.ex);
     }
-    return (await this.get(userId, id))!;
+    return (await this.get(userId, id, robotId))!;
   }
 
   /**
@@ -231,36 +262,79 @@ export class PlaybookStore {
     return personName(u);
   }
 
-  async delete(userId: number, id: number): Promise<void> {
-    if ((await this.get(userId, id)) === null) throw new PlaybookStoreError('not_found', `Playbook #${id} not found`, 404);
-    const used = await this.usedBy(userId, id);
+  async delete(userId: number, id: number, robotId: number | null = null): Promise<void> {
+    const current = await this.get(userId, id, robotId);
+    if (current === null) throw new PlaybookStoreError('not_found', `Playbook #${id} not found`, 404);
+    // every link refuses; only those on the caller's and the robot's agents and workflows are named
+    const [agents, nodes, otherAgents, otherWorkflows] = PlaybookStore.split(await this.links(userId, id, robotId), userId, robotId);
+    if (current.is_robot) userId = robotId as number;
     const names = [
-      ...used.agents.map((a) => `agent "${a.name}"`),
-      ...used.nodes.map((n) => `node "${n.node_name}" in workflow "${n.workflow_name}"`),
+      ...agents.map((a) => `agent "${a.name}"`),
+      ...nodes.map((n) => `node "${n.node_name}" in workflow "${n.workflow_name}"`),
+      ...(otherWorkflows === 0 ? [] : [otherWorkflows === 1 ? '1 other workflow' : `${otherWorkflows} other workflows`]),
+      ...(otherAgents === 0 ? [] : [otherAgents === 1 ? '1 other agent' : `${otherAgents} other agents`]),
     ];
     if (names.length) throw new PlaybookStoreError('in_use', 'This playbook is used by ' + names.join(', ') + '.', 409);
     await sql`DELETE FROM playbooks WHERE id = ${id} AND user_id = ${userId}`.execute(this.ex);
   }
 
-  /** The agents and workflow nodes (the user's own) that link to the playbook. */
-  async usedBy(userId: number, id: number): Promise<{
+  /**
+   * The agents and workflow nodes (the user's own) that link to the playbook. A robot playbook is linked from every
+   * user's: only the caller's and the robot's are named; `others` counts the other agents and workflows.
+   */
+  async usedBy(userId: number, id: number, robotId: number | null = null): Promise<{
     agents: { id: number; name: string }[];
     nodes: { workflow_id: number; workflow_name: string; node_name: string }[];
+    others: number;
   }> {
-    const ag = (await sql<any>`SELECT id, name FROM agents WHERE user_id = ${userId} AND playbook_id = ${id} ORDER BY name`.execute(this.ex)).rows;
-    const agents = ag.map((a) => ({ id: Number(a.id), name: String(a.name) }));
+    const [agents, nodes, otherAgents, otherWorkflows] = PlaybookStore.split(await this.links(userId, id, robotId), userId, robotId);
+    const strip = <T extends { owner: number }>(r: T): Omit<T, 'owner'> => {
+      const { owner: _o, ...rest } = r;
+      return rest;
+    };
+    return { agents: agents.map(strip), nodes: nodes.map(strip), others: otherAgents + otherWorkflows };
+  }
+
+  /** [agents and nodes the caller may open (their own, the robot's), the number of other agents, of other workflows]. */
+  private static split(links: Links, caller: number, robotId: number | null): [LinkAgent[], LinkNode[], number, number] {
+    const sees = (r: { owner: number }) => r.owner === caller || (robotId !== null && r.owner === robotId);
+    const hiddenNodes = links.nodes.filter((n) => !sees(n));
+    const seenAgents = links.agents.filter(sees);
+    return [seenAgents, links.nodes.filter(sees), links.agents.length - seenAgents.length, new Set(hiddenNodes.map((n) => n.workflow_id)).size];
+  }
+
+  /** usedBy, unfiltered, with each row's owner. */
+  private async links(userId: number, id: number, robotId: number | null): Promise<Links> {
+    const o = PlaybookStore.owners(userId, robotId);
+    // a robot playbook (not a published copy) is linked from any permitted user's agents and workflows: scan them all
+    let all = false;
+    if (robotId !== null) {
+      all = (await sql<any>`SELECT 1 AS one FROM playbooks WHERE id = ${id} AND user_id = ${robotId} AND source_id IS NULL`.execute(this.ex)).rows.length > 0;
+    }
+    const ag = all
+      ? (await sql<any>`SELECT id, name, user_id FROM agents WHERE playbook_id = ${id} ORDER BY name`.execute(this.ex)).rows
+      : (await sql<any>`SELECT id, name, user_id FROM agents WHERE user_id IN (${sql.join(o)}) AND playbook_id = ${id} ORDER BY name`.execute(this.ex)).rows;
+    const agents = ag.map((a) => ({ id: Number(a.id), name: String(a.name), owner: Number(a.user_id) }));
     // The node's link lives in its config JSON: decoded here, so the query stays portable.
-    const rows = (await sql<any>`SELECT n.config, w.id AS workflow_id, w.name AS workflow_name
-      FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id
-      WHERE w.user_id = ${String(userId)} AND n.node_type = 'playbook' ORDER BY w.name, n.id`.execute(this.ex)).rows;
-    const nodes: { workflow_id: number; workflow_name: string; node_name: string }[] = [];
+    const rows = all
+      ? (await sql<any>`SELECT n.config, w.id AS workflow_id, w.name AS workflow_name, w.user_id AS owner
+          FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id
+          WHERE n.node_type = 'playbook' ORDER BY w.name, n.id`.execute(this.ex)).rows
+      : (await sql<any>`SELECT n.config, w.id AS workflow_id, w.name AS workflow_name, w.user_id AS owner
+          FROM workflow_nodes n JOIN agent_workflows w ON w.id = n.workflow_id
+          WHERE w.user_id IN (${sql.join(o.map(String))}) AND n.node_type = 'playbook' ORDER BY w.name, n.id`.execute(this.ex)).rows;
+    const nodes: LinkNode[] = [];
     for (const r of rows) {
       let cfg: any = null;
       try { cfg = typeof r.config === 'string' ? JSON.parse(r.config) : r.config; } catch { cfg = null; }
       if (cfg && typeof cfg === 'object' && Number(cfg.playbook_id ?? 0) === id) {
-        nodes.push({ workflow_id: Number(r.workflow_id), workflow_name: String(r.workflow_name), node_name: String(cfg.name ?? 'Playbook') });
+        nodes.push({ workflow_id: Number(r.workflow_id), workflow_name: String(r.workflow_name), node_name: String(cfg.name ?? 'Playbook'), owner: Number(r.owner) });
       }
     }
     return { agents, nodes };
   }
 }
+
+type LinkAgent = { id: number; name: string; owner: number };
+type LinkNode = { workflow_id: number; workflow_name: string; node_name: string; owner: number };
+type Links = { agents: LinkAgent[]; nodes: LinkNode[] };

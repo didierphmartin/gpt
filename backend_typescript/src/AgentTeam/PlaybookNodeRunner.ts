@@ -44,8 +44,18 @@ export class PlaybookNodeRunner {
     private readonly factories: PlaybookNodeRunnerFactories = {},
   ) {}
 
-  /** unattended: no human present, any gate ends the run as handed_off. */
-  async run(userId: number, nodeConfig: Record<string, any>, requestText: string, emit: Emit, unattended = false): Promise<PlaybookNodeResult> {
+  /**
+   * unattended: no human present, any gate ends the run as handed_off.
+   * mcpUserId: whose MCP servers the tools come from (a robot workflow's: the robot); default userId.
+   */
+  async run(
+    userId: number,
+    nodeConfig: Record<string, any>,
+    requestText: string,
+    emit: Emit,
+    unattended = false,
+    mcpUserId: number | null = null
+  ): Promise<PlaybookNodeResult> {
     let doc = PlaybookNodeRunner.parseDocument(nodeConfig.playbook ?? null);
 
     // Node-level write authorization: markdown playbooks cannot set policy.writes_enabled, so the node
@@ -56,7 +66,8 @@ export class PlaybookNodeRunner {
       doc = PlaybookDocument.fromArray(arr);
     }
 
-    const mcp = this.factories.mcp ? await this.factories.mcp(userId) : await PlaybookNodeRunner.defaultMcp(userId);
+    const mcpUser = mcpUserId ?? userId;
+    const mcp = this.factories.mcp ? await this.factories.mcp(mcpUser) : await PlaybookNodeRunner.defaultMcp(mcpUser);
 
     // Bound agent.* targets have no invocation path yet, so no agent names are resolved here.
     const analysis = new PlaybookAnalyzer().analyze(doc, Object.keys(mcp.availableTools()), []);

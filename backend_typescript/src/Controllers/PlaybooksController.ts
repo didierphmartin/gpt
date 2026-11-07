@@ -3,6 +3,7 @@ import { PlaybookStore, PlaybookStoreError } from '../Playbook/PlaybookStore';
 import { EditionConfig } from '../Services/Edition';
 import { RobotAccount } from '../Services/RobotAccount';
 import { RobotPolicy } from '../Services/RobotPolicy';
+import { RobotOwnership } from '../Services/RobotOwnership';
 import { Ctx, ControllerResult } from '../Support/Http';
 
 /** /api/v1/playbooks — the playbook collection (CRUD + used-by + publish to the robot), over PlaybookStore. Mirrors PlaybooksController.php. */
@@ -16,10 +17,15 @@ export class PlaybooksController {
     return new RobotPolicy(this.cfg);
   }
 
+  /** The robot's id when the caller may use the robot (its shared rows), else null. */
+  private robotFor(userId: number): Promise<number | null> {
+    return new RobotOwnership(this.cfg).robotFor(userId);
+  }
+
   /** The user's playbooks; each row carries `published` (null | 'published' | 'changed') when the user can use the robot. */
   async index(ctx: Ctx): Promise<ControllerResult> {
     return this.guard(ctx, async (u) => {
-      const rows = await this.store.list(u);
+      const rows = await this.store.list(u, await this.robotFor(u));
       if (await this.policy().canUse(u)) {
         const robotId = await RobotAccount.id();
         const status = robotId === null ? {} : await this.store.publishStatus(u, robotId);
@@ -43,23 +49,23 @@ export class PlaybooksController {
   async show(ctx: Ctx): Promise<ControllerResult> {
     return this.guard(ctx, async (u) => {
       const id = this.id(ctx);
-      const row = await this.store.get(u, id);
+      const row = await this.store.get(u, id, await this.robotFor(u));
       if (row === null) throw new PlaybookStoreError('not_found', `Playbook #${id} not found`, 404);
       return { success: true, data: row };
     });
   }
 
   async create(ctx: Ctx): Promise<ControllerResult> {
-    return this.guard(ctx, async (u) => ({ success: true, data: await this.store.save(u, null, this.text(ctx), this.key(ctx)) }));
+    return this.guard(ctx, async (u) => ({ success: true, data: await this.store.save(u, null, this.text(ctx), this.key(ctx), await this.robotFor(u)) }));
   }
 
   async update(ctx: Ctx): Promise<ControllerResult> {
-    return this.guard(ctx, async (u) => ({ success: true, data: await this.store.save(u, this.id(ctx), this.text(ctx), this.key(ctx)) }));
+    return this.guard(ctx, async (u) => ({ success: true, data: await this.store.save(u, this.id(ctx), this.text(ctx), this.key(ctx), await this.robotFor(u)) }));
   }
 
   async destroy(ctx: Ctx): Promise<ControllerResult> {
     return this.guard(ctx, async (u) => {
-      await this.store.delete(u, this.id(ctx));
+      await this.store.delete(u, this.id(ctx), await this.robotFor(u));
       return { success: true };
     });
   }
@@ -67,8 +73,9 @@ export class PlaybooksController {
   async usedBy(ctx: Ctx): Promise<ControllerResult> {
     return this.guard(ctx, async (u) => {
       const id = this.id(ctx);
-      if ((await this.store.get(u, id)) === null) throw new PlaybookStoreError('not_found', `Playbook #${id} not found`, 404);
-      return { success: true, data: await this.store.usedBy(u, id) };
+      const robot = await this.robotFor(u);
+      if ((await this.store.get(u, id, robot)) === null) throw new PlaybookStoreError('not_found', `Playbook #${id} not found`, 404);
+      return { success: true, data: await this.store.usedBy(u, id, robot) };
     });
   }
 

@@ -26,10 +26,19 @@ const ctx = (userId: number | null, params: Record<string, any> = {}, extra: Rec
 
 // ---- ActiveWorkflowService ----
 
+/** Who is the robot (kind 'service') and who may use it: 3 and 4 are people, 9 the robot. */
+function usersTable(d: SchedDb): void {
+  d.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, role TEXT, kind TEXT NOT NULL DEFAULT 'person');
+    INSERT INTO users (id, role, kind) VALUES (3, 'user', 'person'), (4, 'user', 'person'), (9, 'robot', 'service');
+    CREATE TABLE packages (role TEXT PRIMARY KEY, name TEXT, builtin INTEGER, capabilities TEXT, updated_at TEXT);
+    INSERT INTO packages (role, name, builtin, capabilities) VALUES ('user', 'User', 1, '{}'), ('robot', 'Robot', 1, '{}');`);
+}
+
 function activeSetup() {
   const clock = { now: '2026-10-14 09:00:00' };
   const d = installSchedulerDb(() => clock.now);
   eventWorkerSchema(d);
+  usersTable(d);
   option(d, 1, 3);
   return { d, clock, svc: () => new ActiveWorkflowService() };
 }
@@ -118,7 +127,7 @@ test('active: check reasons, state and ages', async () => {
   assert.deepEqual(await svc().check(await first()).then((c) => [c.ok, c.reason]), [true, null]);
   assert.equal((await svc().get(3))!.checked_age_s, null);
   clock.now = '2026-10-14 09:00:40';
-  await svc().setState(3, 'waiting', 'fallback');
+  await svc().setState(3, 64, 'waiting', 'fallback');
   clock.now = '2026-10-14 09:01:00';
   const a = (await svc().get(3))!;
   assert.deepEqual([a.watch_state, a.watch_message, a.checked_age_s, a.activated_age_s], ['waiting', 'fallback', 20, 60]);
@@ -190,13 +199,13 @@ test('controller: deleting the event row deactivates; a failing sweep does not f
 // ---- EventWorker ----
 
 class FakeTransport implements WatchTransport {
-  open = new Map<number, string>();
-  answers = new Map<number, [string | false, number, string]>();
+  open = new Map<string, string>();
+  answers = new Map<string, [string | false, number, string]>();
   started = 0;
-  start(key: number, _url: string, _headers: string[], body: string) { this.open.set(key, body); this.started++; }
-  cancel(key: number) { this.open.delete(key); }
+  start(key: string, _url: string, _headers: string[], body: string) { this.open.set(key, body); this.started++; }
+  cancel(key: string) { this.open.delete(key); }
   done() {
-    const out = new Map<number, [string | false, number, string]>();
+    const out = new Map<string, [string | false, number, string]>();
     for (const [k, a] of this.answers) {
       if (this.open.has(k)) {
         out.set(k, a);
@@ -206,16 +215,16 @@ class FakeTransport implements WatchTransport {
     this.answers = new Map();
     return out;
   }
-  answer(key: number, payload: any) {
+  answer(key: string, payload: any) {
     this.answers.set(key, [JSON.stringify({ jsonrpc: '2.0', id: 1, result: { structuredContent: payload } }), 200, '']);
   }
 }
 
 class FakeRuns implements RunSpawner {
-  started: Array<[number, number]> = [];
-  ended = new Map<number, number>();
+  started: Array<[string, number]> = [];
+  ended = new Map<string, number>();
   ticks = 0;
-  start(key: number, scheduleId: number) { this.started.push([key, scheduleId]); }
+  start(key: string, scheduleId: number) { this.started.push([key, scheduleId]); }
   done() { const d = this.ended; this.ended = new Map(); return d; }
   scheduleTick() { this.ticks++; }
 }
@@ -224,6 +233,7 @@ function workerSetup(opts: { log?: (l: string) => void; runs?: RunSpawner; serve
   const t = { now: 1000.0 };
   const d = installSchedulerDb(() => fmt(new Date(Math.trunc(t.now) * 1000)));
   eventWorkerSchema(d);
+  usersTable(d);
   option(d, 1, 3);
   workflow(d, 64, 3, 1);
   const r = row(d, 64, 3, 'event', 1);
@@ -233,8 +243,10 @@ function workerSetup(opts: { log?: (l: string) => void; runs?: RunSpawner; serve
   const w = new EventWorker(new ActiveWorkflowService(), opts.serverFor ?? ((u, n) => WatchCall.server(u, n)), tr, opts.runs ?? runs,
     () => t.now, opts.log ?? null);
   const step = async (after = 0) => { t.now += after; await w.step(); };
-  const state = (user = 3) => {
-    const s = d.prepare('SELECT watch_state, watch_message FROM active_workflows WHERE user_id = ?').get(user) as any;
+  const state = (user = 3, wf: number | null = null) => {
+    const s = (wf
+      ? d.prepare('SELECT watch_state, watch_message FROM active_workflows WHERE user_id = ? AND workflow_id = ?').get(user, wf)
+      : d.prepare('SELECT watch_state, watch_message FROM active_workflows WHERE user_id = ?').get(user)) as any;
     return s ? [s.watch_state, s.watch_message] : [];
   };
   const active = (user = 3, wf = 64) => new ActiveWorkflowService().activate(user, wf);
@@ -247,9 +259,9 @@ function workerSetup(opts: { log?: (l: string) => void; runs?: RunSpawner; serve
   const running = async () => {
     await active();
     await step();
-    tr.answer(3, { status: 'ready' });
+    tr.answer('3:64', { status: 'ready' });
     await step(1);
-    assert.equal(w.slots()[3].state, 'running');
+    assert.equal(w.slots()['3:64'].state, 'running');
   };
   const editWatch = (folder: string) => {
     const watch = JSON.parse(JSON.stringify(WATCH));
@@ -266,16 +278,16 @@ test('worker: nothing active, nothing open; an option workflow waits, runs on re
   const s = workerSetup();
   await s.active();
   await s.step();
-  assert.ok(s.tr.open.has(3));
+  assert.ok(s.tr.open.has('3:64'));
   assert.equal(s.state()[0], 'waiting');
-  s.tr.answer(3, { status: 'ready', via: 'event', events: 'on' });
+  s.tr.answer('3:64', { status: 'ready', via: 'event', events: 'on' });
   await s.step(1);
-  assert.deepEqual(s.runs.started, [[3, s.r]]);
+  assert.deepEqual(s.runs.started, [['3:64', s.r]]);
   assert.equal(s.state()[0], 'running');
-  assert.ok(!s.tr.open.has(3), 'no wait during a run');
-  s.runs.ended.set(3, 0);
+  assert.ok(!s.tr.open.has('3:64'), 'no wait during a run');
+  s.runs.ended.set('3:64', 0);
   await s.step(1);
-  assert.ok(s.tr.open.has(3), 'waiting again');
+  assert.ok(s.tr.open.has('3:64'), 'waiting again');
   assert.deepEqual(s.state(), ['waiting', null]);
 });
 
@@ -283,7 +295,7 @@ test('worker: a timeout waits again; events off is the fallback', async () => {
   const s = workerSetup();
   await s.active();
   await s.step();
-  s.tr.answer(3, { status: 'timeout', events: 'off' });
+  s.tr.answer('3:64', { status: 'timeout', events: 'off' });
   await s.step(1);
   assert.equal(s.tr.started, 2);
   assert.deepEqual(s.state(), ['waiting', 'fallback']);
@@ -295,38 +307,38 @@ test('worker: an error backs off doubling to the cap; a good answer resets it', 
   await s.step();
   const delays: number[] = [];
   for (let i = 0; i < 5; i++) {
-    s.tr.answer(3, { error: 'reconnect_needed' });
+    s.tr.answer('3:64', { error: 'reconnect_needed' });
     await s.step(1);
-    delays.push(s.w.slots()[3].backoff);
+    delays.push(s.w.slots()['3:64'].backoff);
     assert.deepEqual(s.state(), ['error', 'reconnect_needed']);
-    await s.step(s.w.slots()[3].until - s.t.now - 0.5); // not yet
-    assert.ok(!s.tr.open.has(3));
+    await s.step(s.w.slots()['3:64'].until - s.t.now - 0.5); // not yet
+    assert.ok(!s.tr.open.has('3:64'));
     await s.step(1); // due: wait again
-    assert.ok(s.tr.open.has(3));
+    assert.ok(s.tr.open.has('3:64'));
   }
   assert.deepEqual(delays, [30, 60, 120, 240, 300]);
-  s.tr.answer(3, { status: 'timeout' });
+  s.tr.answer('3:64', { status: 'timeout' });
   await s.step(1);
-  assert.equal(s.w.slots()[3].backoff, 0);
+  assert.equal(s.w.slots()['3:64'].backoff, 0);
 });
 
 test('worker: a failed run keeps the watch after a backoff; a timeout does not clear the failure', async () => {
   const s = workerSetup();
   await s.active();
   await s.step();
-  s.tr.answer(3, { status: 'ready' });
+  s.tr.answer('3:64', { status: 'ready' });
   await s.step(1);
-  s.runs.ended.set(3, 1);
+  s.runs.ended.set('3:64', 1);
   await s.step(1);
   assert.deepEqual(s.state(), ['error', 'run_failed']);
-  assert.ok(!s.tr.open.has(3), 'no wait at once: no ready -> fail loop');
+  assert.ok(!s.tr.open.has('3:64'), 'no wait at once: no ready -> fail loop');
   await s.step(EventWorker.BACKOFF_MIN_S);
-  assert.ok(s.tr.open.has(3));
+  assert.ok(s.tr.open.has('3:64'));
   assert.deepEqual(s.state(), ['waiting', 'run_failed']);
-  s.tr.answer(3, { status: 'timeout', events: 'off' });
+  s.tr.answer('3:64', { status: 'timeout', events: 'off' });
   await s.step(1);
   assert.deepEqual(s.state(), ['waiting', 'run_failed']);
-  assert.equal(s.w.slots()[3].backoff, 30);
+  assert.equal(s.w.slots()['3:64'].backoff, 30);
 });
 
 test('worker: failed runs back off doubling and a success resets', async () => {
@@ -335,26 +347,26 @@ test('worker: failed runs back off doubling and a success resets', async () => {
   await s.step();
   const delays: number[] = [];
   for (let i = 0; i < 2; i++) {
-    s.tr.answer(3, { status: 'ready', via: 'event', events: 'on' });
+    s.tr.answer('3:64', { status: 'ready', via: 'event', events: 'on' });
     await s.step(1);
-    assert.equal(s.w.slots()[3].state, 'running');
-    s.runs.ended.set(3, 1);
+    assert.equal(s.w.slots()['3:64'].state, 'running');
+    s.runs.ended.set('3:64', 1);
     await s.step(1);
-    delays.push(s.w.slots()[3].backoff);
+    delays.push(s.w.slots()['3:64'].backoff);
     assert.deepEqual(s.state(), ['error', 'run_failed']);
-    await s.step(s.w.slots()[3].until - s.t.now - 0.5);
-    assert.ok(!s.tr.open.has(3));
+    await s.step(s.w.slots()['3:64'].until - s.t.now - 0.5);
+    assert.ok(!s.tr.open.has('3:64'));
     await s.step(1);
-    assert.ok(s.tr.open.has(3));
+    assert.ok(s.tr.open.has('3:64'));
   }
   assert.deepEqual(delays, [30, 60]);
   assert.equal(s.runs.started.length, 2);
-  s.tr.answer(3, { status: 'ready' });
+  s.tr.answer('3:64', { status: 'ready' });
   await s.step(1);
-  s.runs.ended.set(3, 0);
+  s.runs.ended.set('3:64', 0);
   await s.step(1);
-  assert.equal(s.w.slots()[3].backoff, 0);
-  assert.ok(s.tr.open.has(3));
+  assert.equal(s.w.slots()['3:64'].backoff, 0);
+  assert.ok(s.tr.open.has('3:64'));
   assert.deepEqual(s.state(), ['waiting', null]);
 });
 
@@ -366,11 +378,11 @@ test('worker: a run that cannot start backs off and is logged', async () => {
   });
   await s.active();
   await s.step();
-  s.tr.answer(3, { status: 'ready' });
+  s.tr.answer('3:64', { status: 'ready' });
   await s.step(1);
   assert.deepEqual(s.state(), ['error', 'run_failed']);
-  assert.equal(s.w.slots()[3].backoff, 30);
-  assert.deepEqual(lines, ['event worker: run start (user 3): Error: proc_open failed']);
+  assert.equal(s.w.slots()['3:64'].backoff, 30);
+  assert.deepEqual(lines, ['event worker: run start (3:64): Error: proc_open failed']);
 });
 
 test('worker: a ready after deactivation (or a disable) starts no run', async () => {
@@ -388,7 +400,7 @@ test('worker: a ready after deactivation (or a disable) starts no run', async ()
   await s.active();
   await s.step();
   await new ActiveWorkflowService().deactivate(3, 64);
-  s.tr.answer(3, { status: 'ready' });
+  s.tr.answer('3:64', { status: 'ready' });
   await s.step(1);
   assert.deepEqual(s.runs.started, [], 'between deactivation and the next reconcile');
   assert.deepEqual(s.w.slots(), {});
@@ -397,10 +409,10 @@ test('worker: a ready after deactivation (or a disable) starts no run', async ()
   await s.active();
   await s.step();
   s.d.exec('UPDATE agent_workflows SET enabled = 0');
-  s.tr.answer(3, { status: 'ready' });
+  s.tr.answer('3:64', { status: 'ready' });
   await s.step(1);
   assert.deepEqual(s.runs.started, []);
-  assert.ok(!s.tr.open.has(3));
+  assert.ok(!s.tr.open.has('3:64'));
 });
 
 test('worker: deactivating during a run opens no new wait', async () => {
@@ -408,7 +420,7 @@ test('worker: deactivating during a run opens no new wait', async () => {
   await s.running();
   await new ActiveWorkflowService().deactivate(3, 64);
   await s.step(EventWorker.RECONCILE_S);
-  s.runs.ended.set(3, 0);
+  s.runs.ended.set('3:64', 0);
   await s.step(1);
   assert.equal(s.tr.open.size, 0);
   assert.deepEqual(s.w.slots(), {});
@@ -424,14 +436,14 @@ test('worker: no links is idle and resumes when fixed; a missing server backs of
   assert.deepEqual(s.state(), ['idle', 'no_links']);
   s.d.prepare('INSERT INTO workflow_edges (workflow_id, from_node_id, to_node_id) VALUES (?, ?, ?)').run(edges[0].workflow_id, edges[0].from_node_id, edges[0].to_node_id);
   await s.step(EventWorker.RECONCILE_S);
-  assert.ok(s.tr.open.has(3));
+  assert.ok(s.tr.open.has('3:64'));
 
   s = workerSetup();
   s.d.exec('DELETE FROM mcp_servers');
   await s.active();
   await s.step();
   assert.deepEqual(s.state(), ['error', 'server_missing']);
-  assert.equal(s.w.slots()[3].backoff, 30);
+  assert.equal(s.w.slots()['3:64'].backoff, 30);
 });
 
 test('worker: schedule mode is scheduled and ticks every minute; none or idle does not tick', async () => {
@@ -472,11 +484,11 @@ test('worker: an edited watch reopens the wait; one edited during a run is used 
   let s = workerSetup();
   await s.active();
   await s.step();
-  assert.match(s.tr.open.get(3)!, /"Inbox"/);
+  assert.match(s.tr.open.get('3:64')!, /"Inbox"/);
   s.editWatch('Archive');
   await s.step(EventWorker.RECONCILE_S);
   assert.equal(s.tr.started, 2);
-  assert.match(s.tr.open.get(3)!, /"Archive"/);
+  assert.match(s.tr.open.get('3:64')!, /"Archive"/);
   await s.step(EventWorker.RECONCILE_S);
   assert.equal(s.tr.started, 2, 'unchanged since: the wait stays');
 
@@ -485,11 +497,11 @@ test('worker: an edited watch reopens the wait; one edited during a run is used 
   s.editWatch('Archive');
   await s.step(EventWorker.RECONCILE_S);
   assert.equal(s.tr.open.size, 0);
-  s.runs.ended.set(3, 0);
+  s.runs.ended.set('3:64', 0);
   await s.step(1);
   await s.step(1);
-  assert.ok(s.tr.open.has(3));
-  assert.match(s.tr.open.get(3)!, /"Archive"/);
+  assert.ok(s.tr.open.has('3:64'));
+  assert.match(s.tr.open.get('3:64')!, /"Archive"/);
   assert.equal(s.runs.started.length, 1);
 });
 
@@ -503,7 +515,7 @@ test('worker: a swallowed error is logged once a minute; the heartbeat refreshes
     s.t.now += 10;
   }
   assert.equal(lines.length, 1);
-  assert.match(lines[0], /state write \(user 3\)/);
+  assert.match(lines[0], /state write \(3:64\)/);
   assert.match(lines[0], /locked/);
   s.t.now += 10;
   await s.w.step();
@@ -523,13 +535,13 @@ test('worker: two users are independent; a throwing server lookup does not block
   await s.active();
   await s.active(4, 80);
   await s.step();
-  s.tr.answer(3, { error: 'reconnect_needed' });
-  s.tr.answer(4, { status: 'ready' });
+  s.tr.answer('3:64', { error: 'reconnect_needed' });
+  s.tr.answer('4:80', { status: 'ready' });
   await s.step(1);
   assert.equal(s.state(3)[0], 'error');
   assert.equal(s.state(4)[0], 'running');
-  assert.equal(s.w.slots()[3].backoff, 30);
-  assert.equal(s.w.slots()[4].backoff, 0);
+  assert.equal(s.w.slots()['3:64'].backoff, 30);
+  assert.equal(s.w.slots()['4:80'].backoff, 0);
 
   s = workerSetup({ serverFor: (u, n) => { if (u === 3) throw new Error('db gone'); return WatchCall.server(u, n); } });
   s.user4();
@@ -537,9 +549,9 @@ test('worker: two users are independent; a throwing server lookup does not block
   await s.active(4, 80);
   await s.w.step();
   assert.deepEqual(s.state(3), ['error', 'unreachable']);
-  assert.equal(s.w.slots()[3].backoff, 30);
-  assert.ok(s.tr.open.has(4));
-  assert.ok(!s.tr.open.has(3));
+  assert.equal(s.w.slots()['3:64'].backoff, 30);
+  assert.ok(s.tr.open.has('4:80'));
+  assert.ok(!s.tr.open.has('3:64'));
 });
 
 test('worker: switching the active workflow cancels the old wait; during a run it waits for the end', async () => {
@@ -550,9 +562,10 @@ test('worker: switching the active workflow cancels the old wait; during a run i
   await s.step();
   await s.active(3, 66);
   await s.step(EventWorker.RECONCILE_S);
-  assert.equal(s.w.slots()[3].workflow_id, 66);
-  assert.equal(s.w.slots()[3].schedule_id, other);
+  assert.equal(s.w.slots()['3:66'].workflow_id, 66);
+  assert.equal(s.w.slots()['3:66'].schedule_id, other);
   assert.equal(s.tr.started, 2);
+  assert.deepEqual([...s.tr.open.keys()], ['3:66']); // the old wait was cancelled
 
   s = workerSetup();
   workflow(s.d, 66, 3, 1);
@@ -561,14 +574,14 @@ test('worker: switching the active workflow cancels the old wait; during a run i
   await s.active(3, 66);
   await s.step(EventWorker.RECONCILE_S);
   assert.equal(s.tr.open.size, 0);
-  assert.equal(s.w.slots()[3].workflow_id, 64);
-  assert.equal(s.w.slots()[3].state, 'running');
-  s.runs.ended.set(3, 0);
+  assert.equal(s.w.slots()['3:64'].workflow_id, 64);
+  assert.equal(s.w.slots()['3:64'].state, 'running');
+  s.runs.ended.set('3:64', 0);
   await s.step(1);
   assert.equal(s.tr.open.size, 0, 're-evaluated first');
   await s.step(1);
-  assert.ok(s.tr.open.has(3));
-  assert.equal(s.w.slots()[3].workflow_id, 66);
+  assert.ok(s.tr.open.has('3:66'));
+  assert.equal(s.w.slots()['3:66'].workflow_id, 66);
   assert.equal(s.tr.started, 2);
   assert.equal(s.runs.started.length, 1);
 });
@@ -578,7 +591,7 @@ test('worker: disabling during a run idles after it; re-enabling opens no wait u
   await s.running();
   s.d.exec('UPDATE agent_workflows SET enabled = 0');
   await s.step(EventWorker.RECONCILE_S);
-  s.runs.ended.set(3, 0);
+  s.runs.ended.set('3:64', 0);
   await s.step(1);
   await s.step(1);
   assert.equal(s.tr.open.size, 0);
@@ -592,11 +605,11 @@ test('worker: disabling during a run idles after it; re-enabling opens no wait u
   s.d.exec('UPDATE agent_workflows SET enabled = 1');
   await s.step(EventWorker.RECONCILE_S);
   assert.equal(s.tr.open.size, 0);
-  assert.equal(s.w.slots()[3].state, 'running');
-  s.runs.ended.set(3, 0);
+  assert.equal(s.w.slots()['3:64'].state, 'running');
+  s.runs.ended.set('3:64', 0);
   await s.step(1);
   await s.step(1);
-  assert.ok(s.tr.open.has(3));
+  assert.ok(s.tr.open.has('3:64'));
   assert.equal(s.runs.started.length, 1);
 });
 
@@ -606,10 +619,10 @@ test('worker: a failed state write does not lose a run end; a long failed run st
   s.d.exec('CREATE TABLE flag (v INTEGER)');
   s.d.exec('INSERT INTO flag VALUES (1)');
   s.d.exec("CREATE TRIGGER no_update BEFORE UPDATE ON active_workflows WHEN (SELECT v FROM flag) = 1 BEGIN SELECT RAISE(ABORT, 'locked'); END");
-  s.runs.ended.set(3, 0);
+  s.runs.ended.set('3:64', 0);
   await s.step(1);
-  assert.equal(s.w.slots()[3].state, 'waiting', 'the run end was taken');
-  assert.ok(s.tr.open.has(3));
+  assert.equal(s.w.slots()['3:64'].state, 'waiting', 'the run end was taken');
+  assert.ok(s.tr.open.has('3:64'));
   assert.equal(s.state()[0], 'running', 'the write failed');
   s.d.exec('UPDATE flag SET v = 0');
   await s.step(EventWorker.HEARTBEAT_S + 1);
@@ -619,13 +632,13 @@ test('worker: a failed state write does not lose a run end; a long failed run st
   await s.running();
   await s.step(EventWorker.RECONCILE_S);
   await s.step(EventWorker.RECONCILE_S);
-  s.runs.ended.set(3, 1);
+  s.runs.ended.set('3:64', 1);
   await s.step(1);
   await s.step(1);
   assert.deepEqual(s.state(), ['error', 'run_failed']);
   await s.step(EventWorker.BACKOFF_MIN_S);
   assert.deepEqual(s.state(), ['waiting', 'run_failed']);
-  assert.ok(s.tr.open.has(3));
+  assert.ok(s.tr.open.has('3:64'));
 });
 
 test('worker: a row whose check throws does not stop the others', async () => {
@@ -640,7 +653,7 @@ test('worker: a row whose check throws does not stop the others', async () => {
     return inner(sqlText, params);
   });
   await s.step();
-  assert.ok(s.tr.open.has(4));
+  assert.ok(s.tr.open.has('4:80'));
 });
 
 // ---- WatchCall ----
@@ -696,7 +709,7 @@ test('watch call: the server (own row wins, by slug), the request, the answers a
 const node = process.execPath;
 const runCmd = (id: number): [string, string[]] => [node, ['-e', `const id=${id}; if (id === 9) setTimeout(() => {}, 30000); else process.exit(id === 7 ? 3 : 0);`]];
 const tickOk: [string, string[]] = [node, ['-e', 'process.exit(0)']];
-async function waitFor(s: ProcRunSpawner, seen: Map<number, number>, key: number, max = 5000): Promise<number | null> {
+async function waitFor(s: ProcRunSpawner, seen: Map<string, number>, key: string, max = 5000): Promise<number | null> {
   const end = Date.now() + max;
   while (Date.now() < end) {
     for (const [k, v] of s.done()) seen.set(k, v);
@@ -709,18 +722,18 @@ async function waitFor(s: ProcRunSpawner, seen: Map<number, number>, key: number
 test('spawner: exit codes; a run past its limit is killed; a live run is not overwritten; a hung tick is killed', async () => {
   const cwd = os.tmpdir();
   let s = new ProcRunSpawner(runCmd, tickOk, cwd);
-  const seen = new Map<number, number>();
-  s.start(1, 5);
-  s.start(2, 7);
-  assert.equal(await waitFor(s, seen, 1), 0);
-  assert.equal(await waitFor(s, seen, 2), 3);
+  const seen = new Map<string, number>();
+  s.start('1:5', 5);
+  s.start('2:7', 7);
+  assert.equal(await waitFor(s, seen, '1:5'), 0);
+  assert.equal(await waitFor(s, seen, '2:7'), 3);
 
   const lines: string[] = [];
   s = new ProcRunSpawner(runCmd, tickOk, cwd, 1, (l) => lines.push(l));
-  s.start(1, 9); // sleeps
-  assert.throws(() => s.start(1, 5), /still in flight/);
+  s.start('1:5', 9); // sleeps
+  assert.throws(() => s.start('1:5', 5), /still in flight/); // refused: key 1:5 still runs
   assert.equal(lines.length, 1);
-  const code = await waitFor(s, new Map(), 1, 5000);
+  const code = await waitFor(s, new Map(), '1:5', 5000);
   assert.notEqual(code, null);
   assert.notEqual(code, 0, 'killed at the limit');
   await s.stopAll(1);
@@ -893,6 +906,7 @@ test('live stream: events carry the cursor, state every 5 s, pings every 15 s, b
 test('runByName: authentication, a name, an unknown name, then run() on the found id', async () => {
   const d = installSchedulerDb(() => '2026-10-14 09:00:00');
   d.exec('CREATE TABLE agent_workflows (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT)');
+  usersTable(d);
   d.exec("INSERT INTO agent_workflows (id, user_id, name) VALUES (44, 3, 'Daily digest')");
   const c = new WorkflowController();
   let seen: any = null;
@@ -910,6 +924,7 @@ test('runByName: authentication, a name, an unknown name, then run() on the foun
 test('live: an SSE of run events, state and bye; access is checked', async () => {
   const d = installSchedulerDb(() => '2026-10-14 09:00:00');
   eventWorkerSchema(d);
+  usersTable(d);
   const runsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'live_'));
   const c = new WorkflowController();
   (c as any).workflowRepository = { canUserAccess: async (u: number, w: number) => u === 3 && w === 64 };

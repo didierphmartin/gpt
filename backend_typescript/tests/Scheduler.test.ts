@@ -309,7 +309,9 @@ test('schedule controller: repeat types, a bad cron and a bad trigger are 400; a
   const { ScheduledWorkflowController } = require('../src/Controllers/ScheduledWorkflowController');
   const d = installSchedulerDb(() => '2026-10-14 09:00:00');
   eventWorkerSchema(d);
-  d.exec('CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT)');
+  // the controller asks whether the caller may use the robot (a robot workflow's schedules are the robot's)
+  d.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, role TEXT, kind TEXT NOT NULL DEFAULT 'person');
+    CREATE TABLE packages (role TEXT PRIMARY KEY, name TEXT, builtin INTEGER, capabilities TEXT, updated_at TEXT);`);
   workflow(d, 64, 3, null);
   const c = new ScheduledWorkflowController();
   const create = (body: any) => c.create({ user_id: 3, body: { workflow_id: 64, scheduled_time: '2026-10-14 10:00:00', ...body }, params: {}, query: {}, headers: {} });

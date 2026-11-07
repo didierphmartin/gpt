@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { isDuplicateKey } from '../Support/DbErrors';
 import path from 'path';
 import { Request, Response } from 'express';
 import { sql } from 'kysely';
@@ -38,6 +39,11 @@ import { config as appConfig } from '../config/env';
 import { PlaybookSource } from '../AgentTeam/PlaybookSource';
 import { PlaybookOutcome } from '../AgentTeam/PlaybookOutcome';
 import { PlaybookStore } from '../Playbook/PlaybookStore';
+import { phpStr } from '../Playbook/php';
+import { RobotOwnership, lockedResponse } from '../Services/RobotOwnership';
+import { RobotAccount } from '../Services/RobotAccount';
+import { RobotPolicy } from '../Services/RobotPolicy';
+import { WorkflowOwnerTransfer, WorkflowTransferError } from '../AgentTeam/WorkflowOwnerTransfer';
 
 /**
  * Mirrors src/AgentTeam/Controllers/WorkflowController.php — the management CRUD slice plus the
@@ -66,6 +72,23 @@ export class WorkflowController {
     return phpIntval(ctx.params?.id ?? 0);
   }
 
+  /** Robot ownership rules (PHP keeps one per request; this controller is a singleton, so one per use). */
+  protected ownership(): RobotOwnership {
+    return new RobotOwnership(appConfig);
+  }
+
+  /** The 423 a locked (running robot) workflow answers to every edit. */
+  static lockedResponse(name: string): ControllerResult {
+    return lockedResponse(name);
+  }
+
+  /** The 423 body when this workflow is robot-owned and active, else null. */
+  private async lockedGuard(workflowId: number): Promise<ControllerResult | null> {
+    if (!(await this.ownership().isLocked(workflowId))) return null;
+    const r = (await sql<any>`SELECT name FROM agent_workflows WHERE id = ${workflowId}`.execute(db)).rows[0];
+    return WorkflowController.lockedResponse(String(r?.name ?? ''));
+  }
+
   /** GET /api/v1/workflows */
   async index(ctx: Ctx): Promise<ControllerResult> {
     const userId = this.getUserId(ctx);
@@ -75,16 +98,29 @@ export class WorkflowController {
     }
 
     try {
-      const workflows = await this.workflowRepository.findByUser(userId, false);
+      const robotFor = await this.ownership().robotFor(userId);
+      const workflows = await this.workflowRepository.findByUser(userId, false, robotFor);
 
       const ids = workflows.map((w) => w.id as number);
       const realtimeIds = await this.graphRepository.findRealtimeWorkflowIds(ids);
       const realtimeSet = new Set(realtimeIds);
 
+      // Robot marks and locks for the whole list in at most one query (no per-row lookups on a remote DB):
+      // robot rows are listed only for a caller who may use the robot.
+      const robotIds = robotFor === null ? [] : workflows.filter((w) => w.userId === robotFor).map((w) => w.id as number);
+      const lockedSet = new Set<number>();
+      if (robotIds.length > 0) {
+        const rows = (await sql<any>`SELECT workflow_id FROM active_workflows WHERE workflow_id IN (${sql.join(robotIds)})`.execute(db)).rows;
+        for (const r of rows) lockedSet.add(Number(r.workflow_id));
+      }
+      const robotSet = new Set(robotIds);
+
       return {
         success: true,
         data: workflows.map((workflow) => {
           const arr = workflowToApiArray(workflow);
+          arr.is_robot = robotSet.has(workflow.id as number);
+          arr.locked = lockedSet.has(workflow.id as number);
           arr.runtime_mode = realtimeSet.has(workflow.id as number) ? 'realtime' : 'batch';
           return arr;
         }),
@@ -117,10 +153,11 @@ export class WorkflowController {
     if (hasGraph) {
       const graphData = body.definition ?? body.graph ?? {};
       try {
-        resolved = await new WorkflowRefResolver().resolve(userId, graphData.nodes ?? graphData.steps ?? [], graphData.edges ?? []);
+        resolved = await new WorkflowRefResolver().resolve(userId, graphData.nodes ?? graphData.steps ?? [], graphData.edges ?? [],
+          await this.ownership().robotFor(userId));
       } catch (e: any) {
         if (!(e instanceof UnresolvedRefsException)) throw e;
-        return { success: false, error: 'unknown references', missing: e.missing, status_code: 422 };
+        return { success: false, error: 'unknown references', error_code: 'unknown_references', missing: e.missing, status_code: 422 };
       }
     }
 
@@ -199,7 +236,7 @@ export class WorkflowController {
     }
 
     try {
-      if (!(await this.workflowRepository.canUserAccess(userId, workflowId))) {
+      if (!(await this.workflowRepository.canUserAccess(userId, workflowId, await this.ownership().robotFor(userId)))) {
         return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
       }
 
@@ -315,7 +352,7 @@ export class WorkflowController {
     const mode = (q.a2a ?? '0') === '1' ? 'a2a' : (q.modular ?? '0') === '1' || !phpEmpty(q.package ?? null) ? 'modular' : 'single';
     const zip = (q.format ?? '') === 'zip';
     try {
-      if (!(await this.workflowRepository.canUserAccess(userId, workflowId))) {
+      if (!(await this.workflowRepository.canUserAccess(userId, workflowId, await this.ownership().robotFor(userId)))) {
         return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
       }
       // A packaged Start document is copied only from this user's own document storage.
@@ -365,7 +402,7 @@ export class WorkflowController {
     }
 
     try {
-      if (!(await this.workflowRepository.canUserAccess(userId, workflowId))) {
+      if (!(await this.workflowRepository.canUserAccess(userId, workflowId, await this.ownership().robotFor(userId)))) {
         return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
       }
 
@@ -376,7 +413,12 @@ export class WorkflowController {
         return { success: false, error: 'Workflow not found', status_code: 404 };
       }
 
-      return { success: true, data: workflowToArray(workflow), status_code: 200 };
+      const own = this.ownership();
+      return {
+        success: true,
+        data: { ...workflowToArray(workflow), is_robot: await own.isRobotOwned(workflowId), locked: await own.isLocked(workflowId) },
+        status_code: 200,
+      };
     } catch (e: any) {
       return { success: false, error: e?.message ?? '', status_code: 500 };
     }
@@ -397,9 +439,11 @@ export class WorkflowController {
     }
 
     try {
-      if (!(await this.workflowRepository.isOwner(userId, workflowId))) {
+      if (!(await this.workflowRepository.isOwner(userId, workflowId, await this.ownership().robotFor(userId)))) {
         return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
       }
+      const locked = await this.lockedGuard(workflowId);
+      if (locked) return locked;
 
       const workflow = await this.workflowRepository.findById(workflowId);
 
@@ -438,16 +482,42 @@ export class WorkflowController {
         }
       }
 
-      let updated = await this.workflowRepository.update(workflow);
+      // Names are unique per owner (uq_workflows_user_name): a robot workflow renamed onto another robot workflow's name.
+      if (isset('name') && (await this.nameTaken(workflow.userId as number, phpStr(body.name), workflowId))) {
+        return WorkflowController.nameTakenResponse(phpStr(body.name));
+      }
 
+      // Links resolve against the workflow's OWNER (and the robot's rows when the owner is the robot or may use
+      // it), never the editor's own rows; a robot workflow may link only what the robot can use. Checked before
+      // anything is written.
+      let resolved: { nodes: any[]; edges: any[] } | null = null;
       if (hasGraph) {
         const graphData = body.definition ?? body.graph ?? {};
         const nodes = graphData.nodes ?? graphData.steps ?? [];
         const edges = graphData.edges ?? [];
+        const owner = workflow.userId as number;
+        const own = this.ownership();
+        const refs = new WorkflowRefResolver();
+        resolved = await refs.resolve(owner, nodes, edges, await own.linkRobotFor(owner));
+        if (owner === (await own.robotId())) {
+          const foreign = await refs.foreignToRobot(owner, resolved.nodes);
+          if (foreign.length > 0) throw new UnresolvedRefsException(foreign);
+        }
+      }
 
-        const resolved = await new WorkflowRefResolver().resolve(userId, nodes, edges);
+      let updated: Workflow;
+      try {
+        updated = await this.workflowRepository.update(workflow);
+      } catch (e: any) {
+        // lost a race for the name (MySQL duplicate key, SQLSTATE 23000)
+        if (isset('name') && isDuplicateKey(e)) {
+          return WorkflowController.nameTakenResponse(phpStr(body.name));
+        }
+        throw e;
+      }
+
+      if (resolved !== null) {
         await this.graphRepository.saveGraph(workflowId, resolved.nodes, resolved.edges);
-
         updated = (await this.workflowRepository.findById(workflowId, true))!;
       }
 
@@ -459,10 +529,20 @@ export class WorkflowController {
       };
     } catch (e: any) {
       if (e instanceof UnresolvedRefsException) {
-        return { success: false, error: 'unknown references', missing: e.missing, status_code: 422 };
+        return { success: false, error: 'unknown references', error_code: 'unknown_references', missing: e.missing, status_code: 422 };
       }
       return { success: false, error: e?.message ?? '', status_code: 500 };
     }
+  }
+
+  /** Another workflow of this owner already has the name. */
+  private async nameTaken(ownerId: number, name: string, workflowId: number): Promise<boolean> {
+    const r = await sql<any>`SELECT 1 AS one FROM agent_workflows WHERE user_id = ${ownerId} AND name = ${name} AND id <> ${workflowId}`.execute(db);
+    return r.rows.length > 0;
+  }
+
+  private static nameTakenResponse(name: string): ControllerResult {
+    return { success: false, error_code: 'name_taken', error: `A workflow named "${name}" already exists.`, status_code: 409 };
   }
 
   /** DELETE /api/v1/workflows/{id} */
@@ -479,9 +559,11 @@ export class WorkflowController {
     }
 
     try {
-      if (!(await this.workflowRepository.isOwner(userId, workflowId))) {
+      if (!(await this.workflowRepository.isOwner(userId, workflowId, await this.ownership().robotFor(userId)))) {
         return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
       }
+      const locked = await this.lockedGuard(workflowId);
+      if (locked) return locked;
 
       await this.workflowRepository.delete(workflowId);
 
@@ -505,9 +587,11 @@ export class WorkflowController {
     }
 
     try {
-      if (!(await this.workflowRepository.isOwner(userId, workflowId))) {
+      if (!(await this.workflowRepository.isOwner(userId, workflowId, await this.ownership().robotFor(userId)))) {
         return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
       }
+      const locked = await this.lockedGuard(workflowId);
+      if (locked) return locked;
 
       await this.workflowRepository.toggleEnabled(workflowId);
       const workflow = (await this.workflowRepository.findById(workflowId))!;
@@ -538,7 +622,7 @@ export class WorkflowController {
     }
 
     try {
-      if (!(await this.workflowRepository.canUserAccess(userId, workflowId))) {
+      if (!(await this.workflowRepository.canUserAccess(userId, workflowId, await this.ownership().robotFor(userId)))) {
         return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
       }
 
@@ -551,12 +635,46 @@ export class WorkflowController {
 
       return {
         success: true,
-        data: workflowToArray(duplicated),
+        data: { id: duplicated.id, name: duplicated.name },
         message: 'Workflow duplicated successfully',
         status_code: 201,
       };
     } catch (e: any) {
       return { success: false, error: e?.message ?? '', status_code: 500 };
+    }
+  }
+
+  /**
+   * PUT /api/v1/workflows/{id}/owner  body {owner: 'robot', confirm: bool}
+   * confirm false: what the transfer would do (WorkflowOwnerTransfer.preview); true: move it to the robot.
+   */
+  async owner(ctx: Ctx): Promise<ControllerResult> {
+    const userId = this.getUserId(ctx);
+    const workflowId = this.getWorkflowId(ctx);
+    const body: any = ctx.body ?? {};
+    if (userId <= 0) return { success: false, error: 'Authentication required', status_code: 401 };
+    if ((body.owner ?? null) !== 'robot') {
+      return { success: false, error: "owner must be 'robot'", error_code: 'invalid', status_code: 422 };
+    }
+    if (await new RobotPolicy(appConfig).canUse(userId)) {
+      await RobotAccount.ensure(); // before ownership() reads the robot's id
+    }
+    try {
+      const transfer = new WorkflowOwnerTransfer(this.ownership());
+      const preview = await transfer.preview(userId, workflowId);
+      const locked = await this.lockedGuard(workflowId);
+      if (locked) return locked;
+      const data = (body.confirm ?? false) === true ? await transfer.toRobot(userId, workflowId) : preview;
+      return { success: true, data, status_code: 200 };
+    } catch (e) {
+      if (!(e instanceof WorkflowTransferError)) throw e;
+      return {
+        success: false,
+        error: e.message,
+        error_code: e.kind,
+        status_code: e.status,
+        ...(e.clashes.length > 0 ? { clashes: e.clashes } : {}),
+      };
     }
   }
 
@@ -575,7 +693,7 @@ export class WorkflowController {
     }
 
     try {
-      if (!(await this.workflowRepository.canUserAccess(userId, workflowId))) {
+      if (!(await this.workflowRepository.canUserAccess(userId, workflowId, await this.ownership().robotFor(userId)))) {
         return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
       }
 
@@ -610,12 +728,12 @@ export class WorkflowController {
     }
 
     try {
-      if (!(await this.workflowRepository.canUserAccess(userId, workflowId))) {
+      if (!(await this.workflowRepository.canUserAccess(userId, workflowId, await this.ownership().robotFor(userId)))) {
         return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
       }
 
       const outputStorage = new WorkflowOutputStorage();
-      const result = await outputStorage.listOutputs(workflowId, userId);
+      const result = await outputStorage.listOutputs(workflowId, await this.ownership().runAs(userId, workflowId));
 
       return { ...result, status_code: 200 };
     } catch (e: any) {
@@ -638,12 +756,12 @@ export class WorkflowController {
     }
 
     try {
-      if (!(await this.workflowRepository.canUserAccess(userId, workflowId))) {
+      if (!(await this.workflowRepository.canUserAccess(userId, workflowId, await this.ownership().robotFor(userId)))) {
         return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
       }
 
       const outputStorage = new WorkflowOutputStorage();
-      const result = await outputStorage.getOutput(workflowId, userId, filename);
+      const result = await outputStorage.getOutput(workflowId, await this.ownership().runAs(userId, workflowId), filename);
 
       return { ...result, status_code: result.success ? 200 : 404 };
     } catch (e: any) {
@@ -698,8 +816,12 @@ export class WorkflowController {
     const ctx = buildCtx(req);
     const userId = Math.trunc(Number(ctx.user_id ?? 0)) || 0;
     const body: any = ctx.body ?? {};
+    // A locked robot workflow's node does not run (checked after access: runAs is the caller's otherwise). Read
+    // before the headers go out: the refusal is a 423.
+    const workflowId = phpIntval(body.workflow_id ?? 0);
+    const lockedName = userId && workflowId > 0 ? await this.ownership().lockedRunName(userId, workflowId) : null;
 
-    res.status(200);
+    res.status(userId && lockedName !== null ? 423 : 200);
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -717,6 +839,11 @@ export class WorkflowController {
 
     if (!userId) {
       finish('error', { error: 'Authentication required' });
+      return;
+    }
+
+    if (lockedName !== null) {
+      finish('error', WorkflowController.lockedResponse(lockedName));
       return;
     }
 
@@ -741,7 +868,7 @@ export class WorkflowController {
         }
       } else if (nodeConfig.playbook_id !== undefined && nodeConfig.playbook_id !== null) {
         // A node linked to the collection sends playbook_id; the text is read here, for its owner.
-        const pb = await new PlaybookStore().get(userId, phpIntval(nodeConfig.playbook_id));
+        const pb = await new PlaybookStore().get(userId, phpIntval(nodeConfig.playbook_id), await this.ownership().robotFor(userId));
         if (pb === null) throw new Error(`Playbook #${nodeConfig.playbook_id} not found`);
         nodeConfig.playbook = pb.text;
       }
@@ -750,8 +877,10 @@ export class WorkflowController {
       let transcript = '';
       if (reason === null) {
         try {
-          // Attended: gates go to the person at the editor.
-          result = await this.playbookRunnerFactory().run(userId, nodeConfig, prompt, sseCallback);
+          // Attended: gates go to the person at the editor. A robot workflow's node (workflow_id)
+          // takes its tools from the robot's MCP servers; the run and its gates stay the caller's.
+          const mcpUser = workflowId > 0 ? await this.ownership().runAs(userId, workflowId) : userId;
+          result = await this.playbookRunnerFactory().run(userId, nodeConfig, prompt, sseCallback, false, mcpUser);
           transcript = String(result.output ?? '');
           reason = PlaybookOutcome.reason(String(result.status ?? ''), result.gate ?? null);
         } catch (e) {
@@ -805,7 +934,11 @@ export class WorkflowController {
     if (name === '') {
       return { success: false, error: 'A "workflow" name is required', status_code: 400 };
     }
-    const row = (await sql<any>`SELECT id FROM agent_workflows WHERE user_id = ${userId} AND name = ${name} LIMIT 1`.execute(db)).rows[0];
+    let row = (await sql<any>`SELECT id FROM agent_workflows WHERE user_id = ${userId} AND name = ${name} LIMIT 1`.execute(db)).rows[0];
+    const robot = await this.ownership().robotFor(userId);
+    if (!row && robot !== null) {
+      row = (await sql<any>`SELECT id FROM agent_workflows WHERE user_id = ${robot} AND name = ${name} LIMIT 1`.execute(db)).rows[0];
+    }
     if (!row) {
       return { success: false, error: `No workflow named "${name}" found for this account`, status_code: 404 };
     }
@@ -836,16 +969,18 @@ export class WorkflowController {
       res.write(event === 'ping' ? ': ping\n\n' : `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
     try {
-      if (!userId || !workflowId || !(await this.workflowRepository.canUserAccess(userId, workflowId))) {
+      if (!userId || !workflowId || !(await this.workflowRepository.canUserAccess(userId, workflowId, await this.ownership().robotFor(userId)))) {
         emit('error', { error: userId ? 'Workflow not found or access denied' : 'Authentication required' });
         return;
       }
       const log = new WorkflowRunLog(WorkflowRunLog.defaultDir(appConfig));
       const active = new ActiveWorkflowService();
+      const activeOwner = await this.ownership().runAs(userId, workflowId);
       const cursor = typeof ctx.query?.cursor === 'string' ? ctx.query.cursor : null;
       await LiveStream.run(
         (c) => LiveFeed.next(log, workflowId, c),
-        () => active.get(userId),
+        // a person's own row (whichever workflow it is, as GET /workflows/active); a robot workflow's own row of the robot's several
+        activeOwner === userId ? () => active.get(userId) : () => active.forWorkflow(workflowId),
         emit,
         this.liveClock.sleep,
         this.liveClock.now,
@@ -884,9 +1019,11 @@ export class WorkflowController {
     }
 
     try {
-      if (!(await this.workflowRepository.canUserAccess(userId, workflowId))) {
+      if (!(await this.workflowRepository.canUserAccess(userId, workflowId, await this.ownership().robotFor(userId)))) {
         return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
       }
+      const locked = await this.lockedGuard(workflowId);
+      if (locked) return locked;
 
       const workflow = await this.workflowRepository.findById(workflowId);
       if (!workflow) {
@@ -916,11 +1053,13 @@ export class WorkflowController {
       const hasGraphNodes = await this.graphRepository.getNodes(workflowId);
       const isGraphWorkflow = hasGraphNodes.length > 0;
 
+      // Run the workflow with the appropriate runner: a robot workflow runs (and is recorded) as the robot
+      const runAs = await this.ownership().runAs(userId, workflowId);
       let result: Record<string, any>;
       if (isGraphWorkflow) {
-        result = await new GraphWorkflowRunner().run(workflow, userId, inputVariables);
+        result = await new GraphWorkflowRunner().run(workflow, runAs, inputVariables);
       } else {
-        result = await new WorkflowRunner().run(workflow, userId, inputVariables);
+        result = await new WorkflowRunner().run(workflow, runAs, inputVariables);
       }
 
       result.status_code = result.success ? 200 : 500;
@@ -973,8 +1112,14 @@ export class WorkflowController {
     }
 
     try {
-      if (!(await this.workflowRepository.canUserAccess(userId, workflowId))) {
+      if (!(await this.workflowRepository.canUserAccess(userId, workflowId, await this.ownership().robotFor(userId)))) {
         sseCallback({ type: 'error', error: 'Workflow not found or access denied' });
+        done();
+        return;
+      }
+      const locked = await this.lockedGuard(workflowId);
+      if (locked) {
+        sseCallback({ type: 'error', error: locked.error });
         done();
         return;
       }
@@ -1022,13 +1167,15 @@ export class WorkflowController {
           return;
         }
 
+        // A robot workflow runs (and is recorded) as the robot. The stream context keeps the caller: the browser at
+        // the editor answers its client tools.
         const streamContext = new StreamContext(sseCallback, userId);
         const runner = new GraphWorkflowRunner().setStreamContext(streamContext);
-        await runner.run(workflow, userId, inputVariables, clientSkills, inlineDocuments, scratchFiles);
+        await runner.run(workflow, await this.ownership().runAs(userId, workflowId), inputVariables, clientSkills, inlineDocuments, scratchFiles);
       } else {
         // Old-style (steps) workflow — no streaming support.
         sseCallback({ type: 'info', message: 'Step-based workflow - running without streaming' });
-        const result = await new WorkflowRunner().run(workflow, userId, inputVariables);
+        const result = await new WorkflowRunner().run(workflow, await this.ownership().runAs(userId, workflowId), inputVariables);
         sseCallback({
           type: 'workflow_complete',
           success: result.success ?? false,
@@ -1056,9 +1203,11 @@ export class WorkflowController {
     const nodeId = phpIntval(ctx.params.nodeId);
     if (!userId) return { status_code: 401, success: false, error: 'Authentication required' };
     if (!workflowId || !nodeId) return { status_code: 400, success: false, error: 'Workflow ID and Node ID are required' };
-    if (!(await this.workflowRepository.isOwner(userId, workflowId))) {
+    if (!(await this.workflowRepository.isOwner(userId, workflowId, await this.ownership().robotFor(userId)))) {
       return { status_code: 404, success: false, error: 'Workflow not found or access denied' };
     }
+    const locked = await this.lockedGuard(workflowId);
+    if (locked) return locked;
     const node = await this.graphRepository.getNode(nodeId);
     if (!node || phpIntval(node.workflow_id) !== workflowId) return { status_code: 404, success: false, error: 'Node not found' };
 
@@ -1098,7 +1247,7 @@ export class WorkflowController {
     const nodeId = phpIntval(ctx.params.nodeId);
     if (!userId) return { status_code: 401, success: false, error: 'Authentication required' };
     if (!workflowId || !nodeId) return { status_code: 400, success: false, error: 'Workflow ID and Node ID are required' };
-    if (!(await this.workflowRepository.canUserAccess(userId, workflowId))) {
+    if (!(await this.workflowRepository.canUserAccess(userId, workflowId, await this.ownership().robotFor(userId)))) {
       return { status_code: 404, success: false, error: 'Workflow not found or access denied' };
     }
     const node = await this.graphRepository.getNode(nodeId);
@@ -1117,9 +1266,11 @@ export class WorkflowController {
     if (!workflowId || !nodeId || phpEmpty(docId)) {
       return { status_code: 400, success: false, error: 'Workflow ID, Node ID, and Document ID are required' };
     }
-    if (!(await this.workflowRepository.isOwner(userId, workflowId))) {
+    if (!(await this.workflowRepository.isOwner(userId, workflowId, await this.ownership().robotFor(userId)))) {
       return { status_code: 404, success: false, error: 'Workflow not found or access denied' };
     }
+    const locked = await this.lockedGuard(workflowId);
+    if (locked) return locked;
     const node = await this.graphRepository.getNode(nodeId);
     if (!node || phpIntval(node.workflow_id) !== workflowId) return { status_code: 404, success: false, error: 'Node not found' };
 
@@ -1201,9 +1352,11 @@ export class WorkflowController {
     if (!workflowId || !nodeId) {
       return { success: false, error: 'Workflow ID and Node ID are required', status_code: 400 };
     }
-    if (!(await this.workflowRepository.isOwner(userId, workflowId))) {
+    if (!(await this.workflowRepository.isOwner(userId, workflowId, await this.ownership().robotFor(userId)))) {
       return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
     }
+    const locked = await this.lockedGuard(workflowId);
+    if (locked) return locked;
     const node = await this.graphRepository.getNode(nodeId);
     if (!node || phpIntval(node.workflow_id) !== workflowId) {
       return { success: false, error: 'Node not found', status_code: 404 };

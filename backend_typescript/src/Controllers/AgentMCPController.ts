@@ -1,4 +1,6 @@
 import { Ctx, ControllerResult } from '../Support/Http';
+import { RobotOwnership } from '../Services/RobotOwnership';
+import { config as appEnv } from '../config/env';
 import {
   AgentRepository,
   Agent,
@@ -37,6 +39,11 @@ const SERVER_NAME = 'AgentTeam';
 const SERVER_VERSION = '1.0.0';
 
 export class AgentMCPController {
+  /** The robot's id when the caller may use the robot (its agents are shared), else null. */
+  private robotFor(userId: number): Promise<number | null> {
+    return new RobotOwnership(appEnv).robotFor(Number(userId));
+  }
+
   private repository = new AgentRepository();
 
   /**
@@ -171,7 +178,7 @@ export class AgentMCPController {
       throw new InvalidArgument('agent_id is required');
     }
 
-    if (!(await this.repository.canUserAccess(userId, Number(agentId)))) {
+    if (!(await this.repository.canUserAccess(userId, Number(agentId), await this.robotFor(userId)))) {
       throw new InvalidArgument('Agent not found');
     }
 
@@ -222,7 +229,7 @@ export class AgentMCPController {
       throw new InvalidArgument('agent_id is required');
     }
 
-    if (!(await this.repository.isOwner(userId, Number(agentId)))) {
+    if (!(await this.repository.isOwner(userId, Number(agentId), await this.robotFor(userId)))) {
       throw new InvalidArgument('Agent not found or access denied');
     }
 
@@ -261,7 +268,7 @@ export class AgentMCPController {
       throw new InvalidArgument('agent_id is required');
     }
 
-    if (!(await this.repository.isOwner(userId, Number(agentId)))) {
+    if (!(await this.repository.isOwner(userId, Number(agentId), await this.robotFor(userId)))) {
       throw new InvalidArgument('Agent not found or access denied');
     }
 

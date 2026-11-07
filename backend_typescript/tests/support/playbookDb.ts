@@ -33,6 +33,9 @@ export function createCollectionTables(d: DatabaseSync): void {
   d.exec(`CREATE TABLE agent_workflows (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, name TEXT)`);
   d.exec(`CREATE TABLE workflow_nodes (id INTEGER PRIMARY KEY AUTOINCREMENT, workflow_id INTEGER, node_type TEXT, agent_id INTEGER,
     config TEXT, pos_x INTEGER, pos_y INTEGER, drawflow_node_id TEXT)`);
+  // RobotOwnership asks these (who may use the robot; the robot's id): empty here, so nothing is shared
+  d.exec("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT, role TEXT, kind TEXT NOT NULL DEFAULT 'person')");
+  d.exec('CREATE TABLE IF NOT EXISTS packages (role TEXT PRIMARY KEY, name TEXT, builtin INTEGER, capabilities TEXT, updated_at TEXT)');
 }
 
 export const OKTA = 'A note for colleagues: Okta prod tenant only.\n\nTitle: Okta password reset\nTrigger: A user is locked out.\nInstructions:\n1. #Search Okta Users with the email.\n2. #Reset Okta Password.\n\n(Ask Identity Team before changing step 2.)\nTools used: Okta\nActions used: #Search Okta Users; #Reset Okta Password\n';

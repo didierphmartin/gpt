@@ -1,4 +1,5 @@
 import { Request, Response } from 'express';
+import { isDuplicateKey } from '../Support/DbErrors';
 import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { Ctx, ControllerResult, buildCtx } from '../Support/Http';
@@ -15,6 +16,8 @@ import { agentBuiltinTools } from '../AgentTeam/AgentToolsRegistry';
 import { StreamContext } from '../AgentTeam/StreamContext';
 import { SSEStream } from '../Services/SseStream';
 import { PlaybookStore } from '../Playbook/PlaybookStore';
+import { RobotOwnership } from '../Services/RobotOwnership';
+import { config as appEnv } from '../config/env';
 import { PlaybookAgentTools } from '../AgentTeam/PlaybookAgentTools';
 
 /**
@@ -63,8 +66,9 @@ export class AgentController {
       if (filters[k] === null) delete filters[k];
     }
 
-    const agents = await this.repository.findAccessibleByUser(userId, filters);
-    const total = await this.repository.countAccessible(userId);
+    const robotId = await this.robotFor(userId);
+    const agents = await this.repository.findAccessibleByUser(userId, filters, robotId);
+    const total = await this.repository.countAccessible(userId, robotId);
 
     return {
       success: true,
@@ -156,7 +160,7 @@ export class AgentController {
     const userId = this.getUserId(ctx);
     const agentId = this.getAgentId(ctx);
 
-    if (!(await this.repository.canUserAccess(userId, agentId))) {
+    if (!(await this.repository.canUserAccess(userId, agentId, await this.robotFor(userId)))) {
       return this.error('Agent not found', 404);
     }
 
@@ -178,11 +182,17 @@ export class AgentController {
     const agentId = this.getAgentId(ctx);
     const data: any = ctx.body ?? {};
 
-    if (!(await this.repository.isOwner(userId, agentId))) {
+    if (!(await this.repository.isOwner(userId, agentId, await this.robotFor(userId)))) {
       return this.error('Agent not found or access denied', 404);
     }
 
     const agent = (await this.repository.findById(agentId))!;
+
+    // Names are unique per owner: a robot agent renamed onto another robot agent's name.
+    if (data.name !== undefined && data.name !== null) {
+      const holder = await this.repository.findOwnedByName(String(data.name), agent.userId as number);
+      if (holder !== null && holder.id !== agentId) return this.nameTaken(String(data.name));
+    }
 
     const has = (k: string) => Object.prototype.hasOwnProperty.call(data, k);
     const isset = (k: string) => has(k) && data[k] !== null;
@@ -205,7 +215,12 @@ export class AgentController {
 
     // Only a playbook agent has a playbook; a linked agent keeps its text in the collection only.
     if (has('playbook_id') && data.playbook_id !== null && agent.agentType === 'playbook') {
-      if ((await this.findPlaybook(userId, this.intval(data.playbook_id))) === null) {
+      // a robot agent links only the robot's playbooks (it runs as the robot); a person's, theirs or the robot's
+      const robotId = await this.robotFor(userId);
+      const pb = robotId !== null && agent.userId === robotId
+        ? await this.findPlaybook(robotId, this.intval(data.playbook_id), robotId)
+        : await this.findPlaybook(userId, this.intval(data.playbook_id), robotId);
+      if (pb === null) {
         return this.error('Playbook #' + this.intval(data.playbook_id) + ' not found', 404);
       }
       agent.playbookId = this.intval(data.playbook_id);
@@ -234,6 +249,9 @@ export class AgentController {
         message: `Agent '${updated.name}' updated successfully`,
       };
     } catch (e: any) {
+      if (data.name !== undefined && data.name !== null && isDuplicateKey(e)) {
+        return this.nameTaken(String(data.name)); // lost a race for the name
+      }
       return this.error('Failed to update agent: ' + (e?.message ?? ''), 500);
     }
   }
@@ -242,8 +260,17 @@ export class AgentController {
     agent.category = category === null || category === '' ? null : String(category);
   }
 
-  private async findPlaybook(userId: number, id: number) {
-    return new PlaybookStore().get(userId, id);
+  private async findPlaybook(userId: number, id: number, robotId: number | null = null) {
+    return new PlaybookStore().get(userId, id, robotId);
+  }
+
+  /** The robot's id when the caller may use the robot (its agents are shared), else null. */
+  private robotFor(userId: number): Promise<number | null> {
+    return new RobotOwnership(appEnv).robotFor(userId);
+  }
+
+  private nameTaken(name: string): ControllerResult {
+    return { error_code: 'name_taken', ...this.error(`An agent named "${name}" already exists.`, 409) };
   }
 
   private setAgentType(agent: Agent, agentType: string): void {
@@ -270,7 +297,7 @@ export class AgentController {
     const userId = this.getUserId(ctx);
     const agentId = this.getAgentId(ctx);
 
-    if (!(await this.repository.isOwner(userId, agentId))) {
+    if (!(await this.repository.isOwner(userId, agentId, await this.robotFor(userId)))) {
       return this.error('Agent not found or access denied', 404);
     }
 
@@ -542,7 +569,7 @@ export class AgentController {
     const agentId = this.getAgentId(ctx);
     const data: any = ctx.body ?? {};
 
-    if (!(await this.repository.canUserAccess(userId, agentId))) {
+    if (!(await this.repository.canUserAccess(userId, agentId, await this.robotFor(userId)))) {
       return this.error('Agent not found', 404);
     }
 
@@ -568,7 +595,7 @@ export class AgentController {
     const userId = this.getUserId(ctx);
     const agentId = this.getAgentId(ctx);
 
-    if (!(await this.repository.isOwner(userId, agentId))) {
+    if (!(await this.repository.isOwner(userId, agentId, await this.robotFor(userId)))) {
       return this.error('Agent not found or access denied', 404);
     }
 
@@ -596,7 +623,7 @@ export class AgentController {
     const userId = this.getUserId(ctx);
     const agentId = this.getAgentId(ctx);
 
-    if (!(await this.repository.isOwner(userId, agentId))) {
+    if (!(await this.repository.isOwner(userId, agentId, await this.robotFor(userId)))) {
       return this.error('Agent not found or access denied', 404);
     }
 

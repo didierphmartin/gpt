@@ -2,26 +2,26 @@ import { ActiveWorkflowService } from './ActiveWorkflowService';
 import { WatchCall, WatchServer } from './WatchCall';
 import { phpIntval } from './WorkflowRepository';
 
-/** The event worker's long-polls: one open request per key (a user id). Mirrors WatchTransport.php. */
+/** The event worker's long-polls: one open request per key (an active row's "{user}:{workflow}"). Mirrors WatchTransport.php. */
 export interface WatchTransport {
-  start(key: number, url: string, headers: string[], body: string): void;
-  cancel(key: number): void;
+  start(key: string, url: string, headers: string[], body: string): void;
+  cancel(key: string): void;
   /** The requests that finished since the last call: key => [body | false, http status, error]. */
-  done(): Map<number, [string | false, number, string]>;
+  done(): Map<string, [string | false, number, string]>;
 }
 
 /** The event worker's child processes: an event's runs, and the scheduler tick. Mirrors RunSpawner.php. */
 export interface RunSpawner {
-  /** Start the run-schedule entry point for key (a user id). */
-  start(key: number, scheduleId: number): void;
+  /** Start the run-schedule entry point for key (an active row's "{user}:{workflow}"). */
+  start(key: string, scheduleId: number): void;
   /** key => exit code, for the runs that ended since the last call. */
-  done(): Map<number, number>;
+  done(): Map<string, number>;
   /** Start the scheduler tick for the active schedule-mode workflows, unless the previous one still runs. */
   scheduleTick(): void;
 }
 
 type Slot = {
-  workflow_id: number; schedule_id: number; owner: number; watch: any; mode: string; state: string;
+  user: number; workflow_id: number; schedule_id: number; owner: number; watch: any; mode: string; state: string;
   until: number; backoff: number; message: string | null; run_failed: boolean;
   written_at: number; written: [string, string | null] | null; gone: boolean;
 };
@@ -32,8 +32,8 @@ const same = (a: any, b: any) => JSON.stringify(a) === JSON.stringify(b);
  * The event worker's logic, without I/O of its own: every RECONCILE_S it reads the active workflows; for
  * each option-mode one it holds a wait on the option's waiting tool, starts a run on `ready`, waits again
  * when the run ends, and backs off on errors and failed runs; once a minute, while one of them is in
- * schedule mode, it starts the scheduler tick. One slot per user (one active workflow each). State goes to
- * active_workflows. Mirrors backend/src/AgentTeam/Services/EventWorker.php.
+ * schedule mode, it starts the scheduler tick for the schedule-mode ones. One slot per active row, keyed
+ * "{user}:{workflow}" (a person has one row, the robot one per workflow). State goes to active_workflows. Mirrors backend/src/AgentTeam/Services/EventWorker.php.
  */
 export class EventWorker {
   static readonly RECONCILE_S = 5;
@@ -43,12 +43,13 @@ export class EventWorker {
   static readonly SCHEDULE_TICK_S = 60;
   static readonly LOG_REPEAT_S = 60;
 
-  private slotsByUser = new Map<number, Slot>();
+  /** row key "{user}:{workflow}" => slot */
+  private slotsByKey = new Map<string, Slot>();
   private lastReconcile = -Infinity;
   private lastTick = -Infinity;
   private requestId = 0;
-  /** user id => [workflow_id, schedule_id] of a run that failed while its slot was flagged for rebuild */
-  private carry = new Map<number, [number, number]>();
+  /** row key => [workflow_id, schedule_id] of a run that failed while its slot was flagged for rebuild */
+  private carry = new Map<string, [number, number]>();
   /** logged line => when, for the once-a-minute limit */
   private logged = new Map<string, number>();
 
@@ -71,36 +72,36 @@ export class EventWorker {
         this.logError('reconcile', e); // retried on the next step
       }
     }
-    for (const [user, [body, http, err]] of this.transport.done()) {
+    for (const [key, [body, http, err]] of this.transport.done()) {
       try {
-        await this.onAnswer(user, WatchCall.answer(body, http, String(err)), now);
+        await this.onAnswer(String(key), WatchCall.answer(body, http, String(err)), now);
       } catch (e) {
-        this.logError('answer', e, user); // one user's failure must not lose the others' answers
+        this.logError('answer', e, String(key)); // one row's failure must not lose the others' answers
       }
     }
-    for (const [user, exit] of this.runs.done()) {
+    for (const [key, exit] of this.runs.done()) {
       try {
-        await this.onRunEnd(user, exit, now);
+        await this.onRunEnd(String(key), exit, now);
       } catch (e) {
-        this.logError('run end', e, user);
+        this.logError('run end', e, String(key));
       }
     }
-    for (const user of [...this.slotsByUser.keys()]) {
+    for (const key of [...this.slotsByKey.keys()]) {
       try {
-        const s = this.slotsByUser.get(user)!;
+        const s = this.slotsByKey.get(key)!;
         if (s.state === 'open' || (s.state === 'backoff' && now >= s.until)) {
-          await this.openWait(user, now);
+          await this.openWait(key, now);
         }
-        const cur = this.slotsByUser.get(user);
+        const cur = this.slotsByKey.get(key);
         if (cur !== undefined && now - cur.written_at >= EventWorker.HEARTBEAT_S) {
-          await this.write(user, true);
+          await this.write(key, true);
         }
       } catch (e) {
-        this.logError('wait', e, user);
+        this.logError('wait', e, key);
       }
     }
     // the scheduler tick runs only while some active workflow is in schedule mode and qualifies (not idle)
-    const scheduled = [...this.slotsByUser.values()].some((s) => s.state === 'scheduled');
+    const scheduled = [...this.slotsByKey.values()].some((s) => s.state === 'scheduled');
     if (scheduled && now - this.lastTick >= EventWorker.SCHEDULE_TICK_S) {
       this.lastTick = now;
       try {
@@ -111,86 +112,107 @@ export class EventWorker {
     }
   }
 
-  slots(): Record<number, { workflow_id: number; schedule_id: number; state: string; until: number; backoff: number }> {
-    const out: Record<number, any> = {};
-    for (const [user, s] of this.slotsByUser) {
-      out[user] = { workflow_id: s.workflow_id, schedule_id: s.schedule_id, state: s.state, until: s.until, backoff: s.backoff };
+  /** row key => slot */
+  slots(): Record<string, { workflow_id: number; schedule_id: number; state: string; until: number; backoff: number }> {
+    const out: Record<string, any> = {};
+    for (const [key, s] of this.slotsByKey) {
+      out[key] = { workflow_id: s.workflow_id, schedule_id: s.schedule_id, state: s.state, until: s.until, backoff: s.backoff };
     }
     return out;
   }
 
   stop(): void {
-    for (const user of this.slotsByUser.keys()) this.transport.cancel(user);
+    for (const key of this.slotsByKey.keys()) this.transport.cancel(key);
   }
 
   private async reconcile(): Promise<void> {
     await this.active.sweep();
-    const seen = new Set<number>();
-    for (const row of await this.active.all()) {
-      seen.add(phpIntval(row.user_id));
+    const rows = await this.active.all();
+    const seen = new Set(rows.map((r) => EventWorker.keyOf(r)));
+    // the removed rows first: a person's replaced run is flagged before the new row is looked at
+    for (const key of [...this.slotsByKey.keys()]) {
+      if (!seen.has(key)) {
+        if (this.slotsByKey.get(key)!.state === 'running') {
+          this.slotsByKey.get(key)!.gone = true; // let the run finish, then forget it
+        } else {
+          this.drop(key);
+        }
+      }
+    }
+    for (const key of [...this.carry.keys()]) {
+      if (!seen.has(key) && !this.slotsByKey.has(key)) this.carry.delete(key); // its row is gone: a later reactivation starts clean
+    }
+    for (const row of rows) {
       try {
         await this.reconcileRow(row);
       } catch (e) {
-        this.logError('reconcile', e, phpIntval(row.user_id)); // one row's failure must not stop the later rows
-      }
-    }
-    for (const user of [...this.slotsByUser.keys()]) {
-      if (!seen.has(user)) {
-        if (this.slotsByUser.get(user)!.state === 'running') {
-          this.slotsByUser.get(user)!.gone = true; // let the run finish, then forget it
-        } else {
-          this.drop(user);
-        }
+        this.logError('reconcile', e, EventWorker.keyOf(row)); // one row's failure must not stop the later rows
       }
     }
   }
 
+  /** A slot's key: its active row's "{user}:{workflow}". */
+  private static keyOf(row: Record<string, any>): string {
+    return phpIntval(row.user_id) + ':' + phpIntval(row.workflow_id);
+  }
+
   private async reconcileRow(row: Record<string, any>): Promise<void> {
-    const user = phpIntval(row.user_id);
+    const key = EventWorker.keyOf(row);
     const check = await this.active.check(row);
     const schedule = check.mode.schedule;
-    const key: [number, number] = [phpIntval(row.workflow_id), schedule ? phpIntval(schedule.id) : 0];
+    const ids: [number, number] = [phpIntval(row.workflow_id), schedule ? phpIntval(schedule.id) : 0];
     const watch = EventWorker.watchOf(schedule);
-    let slot = this.slotsByUser.get(user) ?? null;
+    let slot = this.slotsByKey.get(key) ?? null;
     if (slot !== null && slot.state === 'running') {
-      // a run is in flight: nothing for this user changes until it ends; if the row changed, the slot is then rebuilt
-      if (!check.ok || !same([slot.workflow_id, slot.schedule_id], key) || slot.mode !== row.mode || !same(slot.watch, watch)) {
+      // a run is in flight: nothing for this row changes until it ends; if the row changed, the slot is then rebuilt
+      if (!check.ok || !same([slot.workflow_id, slot.schedule_id], ids) || slot.mode !== row.mode || !same(slot.watch, watch)) {
         slot.gone = true;
       }
       return;
     }
-    let carried: Partial<Slot> | null = null;
-    if (slot === null && this.carry.has(user)) {
-      // a failed run that ended while the row changed
-      carried = same(this.carry.get(user), key) ? { message: 'run_failed', run_failed: true } : null;
-      this.carry.delete(user);
+    if (slot === null && (row.user_kind ?? null) !== 'service' && this.replacedRunInFlight(phpIntval(row.user_id))) {
+      return; // a person's replaced workflow still runs: the new one opens once it ends (the robot's run independently)
     }
-    if (slot !== null && !same([slot.workflow_id, slot.schedule_id], key)) {
-      this.drop(user); // another workflow (or row) is active now
+    let carried: Partial<Slot> | null = null;
+    if (slot === null && this.carry.has(key)) {
+      // a failed run that ended while the row changed
+      carried = same(this.carry.get(key), ids) ? { message: 'run_failed', run_failed: true } : null;
+      this.carry.delete(key);
+    }
+    if (slot !== null && !same([slot.workflow_id, slot.schedule_id], ids)) {
+      this.drop(key); // another schedule row of this workflow is active now
       slot = null;
     }
     if (!check.ok) {
-      if (slot !== null && slot.state !== 'running') this.transport.cancel(user);
-      this.slotsByUser.set(user, this.slot(key, row, schedule, 'idle', slot ?? carried));
-      this.slotsByUser.get(user)!.message = check.reason;
-      await this.write(user);
+      if (slot !== null && slot.state !== 'running') this.transport.cancel(key);
+      this.slotsByKey.set(key, this.slot(ids, row, schedule, 'idle', slot ?? carried));
+      this.slotsByKey.get(key)!.message = check.reason;
+      await this.write(key);
       return;
     }
     if (row.mode === 'schedule') {
-      this.slotsByUser.set(user, this.slot(key, row, schedule, 'scheduled', slot ?? carried));
-      this.slotsByUser.get(user)!.message = schedule?.next_run ?? null;
-      await this.write(user);
+      this.slotsByKey.set(key, this.slot(ids, row, schedule, 'scheduled', slot ?? carried));
+      this.slotsByKey.get(key)!.message = schedule?.next_run ?? null;
+      await this.write(key);
       return;
     }
     if (slot !== null && !['idle', 'scheduled'].includes(slot.state) && !same(slot.watch, watch)) {
       // the option's watch was edited in place (same row): close the old wait, wait again with the new one
-      this.transport.cancel(user);
-      this.slotsByUser.set(user, this.slot(key, row, schedule, 'open', slot));
+      this.transport.cancel(key);
+      this.slotsByKey.set(key, this.slot(ids, row, schedule, 'open', slot));
       return;
     }
     if (slot === null || ['idle', 'scheduled'].includes(slot.state)) {
-      this.slotsByUser.set(user, this.slot(key, row, schedule, 'open', slot ?? carried));
+      this.slotsByKey.set(key, this.slot(ids, row, schedule, 'open', slot ?? carried));
     }
+  }
+
+  /** Whether a slot of this person whose row is gone still runs (they activated another workflow meanwhile). */
+  private replacedRunInFlight(userId: number): boolean {
+    for (const s of this.slotsByKey.values()) {
+      if (s.user === userId && s.gone && s.state === 'running') return true;
+    }
+    return false;
   }
 
   /** The schedule row's event_trigger, decoded: what the wait calls. */
@@ -206,39 +228,39 @@ export class EventWorker {
 
   private slot(key: [number, number], row: Record<string, any>, schedule: Record<string, any> | null, state: string, old: Partial<Slot> | null): Slot {
     return {
-      workflow_id: key[0], schedule_id: key[1], owner: phpIntval(row.owner_id), watch: EventWorker.watchOf(schedule),
+      user: phpIntval(row.user_id), workflow_id: key[0], schedule_id: key[1], owner: phpIntval(row.owner_id), watch: EventWorker.watchOf(schedule),
       mode: row.mode, state, until: 0.0, backoff: old?.backoff ?? 0, message: old?.message ?? null,
       run_failed: old?.run_failed ?? false,
       written_at: old?.written_at ?? -Infinity, written: old?.written ?? null, gone: false,
     };
   }
 
-  private async openWait(user: number, now: number): Promise<void> {
-    const s = this.slotsByUser.get(user)!;
+  private async openWait(key: string, now: number): Promise<void> {
+    const s = this.slotsByKey.get(key)!;
     let server: WatchServer | null;
     try {
       server = s.watch !== null && typeof s.watch === 'object' ? await this.serverFor(s.owner, String(s.watch.server ?? '')) : null;
     } catch (e) {
-      this.logError('server lookup', e, user);
-      await this.backoff(user, 'unreachable', now);
+      this.logError('server lookup', e, key);
+      await this.backoff(key, 'unreachable', now);
       return;
     }
     if (server === null) {
-      await this.backoff(user, 'server_missing', now);
+      await this.backoff(key, 'server_missing', now);
       return;
     }
     const [url, headers, body] = WatchCall.request(server, s.watch, ++this.requestId);
-    this.transport.start(user, url, headers, body);
+    this.transport.start(key, url, headers, body);
     s.state = 'waiting';
     if (s.run_failed) s.message = 'run_failed'; // waiting again after a failed run: the failure still shows
-    await this.write(user);
+    await this.write(key);
   }
 
-  private async onAnswer(user: number, answer: ReturnType<typeof WatchCall.answer>, now: number): Promise<void> {
-    const s = this.slotsByUser.get(user);
+  private async onAnswer(key: string, answer: ReturnType<typeof WatchCall.answer>, now: number): Promise<void> {
+    const s = this.slotsByKey.get(key);
     if (s === undefined || s.state !== 'waiting') return; // deactivated or replaced meanwhile
     if (answer.status === 'error') {
-      await this.backoff(user, answer.message, now);
+      await this.backoff(key, answer.message, now);
       return;
     }
     if (s.run_failed) {
@@ -256,71 +278,71 @@ export class EventWorker {
     let ok: boolean;
     try {
       for (const r of await this.active.all()) {
-        if (phpIntval(r.user_id) === user) row = r;
+        if (EventWorker.keyOf(r) === key) row = r;
       }
       ok = row !== null && (await this.active.check(row)).ok;
     } catch (e) {
-      this.logError('check', e, user);
-      await this.backoff(user, 'unreachable', now);
+      this.logError('check', e, key);
+      await this.backoff(key, 'unreachable', now);
       return;
     }
     if (!ok || phpIntval(row!.workflow_id) !== s.workflow_id || row!.mode !== 'option') {
-      this.slotsByUser.delete(user); // deactivated or disabled since the wait opened: no run
+      this.slotsByKey.delete(key); // deactivated or disabled since the wait opened: no run
       return;
     }
     s.state = 'running';
     try {
-      this.runs.start(user, s.schedule_id);
+      this.runs.start(key, s.schedule_id);
     } catch (e) {
-      this.logError('run start', e, user);
+      this.logError('run start', e, key);
       s.run_failed = true;
-      await this.backoff(user, 'run_failed', now);
+      await this.backoff(key, 'run_failed', now);
       return;
     }
-    await this.write(user);
+    await this.write(key);
   }
 
-  private async onRunEnd(user: number, exit: number, now: number): Promise<void> {
-    const s = this.slotsByUser.get(user);
+  private async onRunEnd(key: string, exit: number, now: number): Promise<void> {
+    const s = this.slotsByKey.get(key);
     if (s === undefined) return;
     if (s.gone) {
-      if (exit !== 0) this.carry.set(user, [s.workflow_id, s.schedule_id]);
-      this.slotsByUser.delete(user);
-      this.lastReconcile = -Infinity; // re-evaluate before anything opens for this user
+      if (exit !== 0) this.carry.set(key, [s.workflow_id, s.schedule_id]);
+      this.slotsByKey.delete(key);
+      this.lastReconcile = -Infinity; // re-evaluate before anything opens for this row (or its user's new row)
       return;
     }
     if (exit !== 0) {
       // a run that fails before the poll delivers the mail would loop ready -> run -> fail: back off (30 s .. 300 s)
       s.run_failed = true;
-      await this.backoff(user, 'run_failed', now);
+      await this.backoff(key, 'run_failed', now);
       return;
     }
     Object.assign(s, { state: 'open', message: null, backoff: 0, run_failed: false });
   }
 
-  private async backoff(user: number, message: string, now: number): Promise<void> {
-    const s = this.slotsByUser.get(user)!;
+  private async backoff(key: string, message: string, now: number): Promise<void> {
+    const s = this.slotsByKey.get(key)!;
     const b = s.backoff === 0 ? EventWorker.BACKOFF_MIN_S : Math.min(s.backoff * 2, EventWorker.BACKOFF_MAX_S);
     Object.assign(s, { state: 'backoff', until: now + b, backoff: b, message });
-    await this.write(user);
+    await this.write(key);
   }
 
-  private drop(user: number): void {
-    this.transport.cancel(user);
-    this.slotsByUser.delete(user);
+  private drop(key: string): void {
+    this.transport.cancel(key);
+    this.slotsByKey.delete(key);
   }
 
   /** The slot's state to active_workflows: on a change, or on the heartbeat (force). */
-  private async write(user: number, force = false): Promise<void> {
-    const s = this.slotsByUser.get(user);
+  private async write(key: string, force = false): Promise<void> {
+    const s = this.slotsByKey.get(key);
     if (s === undefined) return;
     const state = s.state === 'backoff' ? 'error' : s.state === 'open' ? 'waiting' : s.state;
     const written: [string, string | null] = [state, s.message];
     if (!force && same(s.written, written)) return;
     try {
-      await this.active.setState(user, state, s.message);
+      await this.active.setState(s.user, s.workflow_id, state, s.message);
     } catch (e) {
-      this.logError('state write', e, user);
+      this.logError('state write', e, key);
       return; // 'written' stays as it was: the heartbeat retries
     }
     s.written = written;
@@ -328,10 +350,10 @@ export class EventWorker {
   }
 
   /** A swallowed error, to the log: each distinct line at most once a minute. */
-  private logError(where: string, e: unknown, user: number | null = null): void {
+  private logError(where: string, e: unknown, key: string | null = null): void {
     if (this.log === null) return;
     const err = e instanceof Error ? e : new Error(String(e));
-    const line = `event worker: ${where}` + (user !== null ? ` (user ${user})` : '') + `: ${err.constructor.name}: ${err.message}`;
+    const line = `event worker: ${where}` + (key !== null ? ` (${key})` : '') + `: ${err.constructor.name}: ${err.message}`;
     const now = this.now();
     if (now - (this.logged.get(line) ?? -Infinity) < EventWorker.LOG_REPEAT_S) return;
     for (const [l, t] of [...this.logged]) if (now - t >= EventWorker.LOG_REPEAT_S) this.logged.delete(l);

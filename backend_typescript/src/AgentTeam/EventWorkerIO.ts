@@ -10,11 +10,11 @@ import { McpEndpoint } from '../Services/McpEndpoint';
 export class FetchTransport implements WatchTransport {
   static readonly TIMEOUT_S = 180;
 
-  private open = new Map<number, AbortController>();
-  private finished = new Map<number, [string | false, number, string]>();
+  private open = new Map<string, AbortController>();
+  private finished = new Map<string, [string | false, number, string]>();
   private wake: (() => void) | null = null;
 
-  start(key: number, url: string, headers: string[], body: string): void {
+  start(key: string, url: string, headers: string[], body: string): void {
     this.cancel(key);
     const ctrl = new AbortController();
     this.open.set(key, ctrl);
@@ -36,7 +36,7 @@ export class FetchTransport implements WatchTransport {
       .catch((e: any) => settle([false, 0, String(e?.message ?? e) || 'fetch error']));
   }
 
-  cancel(key: number): void {
+  cancel(key: string): void {
     const ctrl = this.open.get(key);
     if (ctrl !== undefined) {
       this.open.delete(key);
@@ -45,7 +45,7 @@ export class FetchTransport implements WatchTransport {
     this.finished.delete(key);
   }
 
-  done(): Map<number, [string | false, number, string]> {
+  done(): Map<string, [string | false, number, string]> {
     const out = this.finished;
     this.finished = new Map();
     return out;
@@ -76,7 +76,7 @@ type Command = [string, string[]];
  * PHP's ProcRunSpawner (proc_open); the commands are given (node + the entry script) instead of PHP_BINARY.
  */
 export class ProcRunSpawner implements RunSpawner {
-  private runs = new Map<number, { proc: ChildProcess | null; started: number; exit: number | null }>();
+  private runs = new Map<string, { proc: ChildProcess | null; started: number; exit: number | null }>();
   private tick: { proc: ChildProcess; exit: number | null } | null = null;
   private tickStarted = 0;
 
@@ -96,15 +96,15 @@ export class ProcRunSpawner implements RunSpawner {
     }
   }
 
-  start(key: number, scheduleId: number): void {
+  start(key: string, scheduleId: number): void {
     if (this.runs.has(key)) {
-      this.log(`run for user ${key} is still in flight: schedule ${scheduleId} not started`);
-      throw new Error(`a run for user ${key} is still in flight`);
+      this.log(`run ${key} is still in flight: schedule ${scheduleId} not started`);
+      throw new Error(`a run ${key} is still in flight`);
     }
     const proc = this.spawnChild(this.runCommand(scheduleId));
     const entry = { proc, started: Date.now() / 1000, exit: null as number | null };
     if (proc === null) {
-      this.log(`run for user ${key} (schedule ${scheduleId}) could not start`);
+      this.log(`run ${key} (schedule ${scheduleId}) could not start`);
     } else {
       proc.on('error', () => { entry.exit = 127; });
       proc.on('exit', (code, signal) => { entry.exit = code ?? (signal ? 128 + (signal === 'SIGKILL' ? 9 : 15) : 1); });
@@ -112,9 +112,9 @@ export class ProcRunSpawner implements RunSpawner {
     this.runs.set(key, entry);
   }
 
-  done(): Map<number, number> {
+  done(): Map<string, number> {
     this.reapTick();
-    const out = new Map<number, number>();
+    const out = new Map<string, number>();
     for (const [key, r] of [...this.runs]) {
       if (r.proc === null) {
         out.set(key, 127);
@@ -122,7 +122,7 @@ export class ProcRunSpawner implements RunSpawner {
         continue;
       }
       if (r.exit === null && Date.now() / 1000 - r.started > this.runLimitS) {
-        this.log(`run for user ${key} passed ${this.runLimitS} s: killed`);
+        this.log(`run ${key} passed ${this.runLimitS} s: killed`);
         r.proc.kill('SIGKILL');
         r.exit = 137;
       }
