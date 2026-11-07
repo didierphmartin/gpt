@@ -24,6 +24,17 @@ export type StartDocumentReader = { read(doc: any): Buffer | string | null } | n
 
 export type PackageFile = { path: string; code: string; encoding?: string };
 
+/**
+ * The Docker app's skill store as a compile reads it (SkillStore.compileResolver): the folder of skill `dir` as the
+ * workflow's owner sees it, null when they cannot; `from` is the skill that needs it (a store resolver prefers its group).
+ */
+export type SkillResolver = (dir: string, from?: string | null) => string | null;
+
+/** A compile's skills: the skills folder, or the skill store's resolver. */
+export type SkillsRoot = string | SkillResolver;
+
+export type SkillFile = { dir: string; rel: string; bytes: Buffer; entry: PackageFile };
+
 /** What every LangGraph program imports (the single file; a package's workflow, common and agents). */
 const BASE_REQUIREMENTS = ['langchain', 'langchain-anthropic', 'langchain-openai', 'langgraph', 'httpx',
   'pydantic', 'python-dotenv'];
@@ -90,7 +101,7 @@ export class LangGraphPackage {
   }
 
   /** The package's own files (the code modules, agents and code/ files are the generator's). */
-  static files(facts: any, skillsRoot: string, documents: StartDocumentReader = null): PackageFile[] {
+  static files(facts: any, skillsRoot: SkillsRoot, documents: StartDocumentReader = null): PackageFile[] {
     const skills = LangGraphPackage.skillFiles(facts, skillsRoot);
     const out: PackageFile[] = LangGraphPackage.docFiles(facts, 'modular', skills,
       strval(facts['safeName']) + (has(facts, 'swarm') ? '_modular_swarm' : '_modular'), 'workflow.py');
@@ -161,69 +172,316 @@ export class LangGraphPackage {
   }
 
   /**
-   * Every file of every used skill folder (skipping __pycache__, .DS_Store, *.pyc, .env*, dot-directories), sorted.
-   * bytes is the file's content (Buffer).
+   * Every file of every used skill folder (skipping __pycache__, .DS_Store, *.pyc, .env*, dot-directories), sorted,
+   * plus the skill's native wheels (.wheels/native/: the program installs its libraries from there, offline);
+   * never the browser's (.wheels/pyodide/). Each used skill brings the skills it requires (requiredSkills(),
+   * transitively): they are copied the same way, after the bound ones, at skills/<leaf>/ (a grouped one too).
+   *
+   * skillsRoot: the folder holding the skills, or (the Docker app's skill store) a resolver giving each skill's own
+   * folder, null when the owner cannot see it. bytes is the file's content (Buffer).
    */
-  static skillFiles(facts: any, skillsRoot: string): Array<{ dir: string; rel: string; bytes: Buffer; entry: PackageFile }> {
-    const out: Array<{ dir: string; rel: string; bytes: Buffer; entry: PackageFile }> = [];
-    const root = realpath(skillsRoot);
-    for (const d of LangGraphPackage.skillDirs(facts)) {
-      const segments = StartDocumentStore.safeSegments(d);
-      const safe = segments !== null && segments.filter((seg) => seg.startsWith('.')).length === 0;
-      const base = safe && root !== false ? realpath(root + path.sep + d) : false;
-      if (base === false || root === false || !base.startsWith(root + path.sep) || !isDir(base)) {
-        throw new Error(`Skill folder "${d}" is not available on this server, so it can't be packaged.`);
+  static skillFiles(facts: any, skillsRoot: SkillsRoot): SkillFile[] {
+    const out: SkillFile[] = [];
+    const root: string | false | null = typeof skillsRoot === 'string' ? realpath(skillsRoot) : null;
+    // [skill, who needs it, where it goes]: a bound skill at its own path; a required one at skills/<leaf>/, where
+    // the scripts that need it look (SKILLS_ROOT/<leaf>/...).
+    const queue: Array<[string, string | null, string]> = LangGraphPackage.skillDirs(facts).map((d) => [d, null, d]);
+    const done = new Map<string, string>();
+    let installed: string[] | null = null; // the skill paths a folder root holds (read once, when a skill needs it)
+    while (queue.length > 0) {
+      const [d, by, as] = queue.shift()!;
+      if (done.has(as)) {
+        if (done.get(as) !== d) { // two different skills would land in one folder
+          throw new Error(`Skills "${done.get(as)}" and "${d}" both need to be available as '${as}'; rename one.`);
+        }
+        continue;
       }
-      const found: string[] = [];
-      const walk = (dir: string): void => {
-        let names: string[];
-        try {
-          names = fs.readdirSync(dir);
-        } catch {
-          return;
-        }
-        for (const name of names) {
-          const full = dir + '/' + name;
-          if (SKIP_NAMES.includes(name) || name.endsWith('.pyc') || name.startsWith('.env')) continue;
-          if (isDir(full) && name.startsWith('.')) continue;   // .git/, .pytest_cache/, ... (a link to one too)
-          // RecursiveDirectoryIterator does not descend into a symlinked directory (a leaf, and not a file).
-          if (isRealDir(full)) {
-            walk(full);
-            continue;
-          }
-          const real = isFile(full) ? realpath(full) : false;
-          if (real !== false && real.startsWith(base + path.sep)) found.push(full.slice(base.length + 1));
-        }
-      };
-      walk(base);
+      done.set(as, d);
+      const base = LangGraphPackage.skillBase(d, skillsRoot, root, by);
+      if (base === false) {
+        throw new Error(by === null
+          ? `Skill folder "${d}" is not available on this server, so it can't be packaged.`
+          : `Skill "${by}" needs skill "${d}", which is not available on this server, so it can't be packaged.`);
+      }
+      const found = LangGraphPackage.folderFiles(base, base);
+      const own: Record<string, Buffer> = {};
+      for (const rel of found) {
+        if (rel === 'SKILL.md' || rel.startsWith('scripts/')) own[rel] = fs.readFileSync(`${base}/${rel}`);
+      }
+      if (isDir(`${base}/.wheels/native`)) found.push(...LangGraphPackage.folderFiles(base, `${base}/.wheels/native`));
       sortStrings(found);
       for (const rel of found) {
         const bytes = fs.readFileSync(`${base}/${rel}`);
-        out.push({ dir: d, rel, bytes, entry: LangGraphPackage.entry(`skills/${d}/${rel}`, bytes) });
+        out.push({ dir: as, rel, bytes, entry: LangGraphPackage.entry(`skills/${as}/${rel}`, bytes) });
       }
+      let names: string[];
+      if (root !== null) {
+        installed ??= root === false ? [] : LangGraphPackage.installedSkills(root);
+        names = installed;
+      } else {
+        names = LangGraphPackage.probedSkills(d, own, skillsRoot as SkillResolver);
+      }
+      const req = LangGraphPackage.requiredSkills(d, own, names);
+      for (const m of req.missing) {
+        throw new Error(`Skill "${d}" needs skill "${m}", which is not available on this server, so it can't be packaged.`);
+      }
+      for (const q of req.requires) queue.push([q, d, basename(q)]);
     }
     return out;
   }
 
+  /** The real folder of skill d (inside the root, or from the store resolver), false when unsafe or absent. */
+  private static skillBase(d: string, skillsRoot: SkillsRoot, root: string | false | null, from: string | null = null): string | false {
+    // dir_name comes from the client-saved node config: plain segments ("GEO/geo-report" for a grouped
+    // skill; none empty, "." or "..", none starting with "." (.git, .superpowers), no "\"), resolved
+    // inside the root.
+    const segments = StartDocumentStore.safeSegments(d);
+    const safe = segments !== null && segments.filter((seg) => seg.startsWith('.')).length === 0;
+    if (!safe) return false;
+    let base: string | false;
+    if (root === null) {
+      const dir = (skillsRoot as SkillResolver)(d, from); // from: the skill that needs it (a store resolver prefers its group)
+      base = dir === null ? false : realpath(dir);
+    } else {
+      base = root !== false ? realpath(root + path.sep + d) : false;
+      base = base !== false && base.startsWith(root + path.sep) ? base : false;
+    }
+    return base !== false && isDir(base) ? base : false;
+  }
+
+  /** The skill paths under a skills root: folders (one or two levels, no dot-folder) holding a SKILL.md. */
+  private static installedSkills(root: string): string[] {
+    const out: string[] = [];
+    const ls = (dir: string): string[] => {
+      try {
+        return fs.readdirSync(dir);
+      } catch {
+        return [];
+      }
+    };
+    for (const a of ls(root)) {
+      if (a.startsWith('.') || !isDir(`${root}/${a}`)) continue;
+      if (isFile(`${root}/${a}/SKILL.md`)) {
+        out.push(a);
+        continue;
+      }
+      for (const b of ls(`${root}/${a}`)) {
+        if (!b.startsWith('.') && isFile(`${root}/${a}/${b}/SKILL.md`)) out.push(`${a}/${b}`);
+      }
+    }
+    sortStrings(out);
+    return out;
+  }
+
+  /**
+   * The store has no listing here, only the resolver: every name the skill could mean (its requires-skills, else each
+   * exact quoted literal and each /segment/ of its scripts) that resolves to a skill the owner sees (the resolver
+   * also finds a grouped skill by its leaf).
+   */
+  private static probedSkills(self: string, files: Record<string, Buffer | string>, resolve: SkillResolver): string[] {
+    const md = text(files['SKILL.md'] ?? '');
+    const cands: string[] = [...(LangGraphPackage.declaredSkillsOrNull(md) ?? [])];
+    if (!LangGraphPackage.declaresSkills(md)) { // declared (even []) replaces scanning
+      for (const lit of LangGraphPackage.quotedLiterals(files)) {
+        cands.push(lit); // an exact literal
+        const segs = lit.split('/');
+        for (let i = 1; i < segs.length - 1; i++) cands.push(segs[i]); // a /segment/ with a slash on both sides
+      }
+    }
+    const out: string[] = [];
+    for (const c of [...new Set(cands)]) {
+      if (c === self || !/^[A-Za-z0-9_][A-Za-z0-9_.-]*(\/[A-Za-z0-9_][A-Za-z0-9_.-]*)?$/.test(c)) continue;
+      const dir = resolve(c, self);
+      if (dir !== null && isFile(dir + '/SKILL.md')) out.push(c);
+    }
+    sortStrings(out);
+    return out;
+  }
+
+  /** The quoted string literals ('…' / "…", one line) of a skill's scripts/** text files. */
+  private static quotedLiterals(files: Record<string, Buffer | string>): string[] {
+    const lits: string[] = [];
+    for (const [rel, bytes] of Object.entries(files)) {
+      const buf = toBuf(bytes);
+      if (!rel.startsWith('scripts/') || rel.split('/').includes('__pycache__') || rel.endsWith('.pyc') || !mb_check_encoding_utf8(buf)) continue;
+      for (const m of buf.toString('utf8').matchAll(/'([^'\n\\]*)'|"([^"\n\\]*)"/g)) {
+        lits.push((m[2] ?? '') !== '' ? m[2] : (m[1] ?? ''));
+      }
+    }
+    return lits;
+  }
+
+  /** `requires-skills:` of a SKILL.md frontmatter (list or single form, parsed as `dependencies:`); [] when absent. */
+  static declaredSkills(skillMd: Buffer | string): string[] {
+    return LangGraphPackage.frontmatterList(text(skillMd), 'requires-skills:');
+  }
+
+  /** Whether the frontmatter has a `requires-skills:` line: `requires-skills: []` says "none" and stops scanning. */
+  static declaresSkills(skillMd: Buffer | string): boolean {
+    return LangGraphPackage.declaredSkillsOrNull(text(skillMd)) !== null;
+  }
+
+  /** null when the frontmatter has no `requires-skills:` line. */
+  private static declaredSkillsOrNull(skillMd: string): string[] | null {
+    return LangGraphPackage.frontmatterListOrNull(skillMd, 'requires-skills:');
+  }
+
+  /** The installed skill a name means: the exact path, else by leaf (same group as from, then top level, then the first). */
+  static resolveSkillName(name: string, installed: string[], from: string): string | null {
+    if (installed.includes(name)) return name;
+    const leaf = basename(name);
+    const hits = installed.filter((p) => basename(p) === leaf);
+    if (hits.length === 0) return null;
+    const group = from.includes('/') ? from.split('/')[0] : '';
+    for (const p of hits) if ((p.includes('/') ? p.split('/')[0] : '') === group) return p;
+    for (const p of hits) if (!p.includes('/')) return p;
+    sortStrings(hits);
+    return hits[0];
+  }
+
+  /**
+   * The skills skill path requires (one level; twin of SkillRequires.direct in frontend/assets/js/skill-requires.js):
+   * its `requires-skills:` when declared (replaces scanning), else every OTHER installed skill whose leaf folder name
+   * is an exact quoted string of its scripts/** text files or a /leaf/ segment (slash on both sides) inside one.
+   * Unknown declared names are missing.
+   */
+  static requiredSkills(p: string, files: Record<string, Buffer | string>, installed: string[]): { requires: string[]; missing: string[] } {
+    const list = installed.filter((x) => x !== p);
+    const out = new Set<string>();
+    const missing: string[] = [];
+    const declared = LangGraphPackage.declaredSkillsOrNull(text(files['SKILL.md'] ?? ''));
+    if (declared !== null) { // a declared list (even []) replaces scanning
+      for (const name of declared) {
+        const hit = LangGraphPackage.resolveSkillName(name, list, p);
+        if (hit === null) missing.push(name);
+        else out.add(hit);
+      }
+    } else {
+      const lits = LangGraphPackage.quotedLiterals(files);
+      const exact = new Set(lits);
+      for (const leaf of [...new Set(list.map((x) => basename(x)))]) {
+        const hit = exact.has(leaf) || lits.some((l) => l.includes(`/${leaf}/`));
+        if (hit) out.add(LangGraphPackage.resolveSkillName(leaf, list, p) as string);
+      }
+    }
+    const req = [...out];
+    sortStrings(req);
+    return { requires: req, missing };
+  }
+
+  /** The files under from (paths relative to the skill folder base), skipping junk, .env* and dot-directories. */
+  private static folderFiles(base: string, from: string): string[] {
+    const found: string[] = [];
+    const walk = (dir: string): void => {
+      let names: string[];
+      try {
+        names = fs.readdirSync(dir);
+      } catch {
+        return;
+      }
+      for (const name of names) {
+        const full = dir + '/' + name;
+        if (SKIP_NAMES.includes(name) || name.endsWith('.pyc') || name.startsWith('.env')) continue;
+        if (isDir(full) && name.startsWith('.')) continue; // .git/, .pytest_cache/, .wheels/ ... (a link to one too)
+        // RecursiveDirectoryIterator does not descend into a symlinked directory (a leaf, and not a file).
+        if (isRealDir(full)) {
+          walk(full);
+          continue;
+        }
+        // A file is copied only if it really lives in the skill folder (a symlink may point elsewhere).
+        const real = isFile(full) ? realpath(full) : false;
+        if (real !== false && real.startsWith(base + path.sep)) found.push(full.slice(base.length + 1));
+      }
+    };
+    walk(from);
+    return found;
+  }
+
+  /**
+   * The SKILL.md dependencies a package's requirements.txt lists: those of each skill without bundled wheels.
+   * A skill that carries .wheels/native/*.whl installs its libraries from there, offline, at its first use.
+   */
+  static skillRequirementNames(skillFiles: Array<{ dir?: string; rel: string; bytes: Buffer | string }>): string[] {
+    const bundled = new Set<string>();
+    for (const f of skillFiles) {
+      if (f.rel.startsWith('.wheels/native/') && f.rel.endsWith('.whl')) bundled.add(String(f.dir ?? ''));
+    }
+    const req: string[] = [];
+    for (const f of skillFiles) {
+      if (f.rel === 'SKILL.md' && !bundled.has(String(f.dir ?? ''))) req.push(...LangGraphPackage.skillDependencies(f.bytes));
+    }
+    return req;
+  }
+
   /** `dependencies:` of a SKILL.md's frontmatter, parsed as SkillRuntime.ensure_deps parses it. */
   static skillDependencies(skillMd: Buffer | string): string[] {
-    const text = Buffer.isBuffer(skillMd) ? skillMd.toString('utf8') : skillMd;
-    const lines = preg_split('/\\r\\n|\\r|\\n/', text);
-    if (!lines.length || trim(lines[0]) !== '---') return [];
+    return LangGraphPackage.frontmatterList(text(skillMd), 'dependencies:');
+  }
+
+  /** A frontmatter list field (key with its colon): `key: a, b` or `key: [a, "b"]`; [] when absent. */
+  private static frontmatterList(skillMd: string, key: string): string[] {
+    return LangGraphPackage.frontmatterListOrNull(skillMd, key) ?? [];
+  }
+
+  /** frontmatterList, but null when the field is absent (or there is no frontmatter). */
+  private static frontmatterListOrNull(skillMd: string, key: string): string[] | null {
+    const lines = preg_split('/\\r\\n|\\r|\\n/', skillMd);
+    if (!lines.length || trim(lines[0]) !== '---') return null;
     for (const line of lines.slice(1)) {
       const s = trim(line);
       if (s === '---') break;
-      if (strtolower(s).startsWith('dependencies:')) {
-        const val = trim(trim(explode(':', s, 2)[1]), '[]');
-        const deps: string[] = [];
-        for (const d0 of explode(',', val)) {
-          const d = trim(trim(trim(d0), "'"), '"');
-          if (d !== '') deps.push(d);
+      if (strtolower(s).startsWith(key)) return LangGraphPackage.listItems(explode(':', s, 2)[1]);
+    }
+    return null;
+  }
+
+  /**
+   * Items of a frontmatter list value (`a, b` or `[a, 'b,c']`): split on commas outside single/double quotes,
+   * then one matching quote pair is stripped ('' -> ' inside single quotes). An unterminated quote falls back
+   * to splitting on every comma. Twin of SkillRequires.listItems (JS) and the emitted Python readers.
+   */
+  static listItems(raw: string): string[] {
+    const val = trim(trim(raw), '[]');
+    const items: string[] = [];
+    let cur = '';
+    let q: string | null = null;
+    for (let i = 0; i < val.length; i++) {
+      const c = val[i];
+      if (q !== null) {
+        cur += c;
+        if (c === q) {
+          if (q === "'" && (val[i + 1] ?? '') === "'") cur += val[++i];
+          else q = null;
         }
-        return deps;
+      } else if ((c === '"' || c === "'") && trim(cur) === '') {
+        q = c;
+        cur += c;
+      } else if (c === ',') {
+        items.push(cur);
+        cur = '';
+      } else {
+        cur += c;
       }
     }
-    return [];
+    items.push(cur);
+    const out: string[] = [];
+    if (q !== null) {
+      for (const d0 of val.split(',')) {
+        const d = trim(trim(trim(d0), "'"), '"');
+        if (d !== '') out.push(d);
+      }
+      return out;
+    }
+    for (const d0 of items) {
+      let d = trim(d0);
+      const k = d[0] ?? '';
+      if (d.length >= 2 && (k === "'" || k === '"') && d[d.length - 1] === k) {
+        d = d.slice(1, -1);
+        if (k === "'") d = d.split("''").join("'");
+      }
+      if (d !== '') out.push(d);
+    }
+    return out;
   }
 
   private static providers(facts: any): string[] {
@@ -240,7 +498,7 @@ export class LangGraphPackage {
    * carries (their SKILL.md dependencies); a program that reads its skills from the editor's folder installs
    * their dependencies at the first run instead.
    */
-  static requirementNames(facts: any, layout: string, skillFiles: Array<{ rel: string; bytes: Buffer }> = []): string[] {
+  static requirementNames(facts: any, layout: string, skillFiles: Array<{ dir?: string; rel: string; bytes: Buffer }> = []): string[] {
     const req: string[] = [...BASE_REQUIREMENTS];
     if (layout !== 'single') req.push(...SERVER_REQUIREMENTS);
     if (layout === 'a2a') req.push(...A2A_REQUIREMENTS);
@@ -248,9 +506,7 @@ export class LangGraphPackage {
     for (const p of LangGraphPackage.providers(facts)) {
       if (Object.hasOwn(PROVIDER_REQUIREMENTS, p)) req.push(PROVIDER_REQUIREMENTS[p]);
     }
-    for (const f of skillFiles) {
-      if (f.rel === 'SKILL.md') req.push(...LangGraphPackage.skillDependencies(f.bytes));
-    }
+    req.push(...LangGraphPackage.skillRequirementNames(skillFiles));
     req.push(...PythonRequirements.documentNames(at(facts, 'startDocuments') ?? []));
     return req;
   }
@@ -444,3 +700,8 @@ function isFile(p: string): boolean {
 }
 
 void keysOf;
+
+/** A file's text (bytes as UTF-8). */
+function text(b: Buffer | string): string {
+  return Buffer.isBuffer(b) ? b.toString('utf8') : String(b ?? '');
+}

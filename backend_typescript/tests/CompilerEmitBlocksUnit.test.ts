@@ -60,9 +60,9 @@ test('PythonEmitHelpers: jsonToPython writes None/True/False', () => {
 test('PythonEmitHelpers: pinned blocks (byte length and sha256)', () => {
   const pins: Array<[string, () => string, number, string]> = [
     ['mcpClientBlock', () => PythonEmitHelpers.mcpClientBlock(), 4959, '834b131509dd600011ad0a1002a1fc1e4246076b61f5af4200b16e66f148f0e6'],
-    ['skillDepsBlock', () => PythonEmitHelpers.skillDepsBlock(), 2423, '79f69500a85e9aa03f75f4336d93f8913bb954608a18e59885f90207af20948d'],
+    ['skillDepsBlock', () => PythonEmitHelpers.skillDepsBlock(), 5596, 'fb71cb1def36dc3a7f1e2f006cc8a4e9c0419290d01958f967907afccdd85719'],
     ['documentConverterBlock', () => PythonEmitHelpers.documentConverterBlock(), 5500, 'a1bdc4bfe79b93a46c2ae6ca526fd4bac3ca1281576caa4f3643f344e60fc7bf'],
-    ['skillFsSyncBlock', () => PythonEmitHelpers.skillFsSyncBlock(), 6017, '7b9543f387e0a7fce98aa2ed74c5304e452ddc9d6c06588ecf93d7adf4d03f50'],
+    ['skillFsSyncBlock', () => PythonEmitHelpers.skillFsSyncBlock(), 6167, '3694c25fccfff1a432c965b48b8ad66889e2c84d0a85f3fd90d2796d9ef78769'],
   ];
   for (const [name, fn, len, hash] of pins) {
     const block = fn();

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { count, empty, entries, has, is_array, isEmptyArr, preg_replace, strtolower, strval, values } from './php';
 import { CompiledA2AEmit } from './CompiledA2AEmit';
-import { LangGraphPackage } from './LangGraphPackage';
+import { LangGraphPackage, SkillsRoot } from './LangGraphPackage';
 import { EnvVars, PackageDocs } from './PackageDocs';
 import { PlaybookEmit } from './PlaybookEmit';
 import { PythonEmitHelpers } from './PythonEmitHelpers';
@@ -40,7 +40,7 @@ export class CompiledPackage
      * @param documentFiles the start_documents/ entries (LangGraphPackage::startDocuments()['files'])
      * @return list of {path, code, encoding?}
      */
-    static async files(analyzed: any, skillsRoot: string, documentFiles: any, target: CompiledTarget,
+    static async files(analyzed: any, skillsRoot: SkillsRoot, documentFiles: any, target: CompiledTarget,
         layout: string = 'modular'): Promise<any[]> {
         const skills: any = await LangGraphPackage.skillFiles({ agentData: analyzed['agents'] ?? [] }, skillsRoot);
         const out: any[] = CompiledPackage.docFiles(analyzed, target, layout, values(skills),
@@ -123,9 +123,7 @@ export class CompiledPackage
         if (layout === 'a2a') req.push(...CompiledPackage.A2A_REQUIREMENTS);
         // A playbook node runs the shared interpreter (langchain-core + langgraph + its provider's package).
         req.push(...PlaybookEmit.requirementNames(analyzed));
-        for (const f of skillFiles) {
-            if (f['rel'] === 'SKILL.md') req.push(...LangGraphPackage.skillDependencies(f['bytes']));
-        }
+        req.push(...LangGraphPackage.skillRequirementNames(skillFiles));
         req.push(...PythonRequirements.documentNames(analyzed['startDocuments'] ?? []));
         return req;
     }

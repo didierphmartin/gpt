@@ -13,7 +13,7 @@ import { CompiledArchitectureDoc } from './compiler/CompiledArchitectureDoc';
 import { CompiledPackage } from './compiler/CompiledPackage';
 import { PlaybookEmit } from './compiler/PlaybookEmit';
 import { RunServerEmitter } from './compiler/RunServerEmitter';
-import { LangGraphPackage } from './compiler/LangGraphPackage';
+import { LangGraphPackage, SkillsRoot } from './compiler/LangGraphPackage';
 import { LangGraphRuntime } from './compiler/LangGraphRuntime';
 import { ADKPackage } from './compiler/ADKPackage';
 
@@ -81,7 +81,7 @@ export class ADKGenerator {
     private readonly workflowRepo: ADKRepositories['workflowRepo'],
     private readonly graphRepo: ADKRepositories['graphRepo'],
     private readonly agentRepo: ADKRepositories['agentRepo'],
-    private readonly skillsRoot: string | null = null,   // the package copies the used skills from here
+    private readonly skillsRoot: SkillsRoot | null = null,   // the package copies the used skills from here
     private readonly startDocuments: any = null,         // the package copies the Start's documents from here
   ) {}
 
@@ -342,7 +342,7 @@ export class ADKGenerator {
   }
 
   /** The A2A package of an analysis (no database): servers/, orchestrator.py, api.py, the runtime, the package files. */
-  static async a2aPackage(analyzedIn: any, documentFiles: any = [], skillsRoot: string | null = null): Promise<any> {
+  static async a2aPackage(analyzedIn: any, documentFiles: any = [], skillsRoot: SkillsRoot | null = null): Promise<any> {
     CompiledA2AEmit.refuse(analyzedIn);
     const analyzed: any = oarr(entries(analyzedIn));   // PHP passes the array by value
     analyzed['package'] = true;
@@ -890,6 +890,7 @@ async def _run_skill_script(dir_name: str, script: str, argv: list[str] | None =
     env = dict(
         os.environ,
         SYNERGYAI_OUTPUT_DIR=out_dir,
+        SYNERGYAI_SKILLS_DIR=os.path.abspath(SKILLS_DIR),   # absolute (it may be ./skills): a skill that loads another skill's scripts finds it here
         SYNERGYAI_SCRATCH_DIR=SKILL_SCRATCH_DIR,
         SYNERGYAI_SKILL_DIR_NAME=dir_name,
         SYNERGYAI_SKILL_GROUP=group,

@@ -1,4 +1,5 @@
 import { CompiledPackage, CompiledTarget } from './CompiledPackage';
+import { SkillsRoot } from './LangGraphPackage';
 
 /**
  * The ADK package's own files: CompiledPackage with ADK's framework packages.
@@ -12,7 +13,7 @@ export class ADKPackage
     /** The compile target, as CompiledPackage reads it. */
     static readonly TARGET: CompiledTarget = { key: 'adk', title: 'Google ADK', framework: ADKPackage.FRAMEWORK };
 
-    static async files(analyzed: any, skillsRoot: string, documentFiles: any = [], layout: string = 'modular'): Promise<any[]> {
+    static async files(analyzed: any, skillsRoot: SkillsRoot, documentFiles: any = [], layout: string = 'modular'): Promise<any[]> {
         return CompiledPackage.files(analyzed, skillsRoot, documentFiles, ADKPackage.TARGET, layout);
     }
 

@@ -13,7 +13,7 @@ import { CompiledArchitectureDoc } from './compiler/CompiledArchitectureDoc';
 import { CompiledPackage, CompiledTarget } from './compiler/CompiledPackage';
 import { PlaybookEmit } from './compiler/PlaybookEmit';
 import { RunServerEmitter } from './compiler/RunServerEmitter';
-import { LangGraphPackage, StartDocumentReader } from './compiler/LangGraphPackage';
+import { LangGraphPackage, StartDocumentReader, SkillsRoot } from './compiler/LangGraphPackage';
 
 /** What the generator reads a workflow, its graph and its agents through (WorkflowRepository, WorkflowGraphRepository, AgentRepository). */
 export interface NOOARepositories {
@@ -693,7 +693,7 @@ export class NOOAGenerator {
     private readonly workflowRepo: NOOARepositories['workflowRepo'],
     private readonly graphRepo: NOOARepositories['graphRepo'],
     private readonly agentRepo: NOOARepositories['agentRepo'],
-    private readonly skillsRoot: string | null = null,                  // the package copies the used skills from here
+    private readonly skillsRoot: SkillsRoot | null = null,                  // the package copies the used skills from here
     private readonly startDocuments: StartDocumentReader = null,        // the package copies the Start's documents from here
   ) {}
 
@@ -788,7 +788,7 @@ export class NOOAGenerator {
   }
 
   /** The A2A package of an analysis (no database): servers/, orchestrator.py, api.py, the runtime, the package files. */
-  static async a2aPackage(analyzedIn: any, documentFiles: any = [], skillsRoot: string | null = null): Promise<any> {
+  static async a2aPackage(analyzedIn: any, documentFiles: any = [], skillsRoot: SkillsRoot | null = null): Promise<any> {
     CompiledA2AEmit.refuse(analyzedIn);
     const analyzed: any = copy(analyzedIn);
     analyzed['package'] = true;

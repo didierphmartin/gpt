@@ -239,6 +239,24 @@ _INSTALLED_DEPS = set()
 _DEPS_LOCK = threading.Lock()
 
 
+def _importable(dep: str) -> bool:
+    """Is a declared dependency (a pip requirement such as 'beautifulsoup4' or 'pypdf>=4') already
+    installed: a distribution of that name, or a module of that name?"""
+    import importlib.metadata, importlib.util, re
+    name = re.split(r"[\\s<>=!~;\\[]", dep.strip(), maxsplit=1)[0]
+    if not name:
+        return False
+    try:
+        importlib.metadata.distribution(name)
+        return True
+    except Exception:  # noqa: BLE001 -- PackageNotFoundError, or a bad name
+        pass
+    try:
+        return importlib.util.find_spec(name.replace("-", "_")) is not None
+    except Exception:  # noqa: BLE001 -- e.g. a dotted name whose parent is missing
+        return False
+
+
 def _ensure_skill_deps(skill_dir: str) -> None:
     md = os.path.join(skill_dir, "SKILL.md")
     if not os.path.isfile(md):
@@ -258,13 +276,64 @@ def _ensure_skill_deps(skill_dir: str) -> None:
             break
         if s.lower().startswith("dependencies:"):
             val = s.split(":", 1)[1].strip().strip("[]")
-            deps = [d.strip().strip("'").strip('"') for d in val.split(",") if d.strip()]
+            # Commas inside quotes stay in their item ('numpy>=1.20,<2'); one matching quote pair is
+            # stripped ('' -> ' inside single quotes); an unterminated quote splits on every comma.
+            items, cur, q, i = [], "", None, 0
+            while i < len(val):
+                c = val[i]
+                if q:
+                    cur += c
+                    if c == q:
+                        if q == "'" and val[i + 1:i + 2] == "'":
+                            cur += "'"
+                            i += 1
+                        else:
+                            q = None
+                elif c in "'\\"" and not cur.strip():
+                    q, cur = c, cur + c
+                elif c == ",":
+                    items.append(cur)
+                    cur = ""
+                else:
+                    cur += c
+                i += 1
+            items.append(cur)
+            if q:
+                deps = [d.strip().strip("'").strip('"') for d in val.split(",") if d.strip()]
+            else:
+                for d in items:
+                    d = d.strip()
+                    if len(d) >= 2 and d[0] in "'\\"" and d[-1] == d[0]:
+                        d = d[1:-1].replace("''", "'") if d[0] == "'" else d[1:-1]
+                    if d:
+                        deps.append(d)
             break
+    # A skill that carries its libraries (.wheels/native/, bundled at export) installs them from
+    # there, in one pip call, without the internet.
+    wheels = os.path.join(skill_dir, ".wheels", "native")
+    offline = os.path.isdir(wheels) and any(f.endswith(".whl") for f in os.listdir(wheels))
     with _DEPS_LOCK:
+        missing = []
         for d in deps:
             if d in _INSTALLED_DEPS:
                 continue
             _INSTALLED_DEPS.add(d)
+            if _importable(d):   # requirements.txt (or the runner's venv) already has it: no pip at all
+                continue
+            missing.append(d)
+        if offline and missing:
+            names = " ".join(missing)
+            try:
+                print(f"  [run_skill_script] installing {names} from the skill's own wheels", flush=True)
+                r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-index", "--find-links", wheels,
+                                    *missing], capture_output=True, text=True, timeout=600)
+                if r.returncode != 0:
+                    print(f"  [run_skill_script] pip install {names} FAILED: "
+                          f"{(r.stderr or '')[-300:]}", flush=True)
+            except Exception as e:
+                print(f"  [run_skill_script] pip install {names} error: {e}", flush=True)
+            return
+        for d in missing:
             try:
                 print(f"  [run_skill_script] ensuring dependency: {d}", flush=True)
                 r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", d],
@@ -368,6 +437,7 @@ def _run_skill_script(dir_name: str, script: str, argv=None,
     env = dict(
         os.environ,
         SYNERGYAI_OUTPUT_DIR=out_dir,
+        SYNERGYAI_SKILLS_DIR=os.path.abspath(SKILLS_DIR),   # absolute (it may be ./skills): a skill that loads another skill's scripts finds it here
         SYNERGYAI_SCRATCH_DIR=SKILL_SCRATCH_DIR,
         SYNERGYAI_SKILL_DIR_NAME=dir_name,
         SYNERGYAI_SKILL_GROUP=(dir_name.split("/")[0] if "/" in dir_name else ""),

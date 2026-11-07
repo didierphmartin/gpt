@@ -2130,7 +2130,9 @@ class WatchLoop:
         except Exception:  # noqa: BLE001 -- transport: the server may be down for a while
             self._fail("unreachable", "server unreachable")
             return
-        self.backoff = None
+        if not self.state.last_failed:   # after a failed run, only a good run resets the backoff
+            self.backoff = None
+        failed_now = False
         idle = ("Listening (checks every 15 min)" if (r.get("via") == "fallback" or r.get("events") == "off")
                 else "Listening for events")
         if r["status"] == "ready":
@@ -2140,11 +2142,18 @@ class WatchLoop:
             if drain_shown(line, self.verbosity):
                 self._say(f"ready ({r.get('via') or 'no reason given'}): {line}")
                 self.state.shown = None   # the console moved on: say the idle line again
-            self.state.last_failed = line.startswith(("error", "abandoned"))
+            self.state.last_failed = failed_now = line.startswith(("error", "abandoned"))
+            if not failed_now:
+                self.backoff = None
         if self.state.last_failed:
             self.state.set("Listening — the last run failed", "warn")
         else:
             self.state.set(idle, "ok")
+        if failed_now:
+            # The trigger keeps saying ready while the run fails before the mail is handled: without a
+            # pause that loops ready -> run -> fail (the server engine's EventWorker backs off the same way).
+            self.backoff = self.BACKOFF_START if self.backoff is None else min(self.backoff * 2, self.BACKOFF_MAX)
+            _nap(self.backoff, self.sleep, self.stop)
 
     def _fail(self, kind: str, message: str) -> None:
         self.backoff = self.BACKOFF_START if self.backoff is None else min(self.backoff * 2, self.BACKOFF_MAX)
@@ -2732,6 +2741,7 @@ DOCUMENTS = DocumentConverter()
 
     def __init__(self):
         self._endpoints: dict[str, str] = {}   # registered server URL -> endpoint that accepted the handshake
+        self._failures: dict[str, str] = {}    # registered server URL -> why its last handshake failed
         # One connection pool for every handshake and call; each request sets its own
         # timeout (30 s for the handshake, 180 s for a tool call).
         # Its cookie jar is shared by every server on the same host (MCP uses headers, not cookies).
@@ -2816,6 +2826,7 @@ DOCUMENTS = DocumentConverter()
         Tries candidates() of the live URL in order: as given, then with /mcp
         in its path. The endpoint that answers is remembered.
         Returns that endpoint URL, or None when no candidate accepted the handshake.
+        unreachable() then says why; the caller makes no call.
         """
         init_req = {
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -2851,7 +2862,12 @@ DOCUMENTS = DocumentConverter()
             except Exception as e:
                 last_err = e
         print(f"[warn] MCP init failed for {url}: {last_err}")
+        self._failures[url] = f"MCP server unreachable: {live}: {last_err}"
         return None
+
+    def unreachable(self, url: str) -> str:
+        """Why the server at \`url\` (registered URL) is not called: its last failed handshake."""
+        return self._failures.get(url) or f"MCP server unreachable: {url}"
 
     def call_tool(self, server_url: str, tool_name: str, arguments: dict) -> str:
         """Call a tool on an MCP server via JSON-RPC 2.0.
@@ -2860,7 +2876,10 @@ DOCUMENTS = DocumentConverter()
         The MCP response contains a 'content' array; we extract all text items
         and join them. If no text is found, falls back to raw JSON.
         """
-        mcp_url = self._handshake(server_url) or self.candidates(server_url)[-1]
+        # No handshake, no call: never fall back to the compiled-in URL (it would get this server's headers).
+        mcp_url = self._handshake(server_url)
+        if mcp_url is None:
+            return json.dumps({"error": self.unreachable(server_url)})
 
         request = {
             "jsonrpc": "2.0", "id": int(time.time()),
@@ -2887,7 +2906,10 @@ DOCUMENTS = DocumentConverter()
 
     def call_tool_raw(self, server_url: str, tool_name: str, arguments: dict) -> dict:
         """Call a tool and return the raw MCP result {content, structuredContent?, isError?} (code nodes)."""
-        mcp_url = self._handshake(server_url) or self.candidates(server_url)[-1]
+        mcp_url = self._handshake(server_url)
+        if mcp_url is None:   # marked as transport, so --watch says "unreachable"
+            return {"isError": True, "transport_error": True,
+                    "content": [{"type": "text", "text": self.unreachable(server_url)}]}
         request = {
             "jsonrpc": "2.0", "id": int(time.time()),
             "method": "tools/call",
@@ -3104,15 +3126,64 @@ class SkillRuntime:
                 break
             if s.lower().startswith("dependencies:"):
                 val = s.split(":", 1)[1].strip().strip("[]")
-                deps = [d.strip().strip("'").strip('"') for d in val.split(",") if d.strip()]
+                # Commas inside quotes stay in their item ('numpy>=1.20,<2'); one matching quote pair is
+                # stripped ('' -> ' inside single quotes); an unterminated quote splits on every comma.
+                items, cur, q, i = [], "", None, 0
+                while i < len(val):
+                    c = val[i]
+                    if q:
+                        cur += c
+                        if c == q:
+                            if q == "'" and val[i + 1:i + 2] == "'":
+                                cur += "'"
+                                i += 1
+                            else:
+                                q = None
+                    elif c in "'\\"" and not cur.strip():
+                        q, cur = c, cur + c
+                    elif c == ",":
+                        items.append(cur)
+                        cur = ""
+                    else:
+                        cur += c
+                    i += 1
+                items.append(cur)
+                if q:
+                    deps = [d.strip().strip("'").strip('"') for d in val.split(",") if d.strip()]
+                else:
+                    for d in items:
+                        d = d.strip()
+                        if len(d) >= 2 and d[0] in "'\\"" and d[-1] == d[0]:
+                            d = d[1:-1].replace("''", "'") if d[0] == "'" else d[1:-1]
+                        if d:
+                            deps.append(d)
                 break
+        # A skill that carries its libraries (.wheels/native/, bundled at export) installs them from
+        # there, in one pip call, without the internet.
+        wheels = os.path.join(skill_dir, ".wheels", "native")
+        offline = os.path.isdir(wheels) and any(f.endswith(".whl") for f in os.listdir(wheels))
         with self._deps_lock:
+            missing = []
             for d in deps:
                 if d in self._installed_deps:
                     continue
                 self._installed_deps.add(d)
                 if self._importable(d):   # requirements.txt (or the runner's venv) already has it
                     continue
+                missing.append(d)
+            if offline and missing:
+                names = " ".join(missing)
+                try:
+                    node_print(f"  [run_skill_script] installing {names} from the skill's own wheels")
+                    r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-index", "--find-links", wheels,
+                                        *missing], capture_output=True, text=True, timeout=600)
+                    if r.returncode != 0:
+                        node_print(f"  [run_skill_script] pip install {names} FAILED: "
+                                   f"{(r.stderr or '')[-300:]}")
+                except Exception as e:
+                    node_print(f"  [run_skill_script] pip install {names} error: {e}")
+                return
+            for d in missing:
                 try:
                     node_print(f"[warn] installing {d} (not in requirements.txt)")
                     r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", d],
@@ -3230,6 +3301,7 @@ class SkillRuntime:
         env = dict(
             os.environ,
             SYNERGYAI_OUTPUT_DIR=out_dir,
+            SYNERGYAI_SKILLS_DIR=os.path.abspath(self.skills_dir),   # absolute (it may be ./skills): a skill that loads another skill's scripts finds it here
             SYNERGYAI_SCRATCH_DIR=self.scratch_dir,
             SYNERGYAI_SKILL_DIR_NAME=dir_name,
             SYNERGYAI_SKILL_GROUP=(dir_name.split("/")[0] if "/" in dir_name else ""),

@@ -16,6 +16,7 @@ import { MCPAppController } from './Controllers/MCPAppController';
 import { MCPProxyController } from './Controllers/MCPProxyController';
 import { McpTestController } from './Controllers/McpTestController';
 import { McpHostController } from './Controllers/McpHostController';
+import { SkillStoreController } from './Controllers/SkillStoreController';
 import { HumeToolController } from './Controllers/HumeToolController';
 import { EVIWebhookController } from './Controllers/EVIWebhookController';
 import { SettingsController } from './Controllers/SettingsController';
@@ -74,6 +75,7 @@ const mcpApp = new MCPAppController();
 const mcpProxy = new MCPProxyController();
 const mcpTest = new McpTestController();
 const mcpHost = new McpHostController();
+const skillStore = new SkillStoreController();
 const humeTools = new HumeToolController();
 const eviWebhook = new EVIWebhookController();
 const settings = new SettingsController();
@@ -254,6 +256,18 @@ router.get('/api/v1/mcp/host/servers/:folder([A-Za-z0-9_.-]+)/settings', handle(
 router.put('/api/v1/mcp/host/servers/:folder([A-Za-z0-9_.-]+)/settings', handle((ctx) => mcpHost.putSettings(ctx)));
 router.get('/api/v1/mcp/host/servers/:folder([A-Za-z0-9_.-]+)/source', handle((ctx) => mcpHost.source(ctx)));
 router.delete('/api/v1/mcp/host/servers/:folder([A-Za-z0-9_.-]+)', handle((ctx) => mcpHost.delete(ctx)));
+// Docker app skill store (SKILLS_DIR volume; 404 'no skill store' in folder mode except /store and /native-wheels).
+router.get('/api/v1/skills/store', handle((ctx) => skillStore.store(ctx)));
+router.get('/api/v1/skills', handle((ctx) => skillStore.list(ctx)));
+router.get('/api/v1/skills/files', handle((ctx) => skillStore.files(ctx)));
+router.get('/api/v1/skills/listing', handle((ctx) => skillStore.listing(ctx)));
+router.get('/api/v1/skills/file', handle((ctx) => skillStore.readFile(ctx)));
+router.put('/api/v1/skills/file', handle((ctx) => skillStore.writeFile(ctx)));
+router.post('/api/v1/skills/native-wheels', handle((ctx) => skillStore.nativeWheels(ctx)));
+router.post('/api/v1/skills/import', handle((ctx) => skillStore.import(ctx)));
+router.put('/api/v1/skills/visibility', handle((ctx) => skillStore.visibility(ctx)));
+router.post('/api/v1/skills/move', handle((ctx) => skillStore.move(ctx)));
+router.delete('/api/v1/skills', handle((ctx) => skillStore.delete(ctx)));
 
 // User-controlled MCP settings (protected; user id ALWAYS from the JWT — see
 // MCPServerController.requireUserId). listMine keeps override-disabled servers in the list

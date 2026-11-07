@@ -11,7 +11,7 @@ import { WorkflowView } from './compiler/WorkflowView';
 import { GraphAnalyzer } from './compiler/GraphAnalyzer';
 import { PythonEmitHelpers } from './compiler/PythonEmitHelpers';
 import { LangGraphRuntime } from './compiler/LangGraphRuntime';
-import { LangGraphPackage } from './compiler/LangGraphPackage';
+import { LangGraphPackage, SkillsRoot } from './compiler/LangGraphPackage';
 import { LangGraphArchitectureDoc } from './compiler/LangGraphArchitectureDoc';
 import { PlaybookEmit } from './compiler/PlaybookEmit';
 import { RunServerEmitter } from './compiler/RunServerEmitter';
@@ -66,7 +66,7 @@ export class LangGraphGenerator {
   private graphRepo: LangGraphRepositories['graphRepo'];
   private agentRepo: LangGraphRepositories['agentRepo'];
   /** Where the skill folders the modular package copies are read from (LangGraphPackage). */
-  private skillsRoot: string;
+  private skillsRoot: SkillsRoot;
   /** The requesting user's document storage: the only place a Start document is copied from (none: no copy). */
   private startDocuments: any;
 
@@ -74,7 +74,7 @@ export class LangGraphGenerator {
     workflowRepo: LangGraphRepositories['workflowRepo'],
     graphRepo: LangGraphRepositories['graphRepo'],
     agentRepo: LangGraphRepositories['agentRepo'],
-    skillsRoot: string | null = null,
+    skillsRoot: SkillsRoot | null = null,
     startDocuments: any = null,
   ) {
     this.workflowRepo = workflowRepo;
