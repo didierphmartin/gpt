@@ -1,5 +1,6 @@
 import { MCPToolsLoader } from '../Services/MCPToolsLoader';
 import { AutomationMcp, CallRawAnswer } from './AutomationMcp';
+import { McpEndpoint } from '../Services/McpEndpoint';
 
 /**
  * Production AutomationMcp: describe through the loader (like CodeNodeController), install by one JSON-RPC POST.
@@ -37,7 +38,7 @@ export class LiveAutomationMcp implements AutomationMcp {
     let resp: string;
     let http: number;
     try {
-      const r = await fetch(url, { method: 'POST', headers, body, signal: AbortSignal.timeout(timeoutSeconds * 1000) });
+      const r = await fetch(McpEndpoint.internal(url), { method: 'POST', headers, body, signal: AbortSignal.timeout(timeoutSeconds * 1000) });
       http = r.status;
       resp = await r.text();
     } catch {

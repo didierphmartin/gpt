@@ -5,6 +5,7 @@ import { sql } from 'kysely';
 import { db } from '../db/pools';
 import { CodeNodeEmit, CodeNodeData } from './CodeNodeEmit';
 import { CodeParent } from './CodeNodeStep';
+import { McpEndpoint } from '../Services/McpEndpoint';
 
 /**
  * Runs one code node server-side: backend/scripts/code_node_run.py in a short-lived python3
@@ -82,7 +83,7 @@ export class CodeNodeExecutor {
       } else if (r.headers !== null && typeof r.headers === 'object') {
         headers = r.headers; // mysql2 already decoded a JSON column
       }
-      out[CodeNodeEmit.slug(String(r.name))] = { url: String(r.url), headers: { ...headers } };
+      out[CodeNodeEmit.slug(String(r.name))] = { url: McpEndpoint.internal(String(r.url)), headers: { ...headers } };
     }
     return out;
   }

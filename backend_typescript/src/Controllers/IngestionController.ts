@@ -11,6 +11,7 @@ import { VectorMcpStore } from '../AgentTeam/VectorMcpStore';
 import { IngestionLoader, LoaderDescriptor } from '../AgentTeam/IngestionLoader';
 import { IngestionSplitter } from '../AgentTeam/IngestionSplitter';
 import { MCPToolsLoader } from '../Services/MCPToolsLoader';
+import { McpEndpoint } from '../Services/McpEndpoint';
 
 /**
  * Shared parallel-run state. PHP persists this to /tmp files + a flock cursor
@@ -1195,7 +1196,7 @@ export class IngestionController {
     // globalThis.Response = the fetch Response (the express Response import shadows it).
     let res: globalThis.Response;
     try {
-      res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload), signal: controller.signal });
+      res = await fetch(McpEndpoint.internal(url), { method: 'POST', headers, body: JSON.stringify(payload), signal: controller.signal });
     } catch (e: any) {
       clearTimeout(timer);
       return { body: { error: true, message: `MCP connection failed: ${e?.message ?? e}` }, session: null };

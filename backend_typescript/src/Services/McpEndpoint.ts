@@ -18,6 +18,10 @@ export class McpEndpoint {
    *    Apache 301-redirects a directory URL requested without it).
    */
   static candidates(serverUrl: string, transport = 'http'): string[] {
+    return McpEndpoint.rawCandidates(serverUrl, transport).map((u) => McpEndpoint.internal(u));
+  }
+
+  private static rawCandidates(serverUrl: string, transport: string): string[] {
     const cut = serverUrl.search(/[?#]/);
     const path = cut < 0 ? serverUrl : serverUrl.slice(0, cut);
     const rest = cut < 0 ? '' : serverUrl.slice(cut);

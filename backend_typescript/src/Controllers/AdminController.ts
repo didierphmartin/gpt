@@ -13,6 +13,7 @@ import { requireAdmin } from './RequiresAdmin';
 import { config } from '../config/env';
 import { Edition, EditionConfig } from '../Services/Edition';
 import { LoginAccounts } from '../Services/LoginAccounts';
+import { McpEndpoint } from '../Services/McpEndpoint';
 
 /**
  * Mirrors src/Controllers/AdminController.php — the admin dashboard's user management over the
@@ -1908,7 +1909,7 @@ export class AdminController {
     const timer = setTimeout(() => controller.abort(), 30_000);
     let res: Response;
     try {
-      res = await fetch(url, {
+      res = await fetch(McpEndpoint.internal(url), {
         method: 'POST',
         headers,
         body: JSON.stringify(request),

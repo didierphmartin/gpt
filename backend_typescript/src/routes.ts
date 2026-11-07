@@ -15,6 +15,7 @@ import { MCPServerController } from './Controllers/MCPServerController';
 import { MCPAppController } from './Controllers/MCPAppController';
 import { MCPProxyController } from './Controllers/MCPProxyController';
 import { McpTestController } from './Controllers/McpTestController';
+import { McpHostController } from './Controllers/McpHostController';
 import { HumeToolController } from './Controllers/HumeToolController';
 import { EVIWebhookController } from './Controllers/EVIWebhookController';
 import { SettingsController } from './Controllers/SettingsController';
@@ -71,6 +72,7 @@ const mcpServers = new MCPServerController();
 const mcpApp = new MCPAppController();
 const mcpProxy = new MCPProxyController();
 const mcpTest = new McpTestController();
+const mcpHost = new McpHostController();
 const humeTools = new HumeToolController();
 const eviWebhook = new EVIWebhookController();
 const settings = new SettingsController();
@@ -240,6 +242,16 @@ router.post('/api/v1/mcp/servers', handle((ctx) => mcpServers.create(ctx)));
 router.post('/api/v1/mcp/servers/update', handle((ctx) => mcpServers.update(ctx)));
 router.post('/api/v1/mcp/servers/toggle', handle((ctx) => mcpServers.toggle(ctx)));
 router.delete('/api/v1/mcp/servers', handle((ctx) => mcpServers.delete(ctx)));
+// Docker app only: relay to the server supervisor (404 'no server host' elsewhere). McpHostController.
+router.get('/api/v1/mcp/host', handle((ctx) => mcpHost.info(ctx)));
+router.get('/api/v1/mcp/host/servers', handle((ctx) => mcpHost.list(ctx)));
+router.post('/api/v1/mcp/host/servers/:folder([A-Za-z0-9_.-]+)/install', handle((ctx) => mcpHost.install(ctx)));
+router.post('/api/v1/mcp/host/servers/:folder([A-Za-z0-9_.-]+)/restart', handle((ctx) => mcpHost.restart(ctx)));
+router.post('/api/v1/mcp/host/servers/:folder([A-Za-z0-9_.-]+)/enabled', handle((ctx) => mcpHost.enabled(ctx)));
+router.get('/api/v1/mcp/host/servers/:folder([A-Za-z0-9_.-]+)/settings', handle((ctx) => mcpHost.getSettings(ctx)));
+router.put('/api/v1/mcp/host/servers/:folder([A-Za-z0-9_.-]+)/settings', handle((ctx) => mcpHost.putSettings(ctx)));
+router.get('/api/v1/mcp/host/servers/:folder([A-Za-z0-9_.-]+)/source', handle((ctx) => mcpHost.source(ctx)));
+router.delete('/api/v1/mcp/host/servers/:folder([A-Za-z0-9_.-]+)', handle((ctx) => mcpHost.delete(ctx)));
 
 // User-controlled MCP settings (protected; user id ALWAYS from the JWT — see
 // MCPServerController.requireUserId). listMine keeps override-disabled servers in the list

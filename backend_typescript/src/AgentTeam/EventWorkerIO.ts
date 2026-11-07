@@ -1,5 +1,6 @@
 import { ChildProcess, spawn } from 'child_process';
 import { RunSpawner, WatchTransport } from './EventWorker';
+import { McpEndpoint } from '../Services/McpEndpoint';
 
 /**
  * WatchTransport over fetch: every active workflow's long-poll in this one process (the twin of PHP's
@@ -30,7 +31,7 @@ export class FetchTransport implements WatchTransport {
       this.finished.set(key, r);
       this.wake?.();
     };
-    fetch(url, { method: 'POST', headers: hdrs, body, signal: ctrl.signal })
+    fetch(McpEndpoint.internal(url), { method: 'POST', headers: hdrs, body, signal: ctrl.signal })
       .then(async (res) => settle([await res.text(), res.status, '']))
       .catch((e: any) => settle([false, 0, String(e?.message ?? e) || 'fetch error']));
   }
