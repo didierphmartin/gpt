@@ -4,6 +4,8 @@ import { db } from '../db/pools';
 import { phpIntval } from './WorkflowRepository';
 import { parseSqlDateTime } from './CronExpression';
 import { RobotAccount } from '../Services/RobotAccount';
+import { RobotSkillPolicy } from '../Services/RobotSkillPolicy';
+import { PrivateSkillsRefused } from '../Services/SkillErrors';
 
 /** A refused activation: kind for the editor, status for the API. Mirrors ActiveWorkflowError.php. */
 export class ActiveWorkflowError extends Error {
@@ -24,6 +26,9 @@ const seconds = (v: any): number => Math.floor(parseSqlDateTime(String(v)).getTi
  */
 export class ActiveWorkflowService {
   static readonly TIMED = ['none', 'hourly', 'daily', 'weekly', 'monthly', 'cron'];
+
+  /** skills: the robot's public-skills rule (activating a robot workflow that binds a private skill is refused). */
+  constructor(private readonly skills: Pick<RobotSkillPolicy, 'privateSkills'> | null = null) {}
 
   /**
    * The workflow's input mode, read from its saved data as the editor's StartOptions.active() reads it: the
@@ -65,6 +70,10 @@ export class ActiveWorkflowService {
       throw new ActiveWorkflowError('no_links', 'Start has no links', 422);
     }
     const several = (await RobotAccount.id()) === userId;
+    if (several && this.skills !== null) {
+      const priv = await this.skills.privateSkills(workflowId);
+      if (priv.length > 0) throw new PrivateSkillsRefused(priv);
+    }
     const before = several ? null : await this.get(userId);
     const replaced = before && phpIntval(before.workflow_id) !== workflowId
       ? { workflow_id: phpIntval(before.workflow_id), workflow_name: before.workflow_name } : null;

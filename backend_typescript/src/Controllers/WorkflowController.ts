@@ -43,6 +43,10 @@ import { phpStr } from '../Playbook/php';
 import { RobotOwnership, lockedResponse } from '../Services/RobotOwnership';
 import { RobotAccount } from '../Services/RobotAccount';
 import { RobotPolicy } from '../Services/RobotPolicy';
+import { RobotSkillPolicy } from '../Services/RobotSkillPolicy';
+import { SkillStore } from '../Services/SkillStore';
+import { PrivateSkillsRefused, PrivateSkill } from '../Services/SkillErrors';
+import { SkillsRoot } from '../AgentTeam/compiler/LangGraphPackage';
 import { WorkflowOwnerTransfer, WorkflowTransferError } from '../AgentTeam/WorkflowOwnerTransfer';
 
 /**
@@ -75,6 +79,29 @@ export class WorkflowController {
   /** Robot ownership rules (PHP keeps one per request; this controller is a singleton, so one per use). */
   protected ownership(): RobotOwnership {
     return new RobotOwnership(appConfig);
+  }
+
+  private skillPolicy(): RobotSkillPolicy {
+    return RobotSkillPolicy.fromEnv(appConfig);
+  }
+
+  /**
+   * Where a compile reads the skills from: null = the skills folder (LangGraphPackage.defaultSkillsRoot()); in
+   * the Docker app the skill store, with the workflow owner's visibility (the robot's for a robot workflow).
+   */
+  private async compileSkillsRoot(workflowId: number): Promise<SkillsRoot | null> {
+    const store = SkillStore.fromEnv(appConfig);
+    if (store === null) return null;
+    const r = (await sql<any>`SELECT user_id FROM agent_workflows WHERE id = ${workflowId}`.execute(db)).rows[0];
+    const owner = phpIntval(r?.user_id ?? 0);
+    const asRobot = owner === (await RobotAccount.id());
+    return store.compileResolver(owner, asRobot);
+  }
+
+  /** The private skills a robot-owned workflow binds (the robot can only use public ones), else []. */
+  private async robotPrivateSkills(workflowId: number): Promise<PrivateSkill[]> {
+    const r = (await sql<any>`SELECT user_id FROM agent_workflows WHERE id = ${workflowId}`.execute(db)).rows[0];
+    return r && phpIntval(r.user_id) === (await RobotAccount.id()) ? this.skillPolicy().privateSkills(workflowId) : [];
   }
 
   /** The 423 a locked (running robot) workflow answers to every edit. */
@@ -240,11 +267,14 @@ export class WorkflowController {
         return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
       }
 
+      const priv = await this.robotPrivateSkills(workflowId);
+      if (priv.length > 0) return RobotSkillPolicy.refusal(priv);
+
       const agentRepo = new AgentRepository();
       // A packaged Start document is copied only from this user's own document storage (where
       // uploadNodeDocument writes it: the local node-documents root, see its PORTING DIVERGENCE note).
       const docStore = new StartDocumentStore(await this.getUserStorageFolder(userId), null, WorkflowController.NODE_DOCS_LOCAL_ROOT);
-      const gen = new LangGraphGenerator(this.workflowRepository, this.graphRepository, agentRepo, null, docStore);
+      const gen = new LangGraphGenerator(this.workflowRepository, this.graphRepository, agentRepo, await this.compileSkillsRoot(workflowId), docStore);
       const a2a = (q.a2a ?? '0') === '1';
       // A2A wins if both are set: the two are mutually exclusive in the editor's form.
       const modular = !a2a && (q.modular ?? '0') === '1';
@@ -355,12 +385,14 @@ export class WorkflowController {
       if (!(await this.workflowRepository.canUserAccess(userId, workflowId, await this.ownership().robotFor(userId)))) {
         return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
       }
+      const priv = await this.robotPrivateSkills(workflowId);
+      if (priv.length > 0) return RobotSkillPolicy.refusal(priv);
       // A packaged Start document is copied only from this user's own document storage.
       const gen = new Generator(
         this.workflowRepository,
         this.graphRepository,
         new AgentRepository(),
-        null,
+        await this.compileSkillsRoot(workflowId),
         new StartDocumentStore(await this.getUserStorageFolder(userId), null, WorkflowController.NODE_DOCS_LOCAL_ROOT),
       );
       const result: any = mode === 'a2a' ? await gen.generateA2A(workflowId, String(userId))
@@ -660,13 +692,14 @@ export class WorkflowController {
       await RobotAccount.ensure(); // before ownership() reads the robot's id
     }
     try {
-      const transfer = new WorkflowOwnerTransfer(this.ownership());
+      const transfer = new WorkflowOwnerTransfer(this.ownership(), this.skillPolicy());
       const preview = await transfer.preview(userId, workflowId);
       const locked = await this.lockedGuard(workflowId);
       if (locked) return locked;
       const data = (body.confirm ?? false) === true ? await transfer.toRobot(userId, workflowId) : preview;
       return { success: true, data, status_code: 200 };
     } catch (e) {
+      if (e instanceof PrivateSkillsRefused) return RobotSkillPolicy.refusal(e.skills);
       if (!(e instanceof WorkflowTransferError)) throw e;
       return {
         success: false,
@@ -1022,6 +1055,8 @@ export class WorkflowController {
       if (!(await this.workflowRepository.canUserAccess(userId, workflowId, await this.ownership().robotFor(userId)))) {
         return { success: false, error: 'Workflow not found or access denied', status_code: 404 };
       }
+      const priv = await this.robotPrivateSkills(workflowId);
+      if (priv.length > 0) return RobotSkillPolicy.refusal(priv);
       const locked = await this.lockedGuard(workflowId);
       if (locked) return locked;
 
@@ -1114,6 +1149,12 @@ export class WorkflowController {
     try {
       if (!(await this.workflowRepository.canUserAccess(userId, workflowId, await this.ownership().robotFor(userId)))) {
         sseCallback({ type: 'error', error: 'Workflow not found or access denied' });
+        done();
+        return;
+      }
+      const priv = await this.robotPrivateSkills(workflowId);
+      if (priv.length > 0) {
+        sseCallback({ type: 'error', error: RobotSkillPolicy.MESSAGE, code: 'private_skills', skills: priv });
         done();
         return;
       }

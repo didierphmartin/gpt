@@ -923,6 +923,18 @@ export class GraphWorkflowRunner {
     }
   }
 
+  /**
+   * A node bound to a skill needs the browser that runs it: with no `client_skills` entry for its dir_name
+   * (scheduled, event-triggered, robot and API runs) the run stops here instead of silently running the node
+   * without its skill. Called before any LLM call.
+   */
+  static assertBoundSkillRunnable(config: Record<string, any>, clientSkills: Record<string, any>): void {
+    const bs = config?.bound_skill ?? null;
+    const dir = bs !== null && typeof bs === 'object' ? String(bs.dir_name ?? '') : '';
+    if (dir === '' || (clientSkills[dir] !== undefined && clientSkills[dir] !== null && typeof clientSkills[dir] === 'object')) return;
+    throw new Error(`Skill "${dir}" can only run from the editor or in a compiled program: this run has no browser to run it.`);
+  }
+
   private async executeAgentNode(
     node: any,
     userId: number,
@@ -942,7 +954,8 @@ export class GraphWorkflowRunner {
     };
 
     // Node-level skill content. Folder-backed (bound_skill) resolution depends on the inline
-    // clientSkills bundle (always empty for 2a). Inline skill_content is honored.
+    // clientSkills bundle the browser sends. Inline skill_content is honored.
+    GraphWorkflowRunner.assertBoundSkillRunnable(config, this.clientSkills);
     let skillContent = '';
     if (!phpEmpty(config.bound_skill) && typeof config.bound_skill === 'object') {
       const dirName = String(config.bound_skill.dir_name ?? '');
@@ -1918,6 +1931,8 @@ export class GraphWorkflowRunner {
         this.parallelEmitted[nodeId] = true;
         continue;
       }
+
+      GraphWorkflowRunner.assertBoundSkillRunnable(config, this.clientSkills);
 
       const mergeStrategy = config.merge_strategy ?? 'labeled';
       const context = this.buildContextForNode(nodeId, edges, executedNodes, mergeStrategy);

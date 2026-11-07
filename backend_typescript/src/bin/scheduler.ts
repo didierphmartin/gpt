@@ -1,4 +1,5 @@
 import path from 'path';
+import { RobotSkillPolicy } from '../Services/RobotSkillPolicy';
 import { config } from '../config/env';
 import { ScheduledWorkflowService } from '../AgentTeam/ScheduledWorkflowService';
 import { ScheduleTick, RunSchedule } from '../AgentTeam/ScheduleTick';
@@ -16,7 +17,8 @@ export function bootstrap(): { schedules: ScheduledWorkflowService; runSchedule:
   const workflows = new WorkflowRepository();
   return {
     schedules: new ScheduledWorkflowService(),
-    runSchedule: ScheduleTick.workflowRunner(workflows, workflows.graphRepository, new GraphWorkflowRunner(config), new WorkflowRunner()),
+    runSchedule: ScheduleTick.workflowRunner(workflows, workflows.graphRepository, new GraphWorkflowRunner(config), new WorkflowRunner(),
+      RobotSkillPolicy.fromEnv()),
   };
 }
 

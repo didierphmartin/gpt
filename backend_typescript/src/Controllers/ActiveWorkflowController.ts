@@ -3,6 +3,8 @@ import { ActiveWorkflowError, ActiveWorkflowService } from '../AgentTeam/ActiveW
 import { WorkflowRepository } from '../AgentTeam/WorkflowRepository';
 import { RobotOwnership } from '../Services/RobotOwnership';
 import { config } from '../config/env';
+import { RobotSkillPolicy } from '../Services/RobotSkillPolicy';
+import { PrivateSkillsRefused } from '../Services/SkillErrors';
 
 /**
  * ▶ on Start activates the workflow the event worker runs. One per person; a robot workflow's row is the robot's, and
@@ -11,7 +13,7 @@ import { config } from '../config/env';
  */
 export class ActiveWorkflowController {
   constructor(
-    private readonly active: ActiveWorkflowService = new ActiveWorkflowService(),
+    private readonly active: ActiveWorkflowService = new ActiveWorkflowService(RobotSkillPolicy.fromEnv(config)),
     private readonly ownershipFactory: () => RobotOwnership = () => new RobotOwnership(config),
     private readonly workflows: Pick<WorkflowRepository, 'canUserAccess'> = new WorkflowRepository()
   ) {}
@@ -39,6 +41,7 @@ export class ActiveWorkflowController {
         const data = await this.active.activate(await own.runAs(userId, workflowId), workflowId);
         return { success: true, data, status_code: 200 };
       } catch (e) {
+        if (e instanceof PrivateSkillsRefused) return RobotSkillPolicy.refusal(e.skills);
         if (!(e instanceof ActiveWorkflowError)) throw e;
         return { success: false, error: e.message, kind: e.kind, error_code: e.kind, status_code: e.status };
       }

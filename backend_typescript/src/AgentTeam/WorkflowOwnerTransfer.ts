@@ -2,6 +2,8 @@ import { sql, RawBuilder } from 'kysely';
 import { db } from '../db/pools';
 import { CodeComponentStore } from '../CodeComponent/CodeComponentStore';
 import { RobotOwnership } from '../Services/RobotOwnership';
+import { RobotSkillPolicy } from '../Services/RobotSkillPolicy';
+import { PrivateSkillsRefused } from '../Services/SkillErrors';
 import { CodeNodeEmit } from './CodeNodeEmit';
 import { StartOptionGraph } from './StartOptionGraph';
 
@@ -29,10 +31,18 @@ const TABLES: Record<string, string> = { code_components: 'code_components', pla
  * Mirrors backend/src/AgentTeam/Services/WorkflowOwnerTransfer.php.
  */
 export class WorkflowOwnerTransfer {
-  constructor(private readonly ownership: RobotOwnership) {}
+  constructor(private readonly ownership: RobotOwnership, private readonly skills: Pick<RobotSkillPolicy, 'privateSkills'> | null = null) {}
+
+  /** The robot uses public skills only (corporate): a workflow binding a private one is not handed over. */
+  private async assertPublicSkills(workflowId: number): Promise<void> {
+    if (this.skills === null) return;
+    const priv = await this.skills.privateSkills(workflowId);
+    if (priv.length > 0) throw new PrivateSkillsRefused(priv);
+  }
 
   async preview(callerId: number, workflowId: number): Promise<{ needs_servers: string[]; shared_with: any[]; clashes: any[] }> {
     const [robot, owner, name] = await this.load(callerId, workflowId);
+    await this.assertPublicSkills(workflowId);
     const links = await this.links(workflowId);
     if (owner === robot) {
       return { needs_servers: await this.missingServers(robot, links.servers), shared_with: [], clashes: [] };
@@ -48,6 +58,7 @@ export class WorkflowOwnerTransfer {
   /** An already robot-owned workflow only has its schedule rows moved again (a repair). */
   async toRobot(callerId: number, workflowId: number): Promise<{ workflow_id: number; moved: Plan & { schedules: number[] } }> {
     const [robot, owner, name] = await this.load(callerId, workflowId);
+    await this.assertPublicSkills(workflowId);
     let moved: Plan = { components: [], playbooks: [], agents: [] };
     if (owner !== robot) {
       moved = await this.plan(owner, await this.links(workflowId));

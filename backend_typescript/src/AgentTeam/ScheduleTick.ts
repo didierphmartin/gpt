@@ -1,4 +1,5 @@
 import { ScheduledWorkflowService } from './ScheduledWorkflowService';
+import { RobotSkillPolicy } from '../Services/RobotSkillPolicy';
 import { sqlDateTime } from './CronExpression';
 import { phpEmpty, phpIntval } from './WorkflowRepository';
 
@@ -91,6 +92,7 @@ export class ScheduleTick {
     graphRepository: { getNodes(id: number): Promise<any[]> },
     graphRunner: { run(w: any, u: number, input: Record<string, any>): Promise<Record<string, any>> },
     linearRunner: { run(w: any, u: number, input: Record<string, any>): Promise<Record<string, any>> },
+    skills: Pick<RobotSkillPolicy, 'privateSkillsForOwner'> | null = null,
   ): RunSchedule {
     return async (schedule) => {
       const workflowId = phpIntval(schedule.workflow_id);
@@ -103,6 +105,10 @@ export class ScheduleTick {
         input.prompt = schedule.input_prompt;
       }
       const userId = phpIntval(schedule.user_id);
+      const priv = skills !== null ? await skills.privateSkillsForOwner(userId, workflowId) : [];
+      if (priv.length > 0) {
+        return { success: false, error: RobotSkillPolicy.MESSAGE, code: 'private_skills', skills: priv };
+      }
       const nodes = await graphRepository.getNodes(workflowId);
       return Array.isArray(nodes) && nodes.length > 0
         ? graphRunner.run(workflow, userId, input)

@@ -50,6 +50,10 @@ function controllerFor(fixture: string, access = true): { c: any; cleanup: () =>
   const components = fx.code_components ?? {};
   c.graphRepository = { getGraph: async () => StartOptionGraph.expand(fx.graph, (id: number) => components[String(id)] ?? null) };
   c.getUserStorageFolder = async () => 'user_3';
+  // No robot on this install (RobotOwnership and the robot's skill rule answer without a query); skills from the folder.
+  c.ownership = () => ({ robotFor: async () => null });
+  c.robotPrivateSkills = async () => [];
+  c.compileSkillsRoot = async () => null;
   return {
     c,
     cleanup: () => {

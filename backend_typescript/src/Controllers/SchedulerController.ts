@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { RobotSkillPolicy } from '../Services/RobotSkillPolicy';
 import { Ctx } from '../Support/Http';
 import { config } from '../config/env';
 import { ScheduledWorkflowService } from '../AgentTeam/ScheduledWorkflowService';
@@ -129,7 +130,8 @@ export class SchedulerController {
     const workflowRepository = new WorkflowRepository();
     const tick = new ScheduleTick(
       this.scheduleService,
-      ScheduleTick.workflowRunner(workflowRepository, workflowRepository.graphRepository, new GraphWorkflowRunner(config), new WorkflowRunner()),
+      ScheduleTick.workflowRunner(workflowRepository, workflowRepository.graphRepository, new GraphWorkflowRunner(config), new WorkflowRunner(),
+      RobotSkillPolicy.fromEnv()),
     );
     // A missing active_workflows table (not migrated yet) must not break the tick: then nothing is due, never every schedule.
     let activeWorkflowIds: number[];
