@@ -1370,6 +1370,20 @@ _runner_stderr = _stderr_buf.getvalue()
                 inputFilesObj = null;
             }
         }
+        // A key that is not an absolute path outside the skill folder is refused before anything is
+        // written: content used as a key left a file the browser cannot sync in the skill mount and
+        // broke every later run on the page (input-files-paths.js). The model gets the reason back.
+        const refused = window.InputFilesPaths.refusal(inputFilesObj, mount);
+        if (refused) {
+            console.warn('[pyodide-runner] ' + refused);
+            return {
+                stdout: '',
+                stderr: refused,
+                exitCode: 2,
+                outputs: {},
+                durationMs: Math.round(performance.now() - t0),
+            };
+        }
         if (inputFilesObj && typeof inputFilesObj === 'object') {
             for (const [relRaw, data] of Object.entries(inputFilesObj)) {
                 // Models sometimes emit keys with stray whitespace (" /scratch/x.json") —

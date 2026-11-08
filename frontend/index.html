@@ -4401,7 +4401,8 @@
     <!-- Pyodide skill-script runner. Lazy-loads Pyodide on first call;
          depends on window.localFs (skill folder resolution) and
          window.skillsFs (frontmatter parsing for declared deps). -->
-    <script src="assets/js/pyodide-runner.js?v=20261104-listitems"></script>
+    <script src="assets/js/input-files-paths.js?v=20261107-inputpaths"></script>
+    <script src="assets/js/pyodide-runner.js?v=20261107-inputpaths"></script>
     <!-- Parallel skill execution: worker pool used by chat.js for rounds of 2+
          independent run_skill_script calls (the worker itself loads via new Worker). -->
     <script src="assets/js/pyodide-pool.js?v=20260608-parallel"></script>
@@ -4458,14 +4459,14 @@
     <script src="assets/js/workflow-package-ui.js?v=20261103-skilldeps"></script>
     <script src="assets/js/workflow-package-import.js?v=20261103-skilldeps3"></script>
     <script src="assets/js/skill-visibility-card.js?v=20261103-skilldeps3"></script>
-    <script src="assets/js/workflow-editor.js?v=20261105-cm-code"></script>
+    <script src="assets/js/workflow-editor.js?v=20261107-inputpaths"></script>
     <script src="assets/js/agents-library.js?v=20260903-playbook-agent"></script>
     <script src="assets/js/mcp-tool-tester.js?v=20261105-functions"></script>
     <script src="assets/js/mcp-protocol-validator.js?v=20261105-mcptest"></script>
     <script src="assets/js/mcp-protocol-test.js?v=20261105-mcptest2"></script>
     <script src="assets/js/mcp-library.js?v=20261105-mcptest2"></script>
     <script src="assets/js/file-storage.js?v=20260610-fileselect2"></script>
-    <script src="assets/js/chat.js?v=20261103-libchevron"></script>
+    <script src="assets/js/chat.js?v=20261107-inputpaths"></script>
     <script>
       (function initVoiceDictation() {
         const input = document.getElementById('user-input');

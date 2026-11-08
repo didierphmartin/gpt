@@ -12,6 +12,8 @@ try {
 } catch (e) {
   throw new Error('Pyodide is not installed on this server (run scripts/vendor-pyodide.sh).');
 }
+// The input_files key check shared with pyodide-runner.js (same folder; ?v= follows index.html's).
+importScripts('input-files-paths.js?v=20261107-inputpaths');
 
 let pyodide = null;
 const mountedSkills = new Map();   // dirName -> mountPath
@@ -502,6 +504,12 @@ async function runSkillScript(payload) {
       console.error('[pyodide.worker] input_files is a string but not valid JSON; skipping all input file writes:', e?.message || e);
       inputFilesObj = null;
     }
+  }
+  // Same refusal as _runOne: nothing is written for a key that is not an absolute path outside the skill folder.
+  const refused = self.InputFilesPaths.refusal(inputFilesObj, mount);
+  if (refused) {
+    report(refused);
+    return { stdout: '', stderr: refused, exitCode: 2, outputs: {}, durationMs: Date.now() - t0 };
   }
   if (inputFilesObj && typeof inputFilesObj === 'object') {
     for (const [rel, data] of Object.entries(inputFilesObj)) {
