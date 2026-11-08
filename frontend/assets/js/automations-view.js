@@ -103,10 +103,32 @@
         if (linked) return `Next: ${install}. Do not call save_automation again.`;
         const pb = r.playbook_id ? r.playbook_id : '<from save_playbook_agent>';
         const wf = r.workflow_id ? r.workflow_id : '<from save_workflow>';
-        return `Version ${r.version} for this turn: run create.py with --version ${r.version} (skip it if already VALID with that version), `
+        // An existing key: the stored spec this save replaced. A prompt that does not mention an approval must not
+        // drop the one the automation already has (2026-11-07: a vague prompt turned v6's manager approval into v7 without it).
+        const kept = hasPreviousSpec(r)
+            ? `This automation already existed: previous_spec is version ${r.version - 1}. Start from it before create.py: `
+                + 'keep its approvals, notifications, form variables and playbook steps, change only what the user asks for now, '
+                + 'and remove something only when the user asked to. '
+            : '';
+        return kept + `Version ${r.version} for this turn: run create.py with --version ${r.version} (skip it if already VALID with that version), `
             + `then save_playbook_agent {playbook_id: ${r.playbook_id || 'omit'}, automation_id: ${r.id}, …}, `
             + `then save_workflow {workflow_id: ${r.workflow_id || 'omit'}, automation_id: ${r.id}, path}, `
             + `then save_automation {key, title, spec, playbook_id: ${pb}, workflow_id: ${wf}} (links them; never bumps), then ${install}.`;
+    }
+
+    function hasPreviousSpec(rec) {
+        const p = rec && rec.previous_spec;
+        return !!p && typeof p === 'object' && !Array.isArray(p) && Object.keys(p).length > 0;
+    }
+
+    /**
+     * save_automation's answer to a version bump of an existing key carries the spec stored before it (previous_spec),
+     * read from the record list just before the save. Only for a POST: a linking or same-turn save keeps the turn's spec.
+     */
+    function withPreviousSpec(rec, rowBefore) {
+        const spec = rowBefore && rowBefore.spec;
+        if (!spec || typeof spec !== 'object' || Array.isArray(spec) || !Object.keys(spec).length) return rec;
+        return { ...rec, previous_spec: spec };
     }
 
     /** An absolute /outputs/ path for a model-given path, or null (anything outside /outputs/, or with ..). */
@@ -350,7 +372,7 @@
         }
     }
 
-    return { deployFileList, driftSummary, clientToolNames, saveAutomationPlan, saveAutomationNext, outputsPath, manualInstallMessage,
+    return { deployFileList, driftSummary, clientToolNames, saveAutomationPlan, saveAutomationNext, withPreviousSpec, outputsPath, manualInstallMessage,
         placeholdersIn, playbookKeyPlan, keyTakenMessage, startOptionOf, startSchedulePlan,
         withServerNames, AutomationApi, collectDeployFiles, installAutomation, AutomationsLibrary };
 });

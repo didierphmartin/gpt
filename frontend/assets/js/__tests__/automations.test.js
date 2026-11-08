@@ -70,6 +70,20 @@ const prodOnly = AV.saveAutomationNext({ id: 1, version: 12, servers: [{ id: 9, 
 assert.ok(prodOnly.includes('manual install') && !prodOnly.includes('install_automation'), prodOnly);
 assert.ok(AV.saveAutomationNext({ id: 2, version: 1, playbook_id: null, workflow_id: null, servers: [] }, false).includes('playbook_id: <from save_playbook_agent>'));
 
+// An existing key's bump answers with the spec it replaced (previous_spec), and the next hint says to start from it:
+// a vague prompt once regenerated okta-password-reset v7 without v6's manager approval.
+const v6 = { name: 'okta-password-reset', servicenow: { before: [{ id: 'approve_manager', action: 'askForApproval' }] } };
+const bumped = AV.withPreviousSpec({ id: 3, version: 7, spec: { name: 'okta-password-reset' } }, { id: 3, key: 'okta-password-reset', spec: v6 });
+assert.deepStrictEqual(bumped.previous_spec, v6);
+const keepHint = AV.saveAutomationNext({ ...bumped, servers: [] }, false);
+assert.ok(keepHint.startsWith('This automation already existed: previous_spec is version 6.'), keepHint);
+assert.ok(keepHint.includes('keep its approvals') && keepHint.includes('--version 7'), keepHint);
+// A new key (no row before), an empty stored spec, or a linking save: no previous_spec, no hint.
+assert.strictEqual(AV.withPreviousSpec({ id: 4, version: 1 }, undefined).previous_spec, undefined);
+assert.strictEqual(AV.withPreviousSpec({ id: 4, version: 2 }, { spec: {} }).previous_spec, undefined);
+assert.ok(!AV.saveAutomationNext({ id: 4, version: 1, servers: [] }, false).includes('already existed'));
+assert.ok(!AV.saveAutomationNext({ ...bumped, servers: [] }, true).includes('already existed'));
+
 // outputsPath: save_workflow reads only a file under /outputs/.
 assert.strictEqual(AV.outputsPath('/outputs/okta-reset.workflow.json'), '/outputs/okta-reset.workflow.json');
 assert.strictEqual(AV.outputsPath('okta-reset.workflow.json'), '/outputs/okta-reset.workflow.json');

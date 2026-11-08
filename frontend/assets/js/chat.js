@@ -531,7 +531,10 @@ class ChatApp {
         let rec;
         try {
             if (plan.method === 'POST') {
-                rec = await api.create(plan.body);
+                // An existing key's stored spec, read before this save replaces it: answered as previous_spec so
+                // the model keeps what the automation already has (AutomationsView.saveAutomationNext says how).
+                const before = (await api.list() || []).find(r => r.key === key);
+                rec = AV.withPreviousSpec(await api.create(plan.body), before);
                 versioned.add(key);
             } else {
                 const row = (await api.list() || []).find(r => r.key === key);
