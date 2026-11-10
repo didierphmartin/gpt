@@ -1923,6 +1923,19 @@
       "importStopped": "Import stopped: no SynergyAI folder selected.",
       "alsoInstalls": "Also installs the skills it needs: {{list}}",
       "reasonRequiredClash": "A different skill is already installed under the name of a skill this one needs: {{names}}. Rename or delete it first, or skip this skill."
+    },
+    "runSettings": {
+      "title": "Settings needed before the run",
+      "intro": "These servers the workflow uses are missing settings: required ones, or ones that go with settings already filled (such as the organization connection). Fill them in to run the workflow; they are saved with the server, as in Settings → MCP Servers.",
+      "save": "Save",
+      "saving": "Saving…",
+      "stillMissing": "Still missing: {{names}}",
+      "saveFailed": "The settings could not be saved: {{error}}",
+      "saved": "Settings saved.",
+      "restartHelp": "A server reads its settings when it starts. Restart each server below (stop it, then run its start command in a terminal, in the server's folder inside your SynergyAI folder), then click Continue.",
+      "noStartCommand": "This server declares no start command: restart it the way you usually start it.",
+      "continue": "Continue",
+      "cancelled": "Run cancelled: a server's settings are missing."
     }
   },
   "robot": {

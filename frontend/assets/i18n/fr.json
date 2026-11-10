@@ -1923,6 +1923,19 @@
       "importStopped": "Import arrêté : aucun dossier SynergyAI sélectionné.",
       "alsoInstalls": "Installe aussi les compétences nécessaires : {{list}}",
       "reasonRequiredClash": "Une autre compétence est déjà installée sous le nom d’une compétence dont celle-ci a besoin : {{names}}. Renommez-la ou supprimez-la d’abord, ou ignorez cette compétence."
+    },
+    "runSettings": {
+      "title": "Paramètres requis avant l'exécution",
+      "intro": "Il manque des paramètres à des serveurs utilisés par ce workflow : des paramètres obligatoires, ou qui vont avec des paramètres déjà remplis (comme la connexion de l'organisation). Remplissez-les pour lancer le workflow ; ils sont enregistrés avec le serveur, comme dans Paramètres → Serveurs MCP.",
+      "save": "Enregistrer",
+      "saving": "Enregistrement…",
+      "stillMissing": "Encore manquant : {{names}}",
+      "saveFailed": "Les paramètres n'ont pas pu être enregistrés : {{error}}",
+      "saved": "Paramètres enregistrés.",
+      "restartHelp": "Un serveur lit ses paramètres au démarrage. Redémarrez chaque serveur ci-dessous (arrêtez-le, puis lancez sa commande de démarrage dans un terminal, dans le dossier du serveur à l'intérieur de votre dossier SynergyAI), puis cliquez sur Continuer.",
+      "noStartCommand": "Ce serveur ne déclare pas de commande de démarrage : redémarrez-le comme d'habitude.",
+      "continue": "Continuer",
+      "cancelled": "Exécution annulée : des paramètres d'un serveur manquent."
     }
   },
   "robot": {

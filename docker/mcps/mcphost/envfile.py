@@ -82,7 +82,16 @@ def _norm(f: dict) -> dict:
         "required": bool(f.get("required")),
         "secret": bool(secret) if secret is not None else bool(SECRET_FIELD_RE.search(name or "")),
         "default": "" if default is None else str(default),
+        # settings that go together: once one of a group is filled, the others are needed too
+        **({"group": f["group"].strip()} if isinstance(f.get("group"), str) and f["group"].strip() else {}),
     }
+
+
+def missing(fields: list, current: dict, skip=()) -> list:
+    """Names still needed: a required field with no value, and every empty member of a group one of whose members is set."""
+    live = [f for f in fields if f["name"] not in skip]
+    started = {f["group"] for f in live if f.get("group") and current.get(f["name"])}
+    return [f["name"] for f in live if not current.get(f["name"]) and (f["required"] or f.get("group") in started)]
 
 
 def fields(manifest: dict | None, env_example: str) -> list:

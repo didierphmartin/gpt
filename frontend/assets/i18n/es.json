@@ -1923,6 +1923,19 @@
       "importStopped": "Importación detenida: no se seleccionó ninguna carpeta SynergyAI.",
       "alsoInstalls": "También instala las habilidades que necesita: {{list}}",
       "reasonRequiredClash": "Ya hay instalada otra habilidad con el nombre de una que esta necesita: {{names}}. Renómbrala o elimínala primero, u omite esta habilidad."
+    },
+    "runSettings": {
+      "title": "Ajustes necesarios antes de ejecutar",
+      "intro": "A algunos servidores que usa este flujo les faltan ajustes: obligatorios, o que van con ajustes ya completados (como la conexión de la organización). Complételos para ejecutar el flujo; se guardan con el servidor, como en Ajustes → Servidores MCP.",
+      "save": "Guardar",
+      "saving": "Guardando…",
+      "stillMissing": "Aún faltan: {{names}}",
+      "saveFailed": "No se pudieron guardar los ajustes: {{error}}",
+      "saved": "Ajustes guardados.",
+      "restartHelp": "Un servidor lee sus ajustes al iniciarse. Reinicie cada servidor de abajo (deténgalo y ejecute su comando de inicio en una terminal, en la carpeta del servidor dentro de su carpeta SynergyAI) y luego pulse Continuar.",
+      "noStartCommand": "Este servidor no declara un comando de inicio: reinícielo como lo hace normalmente.",
+      "continue": "Continuar",
+      "cancelled": "Ejecución cancelada: faltan ajustes de un servidor."
     }
   },
   "robot": {

@@ -280,7 +280,7 @@ class Control:
             self.manager.restart(folder)
         current = envfile.parse(text)
         over = overridden(_manifest(d), [f["name"] for f in fields])
-        return 200, {"missing": [f["name"] for f in fields if f["required"] and not current.get(f["name"]) and f["name"] not in over]}
+        return 200, {"missing": envfile.missing(fields, current, over)}
 
     def source(self, folder: str):
         d = self._known(folder)

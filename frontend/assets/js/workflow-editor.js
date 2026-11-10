@@ -17653,6 +17653,26 @@ class WorkflowEditor {
      * omission — it is the contract, pinned by
      * frontend/assets/js/__tests__/batch-conversation.test.js.
      */
+    /**
+     * Before a run: the MCP servers the workflow uses whose settings can be read (the user's SynergyAI folder
+     * or the server host) are checked, and a form opens when a required one is empty (McpServerSettings.runGate).
+     * True = run. A check that cannot be made never blocks the run: the first failing node says why, as before.
+     */
+    async _runSettingsGate() {
+        const MS = window.McpServerSettings, WP = window.WorkflowPackage;
+        if (!MS || !WP?.collectDependencies || !window.WorkflowPackageUI?.settingsFieldsHtml) return true;
+        try {
+            let toolServers = new Map();
+            try { ({ toolServers } = await window.WorkflowPackageUI.loadServers()); } catch (_) { /* agent tools unknown */ }
+            const names = WP.collectDependencies(this.exportWorkflow().nodes, { toolServers }).servers;
+            if (!names.length) return true;
+            return await MS.runGate(this, names, await this._loadMcpServersMeta(true));
+        } catch (e) {
+            console.warn('[workflow] server settings check skipped:', e?.message || e);
+            return true;
+        }
+    }
+
     async _batchTurn(userPrompt) {
         this._pbClearFeed();
         this._pbBubble('you', userPrompt);
@@ -17661,6 +17681,12 @@ class WorkflowEditor {
         // rebuilds the canvas when it lands: walk the graph only after it.
         if (this._batchSessionSave) { await this._batchSessionSave; this._batchSessionSave = null; }
         if (this._saveInFlight) { try { await this._saveInFlight; } catch (_) {} }
+        // A used server missing a required private setting: its form first; Cancel = nothing runs.
+        if (!(await this._runSettingsGate())) {
+            this._pbPendingClear();
+            this._pbBubble('agent', this.t('workflow.runSettings.cancelled'), { label: this._batchAnswerLabel() });
+            return { output: '', node_outputs: {}, success: false, nodes_executed: 0, response_time_ms: 0 };
+        }
         const st = document.getElementById('pb-ov-status');
         if (st) { st.textContent = this.t('workflow.batchSession.running'); st.style.color = '#9ca3af'; }
         let res;
