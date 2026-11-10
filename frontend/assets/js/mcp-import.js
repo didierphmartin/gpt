@@ -108,7 +108,8 @@
             } catch (e) { err = (e && e.message) || String(e); }
             installing = false;
             const ok = !err && res && res.state === 'running';
-            const log = err || ((res && res.log) || []).slice(-20).join('\n');
+            const regFailed = !err && res && res.state === 'register-failed';
+            const log = err || (regFailed ? `${fetched.folder}: ${res.error || ''}\n${t('registerFailed')}` : ((res && res.log) || []).slice(-20).join('\n'));
             body.innerHTML = `<div style="font-size: 13px; ${ok ? 'color: #15803d;' : 'color: #b91c1c;'}">${esc(ok ? t('done') : t('failed'))}</div>
                 ${!ok && log ? `<pre style="margin: 0; padding: 6px 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; white-space: pre-wrap; font-size: 12px; max-height: 240px; overflow: auto;">${esc(log)}</pre>` : ''}
                 <div style="display: flex; justify-content: flex-end;"><button type="button" data-close style="${BTN}">${esc(t('close'))}</button></div>`;

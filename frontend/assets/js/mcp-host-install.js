@@ -45,7 +45,10 @@
 
     function registrationUrl(gateway, folder, manifest) {
         const gw = String(gateway || '').replace(/\/+$/, '');
-        return manifest && manifest.runtime === 'php' ? `${gw}/${folder}/${manifest.entry}` : `${gw}/${folder}/mcp`;
+        if (manifest && manifest.runtime === 'php' && manifest.entry) {
+            return `${gw}/${folder}/${String(manifest.entry).split('/').map(encodeURIComponent).join('/')}`;
+        }
+        return `${gw}/${folder}/mcp`;
     }
 
     async function installAndRegister({ folder, manifest, filesB64, env, source, gateway }) {
@@ -54,6 +57,7 @@
         if (r.state !== 'running') return { state: r.state, log: r.log };
         const server = await window.mcpClient.addServer(name, registrationUrl(gateway, folder, manifest),
             manifest.description || '', {}, 'http');
+        if (!server || server.success === false) return { state: 'register-failed', error: server && server.error };
         return { state: r.state, server };
     }
 

@@ -183,4 +183,10 @@ class McpHostControllerTest extends TestCase
         $r = $this->fetchCtl(fn() => throw new GitHubFetchError(400, 'bad link'))->fetch($this->req(3, ['url' => 'x']));
         $this->assertSame(400, $r['status_code']);
     }
+
+    public function testFetchNonStringUrlIs400(): void
+    {
+        $r = $this->fetchCtl(fn($u) => throw new \InvalidArgumentException('Not a GitHub link'))->fetch($this->req(3, ['url' => []]));
+        $this->assertSame(400, $r['status_code']);
+    }
 }

@@ -331,6 +331,7 @@
       "installing": "This can take a few minutes for a Python server",
       "done": "Installed and added to your MCP servers",
       "failed": "Installation failed",
+      "registerFailed": "The server is installed and running; add it from Settings → MCP servers, or remove it there and import again.",
       "runtimePhp": "PHP",
       "runtimePython": "Python",
       "from": "from {{source}}",

@@ -82,6 +82,12 @@ class GitHubServerFetcherTest extends TestCase
         $this->assertSame(50 * 1024 * 1024, $this->calls[1]['max']);
     }
 
+    public function testSourceUrlIsTheRebuiltLink(): void
+    {
+        $out = $this->fetcher($this->arxiv())->fetch('https://github.com/o/mcps/tree/main/arxiv?tab=readme');
+        $this->assertSame('https://github.com/o/mcps/tree/main/arxiv', $out['source']['url']);
+    }
+
     public function testSlashRefPicksLongestExistingRef(): void
     {
         $routes = [

@@ -24,6 +24,8 @@ class PhpRouterTest(unittest.TestCase):
         (d / "datasheet.html").write_text("d")
         (d / "server.log").write_text("log")
         (d / "server.log.1").write_text("log")
+        for n in ("token.json", "cache.sqlite", "app.log", "cert.pem", "client_secret.json", "Credentials.json", "a.key", "x.p12", "x.pfx", "cache.sqlite-wal"):
+            (d / n).write_text("x")
         (d / "data").mkdir()
         (d / "data/x.sqlite").write_text("x")
         (d / "sub/.git").mkdir(parents=True)
@@ -60,6 +62,6 @@ class PhpRouterTest(unittest.TestCase):
         self.assertEqual(self.get("/datasheet.html")[0], 200)
 
     def test_refused(self):
-        for p in ("/.env", "/.htaccess", "/sub/.git/x", "/x/../.env", "/server.log", "/server.log.1", "/data/x.sqlite", "/sub/server.log", "/%2e%65nv", "/"):
+        for p in ("/.env", "/.htaccess", "/sub/.git/x", "/x/../.env", "/server.log", "/server.log.1", "/data/x.sqlite", "/sub/server.log", "/%2e%65nv", "/", "/token.json", "/cache.sqlite", "/app.log", "/cert.pem", "/client_secret.json", "/Credentials.json", "/a.key", "/x.p12", "/x.pfx", "/cache.sqlite-wal"):
             with self.subTest(p=p):
                 self.assertEqual(self.get(p)[0], 404)

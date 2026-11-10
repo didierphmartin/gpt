@@ -10,7 +10,9 @@ foreach ($segs as $seg) {
     }
 }
 $first = $segs[1] ?? '';
-if ($first === 'data' || preg_match('/^server\.log(\..*)?$/', basename($path))) {
+$base = strtolower(basename($path));
+$secret = '/^server\.log(\..*)?$|\.sqlite|\.log$|\.(pem|key|p12|pfx)$|^(credentials|token).*\.json$|secret/';
+if ($first === 'data' || preg_match($secret, $base)) {
     http_response_code(404);
     return true;
 }

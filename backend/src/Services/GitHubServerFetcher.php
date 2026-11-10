@@ -65,7 +65,7 @@ final class GitHubServerFetcher
         }
         return $this->unpack($res['body'], $path) + [
             'folder' => $folder,
-            'source' => ['url' => trim($url), 'owner' => $link['owner'], 'repo' => $link['repo'], 'ref' => $ref, 'sha' => $sha, 'path' => $path],
+            'source' => ['url' => 'https://github.com/' . $link['owner'] . '/' . $link['repo'] . '/tree/' . $ref . '/' . $path, 'owner' => $link['owner'], 'repo' => $link['repo'], 'ref' => $ref, 'sha' => $sha, 'path' => $path],
         ];
     }
 

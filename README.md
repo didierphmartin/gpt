@@ -297,14 +297,14 @@ Docker Engine + Compose v2, and either your own LLM provider keys or an account 
 4. **Optional: install the local runner** if you want to run compiled
    workflows. See *First run* below.
 
-MCP servers you import in the Docker app are kept in the `gpt_gpt-mcps` volume
-(compose adds the project name as a prefix, see below) and start by themselves, also after a restart or a rebuild of the stack.
+MCP servers you import in the Docker app are kept in the named volume `gpt-mcps`
+(shown by Docker as `gpt_gpt-mcps`, because compose adds the project name as a prefix) and start by themselves, also after a restart or a rebuild of the stack.
 
-By default they live in the `gpt-mcps` named volume. To keep them in a folder
+By default they live in that volume. To keep them in a folder
 instead, create the folder first (Docker would create a missing one owned by
 root, which uid 1000 cannot write), make it writable by uid 1000, and set
-`MCPS_STORE` to its absolute path. A relative path or a bare name is taken as a
-volume name, and `~` is not expanded, also not in a `.env` file:
+`MCPS_STORE` to its absolute path. Only a bare name is taken as a
+volume name (a path such as `./x` is a bind mount), and `~` is not expanded, also not in a `.env` file:
 
 ```bash
 mkdir -p $HOME/Documents/synergyAI/mcps-docker

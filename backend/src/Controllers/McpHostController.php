@@ -82,7 +82,8 @@ final class McpHostController
             $e = 'Only an admin can install MCP servers here.';
             return ['success' => false, 'data' => ['error' => $e], 'error' => $e, 'status_code' => 403];
         }
-        $url = (string) (((array) ($request['body'] ?? []))['url'] ?? '');
+        $u = ((array) ($request['body'] ?? []))['url'] ?? '';
+        $url = is_string($u) ? $u : '';
         try {
             $data = ($this->fetcherFactory)()->fetch($url);
         } catch (GitHubFetchError $e) {

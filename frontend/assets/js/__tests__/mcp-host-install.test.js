@@ -16,6 +16,10 @@ const make = (mcpClient) => {
     assert.strictEqual(H.registrationUrl('http://gw', 'srv', { runtime: 'python', entry: 'main.py' }), 'http://gw/srv/mcp');
     assert.strictEqual(H.registrationUrl('http://gw//', 'srv', { runtime: 'php', entry: 'mcp.php' }), 'http://gw/srv/mcp.php');
 
+    assert.strictEqual(H.registrationUrl('http://gw', 'srv', { runtime: 'php', entry: 'sub dir/mcp.php' }), 'http://gw/srv/sub%20dir/mcp.php');
+    assert.strictEqual(H.registrationUrl('http://gw', 'srv', { runtime: 'php' }), 'http://gw/srv/mcp');
+    assert.strictEqual(H.registrationUrl('http://gw', 'srv', { runtime: 'php', entry: '' }), 'http://gw/srv/mcp');
+
     const fake = (state, log, installErr) => {
         const calls = { add: [], install: [] };
         return {
@@ -47,5 +51,14 @@ const make = (mcpClient) => {
     mc = fake('running', [], err);
     await assert.rejects(make(mc).installAndRegister(args), /conflict/);
     assert.strictEqual(mc.calls.add.length, 0);
+
+    for (const reply of [{ success: false, error: 'A server with this name already exists' }, undefined]) {
+        mc = fake('running');
+        mc.addServer = async () => reply;
+        r = await make(mc).installAndRegister(args);
+        assert.strictEqual(r.state, 'register-failed');
+        assert.strictEqual(r.error, reply ? reply.error : undefined);
+        assert.strictEqual(r.server, undefined);
+    }
     console.log('mcp-host-install: ok');
 })().catch((e) => { console.error(e); process.exit(1); });
