@@ -1939,7 +1939,7 @@
     },
     "serverSettings": {
       "title": "Server settings",
-      "help": "The private settings of each checked server, saved with the server (as in Settings → MCP Servers). Click a server to see or change them.",
+      "help": "The private settings of each server checked in MCP Servers, saved with the server (as in Settings → MCP Servers).",
       "complete": "settings complete",
       "missing": "missing: {{names}}",
       "none": "declares no settings",
@@ -1948,7 +1948,8 @@
       "save": "Save",
       "savedHost": "Saved. The server restarts with its new settings.",
       "savedLocal": "Saved. Restart the server so it reads them: run its start command in a terminal, in the server's folder inside your SynergyAI folder.",
-      "saveFailed": "The settings could not be saved: {{error}}"
+      "saveFailed": "The settings could not be saved: {{error}}",
+      "noServers": "No server checked. Check one in MCP Servers to see its settings here."
     }
   },
   "robot": {

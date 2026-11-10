@@ -1939,7 +1939,7 @@
     },
     "serverSettings": {
       "title": "Paramètres des serveurs",
-      "help": "Les paramètres privés de chaque serveur coché, enregistrés avec le serveur (comme dans Paramètres → Serveurs MCP). Cliquez sur un serveur pour les voir ou les modifier.",
+      "help": "Les paramètres privés de chaque serveur coché dans Serveurs MCP, enregistrés avec le serveur (comme dans Paramètres → Serveurs MCP).",
       "complete": "paramètres complets",
       "missing": "manquant : {{names}}",
       "none": "ne déclare aucun paramètre",
@@ -1948,7 +1948,8 @@
       "save": "Enregistrer",
       "savedHost": "Enregistré. Le serveur redémarre avec ses nouveaux paramètres.",
       "savedLocal": "Enregistré. Redémarrez le serveur pour qu'il les lise : lancez sa commande de démarrage dans un terminal, dans le dossier du serveur à l'intérieur de votre dossier SynergyAI.",
-      "saveFailed": "Les paramètres n'ont pas pu être enregistrés : {{error}}"
+      "saveFailed": "Les paramètres n'ont pas pu être enregistrés : {{error}}",
+      "noServers": "Aucun serveur coché. Cochez-en un dans Serveurs MCP pour voir ses paramètres ici."
     }
   },
   "robot": {

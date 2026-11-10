@@ -1939,7 +1939,7 @@
     },
     "serverSettings": {
       "title": "Ajustes de los servidores",
-      "help": "Los ajustes privados de cada servidor marcado, guardados con el servidor (como en Ajustes → Servidores MCP). Haga clic en un servidor para verlos o cambiarlos.",
+      "help": "Los ajustes privados de cada servidor marcado en Servidores MCP, guardados con el servidor (como en Ajustes → Servidores MCP).",
       "complete": "ajustes completos",
       "missing": "faltan: {{names}}",
       "none": "no declara ajustes",
@@ -1948,7 +1948,8 @@
       "save": "Guardar",
       "savedHost": "Guardado. El servidor se reinicia con sus nuevos ajustes.",
       "savedLocal": "Guardado. Reinicie el servidor para que los lea: ejecute su comando de inicio en una terminal, en la carpeta del servidor dentro de su carpeta SynergyAI.",
-      "saveFailed": "No se pudieron guardar los ajustes: {{error}}"
+      "saveFailed": "No se pudieron guardar los ajustes: {{error}}",
+      "noServers": "Ningún servidor marcado. Marque uno en Servidores MCP para ver sus ajustes aquí."
     }
   },
   "robot": {

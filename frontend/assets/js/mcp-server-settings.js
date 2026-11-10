@@ -274,11 +274,11 @@
     }
 
     /**
-     * The code component form's "Server settings" block: one line per used server ("settings complete" / "missing: X",
-     * or "kept by the server" when its files are not reachable from here), opening to all its settings and a Save.
-     * A server with something missing starts open. Returns { refresh(names) } -- call it when the server ticks change.
+     * The code component form's "Server settings" tab: one section per checked server, open, with all its settings and
+     * a Save, headed "settings complete" / "missing: X" ("kept where the server runs" when its files are not reachable
+     * from here). onState(anyMissing) after each read and save. Returns { refresh(names) } -- call it when the ticks change.
      */
-    function mountServerSettings(el, editor, metas) {
+    function mountServerSettings(el, editor, metas, onState) {
         const UI = window.WorkflowPackageUI;
         const esc = UI.esc;
         const t = (k, p) => esc(editor.t(`workflow.serverSettings.${k}`, p));
@@ -296,16 +296,18 @@
             const body = info.error || !info.fields.length ? '' : `<div data-fields style="display:flex;flex-direction:column;gap:8px;margin-top:8px;">${UI.settingsFieldsHtml(tp, info.fields, shownOf(info))}</div>
                 <div data-result style="font-size:12px;"></div>
                 <div style="display:flex;justify-content:flex-end;"><button type="button" data-save class="mcp-btn mcp-btn-primary" style="padding:4px 12px;">${t('save')}</button></div>`;
-            return `<details data-row="${i}" ${info.missing.length ? 'open' : ''} style="border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;">
+            return `<details data-row="${i}" open style="border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;">
                 <summary style="cursor:pointer;font-size:13px;"><strong>${esc(r.name)}</strong> <span style="color:#64748b;font-size:12px;">mcps/${esc(info.folder)}</span> — ${status(info)}</summary>${body}</details>`;
         }
 
         async function render() {
             const my = ++seq;
-            if (!names.length) { el.innerHTML = ''; return; }
+            if (!names.length) { onState?.(false); el.innerHTML = `<p style="font-size:12px;color:#64748b;">${t('noServers')}</p>`; return; }
             el.innerHTML = `<p style="font-size:12px;color:#64748b;margin:0;">…</p>`;
             const rows = await readAll(names, metas);
             if (my !== seq) return;   // ticks changed meanwhile
+            const state = () => onState?.(rows.some((r) => !r.info.error && r.info.missing.length));
+            state();
             const unreachable = names.filter((n) => !rows.some((r) => r.name === n));
             el.innerHTML = `<div style="font-size:13px;font-weight:600;margin-bottom:4px;">${t('title')}</div>
                 <p style="font-size:12px;color:#64748b;margin:0 0 8px;">${t('help')}</p>
@@ -322,7 +324,7 @@
                     if (tg) UI.toggleSecret(tg, tPlain);
                 });
                 const btn = row.querySelector('[data-save]');
-                if (btn) btn.onclick = () => save(r, row, btn);
+                if (btn) btn.onclick = () => save(r, row, btn).then(state);
             });
         }
 

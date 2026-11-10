@@ -10224,7 +10224,7 @@ class WorkflowEditor {
                 <div class="storage-config-header"><h3>⚙️ ${this.escapeHtml(node ? this.t('codeLibrary.nodeTitle') : this.t('codeLibrary.componentTitle'))}</h3><button class="storage-config-close" data-act="close">×</button></div>
                 <div data-f="link" class="text-xs text-gray-600" style="padding:4px 16px;display:none;"></div>
                 <div class="flex border-b border-gray-200" style="padding:0 16px;">
-                    ${tab('settings', 'Settings')}${tab('args', 'Arguments')}${tab('code', 'Code')}${tab('servers', 'MCP Servers')}${tab('tools', 'Tools')}${tab('input', 'Input')}${tab('output', 'Output')}${tab('logs', 'Logs')}
+                    ${tab('settings', 'Settings')}${tab('args', 'Arguments')}${tab('code', 'Code')}${tab('servers', 'MCP Servers')}${tab('srvsettings', this.escapeHtml(this.t('workflow.serverSettings.title')))}${tab('tools', 'Tools')}${tab('input', 'Input')}${tab('output', 'Output')}${tab('logs', 'Logs')}
                 </div>
                 <div class="storage-config-body" style="overflow:auto;flex:1;">
                     ${pane('settings', `<div class="storage-config-grid">
@@ -10243,8 +10243,8 @@ class WorkflowEditor {
                     </div>`)}
                     ${pane('servers', `<p class="text-xs text-gray-500" style="margin:0 0 8px;">The code calls a checked server's tools with
                         <code>call_tool("&lt;server&gt;", "&lt;tool&gt;", {...})</code>; the server is written as shown in grey.</p>
-                        <div data-f="servers"><p class="text-sm text-gray-400 italic">…</p></div>
-                        <div data-f="srvsettings" style="margin-top:16px;"></div>`)}
+                        <div data-f="servers"><p class="text-sm text-gray-400 italic">…</p></div>`)}
+                    ${pane('srvsettings', '<div data-f="srvsettings"></div>')}
                     ${pane('args', `${node ? '<div data-f="args"></div>' : '<div data-f="decl-args"></div>'}
                         <div data-f="watchargs" style="display:none;margin-top:16px;"></div>
                         <div data-f="callargs" style="display:none;margin-top:16px;"></div>`)}
@@ -10592,7 +10592,11 @@ class WorkflowEditor {
             refreshConnect();
             assist?.refresh();
             if (window.McpServerSettings?.mountServerSettings && window.WorkflowPackageUI?.settingsFieldsHtml) {
-                srvSettings = window.McpServerSettings.mountServerSettings(f('srvsettings'), this, servers);
+                // The tab name carries a ⚠ while a checked server lacks a setting it needs.
+                const srvTab = overlay.querySelector('[data-tab="srvsettings"]');
+                const srvLabel = this.t('workflow.serverSettings.title');
+                srvSettings = window.McpServerSettings.mountServerSettings(f('srvsettings'), this, servers,
+                    (missing) => { if (srvTab) srvTab.textContent = missing ? `⚠ ${srvLabel}` : srvLabel; });
                 srvSettings.refresh([...checked]);
             }
         })();
