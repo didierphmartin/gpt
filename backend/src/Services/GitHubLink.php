@@ -19,15 +19,32 @@ final class GitHubLink
         }
         $path = array_values(array_filter(explode('/', (string) ($parts['path'] ?? '')), static fn($s) => $s !== ''));
         $msg = "Paste the link to one server's folder";
+        if (count($path) >= 2) {
+            $repo = preg_replace('/\.git$/', '', $path[1]);
+            if (
+                !preg_match('/^[A-Za-z0-9](?:[A-Za-z0-9-]*)$/', $path[0])
+                || !preg_match('/^[A-Za-z0-9_.-]+$/', $repo) || $repo === '.' || $repo === '..'
+            ) {
+                throw new \InvalidArgumentException('Not a GitHub link');
+            }
+        }
         if (count($path) < 5 || !in_array($path[2], ['tree', 'blob'], true)) {
             throw new \InvalidArgumentException($msg);
         }
-        $repo = preg_replace('/\.git$/', '', $path[1]);
-        return [
-            'owner' => $path[0],
-            'repo' => $repo,
-            'segments' => array_map('rawurldecode', array_slice($path, 3)),
-        ];
+        $segments = array_map('rawurldecode', array_slice($path, 3));
+        foreach ($segments as $seg) {
+            if ($seg === '.' || $seg === '..' || preg_match('~[/\\\\?#\x00-\x1f\x7f]~', $seg)) {
+                throw new \InvalidArgumentException($msg);
+            }
+        }
+        $isManifest = end($segments) === self::MANIFEST;
+        if ($path[2] === 'blob' && !$isManifest) {
+            throw new \InvalidArgumentException($msg);
+        }
+        if (count($segments) - ($isManifest ? 1 : 0) < 2) {
+            throw new \InvalidArgumentException($msg);
+        }
+        return ['owner' => $path[0], 'repo' => $repo, 'segments' => $segments];
     }
 
     /** @return list<array{ref:string, path:string}> longest ref first */
