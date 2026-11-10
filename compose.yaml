@@ -91,7 +91,7 @@ services:
       web:
         condition: service_healthy
     volumes:
-      - gpt-mcps:/mcps
+      - ${MCPS_STORE:-gpt-mcps}:/mcps
       # Only the token, never gpt-secrets: servers imported here run third-party
       # code, which must not be able to read the JWT secrets.
       - gpt-mcps-token:/run/mcps-token:ro
