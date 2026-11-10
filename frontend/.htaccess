@@ -22,5 +22,7 @@
     <FilesMatch "\.html$">
         Header set Content-Security-Policy "frame-ancestors 'self' https://finmind.org http://localhost:3000"
         Header unset X-Frame-Options
+        # Revalidate the page on every load (ETag, cheap): a cached index.html keeps loading the previous ?v= scripts.
+        Header set Cache-Control "no-cache"
     </FilesMatch>
 </IfModule>
