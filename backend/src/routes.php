@@ -291,6 +291,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         // Docker app only: relay to the server supervisor (404 'no server host' elsewhere)
         $r->get('/api/v1/mcp/host', ['McpHostController', 'info']);
         $r->get('/api/v1/mcp/host/servers', ['McpHostController', 'list']);
+        $r->post('/api/v1/mcp/host/fetch', ['McpHostController', 'fetch']);
         $r->post('/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/install', ['McpHostController', 'install']);
         $r->post('/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/restart', ['McpHostController', 'restart']);
         $r->post('/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/enabled', ['McpHostController', 'enabled']);

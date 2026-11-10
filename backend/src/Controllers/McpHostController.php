@@ -4,6 +4,8 @@ namespace Quantis\AIPortfolioAssistant\Controllers;
 
 use PDO;
 use Quantis\AIPortfolioAssistant\Services\Edition;
+use Quantis\AIPortfolioAssistant\Services\GitHubFetchError;
+use Quantis\AIPortfolioAssistant\Services\GitHubServerFetcher;
 use Quantis\AIPortfolioAssistant\Services\McpHostClient;
 
 /**
@@ -19,8 +21,12 @@ final class McpHostController
     /** @var \Closure(): McpHostClient */
     private \Closure $clientFactory;
 
-    public function __construct(private readonly PDO $db, private readonly array $config, ?\Closure $clientFactory = null)
+    /** @var \Closure(): object an object with fetch(string $url): array (GitHubServerFetcher) */
+    private \Closure $fetcherFactory;
+
+    public function __construct(private readonly PDO $db, private readonly array $config, ?\Closure $clientFactory = null, ?\Closure $fetcherFactory = null)
     {
+        $this->fetcherFactory = $fetcherFactory ?? fn() => new GitHubServerFetcher();
         $this->clientFactory = $clientFactory
             ?? fn() => new McpHostClient((string) ($_ENV['MCPS_URL'] ?? ''), (string) ($_ENV['MCPS_TOKEN'] ?? ''));
     }
@@ -66,6 +72,25 @@ final class McpHostController
         $body = (array) ($request['body'] ?? []);
         $body['installed_by'] = (int) $request['user_id'];
         return self::out($this->client()->request('POST', "/servers/$folder/install", $body));
+    }
+
+    /** Reads one server folder from a public GitHub link; the browser then posts it to install. */
+    public function fetch(array $request): array
+    {
+        if (!self::available()) return self::none();
+        if (Edition::isCorporate($this->config) && !$this->isAdmin($request)) {
+            $e = 'Only an admin can install MCP servers here.';
+            return ['success' => false, 'data' => ['error' => $e], 'error' => $e, 'status_code' => 403];
+        }
+        $url = (string) (((array) ($request['body'] ?? []))['url'] ?? '');
+        try {
+            $data = ($this->fetcherFactory)()->fetch($url);
+        } catch (GitHubFetchError $e) {
+            return ['success' => false, 'error' => $e->getMessage(), 'status_code' => $e->status];
+        } catch (\InvalidArgumentException $e) {
+            return ['success' => false, 'error' => $e->getMessage(), 'status_code' => 400];
+        }
+        return ['success' => true, 'data' => $data, 'status_code' => 200];
     }
 
     public function restart(array $request, string|int $folder): array

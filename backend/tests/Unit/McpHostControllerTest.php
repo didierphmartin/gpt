@@ -7,6 +7,7 @@ namespace Quantis\AIPortfolioAssistant\Tests\Unit;
 use PDO;
 use PHPUnit\Framework\TestCase;
 use Quantis\AIPortfolioAssistant\Controllers\McpHostController;
+use Quantis\AIPortfolioAssistant\Services\GitHubFetchError;
 use Quantis\AIPortfolioAssistant\Services\McpHostClient;
 
 class McpHostControllerTest extends TestCase
@@ -132,5 +133,54 @@ class McpHostControllerTest extends TestCase
         $r = $this->ctl()->list($this->req(1));
         $this->assertContains('Authorization: Bearer tok', $this->calls[0]['headers']);
         $this->assertStringNotContainsString('tok', json_encode($r));
+    }
+
+    private function fetchCtl(\Closure $fetch, array $config = []): McpHostController
+    {
+        $fetcher = new class($fetch) {
+            public function __construct(private \Closure $fn) {}
+            public function fetch(string $url): array { return ($this->fn)($url); }
+        };
+        return new McpHostController($this->db, $config, fn() => new McpHostClient('http://mcps:8790', 'tok', fn() => $this->reply), fn() => $fetcher);
+    }
+
+    public function testFetchUnavailableWithoutHost(): void
+    {
+        $_ENV['MCPS_URL'] = '';
+        $r = $this->fetchCtl(fn() => [])->fetch($this->req(3, ['url' => 'https://github.com/o/r']));
+        $this->assertSame(404, $r['status_code']);
+        $this->assertFalse($r['success']);
+    }
+
+    public function testFetchCorporateNonAdminRefused(): void
+    {
+        $called = false;
+        $c = $this->fetchCtl(function () use (&$called) { $called = true; return []; }, ['edition' => 'corporate']);
+        $r = $c->fetch($this->req(3, ['url' => 'https://github.com/o/r']));
+        $this->assertSame(403, $r['status_code']);
+        $this->assertSame('Only an admin can install MCP servers here.', $r['error']);
+        $this->assertFalse($called);
+        $this->assertSame(200, $c->fetch($this->req(1, ['url' => 'https://github.com/o/r']))['status_code']);
+    }
+
+    public function testFetchReturnsFetcherResult(): void
+    {
+        $got = null;
+        $result = ['folder' => 'srv', 'manifest' => [], 'fields' => [], 'files' => ['a.py' => 'eA=='], 'source' => ['sha' => 'abc']];
+        $r = $this->fetchCtl(function ($u) use (&$got, $result) { $got = $u; return $result; })->fetch($this->req(3, ['url' => 'https://github.com/o/r']));
+        $this->assertSame('https://github.com/o/r', $got);
+        $this->assertSame(['success' => true, 'data' => $result, 'status_code' => 200], $r);
+        $this->assertArrayNotHasKey('.env', $r['data']['files']);
+    }
+
+    public function testFetchMapsErrors(): void
+    {
+        $r = $this->fetchCtl(fn() => throw new GitHubFetchError(404, 'Repository, branch or folder not found on GitHub'))->fetch($this->req(3, ['url' => 'x']));
+        $this->assertSame(['success' => false, 'error' => 'Repository, branch or folder not found on GitHub', 'status_code' => 404], $r);
+        $r = $this->fetchCtl(fn() => throw new \InvalidArgumentException('Not a GitHub link'))->fetch($this->req(3, []));
+        $this->assertSame(400, $r['status_code']);
+        $this->assertSame('Not a GitHub link', $r['error']);
+        $r = $this->fetchCtl(fn() => throw new GitHubFetchError(400, 'bad link'))->fetch($this->req(3, ['url' => 'x']));
+        $this->assertSame(400, $r['status_code']);
     }
 }
