@@ -73,6 +73,36 @@ class McpHostControllerTest extends TestCase
         $this->assertSame(3, json_decode($this->calls[0]['body'], true)['installed_by']);
     }
 
+    public function testInstallRelaysEmptyEnvAndFilesAsObjects(): void
+    {
+        $this->reply = [200, '{"ok":true}'];
+        $body = json_decode('{"files":{},"env":{},"source":{"repo":"o/r"}}', true);
+        $this->ctl()->install($this->req(3, $body), 'new');
+        $sent = $this->calls[0]['body'];
+        $this->assertStringContainsString('"env":{}', $sent);
+        $this->assertStringContainsString('"files":{}', $sent);
+        $this->assertStringContainsString('"source":{"repo":"o/r"}', $sent);
+    }
+
+    public function testInstallKeepsFilledFilesAndSkipsAbsentKeys(): void
+    {
+        $this->reply = [200, '{"ok":true}'];
+        $this->ctl()->install($this->req(3, ['files' => ['a.py' => 'x'], 'source' => null]), 'new');
+        $sent = $this->calls[0]['body'];
+        $this->assertStringContainsString('"files":{"a.py":"x"}', $sent);
+        $this->assertStringNotContainsString('"env"', $sent);
+        $this->assertStringContainsString('"source":null', $sent);
+    }
+
+    public function testSettingsPutRelaysEmptyValuesAsObject(): void
+    {
+        $this->reply = [200, '[{"folder":"a","installed_by":3}]'];
+        $this->ctl()->putSettings($this->req(3, ['values' => []]), 'a');
+        $put = end($this->calls);
+        $this->assertSame('PUT', $put['method']);
+        $this->assertStringContainsString('"values":{}', $put['body']);
+    }
+
     public function testCorporateInstallIsAdminOnly(): void
     {
         $this->reply = [200, '{"ok":true}'];

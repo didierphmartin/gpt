@@ -69,7 +69,7 @@ final class McpHostController
             $e = 'Only an admin can install MCP servers here.';
             return ['success' => false, 'data' => ['error' => $e], 'error' => $e, 'status_code' => 403];
         }
-        $body = (array) ($request['body'] ?? []);
+        $body = self::objects((array) ($request['body'] ?? []), ['files', 'env', 'source']);
         $body['installed_by'] = (int) $request['user_id'];
         return self::out($this->client()->request('POST', "/servers/$folder/install", $body));
     }
@@ -124,6 +124,15 @@ final class McpHostController
         return $this->owned($request, $folder, 'DELETE', '', false);
     }
 
+    /** Empty arrays under these keys were `{}` on the wire; json_encode would turn them into `[]`. */
+    private static function objects(array $body, array $keys): array
+    {
+        foreach ($keys as $k) {
+            if (isset($body[$k]) && $body[$k] === []) $body[$k] = new \stdClass();
+        }
+        return $body;
+    }
+
     /** Owner-or-admin gate (from the supervisor's own list), then the relayed call. */
     private function owned(array $request, string|int $folder, string $method, string $sub, bool $withBody): array
     {
@@ -140,7 +149,7 @@ final class McpHostController
             return ['success' => false, 'data' => ['error' => 'forbidden'], 'error' => 'forbidden', 'status_code' => 403];
         }
         $path = "/servers/$folder" . ($sub === '' ? '' : "/$sub");
-        return self::out($this->client()->request($method, $path, $withBody ? (array) ($request['body'] ?? []) : null));
+        return self::out($this->client()->request($method, $path, $withBody ? self::objects((array) ($request['body'] ?? []), ['values']) : null));
     }
 
     private function client(): McpHostClient
