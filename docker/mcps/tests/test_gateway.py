@@ -49,7 +49,8 @@ class Backend(BaseHTTPRequestHandler):
             self.wfile.write(b"0\r\n\r\n")
             return
         data = json.dumps({"method": self.command, "path": path, "query": query, "body": body,
-                           "host": self.headers.get("Host"), "x": self.headers.get("X-Custom")}).encode()
+                           "host": self.headers.get("Host"), "x": self.headers.get("X-Custom"),
+                           "fwd": {k: self.headers.get_all(k) for k in ("X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Prefix")}}).encode()
         self.send_response(201)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
@@ -97,6 +98,17 @@ class GatewayTest(unittest.TestCase):
                          {"method": "POST", "path": "/mcp", "query": "x=1", "body": '{"a":1}'})
         self.assertEqual(j["x"], "yes")
         self.assertEqual(j["host"], f"127.0.0.1:{self.backend.server_address[1]}")
+
+    def test_forwarding_headers(self):
+        _, raw = self.request("GET", "/ok_server/mcp.php", None,
+                              {"Host": "localhost:8790", "X-Forwarded-Prefix": "/evil", "X-Forwarded-Host": "evil.example"})
+        self.assertEqual(json.loads(raw)["fwd"], {"X-Forwarded-Host": ["localhost:8790"],
+                                                   "X-Forwarded-Proto": ["http"],
+                                                   "X-Forwarded-Prefix": ["/ok_server"]})
+
+    def test_forwarded_proto_from_client_is_kept(self):
+        _, raw = self.request("GET", "/ok_server/x", None, {"Host": "h", "X-Forwarded-Proto": "https"})
+        self.assertEqual(json.loads(raw)["fwd"]["X-Forwarded-Proto"], ["https"])
 
     def test_other_methods_and_bare_folder(self):
         self.assertEqual(json.loads(self.request("DELETE", "/ok_server/a/b")[1])["path"], "/a/b")
