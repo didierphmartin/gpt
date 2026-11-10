@@ -18,6 +18,8 @@ final class GitHubServerFetcher
     private const NOT_FOUND = 'Repository, branch or folder not found on GitHub';
     private const RATE_LIMIT = "GitHub's rate limit was reached; try again in an hour";
     private const UNREACHABLE = 'GitHub could not be reached';
+    private const UNREADABLE = 'GitHub sent an archive that could not be read';
+    private const SMALL_FILE_MAX = 1024 * 1024;   // manifest and .env.example are read before the folder cap applies
 
     // copied from docker/mcps/mcphost/control.py (DEFAULT_EXCLUDES, ALWAYS_EXCLUDES)
     private const DEFAULT_EXCLUDES = ['.venv/', 'venv/', 'node_modules/', 'vendor/', '__pycache__/', 'dist/', 'build/', '.git/', 'log/', 'logs/', 'tests/', 'docs/', '.env', '*.sqlite*', '*.log',
@@ -109,7 +111,7 @@ final class GitHubServerFetcher
             file_put_contents($tmp, $bytes);
             $zip = new \ZipArchive();
             if ($zip->open($tmp, \ZipArchive::RDONLY) !== true || $zip->numFiles === 0) {
-                throw new GitHubFetchError(502, 'GitHub sent an archive that could not be read');
+                throw new GitHubFetchError(502, self::UNREADABLE);
             }
             try {
                 return $this->select($zip, $path);
@@ -130,6 +132,9 @@ final class GitHubServerFetcher
         for ($i = 0; $i < $zip->numFiles; $i++) {
             $st = $zip->statIndex($i);
             $name = (string) ($st['name'] ?? '');
+            if (!str_starts_with($name, $root . '/')) {
+                throw new GitHubFetchError(502, self::UNREADABLE);
+            }
             if (str_ends_with($name, '/') || !str_starts_with($name, $prefix)) {
                 continue;
             }
@@ -149,7 +154,12 @@ final class GitHubServerFetcher
         if (!isset($entries[self::MANIFEST])) {
             throw new GitHubFetchError(422, 'This folder has no synergyai-mcp.json');
         }
-        $manifest = json_decode((string) $zip->getFromIndex($entries[self::MANIFEST][0]), true);
+        foreach ([self::MANIFEST, '.env.example'] as $small) {
+            if (isset($entries[$small]) && $entries[$small][1] > self::SMALL_FILE_MAX) {
+                throw new GitHubFetchError(413, $small . ' is larger than 1 MB');
+            }
+        }
+        $manifest = json_decode(self::read($zip, $entries[self::MANIFEST][0]), true);
         if (!is_array($manifest) || ($manifest !== [] && array_is_list($manifest))) {
             throw new GitHubFetchError(422, 'synergyai-mcp.json is not valid JSON');
         }
@@ -174,10 +184,19 @@ final class GitHubServerFetcher
 
         $files = [];
         foreach ($keep as $rel) {
-            $files[$rel] = base64_encode((string) $zip->getFromIndex($entries[$rel][0]));
+            $files[$rel] = base64_encode(self::read($zip, $entries[$rel][0]));
         }
-        $example = isset($entries['.env.example']) ? (string) $zip->getFromIndex($entries['.env.example'][0]) : '';
+        $example = isset($entries['.env.example']) ? self::read($zip, $entries['.env.example'][0]) : '';
         return ['manifest' => $manifest, 'fields' => self::fields($manifest, $example), 'files' => $files];
+    }
+
+    private static function read(\ZipArchive $zip, int $index): string
+    {
+        $bytes = $zip->getFromIndex($index);
+        if ($bytes === false) {
+            throw new GitHubFetchError(502, self::UNREADABLE);
+        }
+        return $bytes;
     }
 
     private static function safeRel(string $rel): bool
@@ -296,6 +315,8 @@ final class GitHubServerFetcher
         curl_setopt_array($ch, [
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 5,
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTPS,
+            CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
             CURLOPT_TIMEOUT => self::TIMEOUT,
             CURLOPT_HTTPHEADER => $headers,
             CURLOPT_WRITEFUNCTION => static function ($ch, string $chunk) use (&$body, &$over, $maxBytes): int {

@@ -150,6 +150,28 @@ class GitHubServerFetcherTest extends TestCase
             413, 'The server folder is larger than 20 MB');
     }
 
+    public function testOversizedManifestOrEnvExampleRejectedBeforeReading(): void
+    {
+        $big = '{"runtime":"php","entry":"mcp.php","pad":"' . str_repeat('a', 1024 * 1024) . '"}';
+        $this->expectError(fn() => $this->fetcher($this->arxiv([], $big))->fetch('https://github.com/o/mcps/tree/main/arxiv'),
+            413, 'synergyai-mcp.json is larger than 1 MB');
+        $routes = $this->arxiv(['mcps-abc123/arxiv/.env.example' => str_repeat('#', 1024 * 1024 + 1)]);
+        $this->expectError(fn() => $this->fetcher($routes)->fetch('https://github.com/o/mcps/tree/main/arxiv'),
+            413, '.env.example is larger than 1 MB');
+    }
+
+    public function testArchiveWithoutSingleTopFolder(): void
+    {
+        $routes = $this->arxiv();
+        $routes['https://codeload.github.com/o/mcps/zip/abc123'] = [200, $this->zip([
+            'mcps-abc123/arxiv/mcp.php' => '<?php',
+            'mcps-abc123/arxiv/synergyai-mcp.json' => self::MANIFEST,
+            'elsewhere/x' => 'y',
+        ])];
+        $this->expectError(fn() => $this->fetcher($routes)->fetch('https://github.com/o/mcps/tree/main/arxiv'),
+            502, 'GitHub sent an archive that could not be read');
+    }
+
     public function testEveryCandidate404(): void
     {
         $this->expectError(fn() => $this->fetcher([])->fetch('https://github.com/o/mcps/tree/feat/x/arxiv'),
