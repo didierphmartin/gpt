@@ -42,6 +42,12 @@ class MCPLibrary {
             });
         }
         document.addEventListener('click', () => this.hideContextMenu());
+
+        this.importBtn = document.getElementById('mcp-servers-import-btn');
+        if (this.importBtn) {
+            this.importBtn.addEventListener('click', () => window.mcpImport.open({ onDone: () => this.loadTree() }));
+            window.mcpClient.hostStatus().then((st) => { if (st && st.available) this.importBtn.classList.remove('hidden'); }).catch(() => {});
+        }
     }
 
     // ─── data ──────────────────────────────────────────────────────────────

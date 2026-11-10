@@ -318,6 +318,23 @@
   },
   "mcpLibrary": {
     "newServer": "New Server",
+    "import": {
+      "button": "Import",
+      "title": "Import an MCP server from GitHub",
+      "linkLabel": "GitHub link",
+      "linkHint": "Link to one server's folder on GitHub, with a synergyai-mcp.json",
+      "fetch": "Fetch",
+      "cancel": "Cancel",
+      "install": "Install",
+      "installed": "Already installed",
+      "missingRequired": "Fill in the required settings",
+      "installing": "This can take a few minutes for a Python server",
+      "done": "Installed and added to your MCP servers",
+      "failed": "Installation failed",
+      "runtimePhp": "PHP",
+      "runtimePython": "Python",
+      "from": "from {source}"
+    },
     "master": "MCP on",
     "search": "Search servers...",
     "myServers": "My servers",

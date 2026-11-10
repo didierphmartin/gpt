@@ -2474,6 +2474,9 @@
                                 <button id="mcp-servers-new-btn" class="flex-1 text-blue-600 hover:text-blue-700 text-xs font-medium py-1 px-2 bg-blue-50 hover:bg-blue-100 rounded transition">
                                     ➕ <span data-i18n="mcpLibrary.newServer">New Server</span>
                                 </button>
+                                <button id="mcp-servers-import-btn" class="hidden flex-1 text-blue-600 hover:text-blue-700 text-xs font-medium py-1 px-2 bg-blue-50 hover:bg-blue-100 rounded transition">
+                                    ⬆️ <span data-i18n="mcpLibrary.import.button">Import</span>
+                                </button>
                                 <label class="text-xs text-gray-600 flex items-center gap-1 px-1" title="Enable/disable MCP tools for your chats">
                                     <input type="checkbox" id="mcp-servers-master-toggle" checked>
                                     <span data-i18n="mcpLibrary.master">MCP on</span>
@@ -4459,13 +4462,14 @@
     <script src="assets/js/workflow-package-ui.js?v=20261103-skilldeps"></script>
     <script src="assets/js/mcp-host-install.js?v=20261110-mcpimport"></script>
     <script src="assets/js/workflow-package-import.js?v=20261110-mcpimport"></script>
+    <script src="assets/js/mcp-import.js?v=20261110-mcpimport"></script>
     <script src="assets/js/skill-visibility-card.js?v=20261103-skilldeps3"></script>
     <script src="assets/js/workflow-editor.js?v=20261107-inputpaths"></script>
     <script src="assets/js/agents-library.js?v=20260903-playbook-agent"></script>
     <script src="assets/js/mcp-tool-tester.js?v=20261105-functions"></script>
     <script src="assets/js/mcp-protocol-validator.js?v=20261105-mcptest"></script>
     <script src="assets/js/mcp-protocol-test.js?v=20261105-mcptest2"></script>
-    <script src="assets/js/mcp-library.js?v=20261105-mcptest2"></script>
+    <script src="assets/js/mcp-library.js?v=20261110-mcpimport"></script>
     <script src="assets/js/file-storage.js?v=20260610-fileselect2"></script>
     <script src="assets/js/chat.js?v=20261107-prevspec"></script>
     <script>
