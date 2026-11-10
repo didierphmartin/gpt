@@ -79,6 +79,10 @@ const plain = (x) => JSON.parse(JSON.stringify(x));
     ctx.window.mcpClient = { hostStatus: async () => ({ available: false }) };
     const metas = [{ name: 'Outlook', url: 'http://127.0.0.1:8770/mcp' }, { name: 'SharePoint', url: 'http://127.0.0.1:8771/mcp' }];
 
+    // readAll: every checkable server, complete or not (the component form lists them all)
+    const all = await MS.readAll(['Outlook', 'SharePoint', 'Remote'], [...metas, { name: 'Remote', url: 'https://x/mcp' }]);
+    assert.deepStrictEqual(plain(all.map((r) => [r.name, r.info.missing])), [['Outlook', ['OUTLOOK_SECRET_KEY']], ['SharePoint', []]]);
+
     const missing = await MS.findMissing(['Outlook', 'SharePoint'], metas);
     assert.strictEqual(missing.length, 1);
     assert.strictEqual(missing[0].name, 'Outlook');

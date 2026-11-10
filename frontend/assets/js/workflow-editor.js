@@ -10243,7 +10243,8 @@ class WorkflowEditor {
                     </div>`)}
                     ${pane('servers', `<p class="text-xs text-gray-500" style="margin:0 0 8px;">The code calls a checked server's tools with
                         <code>call_tool("&lt;server&gt;", "&lt;tool&gt;", {...})</code>; the server is written as shown in grey.</p>
-                        <div data-f="servers"><p class="text-sm text-gray-400 italic">…</p></div>`)}
+                        <div data-f="servers"><p class="text-sm text-gray-400 italic">…</p></div>
+                        <div data-f="srvsettings" style="margin-top:16px;"></div>`)}
                     ${pane('args', `${node ? '<div data-f="args"></div>' : '<div data-f="decl-args"></div>'}
                         <div data-f="watchargs" style="display:none;margin-top:16px;"></div>
                         <div data-f="callargs" style="display:none;margin-top:16px;"></div>`)}
@@ -10365,6 +10366,7 @@ class WorkflowEditor {
         };
         const toolsShown = () => f('tools').closest('[data-pane]')?.style.display !== 'none';
         let assist = null;   // the assistant box (mounted below); a server tick refreshes its listings
+        let srvSettings = null;   // the checked servers' private settings (McpServerSettings), under the ticks
         const renderServers = () => {
             const esc = (v) => this.escapeHtml(String(v ?? ''));
             const known = new Set(servers.map((m) => m.name));
@@ -10387,6 +10389,7 @@ class WorkflowEditor {
             f('servers').querySelectorAll('input[data-server]').forEach((cb) => cb.addEventListener('change', () => {
                 if (cb.checked) checked.add(cb.dataset.server); else checked.delete(cb.dataset.server);
                 refreshConnect();
+                srvSettings?.refresh([...checked]);
                 assist?.refresh();
                 if (toolsShown()) renderTools();
             }));
@@ -10588,6 +10591,10 @@ class WorkflowEditor {
             renderServers();
             refreshConnect();
             assist?.refresh();
+            if (window.McpServerSettings?.mountServerSettings && window.WorkflowPackageUI?.settingsFieldsHtml) {
+                srvSettings = window.McpServerSettings.mountServerSettings(f('srvsettings'), this, servers);
+                srvSettings.refresh([...checked]);
+            }
         })();
 
         // The assistant under the Code tab: writes the code and exits from the checked servers' tool docs.

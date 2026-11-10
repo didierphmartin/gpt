@@ -1936,6 +1936,19 @@
       "noStartCommand": "Ce serveur ne déclare pas de commande de démarrage : redémarrez-le comme d'habitude.",
       "continue": "Continuer",
       "cancelled": "Exécution annulée : des paramètres d'un serveur manquent."
+    },
+    "serverSettings": {
+      "title": "Paramètres des serveurs",
+      "help": "Les paramètres privés de chaque serveur coché, enregistrés avec le serveur (comme dans Paramètres → Serveurs MCP). Cliquez sur un serveur pour les voir ou les modifier.",
+      "complete": "paramètres complets",
+      "missing": "manquant : {{names}}",
+      "none": "ne déclare aucun paramètre",
+      "unreadable": "les paramètres n'ont pas pu être lus",
+      "notHere": "ses paramètres sont gardés là où le serveur tourne, illisibles d'ici",
+      "save": "Enregistrer",
+      "savedHost": "Enregistré. Le serveur redémarre avec ses nouveaux paramètres.",
+      "savedLocal": "Enregistré. Redémarrez le serveur pour qu'il les lise : lancez sa commande de démarrage dans un terminal, dans le dossier du serveur à l'intérieur de votre dossier SynergyAI.",
+      "saveFailed": "Les paramètres n'ont pas pu être enregistrés : {{error}}"
     }
   },
   "robot": {

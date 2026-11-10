@@ -1936,6 +1936,19 @@
       "noStartCommand": "This server declares no start command: restart it the way you usually start it.",
       "continue": "Continue",
       "cancelled": "Run cancelled: a server's settings are missing."
+    },
+    "serverSettings": {
+      "title": "Server settings",
+      "help": "The private settings of each checked server, saved with the server (as in Settings → MCP Servers). Click a server to see or change them.",
+      "complete": "settings complete",
+      "missing": "missing: {{names}}",
+      "none": "declares no settings",
+      "unreadable": "settings could not be read",
+      "notHere": "its settings are kept where the server runs, not readable from here",
+      "save": "Save",
+      "savedHost": "Saved. The server restarts with its new settings.",
+      "savedLocal": "Saved. Restart the server so it reads them: run its start command in a terminal, in the server's folder inside your SynergyAI folder.",
+      "saveFailed": "The settings could not be saved: {{error}}"
     }
   },
   "robot": {

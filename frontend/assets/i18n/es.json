@@ -1936,6 +1936,19 @@
       "noStartCommand": "Este servidor no declara un comando de inicio: reinícielo como lo hace normalmente.",
       "continue": "Continuar",
       "cancelled": "Ejecución cancelada: faltan ajustes de un servidor."
+    },
+    "serverSettings": {
+      "title": "Ajustes de los servidores",
+      "help": "Los ajustes privados de cada servidor marcado, guardados con el servidor (como en Ajustes → Servidores MCP). Haga clic en un servidor para verlos o cambiarlos.",
+      "complete": "ajustes completos",
+      "missing": "faltan: {{names}}",
+      "none": "no declara ajustes",
+      "unreadable": "no se pudieron leer los ajustes",
+      "notHere": "sus ajustes se guardan donde se ejecuta el servidor, no se pueden leer desde aquí",
+      "save": "Guardar",
+      "savedHost": "Guardado. El servidor se reinicia con sus nuevos ajustes.",
+      "savedLocal": "Guardado. Reinicie el servidor para que los lea: ejecute su comando de inicio en una terminal, en la carpeta del servidor dentro de su carpeta SynergyAI.",
+      "saveFailed": "No se pudieron guardar los ajustes: {{error}}"
     }
   },
   "robot": {
