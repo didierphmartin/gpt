@@ -4,7 +4,7 @@ import time
 import unittest
 from pathlib import Path
 
-from mcphost.procs import Manager
+from mcphost.procs import Manager, start_command
 from mcphost.registry import Registry
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -187,3 +187,32 @@ class ProcsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StartCommandTest(unittest.TestCase):
+    R = Path("/r.php")
+
+    def test_start_command_php(self):
+        self.assertEqual(start_command({"runtime": "php", "entry": "mcp.php"}, 9105, self.R),
+                         "exec php -S 127.0.0.1:9105 /r.php")
+
+    def test_start_command_python_default_runtime(self):
+        self.assertEqual(start_command({"start": "./run.sh"}, 9105, self.R), "./run.sh")
+
+    def test_start_command_php_without_entry(self):
+        with self.assertRaisesRegex(ValueError, "a php server needs an entry file"):
+            start_command({"runtime": "php"}, 9105, self.R)
+
+    def test_start_command_python_without_start(self):
+        with self.assertRaisesRegex(ValueError, "the server's manifest has no start command"):
+            start_command({}, 9105, self.R)
+
+    def test_php_env_has_workers_and_entry(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "p").mkdir()
+            reg = Registry(root)
+            reg.add("p", "P", 1)
+            env = Manager(root, reg)._env("p", {"runtime": "php", "entry": "mcp.php"})
+            self.assertEqual(env["PHP_CLI_SERVER_WORKERS"], "4")
+            self.assertEqual(env["MCP_ENTRY"], "mcp.php")
