@@ -62,6 +62,7 @@ const conn2 = WP.stripSecrets([{ id: '6', node_type: 'vectorstore', config: { co
 assert.deepStrictEqual(conn2.nodes[0].config.connection, { host: 'h' });
 assert.deepStrictEqual(conn2.stripped.map((x) => x.field), ['dsn', 'connection_string', 'conn_str', 'auth_header', 'bearer', 'private_pem']);
 for (const f of ['DSN', 'Connection_String', 'connstr', 'PRIVATE_KEY']) assert.ok(WP.SECRET_FIELD_RE.test(f), f);
+assert.ok(WP.SECRET_FIELD_RE.test('EVENTHUB_CONNECTION'));
 
 // selectServerFiles
 const files = ['server.py','tests/t.py','.env','.env.example','.venv/x','a/__pycache__/b.pyc','data.sqlite-wal','README.md'];

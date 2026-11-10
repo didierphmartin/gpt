@@ -192,7 +192,7 @@
     }
 
     // dsn / connection strings carry the password (pgvector DSN, Azure AccountKey) inside the value.
-    const SECRET_FIELD_RE = /key|secret|token|password|passwd|credential|dsn|connection_string|conn_str|connstr|auth|bearer|private/i;
+    const SECRET_FIELD_RE = /key|secret|token|password|passwd|credential|dsn|connection|connection_string|conn_str|connstr|auth|bearer|private/i;
 
     /** Copy of `nodes` with secret-looking fields removed from each config.connection; input untouched. */
     function stripSecrets(nodes) {

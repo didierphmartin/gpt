@@ -36,3 +36,6 @@ class EnvFileTest(unittest.TestCase):
         self.assertEqual(f[0], {"name": "TENANT", "label": "Tenant id of the app", "required": False, "secret": False, "default": "abc"})
         self.assertTrue(f[1]["secret"])
         self.assertEqual(f[1]["default"], "x")
+
+    def test_connection_is_secret(self):
+        self.assertTrue(fields(None, "EVENTHUB_CONNECTION=\n")[0]["secret"])
