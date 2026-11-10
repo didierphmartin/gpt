@@ -7461,6 +7461,12 @@ class WorkflowEditor {
         });
     }
 
+    /** The Import button: from a file (_pickImportFile) or from a GitHub link to a package .zip. */
+    _handleImportWorkflow() {
+        if (window.WorkflowPackageUI?.showImportChoice) window.WorkflowPackageUI.showImportChoice(this, () => this._pickImportFile());
+        else this._pickImportFile();
+    }
+
     /**
      * Import a workflow from a JSON file the user picks. The expected shape
      * is what `_showWorkflowJson()` produces — i.e. the same payload sent to
@@ -7468,7 +7474,7 @@ class WorkflowEditor {
      * as an unsaved new workflow (currentWorkflowId = null) so Save creates
      * a fresh row instead of overwriting whatever was previously loaded.
      */
-    _handleImportWorkflow() {
+    _pickImportFile() {
         // Re-entrancy guard: only ever one picker open at a time. Even if some
         // path invokes this more than once in a burst, the duplicates bail.
         if (this._importPickerOpen) return;

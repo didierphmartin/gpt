@@ -471,8 +471,116 @@
         return importPackageBytes(editor, new Uint8Array(await file.arrayBuffer()), overrides);
     }
 
+    const LINK_MAX_BYTES = 50 * 1024 * 1024;
+    const linkError = (key, params) => Object.assign(new Error(key), { key, params });
+
+    /**
+     * The direct download address of a package link: a GitHub file page (github.com/<o>/<r>/blob/<ref>/<path>.zip, or
+     * /raw/), or a raw.githubusercontent.com address. raw.githubusercontent.com answers browsers (CORS *) and is not
+     * rate-limited like the API; a ref with "/" needs no resolving, raw joins ref and path the same way.
+     */
+    function packageLinkUrl(link) {
+        let u;
+        try { u = new URL(String(link || '').trim()); } catch (_) { throw linkError('linkNotZip'); }
+        const segs = u.pathname.split('/').filter(Boolean);
+        let raw;
+        if (u.protocol === 'https:' && u.hostname === 'github.com' && segs.length >= 5 && (segs[2] === 'blob' || segs[2] === 'raw')) {
+            raw = ['', segs[0], segs[1], ...segs.slice(3)].join('/');
+        } else if (u.protocol === 'https:' && u.hostname === 'raw.githubusercontent.com' && segs.length >= 4) {
+            raw = '/' + segs.join('/');
+        }
+        if (!raw || !/\.zip$/i.test(raw)) throw linkError('linkNotZip');
+        return 'https://raw.githubusercontent.com' + raw;
+    }
+
+    /** The package's bytes, downloaded from its GitHub link. */
+    async function fetchPackageLink(link, fetchFn = (...a) => fetch(...a)) {
+        const url = packageLinkUrl(link);
+        let res;
+        try { res = await fetchFn(url); } catch (err) { throw linkError('linkFailed', { reason: err.message }); }
+        if (res.status === 404) throw linkError('linkNotFound');
+        if (!res.ok) throw linkError('linkFailed', { reason: `HTTP ${res.status}` });
+        if (Number(res.headers?.get?.('content-length') || 0) > LINK_MAX_BYTES) throw linkError('linkTooBig');
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        if (bytes.length > LINK_MAX_BYTES) throw linkError('linkTooBig');
+        if (!(bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04)) throw linkError('linkNotPackage');
+        return bytes;
+    }
+
+    /**
+     * The workflow Import button: "From a file" (the editor's own picker, pickFile) or "From GitHub" (a link to a
+     * package .zip, downloaded and imported like a picked one).
+     */
+    function showImportChoice(editor, pickFile) {
+        const t = (key, params) => esc(editor.t(`workflow.package.${key}`, params));
+        document.getElementById('wf-import-choice')?.remove();
+        const modal = document.createElement('div');
+        modal.id = 'wf-import-choice';
+        modal.className = 'fixed inset-0 z-[200] flex items-center justify-center';
+        modal.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+        const choice = 'flex items-center gap-3 px-4 py-3 border border-gray-200 rounded-lg hover:bg-blue-50 hover:border-blue-300 transition text-left';
+        modal.innerHTML = `
+            <div class="bg-white rounded-xl shadow-xl border border-gray-200 w-full max-w-md mx-4 p-5">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-base font-semibold text-gray-800">${t('importTitle')}</h3>
+                    <button data-act="close" class="p-1.5 text-gray-500 hover:text-gray-700 rounded">&#10005;</button>
+                </div>
+                <div class="flex flex-col gap-2">
+                    <button data-act="file" class="${choice}"><span class="text-2xl">📁</span><span>
+                        <span class="block text-sm font-medium text-gray-800">${t('importFromFile')}</span>
+                        <span class="block text-xs text-gray-500">${t('importFromFileHelp')}</span></span></button>
+                    <button data-act="github" class="${choice}"><span class="text-2xl">🐙</span><span>
+                        <span class="block text-sm font-medium text-gray-800">${t('importFromGithub')}</span>
+                        <span class="block text-xs text-gray-500">${t('importFromGithubHelp')}</span></span></button>
+                </div>
+                <div data-part="form" class="hidden mt-3">
+                    <input data-part="url" type="text" placeholder="https://github.com/owner/repo/blob/main/workflow.zip"
+                           class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-blue-400" />
+                    <div class="flex justify-end gap-2 mt-2">
+                        <button data-act="cancel" type="button" class="px-3 py-1 text-xs text-gray-600 hover:bg-gray-100 rounded">${t('cancel')}</button>
+                        <button data-act="import" type="button" class="px-3 py-1 text-xs text-white bg-blue-600 hover:bg-blue-700 rounded">${t('importLinkGo')}</button>
+                    </div>
+                </div>
+                <div data-part="status" class="hidden mt-4 text-xs px-3 py-2 rounded-lg border"></div>
+            </div>`;
+        document.body.appendChild(modal);
+        const $ = (sel) => modal.querySelector(sel);
+        const form = $('[data-part="form"]'), input = $('[data-part="url"]'), status = $('[data-part="status"]');
+        const go = $('[data-act="import"]');
+        let busy = false;
+        const close = () => { if (!busy) modal.remove(); };
+        const show = (text, kind) => {
+            status.classList.remove('hidden');
+            status.className = 'mt-4 text-xs px-3 py-2 rounded-lg border ' + (kind === 'error'
+                ? 'bg-red-50 border-red-200 text-red-800' : 'bg-blue-50 border-blue-200 text-blue-800');
+            status.textContent = text;
+        };
+        const run = async () => {
+            if (busy) return;
+            busy = true; go.disabled = true;
+            show(editor.t('workflow.package.importLinkDownloading'), 'info');
+            try {
+                const bytes = await fetchPackageLink(input.value);
+                busy = false;
+                modal.remove();
+                await importPackageBytes(editor, bytes);
+            } catch (err) {
+                busy = false; go.disabled = false;
+                show(err.key ? editor.t(`workflow.package.${err.key}`, err.params) : err.message, 'error');
+            }
+        };
+        $('[data-act="close"]').addEventListener('click', close);
+        modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+        $('[data-act="file"]').addEventListener('click', () => { modal.remove(); pickFile(); });
+        $('[data-act="github"]').addEventListener('click', () => { form.classList.remove('hidden'); input.focus(); });
+        $('[data-act="cancel"]').addEventListener('click', () => { if (!busy) { form.classList.add('hidden'); status.classList.add('hidden'); } });
+        go.addEventListener('click', run);
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
+        return modal;
+    }
+
     Object.assign(window.WorkflowPackageUI, {
-        importPackage, importPackageBytes, loadImportHave: loadHave, importIo: defaultIo, importResultHtml: resultHtml, importCardHtml: cardHtml,
+        importPackage, importPackageBytes, packageLinkUrl, fetchPackageLink, showImportChoice, loadImportHave: loadHave, importIo: defaultIo, importResultHtml: resultHtml, importCardHtml: cardHtml,
         settingsFieldsHtml, commandBlockHtml, toggleSecret, wireCopyButtons,
     });
 })();
