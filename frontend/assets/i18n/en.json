@@ -1939,7 +1939,7 @@
     },
     "serverSettings": {
       "title": "Server settings",
-      "help": "The private settings of each server checked in MCP Servers, saved with the server (as in Settings → MCP Servers).",
+      "help": "The private settings of the MCP servers this component calls, saved with each server (as in Settings → MCP Servers).",
       "complete": "settings complete",
       "missing": "missing: {{names}}",
       "none": "declares no settings",

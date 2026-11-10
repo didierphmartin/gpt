@@ -1939,7 +1939,7 @@
     },
     "serverSettings": {
       "title": "Ajustes de los servidores",
-      "help": "Los ajustes privados de cada servidor marcado en Servidores MCP, guardados con el servidor (como en Ajustes → Servidores MCP).",
+      "help": "Los ajustes privados de los servidores MCP que llama este componente, guardados con cada servidor (como en Ajustes → Servidores MCP).",
       "complete": "ajustes completos",
       "missing": "faltan: {{names}}",
       "none": "no declara ajustes",

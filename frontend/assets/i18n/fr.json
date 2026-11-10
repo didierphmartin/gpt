@@ -1939,7 +1939,7 @@
     },
     "serverSettings": {
       "title": "Paramètres des serveurs",
-      "help": "Les paramètres privés de chaque serveur coché dans Serveurs MCP, enregistrés avec le serveur (comme dans Paramètres → Serveurs MCP).",
+      "help": "Les paramètres privés des serveurs MCP qu'appelle ce composant, enregistrés avec chaque serveur (comme dans Paramètres → Serveurs MCP).",
       "complete": "paramètres complets",
       "missing": "manquant : {{names}}",
       "none": "ne déclare aucun paramètre",

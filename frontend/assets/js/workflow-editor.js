@@ -11180,6 +11180,7 @@ class WorkflowEditor {
                         <code style="font-size:12px;overflow-wrap:anywhere;">${esc(JSON.stringify(watchArgs))}</code>
                     </div>
                     <div data-role="connections" style="display:none;margin:0 0 14px;"></div>
+                    <div data-role="srvsettings" style="margin:0 0 14px;"></div>
                     <p style="margin:0 0 10px;font-size:13px;color:#6b7280;">${esc(t(fields.length ? 'argsIntro' : 'noArgs'))}</p>
                     <div style="display:${fields.length ? 'grid' : 'none'};grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:14px;">
                         ${fields.map((f) => `<label for="start-arg-${esc(f.name)}">${esc(f.name)}${f.required ? ' <span style="color:#dc2626;">*</span>' : ''}</label>
@@ -11210,6 +11211,12 @@ class WorkflowEditor {
         warn();
         if (editable) inputs[0]?.focus();
         this._mountStartConnections(overlay.querySelector('[data-role="connections"]'), comp);
+        // The option's servers' private settings (the code node form's Server settings block).
+        if (window.McpServerSettings?.mountServerSettings && window.WorkflowPackageUI?.settingsFieldsHtml && (comp.mcp_servers || []).length) {
+            this._loadMcpServersMeta(true).then((metas) => window.McpServerSettings
+                .mountServerSettings(overlay.querySelector('[data-role="srvsettings"]'), this, metas).refresh(comp.mcp_servers))
+                .catch((e) => console.warn('[workflow] server settings not shown:', e?.message || e));
+        }
         overlay.addEventListener('click', async (ev) => {
             const act = ev.target?.dataset?.act;
             if (act === 'close') { overlay.remove(); return; }
