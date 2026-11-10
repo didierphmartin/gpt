@@ -446,6 +446,8 @@
             local: !!s.local,
             // A global server (no owner) carries its keys on the administrator's side.
             global: s.user_id === null || s.user_id === undefined || s.user_id === '',
+            // Where a hosted server came from on GitHub: information only (the package always carries its files).
+            ...(s.source && typeof s.source === 'object' ? { source: s.source } : {}),
         };
     }
 
@@ -573,6 +575,7 @@
             if (!(h.host && s.local) && isLocalUrl(s.url)) { r.reasons.push('localhost-url'); r.url = s.url; }
             if (s.needs_auth) r.reasons.push('needs-key');
             if (s.global) r.reasons.push('global-server');
+            if (s.source && typeof s.source === 'object') r.source = s.source;
             r.status = r.folderExists ? 'clash' : cls !== 'install' ? cls : r.reasons.some((x) => x !== 'global-server') ? 'attention' : cls;
             rows.push(r);
         }
@@ -662,6 +665,9 @@
         const ofKind = (k) => (rows || []).filter((r) => r.kind === k);
         const rowValues = (r) => pick(vals, r.name) || {};
         const parse = (path) => { try { return own(files, path) ? JSON.parse(dec(files[path])) : null; } catch (e) { return null; } };
+        // A volume server's address (McpHostInstall.registrationUrl: <gw>/<folder>/<entry> for PHP); without one, the Python "/mcp".
+        const hostUrl = typeof io.registrationUrl === 'function' ? io.registrationUrl
+            : (gw, folder) => `${String(gw || '').replace(/\/+$/, '')}/${folder}/mcp`;
         const playbookDep = (r) => deps.find((d) => d.kind === 'playbook' && (d.pkey || d.name) === r.name);
         const serverOf = (r) => (pkg.servers || []).find((x) => x.name === r.name);
         const serverDep = (r) => deps.find((d) => d.kind === 'server' && d.name === r.name);
@@ -750,7 +756,9 @@
                 }
                 const sent = Object.create(null);
                 for (const p of paths) sent[p.slice(dest.length + 1)] = files[p];
-                const res = await step(`install server ${r.name}`, () => io.installServer(folder, { name: r.name, files: sent, env }));
+                const srv = serverOf(r);
+                const source = srv && srv.source && typeof srv.source === 'object' ? srv.source : null;   // information only
+                const res = await step(`install server ${r.name}`, () => io.installServer(folder, { name: r.name, files: sent, env, source }));
                 volumeState.set(r.name, res || {});
                 map[r.name] = folder;
                 continue;
@@ -799,7 +807,8 @@
             const v = rowValues(r);
             const url = pick(v, 'url'), auth = pick(v, 'authorization');
             const volumeFolder = h.host && s.local ? map[r.name] : null;   // served by the host at a fixed address
-            const reg = { name: s.name, url: volumeFolder ? `${h.host.gateway}/${volumeFolder}/mcp` : url !== undefined && url !== '' ? url : s.url, description: s.description || '',
+            const reg = { name: s.name, url: volumeFolder ? hostUrl(h.host.gateway, volumeFolder, parse(`mcps/${volumeFolder}/synergyai-mcp.json`))
+                : url !== undefined && url !== '' ? url : s.url, description: s.description || '',
                 transport: s.transport || 'http', is_mock: !!s.is_mock, headers: auth ? { Authorization: auth } : {} };
             const res = await step(`register server ${r.name}`, () => io.addServer(reg));
             serverIdByName.set(r.name, Number(res.id));

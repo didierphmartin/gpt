@@ -198,6 +198,10 @@
         let gateway = '';
         try { const st = await window.mcpClient?.hostStatus(); if (st && st.available) gateway = st.gateway || ''; }
         catch (e) { console.warn('[package] server host status unavailable:', e.message); }
+        // The host's rows carry each volume server's GitHub source (information only; its files travel anyway).
+        let hostRows = [];
+        if (gateway) try { hostRows = (await window.mcpClient.hostServers()) || []; }
+        catch (e) { console.warn('[package] server host list unavailable:', e.message); }
         const servers = [];
         for (const name of deps.servers) {
             const regs = registered.filter((s) => s.name === name);
@@ -217,7 +221,9 @@
             }
             if (source && !source.manifest) warn('no-install', 'warnNoInstall', { name });
             if (source) Object.assign(files, source.files);
-            servers.push({ ...reg, local: !!source, folder, hasManifest: !!(source && source.manifest) });
+            const hostRow = hostFolder ? hostRows.find((x) => x && x.folder === hostFolder) : null;
+            servers.push({ ...reg, local: !!source, folder, hasManifest: !!(source && source.manifest),
+                ...(source && hostRow && hostRow.source ? { source: hostRow.source } : {}) });
         }
 
         // Code components: the ones _bundleCodeComponents found in the library.

@@ -39,10 +39,10 @@
     };
 
     /** The shared host install, with the package's bytes encoded. */
-    function installOnHost(folder, { name, files, env }) {
+    function installOnHost(folder, { name, files, env, source }) {
         const filesB64 = {};
         for (const rel of Object.keys(files)) filesB64[rel] = toBase64(files[rel]);
-        return window.McpHostInstall.installOnHost(folder, { name, filesB64, env });
+        return window.McpHostInstall.installOnHost(folder, { name, filesB64, env, source });
     }
 
     /** The io installPackage writes through: the user's folder, the server list, playbooks, components. */
@@ -85,6 +85,7 @@
             },
             importComponents: (bundle, nodes) => editor._importCodeComponents(bundle, nodes),
             installServer: (folder, body) => installOnHost(folder, body),
+            registrationUrl: (gateway, folder, manifest) => window.McpHostInstall.registrationUrl(gateway, folder, manifest),
         };
     }
 
@@ -217,6 +218,12 @@
         else status = r.destination && !volume ? t('statusInstallTo', { destination: r.destination }) : t('statusInstall');
         const reasons = (r.reasons || []).filter((x) => REASON_KEY[x]);
         const parts = [];
+        // A server installed from GitHub says where from (information only: its files come from the package).
+        const src = r.kind === 'server' && r.source;
+        if (src && src.owner && src.repo) {
+            const where = `${src.owner}/${src.repo}${src.sha ? ` @ ${String(src.sha).slice(0, 7)}` : ''}`;
+            parts.push(`<div style="color: #475569; font-size: 13px;">${esc(editor.t('mcpLibrary.import.from', { source: where }))}</div>`);
+        }
         if (reasons.length && !skipped) {
             parts.push(`<ul style="margin: 0 0 0 18px; color: #92400e; font-size: 13px;">${reasons.map((x) => `<li>${t(REASON_KEY[x])}</li>`).join('')}</ul>`);
         }
@@ -465,7 +472,7 @@
     }
 
     Object.assign(window.WorkflowPackageUI, {
-        importPackage, importPackageBytes, loadImportHave: loadHave, importIo: defaultIo, importResultHtml: resultHtml,
+        importPackage, importPackageBytes, loadImportHave: loadHave, importIo: defaultIo, importResultHtml: resultHtml, importCardHtml: cardHtml,
         settingsFieldsHtml, commandBlockHtml, toggleSecret, wireCopyButtons,
     });
 })();
