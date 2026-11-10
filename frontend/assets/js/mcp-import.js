@@ -92,7 +92,7 @@
             };
             refresh();
             body.querySelector('[data-cancel]').onclick = close;
-            body.querySelector('[data-install]').onclick = () => install(fetched, values());
+            body.querySelector('[data-install]').onclick = () => install(fetched, installEnv(values()));
         }
 
         async function install(fetched, env) {
@@ -109,9 +109,12 @@
             installing = false;
             const ok = !err && res && res.state === 'running';
             const regFailed = !err && res && res.state === 'register-failed';
-            const log = err || (regFailed ? `${fetched.folder}: ${res.error || ''}\n${t('registerFailed')}` : ((res && res.log) || []).slice(-20).join('\n'));
+            const tail = (x) => String(x).split('\n').slice(-20).join('\n');
+            const crashed = !err && !regFailed && !ok && res;
+            const log = err ? tail(err) : (regFailed ? `${fetched.folder}: ${res.error || ''}\n${t('registerFailed')}` : ((res && res.log) || []).slice(-20).join('\n'));
             body.innerHTML = `<div style="font-size: 13px; ${ok ? 'color: #15803d;' : 'color: #b91c1c;'}">${esc(ok ? t('done') : t('failed'))}</div>
                 ${!ok && log ? `<pre style="margin: 0; padding: 6px 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; white-space: pre-wrap; font-size: 12px; max-height: 240px; overflow: auto;">${esc(log)}</pre>` : ''}
+                ${crashed ? `<div style="font-size: 12px; color: #b45309;">${esc(t('crashedHint'))}</div>` : ''}
                 <div style="display: flex; justify-content: flex-end;"><button type="button" data-close style="${BTN}">${esc(t('close'))}</button></div>`;
             body.querySelector('[data-close]').onclick = close;
             if (ok && typeof onDone === 'function') onDone();
@@ -120,5 +123,12 @@
         linkForm();
     }
 
-    window.mcpImport = { open, reviewState };
+    /** Settings sent to the install: a blank one is left out so the server's own default applies. */
+    function installEnv(values) {
+        const out = {};
+        for (const k of Object.keys(values || {})) if (values[k] !== '') out[k] = values[k];
+        return out;
+    }
+
+    window.mcpImport = { open, reviewState, installEnv };
 })();

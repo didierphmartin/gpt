@@ -52,6 +52,11 @@ const make = (mcpClient) => {
     await assert.rejects(make(mc).installAndRegister(args), /conflict/);
     assert.strictEqual(mc.calls.add.length, 0);
 
+    const lines = Array.from({ length: 25 }, (_, i) => `line${i + 1}`);
+    mc = fake('running');
+    mc.hostInstall = async () => { throw Object.assign(new Error('Install failed'), { status: 422, body: { data: { log: lines } } }); };
+    await assert.rejects(make(mc).installOnHost('srv', { name: 'srv', filesB64: {}, env: {} }), (e) => e.message.includes('line25') && !e.message.includes('line1\n') && !e.message.includes('line5\n'));
+
     for (const reply of [{ success: false, error: 'A server with this name already exists' }, undefined]) {
         mc = fake('running');
         mc.addServer = async () => reply;

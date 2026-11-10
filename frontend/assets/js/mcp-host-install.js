@@ -28,7 +28,7 @@
         } catch (e) {
             if (e.status === 422) {
                 const log = (e.body && e.body.data && e.body.data.log) || (e.body && e.body.log) || [];
-                throw new Error(`${e.message}${log.length ? '\n' + log.slice(0, 20).join('\n') : ''}`);
+                throw new Error(`${e.message}${log.length ? '\n' + log.slice(-20).join('\n') : ''}`);
             }
             if (e.status !== undefined && e.status !== 502 && e.status !== 504) throw e;
         }

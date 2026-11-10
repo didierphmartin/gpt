@@ -332,6 +332,7 @@
       "done": "Installé et ajouté à vos serveurs MCP",
       "failed": "Échec de l'installation",
       "registerFailed": "Le serveur est installé et en cours d'exécution ; ajoutez-le depuis Paramètres → Serveurs MCP, ou supprimez-le là et importez-le à nouveau.",
+      "crashedHint": "Le serveur est installé mais ne s'est pas lancé. Corrigez ses paramètres dans Paramètres → Serveurs MCP, ou supprimez-le là et importez-le à nouveau.",
       "runtimePhp": "PHP",
       "runtimePython": "Python",
       "from": "depuis {{source}}",
