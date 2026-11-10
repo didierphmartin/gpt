@@ -333,7 +333,8 @@
       "failed": "Échec de l'installation",
       "runtimePhp": "PHP",
       "runtimePython": "Python",
-      "from": "depuis {source}"
+      "from": "depuis {{source}}",
+      "close": "OK"
     },
     "master": "MCP actif",
     "search": "Rechercher des serveurs...",

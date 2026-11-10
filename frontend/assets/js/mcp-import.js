@@ -30,8 +30,8 @@
         document.body.appendChild(modal);
         const body = modal.querySelector('[data-body]');
         const close = () => { modal.remove(); };
-        modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
-        let url = '';
+        modal.addEventListener('click', (e) => { if (e.target === modal && !installing) close(); });
+        let url = '', busy = false, installing = false;
 
         function linkForm(error) {
             body.innerHTML = `<label style="font-size: 13px; display: flex; flex-direction: column; gap: 4px;">${esc(t('linkLabel'))}
@@ -46,13 +46,14 @@
             body.querySelector('[data-cancel]').onclick = close;
             const go = async () => {
                 url = input.value.trim();
-                if (!url) return;
+                if (!url || busy) return;
+                busy = true;
                 body.querySelector('[data-fetch]').disabled = true;
                 body.querySelector('[data-fetch]').textContent = '…';
                 try {
                     const [fetched, rows] = await Promise.all([window.mcpClient.hostFetch(url), window.mcpClient.hostServers().catch(() => [])]);
                     review(fetched, rows.map((r) => r.folder));
-                } catch (e) { linkForm((e && e.message) || String(e)); }
+                } catch (e) { linkForm((e && e.message) || String(e)); } finally { busy = false; }
             };
             body.querySelector('[data-fetch]').onclick = go;
             input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
@@ -84,17 +85,19 @@
                 btn.style.opacity = st.canInstall ? '1' : '0.5';
                 body.querySelector('[data-reason]').textContent = st.reason === 'installed' ? t('installed') : st.reason === 'missing' ? t('missingRequired') : '';
             };
-            body.addEventListener('input', refresh);
-            body.addEventListener('click', (e) => {
+            body.oninput = refresh;
+            body.onclick = (e) => {
                 const tg = e.target.closest('[data-toggle-secret]');
                 if (tg) window.WorkflowPackageUI.toggleSecret(tg, (k) => window.i18n.t(`workflow.package.${k}`));
-            });
+            };
             refresh();
             body.querySelector('[data-cancel]').onclick = close;
             body.querySelector('[data-install]').onclick = () => install(fetched, values());
         }
 
         async function install(fetched, env) {
+            installing = true;
+            body.oninput = body.onclick = null;
             body.innerHTML = `<div style="display: flex; align-items: center; gap: 10px; font-size: 13px;">
                 <span style="width: 16px; height: 16px; border: 2px solid #cbd5e1; border-top-color: #2563eb; border-radius: 50%; display: inline-block; animation: mcpimp-spin 1s linear infinite;"></span>
                 <span>${esc(t('installing'))}</span></div><style>@keyframes mcpimp-spin { to { transform: rotate(360deg); } }</style>`;
@@ -103,11 +106,12 @@
                 const st = await window.mcpClient.hostStatus();
                 res = await window.McpHostInstall.installAndRegister({ folder: fetched.folder, manifest: fetched.manifest, filesB64: fetched.files, env, source: fetched.source, gateway: st.gateway });
             } catch (e) { err = (e && e.message) || String(e); }
+            installing = false;
             const ok = !err && res && res.state === 'running';
             const log = err || ((res && res.log) || []).slice(-20).join('\n');
             body.innerHTML = `<div style="font-size: 13px; ${ok ? 'color: #15803d;' : 'color: #b91c1c;'}">${esc(ok ? t('done') : t('failed'))}</div>
                 ${!ok && log ? `<pre style="margin: 0; padding: 6px 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; white-space: pre-wrap; font-size: 12px; max-height: 240px; overflow: auto;">${esc(log)}</pre>` : ''}
-                <div style="display: flex; justify-content: flex-end;"><button type="button" data-close style="${BTN}">OK</button></div>`;
+                <div style="display: flex; justify-content: flex-end;"><button type="button" data-close style="${BTN}">${esc(t('close'))}</button></div>`;
             body.querySelector('[data-close]').onclick = close;
             if (ok && typeof onDone === 'function') onDone();
         }

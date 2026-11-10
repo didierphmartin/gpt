@@ -12,9 +12,10 @@ assert.strictEqual(reviewState(fetched, [], {}).reason, 'missing');
 assert.strictEqual(reviewState(fetched, [], { KEY: '  ' }).canInstall, false);
 assert.deepStrictEqual(JSON.parse(JSON.stringify(reviewState(fetched, ['other'], { KEY: 'x' }))), { canInstall: true, reason: null });
 assert.strictEqual(reviewState({ folder: 'a' }, [], {}).canInstall, true);
-const keys = ['button', 'title', 'linkLabel', 'linkHint', 'fetch', 'cancel', 'install', 'installed', 'missingRequired', 'installing', 'done', 'failed', 'runtimePhp', 'runtimePython', 'from'];
+const keys = ['button', 'title', 'linkLabel', 'linkHint', 'fetch', 'cancel', 'install', 'installed', 'missingRequired', 'installing', 'done', 'failed', 'runtimePhp', 'runtimePython', 'from', 'close'];
 for (const l of ['en', 'es', 'fr']) {
     const j = JSON.parse(fs.readFileSync(__dirname + `/../../i18n/${l}.json`, 'utf8'));
     for (const k of keys) assert.ok(j.mcpLibrary.import && typeof j.mcpLibrary.import[k] === 'string', `${l} missing mcpLibrary.import.${k}`);
+    assert.ok(j.mcpLibrary.import.from.includes('{{source}}'), `${l} from needs {{source}}`);
 }
 console.log('mcp-import: ok');

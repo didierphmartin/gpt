@@ -333,7 +333,8 @@
       "failed": "Installation failed",
       "runtimePhp": "PHP",
       "runtimePython": "Python",
-      "from": "from {source}"
+      "from": "from {{source}}",
+      "close": "OK"
     },
     "master": "MCP on",
     "search": "Search servers...",
