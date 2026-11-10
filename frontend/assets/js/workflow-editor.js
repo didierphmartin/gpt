@@ -3704,6 +3704,8 @@ class WorkflowEditor {
                 this.t('workflow.active.replaceConfirm'));
             if (!ok) return false;
         }
+        // The server runs it with the same servers: a missing private setting is asked for first (Cancel = not activated).
+        if (!(await this._runSettingsGate())) return false;
         await this._persistIfDirty();   // the worker reads Start's links and option from the database
         await this._stopCompiledEngine();   // one engine reads the events: the worker, from now on
         const r = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/activate`, { method: 'POST', headers: this.getAuthHeaders() });
@@ -17654,7 +17656,8 @@ class WorkflowEditor {
      * frontend/assets/js/__tests__/batch-conversation.test.js.
      */
     /**
-     * Before a run: the MCP servers the workflow uses whose settings can be read (the user's SynergyAI folder
+     * Before a run (the run conversation's turn) and before ▶ activates a scheduled / option Start: the MCP servers
+     * the workflow uses whose settings can be read (the user's SynergyAI folder
      * or the server host) are checked, and a form opens when a required one is empty (McpServerSettings.runGate).
      * True = run. A check that cannot be made never blocks the run: the first failing node says why, as before.
      */
@@ -17664,7 +17667,14 @@ class WorkflowEditor {
         try {
             let toolServers = new Map();
             try { ({ toolServers } = await window.WorkflowPackageUI.loadServers()); } catch (_) { /* agent tools unknown */ }
-            const names = WP.collectDependencies(this.exportWorkflow().nodes, { toolServers }).servers;
+            const nodes = this.exportWorkflow().nodes;
+            const names = WP.collectDependencies(nodes, { toolServers }).servers;
+            // The Start option's component calls servers too (its trigger, e.g. Outlook's wait for a dropped email).
+            for (const n of nodes) {
+                const opt = n.node_type === 'start' ? n.config?.start_option : null;
+                const comp = opt ? window.CodeComponents?.cache?.get(opt) : null;
+                for (const s of comp?.mcp_servers || []) if (!names.includes(s)) names.push(s);
+            }
             if (!names.length) return true;
             return await MS.runGate(this, names, await this._loadMcpServersMeta(true));
         } catch (e) {
