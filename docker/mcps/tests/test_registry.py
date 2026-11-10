@@ -48,6 +48,16 @@ class RegistryTest(unittest.TestCase):
         self.assertEqual(r.add("jira_mcp", "Jira", 3)["port"], 9101)
         self.assertEqual(Registry(self.tmp).get("sharepoint_mcp")["port"], 9102)
 
+    def test_add_records_runtime_and_source(self):
+        r = Registry(self.tmp)
+        src = {"url": "https://github.com/o/r", "owner": "o", "repo": "r", "ref": "main", "sha": "abc", "path": ""}
+        e = r.add("php_mcp", "P", 1, runtime="php", source=src)
+        self.assertEqual((e["runtime"], e["source"]), ("php", src))
+        self.assertEqual(Registry(self.tmp).get("php_mcp")["source"], src)
+        e2 = r.add("py_mcp", "Y", 1)
+        self.assertEqual(e2["runtime"], "python")
+        self.assertNotIn("source", e2)
+
     def test_folder_taken_refused(self):
         r = Registry(self.tmp)
         r.add("x", "X", 1)

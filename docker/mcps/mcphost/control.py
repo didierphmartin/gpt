@@ -134,14 +134,15 @@ class Control:
         out = []
         for folder, e in self.registry.load().items():
             out.append({"folder": folder, "name": e.get("name"), "port": e.get("port"), "enabled": e.get("enabled", True),
-                        "installed_by": e.get("installed_by"), "state": self._state(folder),
+                        "installed_by": e.get("installed_by"), "runtime": e.get("runtime") or "python",
+                        "source": e.get("source"), "state": self._state(folder),
                         "log": self.manager.log_tail(folder, LOG_LINES)})
         with self._lock:
             building = dict(self._installing)
         for folder, (name, owner) in building.items():
             if folder not in {s["folder"] for s in out}:
                 out.append({"folder": folder, "name": name, "port": None, "enabled": True, "installed_by": owner,
-                            "state": "installing", "log": self.manager.log_tail(folder, LOG_LINES)})
+                            "runtime": "python", "source": None, "state": "installing", "log": self.manager.log_tail(folder, LOG_LINES)})
         return out
 
     def install(self, folder: str, body: dict):
@@ -149,6 +150,9 @@ class Control:
         files, env = body.get("files"), body.get("env", {})
         if not isinstance(files, dict) or not isinstance(env, dict):
             raise ApiError(400, "files and env must be objects")
+        source = body.get("source")
+        if source is not None and not isinstance(source, dict):
+            raise ApiError(400, "source must be an object")
         decoded = {}
         for rel, b64 in files.items():
             if not is_safe_rel_path(rel):
@@ -192,7 +196,8 @@ class Control:
                     shutil.rmtree(d, ignore_errors=True)
                     raise ApiError(422, "install-failed", log=log)
             name = body.get("name") or manifest.get("name") or folder
-            entry = self.registry.add(folder, name, body.get("installed_by"))
+            entry = self.registry.add(folder, name, body.get("installed_by"),
+                                      runtime=manifest.get("runtime") or "python", source=body.get("source"))
         except ApiError:
             raise
         except RegistryError as e:

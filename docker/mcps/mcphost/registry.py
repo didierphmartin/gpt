@@ -67,7 +67,7 @@ class Registry:
     def get(self, folder: str) -> dict | None:
         return self.load().get(folder)
 
-    def add(self, folder: str, name: str, installed_by) -> dict:
+    def add(self, folder: str, name: str, installed_by, runtime: str = "python", source: dict | None = None) -> dict:
         with self._lock:
             data = self._load_for_write()
             if folder in data:
@@ -76,7 +76,10 @@ class Registry:
             port = next((p for p in range(PORT_FIRST, PORT_LAST + 1) if p not in used), None)
             if port is None:
                 raise NoFreePortError("no free port")
-            data[folder] = {"name": name, "port": port, "enabled": True, "installed_by": installed_by}
+            data[folder] = {"name": name, "port": port, "enabled": True, "installed_by": installed_by,
+                            "runtime": runtime or "python"}
+            if source:
+                data[folder]["source"] = source
             self._save(data)
             return data[folder]
 

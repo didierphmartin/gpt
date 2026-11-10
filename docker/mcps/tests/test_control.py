@@ -100,6 +100,28 @@ class ControlTest(unittest.TestCase):
         s = self.get("/servers").json()[0]
         self.assertEqual((s["folder"], s["name"], s["installed_by"], s["enabled"]), ("ok_server", "Fake", 7, True))
 
+    def test_list_returns_runtime_and_source(self):
+        self.registry.add("old", "Old", 1)
+        self.registry._save({**self.registry.load(), "older": {"name": "O", "port": 9150, "enabled": True, "installed_by": 1}})
+        src = {"url": "https://github.com/o/r", "owner": "o", "repo": "r", "ref": "main", "sha": "abc", "path": ""}
+        self.registry.add("new", "New", 1, runtime="php", source=src)
+        rows = {s["folder"]: s for s in self.get("/servers").json()}
+        self.assertEqual((rows["older"]["runtime"], rows["older"]["source"]), ("python", None))
+        self.assertEqual((rows["new"]["runtime"], rows["new"]["source"]), ("php", src))
+
+    def test_install_php_manifest_without_start(self):
+        files = {"synergyai-mcp.json": b64(json.dumps({"runtime": "php", "entry": "mcp.php"})), "mcp.php": b64("<?php\n")}
+        src = {"url": "https://github.com/o/r", "owner": "o", "repo": "r", "ref": "main", "sha": "abc", "path": ""}
+        r = self.call("POST", "/servers/phpx/install", {"name": "P", "installed_by": 7, "files": files, "env": {}, "source": src})
+        self.assertEqual(r.status, 201)
+        e = self.registry.get("phpx")
+        self.assertEqual((e["runtime"], e["source"]), ("php", src))
+
+    def test_install_rejects_non_object_source(self):
+        r = self.call("POST", "/servers/bad/install", {"name": "P", "files": self.fixture_files(), "env": {}, "source": "x"})
+        self.assertEqual(r.status, 400)
+        self.assertFalse((self.root / "bad").exists())
+
     def test_failed_install_leaves_nothing(self):
         r = self.install("broken", files=self.fixture_files(manifest_install="echo boom; exit 3"))
         self.assertEqual(r.status, 422)
