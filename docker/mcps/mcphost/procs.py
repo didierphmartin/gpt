@@ -1,6 +1,7 @@
 """Runs each hosted server as a child process: env assembly, log capture, back-off restarts."""
 import json
 import os
+import shlex
 import signal
 import subprocess
 import threading
@@ -19,6 +20,19 @@ STOP_GRACE = 10
 LOG_MAX = 5 * 1024 * 1024
 LOG_NAME = "server.log"
 HOST = "127.0.0.1"
+ROUTER = Path(__file__).with_name("php_router.php")
+
+
+def start_command(manifest: dict, port: int, router: Path) -> str:
+    """The shell command that starts a server: a PHP one is built here, a Python one names its own."""
+    if manifest.get("runtime") == "php":
+        if not manifest.get("entry") or not isinstance(manifest["entry"], str):
+            raise ValueError("a php server needs an entry file")
+        return f"exec php -S {HOST}:{port} {shlex.quote(str(router))}"
+    start = manifest.get("start")
+    if not start or not isinstance(start, str):
+        raise ValueError("the server's manifest has no start command")
+    return start
 
 
 def _read(path: Path) -> str:
@@ -165,6 +179,9 @@ class Manager:
             env[host] = HOST
         if port:
             env[port] = str(self.registry.get(folder)["port"])
+        if manifest.get("runtime") == "php":
+            env["PHP_CLI_SERVER_WORKERS"] = "4"
+            env["MCP_ENTRY"] = str(manifest.get("entry") or "")
         data = manifest.get("data_env")
         if not isinstance(data, list):
             names = flds + [f["name"] for f in envfile.fields(None, example)]
@@ -179,11 +196,12 @@ class Manager:
         log = _Log(d / LOG_NAME)
         try:
             manifest = json.loads(_read(d / "synergyai-mcp.json") or "{}")
-            start = manifest.get("start") if isinstance(manifest, dict) else None
-            if not start or not isinstance(start, str):
-                raise ValueError("the server's manifest has no start command")
-            if self.registry.get(folder) is None:
+            if not isinstance(manifest, dict):
+                manifest = {}
+            entry = self.registry.get(folder)
+            if entry is None:
                 raise ValueError("server is not registered")
+            start = start_command(manifest, entry["port"], ROUTER)
             env = self._env(folder, manifest)
             (d / "data").mkdir(exist_ok=True)
             proc = subprocess.Popen(["bash", "-c", start], cwd=d, env=env, stdin=subprocess.DEVNULL,

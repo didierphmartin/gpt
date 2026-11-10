@@ -1,0 +1,22 @@
+const assert = require('assert');
+const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(__dirname + '/../mcp-import.js', 'utf8');
+const ctx = { window: {}, console, setTimeout };
+vm.createContext(ctx);
+vm.runInContext(src, ctx);
+const { reviewState, installEnv } = ctx.window.mcpImport;
+const fetched = { folder: 'acme', fields: [{ name: 'KEY', required: true }, { name: 'OPT', required: false }] };
+assert.deepStrictEqual(JSON.parse(JSON.stringify(reviewState(fetched, ['acme'], { KEY: 'x' }))), { canInstall: false, reason: 'installed' });
+assert.strictEqual(reviewState(fetched, [], {}).reason, 'missing');
+assert.strictEqual(reviewState(fetched, [], { KEY: '  ' }).canInstall, false);
+assert.deepStrictEqual(JSON.parse(JSON.stringify(reviewState(fetched, ['other'], { KEY: 'x' }))), { canInstall: true, reason: null });
+assert.strictEqual(reviewState({ folder: 'a' }, [], {}).canInstall, true);
+assert.deepStrictEqual(JSON.parse(JSON.stringify(installEnv({ A: 'x', B: '', C: ' ', D: '0' }))), { A: 'x', C: ' ', D: '0' });
+const keys = ['crashedHint', 'button', 'title', 'linkLabel', 'linkHint', 'fetch', 'cancel', 'install', 'installed', 'missingRequired', 'installing', 'done', 'failed', 'registerFailed', 'runtimePhp', 'runtimePython', 'from', 'close'];
+for (const l of ['en', 'es', 'fr']) {
+    const j = JSON.parse(fs.readFileSync(__dirname + `/../../i18n/${l}.json`, 'utf8'));
+    for (const k of keys) assert.ok(j.mcpLibrary.import && typeof j.mcpLibrary.import[k] === 'string', `${l} missing mcpLibrary.import.${k}`);
+    assert.ok(j.mcpLibrary.import.from.includes('{{source}}'), `${l} from needs {{source}}`);
+}
+console.log('mcp-import: ok');

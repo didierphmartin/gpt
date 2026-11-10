@@ -61,7 +61,12 @@ def make_server(registry, port=8790, host="0.0.0.0") -> ThreadingHTTPServer:
                 return self._fail(404, "not found")
             body, chunked = self._body()
             target = "/" + rest + ("?" + query if query else "")
-            headers = {k: v for k, v in self.headers.items() if not _hop(k) and k.lower() not in ("host", "content-length")}
+            incoming_proto = self.headers.get("X-Forwarded-Proto")
+            headers = {k: v for k, v in self.headers.items()
+                       if not _hop(k) and k.lower() not in ("host", "content-length") and not k.lower().startswith("x-forwarded-")}
+            headers["X-Forwarded-Host"] = self.headers.get("Host") or ""
+            headers["X-Forwarded-Proto"] = incoming_proto or "http"
+            headers["X-Forwarded-Prefix"] = "/" + folder
             if isinstance(body, bytes):
                 headers["Content-Length"] = str(len(body))
             conn = http.client.HTTPConnection("127.0.0.1", entry["port"], timeout=CONNECT_TIMEOUT)

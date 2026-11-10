@@ -1,5 +1,12 @@
 const assert = require('assert');
 const WP = require('../workflow-package.js');
+const HostInstall = (() => {
+    const vm = require('vm');
+    const ctx = { window: {}, console, setTimeout };
+    vm.createContext(ctx);
+    vm.runInContext(require('fs').readFileSync(__dirname + '/../mcp-host-install.js', 'utf8'), ctx);
+    return ctx.window.McpHostInstall;
+})();
 
 const ctx = { toolServers: new Map([['get_pto_balance', ['Workday']], ['poll_jobs', ['servicenow', 'servicenow-mock']]]),
               serverNameById: new Map([[7, 'vector_Qdrant']]) };
@@ -62,6 +69,7 @@ const conn2 = WP.stripSecrets([{ id: '6', node_type: 'vectorstore', config: { co
 assert.deepStrictEqual(conn2.nodes[0].config.connection, { host: 'h' });
 assert.deepStrictEqual(conn2.stripped.map((x) => x.field), ['dsn', 'connection_string', 'conn_str', 'auth_header', 'bearer', 'private_pem']);
 for (const f of ['DSN', 'Connection_String', 'connstr', 'PRIVATE_KEY']) assert.ok(WP.SECRET_FIELD_RE.test(f), f);
+assert.ok(WP.SECRET_FIELD_RE.test('EVENTHUB_CONNECTION'));
 
 // selectServerFiles
 const files = ['server.py','tests/t.py','.env','.env.example','.venv/x','a/__pycache__/b.pyc','data.sqlite-wal','README.md'];
@@ -212,6 +220,16 @@ assert.deepStrictEqual(man.warnings, [{ kind: 'tool-missing', node: '9', message
 // mcps/servers.json in the zip: the same registrations
 assert.deepStrictEqual(WP.serverRegistration({ id: 1, name: 'A', url: 'u', headers: { AUTHORIZATION: 'k' } }),
     { name: 'A', url: 'u', description: '', transport: 'http', is_mock: false, needs_auth: true, old_id: 1, local: false, global: true });
+// a hosted server's GitHub source travels with it (information only); its files are still listed
+{
+    const src = { url: 'https://github.com/o/r/tree/main/srv', owner: 'o', repo: 'r', ref: 'main', sha: '0123456789abcdef', path: 'srv' };
+    const hm = WP.buildManifest({ servers: [{ id: 2, name: 'Php', url: 'http://gw/php_srv/mcp.php', user_id: 5, local: true, folder: 'php_srv', hasManifest: true, source: src }] });
+    const e = hm.dependencies.find((x) => x.kind === 'server');
+    assert.deepStrictEqual(e.source, src);
+    assert.strictEqual(e.folder, 'mcps/php_srv/');
+    assert.deepStrictEqual(WP.serverRegistration({ name: 'A', source: src }).source, src);
+    assert.ok(!('source' in WP.serverRegistration({ name: 'A', source: null })));
+}
 assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
 
 (async () => {
@@ -513,6 +531,42 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
             assert.ok(hres.installed.some((x) => x.kind === 'server' && x.destination === 'volume: outlook_mcp' && x.state === 'running'));
             assert.deepStrictEqual(hres.commands, []);
             assert.ok(!hio.calls.some((c) => c[0] === 'ensureDir' && c[1] === 'mcps'));
+            // with the shared registrationUrl: a Python server is still <gw>/<folder>/mcp
+            {
+                const pyIo = memIo();
+                pyIo.registrationUrl = HostInstall.registrationUrl;
+                await WP.installPackage(hrows, ipkg, { Outlook: { TENANT_ID: 't' } }, pyIo, hhave);
+                assert.strictEqual(pyIo.calls.find((c) => c[0] === 'addServer')[1].url, 'http://localhost:8790/outlook_mcp/mcp');
+            }
+            // a PHP server is registered at <gw>/<folder>/<entry>; its GitHub source reaches the host install
+            {
+                const src = { url: 'https://github.com/o/r/tree/main/srv', owner: 'o', repo: 'r', ref: 'main', sha: '0123456789abcdef', path: 'srv' };
+                const phpEntries = { ...ientries,
+                    'mcps/servers.json': J(JSON.parse(new TextDecoder().decode(ientries['mcps/servers.json'])).map((x) => (x.name === 'Outlook' ? { ...x, source: src } : x))),
+                    'mcps/outlook_mcp/synergyai-mcp.json': J({ ...srvMan, runtime: 'php', entry: 'mcp.php' }) };
+                const ppkg = WP.readPackage(phpEntries);
+                const prows = await WP.reviewRows(ppkg, hhave);
+                assert.deepStrictEqual(prows.find((r) => r.name === 'Outlook').source, src);
+                const phpIo = memIo();
+                phpIo.registrationUrl = HostInstall.registrationUrl;
+                await WP.installPackage(prows, ppkg, { Outlook: { TENANT_ID: 't' } }, phpIo, hhave);
+                assert.strictEqual(phpIo.calls.find((c) => c[0] === 'addServer')[1].url, 'http://localhost:8790/outlook_mcp/mcp.php');
+                assert.deepStrictEqual(phpIo.calls.find((c) => c[0] === 'installServer')[2].source, src);
+                // use-existing on the volume folder: the PHP address too
+                const uh = { ...hhave, hostFolders: ['outlook_mcp'] };
+                const urows = await WP.reviewRows(ppkg, uh);
+                for (const r of urows) r.choice = r.name === 'Outlook' ? 'use-existing' : (r.kind === 'server' && r.status === 'present') ? r.choice : 'skip';
+                const uio = memIo();
+                uio.registrationUrl = HostInstall.registrationUrl;
+                await WP.installPackage(urows, ppkg, {}, uio, uh);
+                assert.strictEqual(uio.calls.find((c) => c[0] === 'addServer')[1].url, 'http://localhost:8790/outlook_mcp/mcp.php');
+                // the dev app (no host) ignores source: nothing about it reaches the user's folder or the registration
+                const dio = memIo();
+                const drows = await WP.reviewRows(ppkg, ihave);
+                await WP.installPackage(drows, ppkg, { Outlook: { TENANT_ID: 't' } }, dio, ihave);
+                assert.ok(!JSON.stringify(dio.fs).includes('0123456789abcdef'));
+                assert.ok(!('source' in dio.calls.find((c) => c[0] === 'addServer')[1]));
+            }
             // a non-local server with a localhost address keeps its warning in host mode
             const nl = { ...ipkg, servers: ipkg.servers.map((x) => (x.name === 'Hosted' ? { ...x, url: 'http://localhost:1/mcp' } : x)) };
             assert.ok((await WP.reviewRows(nl, hhave)).find((r) => r.name === 'Hosted').reasons.includes('localhost-url'));

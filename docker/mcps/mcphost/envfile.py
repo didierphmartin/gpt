@@ -1,7 +1,7 @@
 """Settings file (.env) helpers; twins of parseEnv / renderEnv / mergeEnv / envFields in workflow-package.js."""
 import re
 
-SECRET_FIELD_RE = re.compile(r"key|secret|token|password|passwd|credential|dsn|connection_string|conn_str|connstr|auth|bearer|private", re.I)
+SECRET_FIELD_RE = re.compile(r"key|secret|token|password|passwd|credential|dsn|connection|connection_string|conn_str|connstr|auth|bearer|private", re.I)
 _NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
 _QUOTE_NEEDED = re.compile(r"[\s#\"'\\]")

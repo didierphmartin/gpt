@@ -297,8 +297,31 @@ Docker Engine + Compose v2, and either your own LLM provider keys or an account 
 4. **Optional: install the local runner** if you want to run compiled
    workflows. See *First run* below.
 
-MCP servers you import in the Docker app are kept in the `gpt-mcps` volume
-and start by themselves, also after a restart or a rebuild of the stack.
+MCP servers you import in the Docker app are kept in the named volume `gpt-mcps`
+(shown by Docker as `gpt_gpt-mcps`, because compose adds the project name as a prefix) and start by themselves, also after a restart or a rebuild of the stack.
+
+By default they live in that volume. To keep them in a folder
+instead, create the folder first (Docker would create a missing one owned by
+root, which uid 1000 cannot write), make it writable by uid 1000, and set
+`MCPS_STORE` to its absolute path. Only a bare name is taken as a
+volume name (a path such as `./x` is a bind mount), and `~` is not expanded, also not in a `.env` file:
+
+```bash
+mkdir -p $HOME/Documents/synergyAI/mcps-docker
+MCPS_STORE=$HOME/Documents/synergyAI/mcps-docker docker compose up -d
+```
+
+Do not point it at the dev app's own `<SynergyAI>/mcps/` folder: its servers
+have macOS virtual environments, and the container refuses existing folders.
+
+Back up the volume with:
+
+```bash
+docker run --rm -v gpt_gpt-mcps:/m -v "$PWD":/b alpine tar czf /b/mcps-backup.tgz -C /m .
+```
+
+The `gpt_` prefix is the compose project name (the checkout folder's name, `gpt`
+by default); check with `docker volume ls`.
 
 Skills you create or import in the Docker app are kept in the `gpt-skills`
 volume (public or private, per person), so they survive a rebuild and need no
