@@ -1259,7 +1259,7 @@ class WorkflowEditor {
                 </button>
             </div>
             <div class="workflow-btn-group">
-                <button id="workflow-import-btn" class="workflow-io-btn" title="Import a workflow from a JSON file">
+                <button id="workflow-import-btn" class="workflow-io-btn" title="Import a workflow package (.zip) from a file or a GitHub link, or a workflow JSON file">
                     📥 Import
                 </button>
                 <button id="workflow-export-btn" class="workflow-io-btn" title="${this.escapeHtml(this.t('workflow.package.exportTitle'))}">
