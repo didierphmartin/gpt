@@ -185,9 +185,6 @@ class ProcsTest(unittest.TestCase):
         self.assertIn("boom", err.getvalue())
         self.assertEqual(self.m.state("ok_server"), "running")
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class StartCommandTest(unittest.TestCase):
     R = Path("/r.php")
@@ -216,3 +213,7 @@ class StartCommandTest(unittest.TestCase):
             env = Manager(root, reg)._env("p", {"runtime": "php", "entry": "mcp.php"})
             self.assertEqual(env["PHP_CLI_SERVER_WORKERS"], "4")
             self.assertEqual(env["MCP_ENTRY"], "mcp.php")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -21,6 +21,11 @@ class PhpRouterTest(unittest.TestCase):
         (d / ".env").write_text("SECRET=1")
         (d / ".htaccess").write_text("x")
         (d / "app.html").write_text("<p>hi</p>")
+        (d / "datasheet.html").write_text("d")
+        (d / "server.log").write_text("log")
+        (d / "server.log.1").write_text("log")
+        (d / "data").mkdir()
+        (d / "data/x.sqlite").write_text("x")
         (d / "sub/.git").mkdir(parents=True)
         (d / "sub/.git/x").write_text("x")
         with socket.socket() as s:
@@ -52,8 +57,9 @@ class PhpRouterTest(unittest.TestCase):
     def test_served(self):
         self.assertEqual(self.get("/mcp.php"), (200, "ok"))
         self.assertEqual(self.get("/app.html")[0], 200)
+        self.assertEqual(self.get("/datasheet.html")[0], 200)
 
     def test_refused(self):
-        for p in ("/.env", "/.htaccess", "/sub/.git/x", "/x/../.env", "/%2e%65nv", "/"):
+        for p in ("/.env", "/.htaccess", "/sub/.git/x", "/x/../.env", "/server.log", "/server.log.1", "/data/x.sqlite", "/sub/server.log", "/%2e%65nv", "/"):
             with self.subTest(p=p):
                 self.assertEqual(self.get(p)[0], 404)

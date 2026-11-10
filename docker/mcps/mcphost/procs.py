@@ -1,6 +1,7 @@
 """Runs each hosted server as a child process: env assembly, log capture, back-off restarts."""
 import json
 import os
+import shlex
 import signal
 import subprocess
 import threading
@@ -27,7 +28,7 @@ def start_command(manifest: dict, port: int, router: Path) -> str:
     if manifest.get("runtime") == "php":
         if not manifest.get("entry") or not isinstance(manifest["entry"], str):
             raise ValueError("a php server needs an entry file")
-        return f"exec php -S {HOST}:{port} {router}"
+        return f"exec php -S {HOST}:{port} {shlex.quote(str(router))}"
     start = manifest.get("start")
     if not start or not isinstance(start, str):
         raise ValueError("the server's manifest has no start command")
