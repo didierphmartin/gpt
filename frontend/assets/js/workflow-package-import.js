@@ -32,45 +32,17 @@
     const rowValues = (values, name) => own(values, name) || (values[name] = Object.create(null));
 
     const i18n = (key) => (window.i18n && window.i18n.t ? window.i18n.t(`workflow.package.${key}`) : key);
-    const POLL_MS = 3000, POLL_MAX_MS = 15 * 60 * 1000;
-    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     const toBase64 = (bytes) => {
         let bin = '';
         for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
         return btoa(bin);
     };
 
-    /** Send one server to the Docker app's server host. A long install can outlive the proxy: then watch the list.
-     *  "running" at the install reply only means the process was launched, so its state is read once more a moment
-     *  later: a server that stops on start then shows as such, with its log. */
-    async function installOnHost(folder, { name, files, env }) {
-        const mc = window.mcpClient;
-        const encoded = {};
-        for (const rel of Object.keys(files)) encoded[rel] = toBase64(files[rel]);
-        try {
-            const r = await mc.hostInstall(folder, { name, files: encoded, env });
-            await wait(POLL_MS);
-            try {
-                const row = (await mc.hostServers()).find((x) => x.folder === folder);
-                if (row) return { ...r, state: row.state, log: row.log };
-            } catch (_) { /* the install reply stands */ }
-            return r;
-        } catch (e) {
-            if (e.status === 422) {
-                const log = (e.body && e.body.data && e.body.data.log) || (e.body && e.body.log) || [];
-                throw new Error(`${e.message}${log.length ? '\n' + log.slice(0, 20).join('\n') : ''}`);
-            }
-            if (e.status !== undefined && e.status !== 502 && e.status !== 504) throw e;
-        }
-        for (const start = Date.now(); Date.now() - start < POLL_MAX_MS;) {
-            await wait(POLL_MS);
-            let list;
-            try { list = await mc.hostServers(); } catch (_) { continue; }
-            const row = list.find((x) => x.folder === folder);
-            if (!row) throw new Error(i18n('hostInstallUnfinished'));
-            if (row.state !== 'installing') return { state: row.state, log: row.log };
-        }
-        throw new Error(i18n('hostInstallTooLong'));
+    /** The shared host install, with the package's bytes encoded. */
+    function installOnHost(folder, { name, files, env }) {
+        const filesB64 = {};
+        for (const rel of Object.keys(files)) filesB64[rel] = toBase64(files[rel]);
+        return window.McpHostInstall.installOnHost(folder, { name, filesB64, env });
     }
 
     /** The io installPackage writes through: the user's folder, the server list, playbooks, components. */

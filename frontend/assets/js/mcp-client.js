@@ -96,6 +96,7 @@ class MCPClient {
     }
     async hostServers() { return (await this.request('/mcp/host/servers')).data || []; }
     hostInstall(folder, body) { return this._host(folder, 'install', { method: 'POST', body: JSON.stringify(body) }); }
+    async hostFetch(url) { return (await this.request('/mcp/host/fetch', { method: 'POST', body: JSON.stringify({ url }) })).data; }
     hostRestart(folder) { return this._host(folder, 'restart', { method: 'POST' }); }
     hostSetEnabled(folder, enabled) { return this._host(folder, 'enabled', { method: 'POST', body: JSON.stringify({ enabled: !!enabled }) }); }
     hostSettings(folder) { return this._host(folder, 'settings'); }
