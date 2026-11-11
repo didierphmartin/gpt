@@ -245,6 +245,9 @@
         .markdown-content h1 { font-size: 1.5rem; font-weight: bold; margin: 1rem 0 0.5rem; color: #1e40af; }
         .markdown-content h2 { font-size: 1.25rem; font-weight: 600; margin: 0.75rem 0 0.5rem; color: #1e3a8a; }
         .markdown-content h3 { font-size: 1.1rem; font-weight: 600; margin: 0.5rem 0 0.25rem; }
+        /* A compiled README (code view, Info): a blank line's worth of space above each section title. */
+        .readme-doc.markdown-content :is(h1, h2, h3, h4) { margin-top: 1.5em; }
+        .readme-doc.markdown-content > :first-child { margin-top: 0; }
         .markdown-content p { margin: 0.5rem 0; line-height: 1.6; }
         .markdown-content ul { list-style-type: disc; margin-left: 1.5rem; margin: 0.5rem 0; }
         .markdown-content ol { list-style-type: decimal; margin-left: 1.5rem; margin: 0.5rem 0; }
@@ -4465,7 +4468,7 @@
     <script src="assets/js/mcp-server-settings.js?v=20261110-list"></script>
     <script src="assets/js/mcp-import.js?v=20261110-mcpimport4"></script>
     <script src="assets/js/skill-visibility-card.js?v=20261103-skilldeps3"></script>
-    <script src="assets/js/workflow-editor.js?v=20261111-readme-about"></script>
+    <script src="assets/js/workflow-editor.js?v=20261111-readme-spacing"></script>
     <script src="assets/js/agents-library.js?v=20260903-playbook-agent"></script>
     <script src="assets/js/mcp-tool-tester.js?v=20261105-functions"></script>
     <script src="assets/js/mcp-protocol-validator.js?v=20261105-mcptest"></script>

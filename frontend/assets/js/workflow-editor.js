@@ -6228,7 +6228,7 @@ class WorkflowEditor {
             const readme = files.find((f) => f.path === 'README.md');
             if (!readme) { el.remove(); return; }
             el.innerHTML = `<h4 class="text-base font-semibold text-gray-900 mb-2">${t('readmeTitle')}</h4>
-                <div class="markdown-content text-sm border-t border-gray-200 pt-3"></div>`;
+                <div class="readme-doc markdown-content text-sm border-t border-gray-200 pt-3"></div>`;
             // Workflow and node names are user text: rendered Markdown only through DOMPurify (_pbRenderBody).
             el.querySelector('.markdown-content').innerHTML = this._pbRenderBody(this._manifestFileText(readme));
         } catch (e) {
@@ -6302,7 +6302,7 @@ class WorkflowEditor {
                 </div>`
                 : (savedPath ? `<div class="text-xs text-gray-500 mb-2">Saved to <code class="text-gray-700">${this.escapeHtml(savedPath)}</code></div>` : '')}
                 <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 overflow-auto flex-1 select-all"></pre>
-                <div class="code-md markdown-content text-sm border border-gray-200 rounded p-4 overflow-auto flex-1" style="display:none"></div>
+                <div class="code-md readme-doc markdown-content text-sm border border-gray-200 rounded p-4 overflow-auto flex-1" style="display:none"></div>
                 <div class="flex justify-end gap-2 mt-3">
                     ${this._codeModalActionsHtml()}
                     <button class="code-close-btn px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${this.escapeHtml(this.t('common.close') || 'Close')}</button>
