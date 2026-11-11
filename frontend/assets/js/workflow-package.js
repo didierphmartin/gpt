@@ -794,11 +794,10 @@
                 const v = rowValues(r);
                 const man = parse(`${dest}/synergyai-mcp.json`);
                 const ex = pick(files, `${dest}/.env.example`);
+                // what the form holds is saved; "fill in later" only lets missing ones wait
                 const env = Object.create(null);
-                if (!pick(v, 'fillLater')) {
-                    for (const f of envFields(man, ex ? dec(ex) : '')) { const x = pick(v, f.name); env[f.name] = x !== undefined && x !== null ? x : f.default; }
-                    for (const k of Object.keys(env)) if (env[k] === '') delete env[k];   // blank: the server's own default applies
-                }
+                for (const f of envFields(man, ex ? dec(ex) : '')) { const x = pick(v, f.name); env[f.name] = x !== undefined && x !== null ? x : f.default; }
+                for (const k of Object.keys(env)) if (env[k] === '') delete env[k];   // blank: the server's own default applies
                 const sent = Object.create(null);
                 for (const p of paths) sent[p.slice(dest.length + 1)] = files[p];
                 const srv = serverOf(r);
@@ -814,10 +813,11 @@
             const ex = pick(files, `${dest}/.env.example`);
             const man = parse(`${dest}/synergyai-mcp.json`);
             const fields = envFields(man, ex ? dec(ex) : '');
-            if (!pick(v, 'fillLater') && fields.length) {
-                const env = Object.create(null);
-                for (const f of fields) { const x = pick(v, f.name); env[f.name] = x !== undefined && x !== null ? x : f.default; }
-                for (const k of Object.keys(env)) if (env[k] === '') delete env[k];   // blank: the server's own default applies
+            // what the form holds is saved; "fill in later" only lets missing ones wait
+            const env = Object.create(null);
+            for (const f of fields) { const x = pick(v, f.name); env[f.name] = x !== undefined && x !== null ? x : f.default; }
+            for (const k of Object.keys(env)) if (env[k] === '') delete env[k];   // blank: the server's own default applies
+            if (fields.length) {
                 await step(`write settings for ${r.name}`, () => writeFile(`${dest}/.env`, 'mcps', new TextEncoder().encode(renderEnv(env)), true));
             }
             map[r.name] = folder;
