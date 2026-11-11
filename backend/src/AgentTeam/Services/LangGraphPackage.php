@@ -657,6 +657,37 @@ final class LangGraphPackage
         return $o;
     }
 
+    /**
+     * PackageDocs::head's $about: the workflow's Description, its steps (the names, models, tools and MCP servers
+     * the compile resolved) and the MCP server settings the editor sent.
+     */
+    private static function about(array $facts): array
+    {
+        $nodes = [];
+        foreach ($facts['agentData'] ?? [] as $nid => $ad) {
+            $nodes[$nid] = ['name' => $ad['display'], 'provider' => $ad['provider'], 'model' => $ad['model'],
+                'tools' => $ad['tool_names'] ?? [], 'skills' => $ad['skills'] ?? []];
+        }
+        foreach ($facts['playbookData'] ?? [] as $nid => $pd) {
+            $nodes[$nid] = ['name' => $pd['display'], 'provider' => $pd['provider'], 'model' => $pd['model'], 'tools' => [], 'skills' => []];
+        }
+        foreach ($facts['codeData'] ?? [] as $nid => $cd) {
+            $nodes[$nid] = ['name' => $cd['display'], 'provider' => '', 'model' => '',
+                'tools' => array_map(fn($slg) => "{$slg}.*", $cd['mcp_servers'] ?? []), 'skills' => []];
+        }
+        $extra = [];
+        foreach ($facts['dispatchTargets'] ?? [] as $nid => $targets) {
+            $extra[$nid]['dispatch'] = array_column($targets, 'name');
+        }
+        $wf = $facts['workflow'] ?? null;
+        return [
+            'description' => is_object($wf) && method_exists($wf, 'getDescription') ? (string) $wf->getDescription() : '',
+            'steps' => WorkflowGraphAnalyzer::docNodes((array) ($facts['byId'] ?? []), (array) ($facts['order'] ?? []),
+                (array) ($facts['edges'] ?? []), $nodes, $extra),
+            'servers' => (array) ($facts['serverSettings'] ?? []),
+        ];
+    }
+
     /** README.md: what the folder is, install, configure, the run modes, files written, run server, service, code nodes. */
     private static function readme(array $facts, string $layout, string $folder, string $entry): string
     {
@@ -678,7 +709,7 @@ final class LangGraphPackage
         if ($layout !== 'modular') {
             array_push($intro, ...PackageDocs::editorSkillsNote($skills));
         }
-        $L = PackageDocs::head($name, $intro, $folder, self::envVariables($facts));
+        $L = PackageDocs::head($name, $intro, $folder, self::envVariables($facts), self::about($facts));
         $L[] = '## Run';
         $L[] = '';
         $L[] = 'Run these from the folder, with the environment active.';

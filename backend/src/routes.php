@@ -393,9 +393,13 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->post('/api/v1/workflows', ['AgentTeam:WorkflowController', 'create']);
         $r->get('/api/v1/workflows/{id:\d+}', ['AgentTeam:WorkflowController', 'show']);
         $r->get('/api/v1/workflows/{id:\d+}/generate-python', ['AgentTeam:WorkflowController', 'generatePython']);
+        $r->post('/api/v1/workflows/{id:\d+}/generate-python', ['AgentTeam:WorkflowController', 'generatePython']);   // + server_settings for the README
         $r->get('/api/v1/workflows/{id:\d+}/generate-adk', ['AgentTeam:WorkflowController', 'generateAdk']);
+        $r->post('/api/v1/workflows/{id:\d+}/generate-adk', ['AgentTeam:WorkflowController', 'generateAdk']);   // + server_settings for the README
         $r->get('/api/v1/workflows/{id:\d+}/generate-maf', ['AgentTeam:WorkflowController', 'generateMaf']);
+        $r->post('/api/v1/workflows/{id:\d+}/generate-maf', ['AgentTeam:WorkflowController', 'generateMaf']);   // + server_settings for the README
         $r->get('/api/v1/workflows/{id:\d+}/generate-nooa', ['AgentTeam:WorkflowController', 'generateNooa']);
+        $r->post('/api/v1/workflows/{id:\d+}/generate-nooa', ['AgentTeam:WorkflowController', 'generateNooa']);   // + server_settings for the README
         // Standalone config-driven ingestion compiler (separate from agent code) —
         // chunks/scripts are compiled from the node configs the frontend sends.
         $r->post('/api/v1/workflows/{id:\d+}/ingestion/node-code', ['AgentTeam:IngestionController', 'nodeCode']);

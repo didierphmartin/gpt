@@ -21,6 +21,8 @@ use PDO;
  */
 class ADKGenerator
 {
+    use CompiledServerSettings;   // the README's "MCP server settings"
+
     public function __construct(
         private PDO $db,
         private WorkflowRepository $workflowRepo,
@@ -71,6 +73,9 @@ class ADKGenerator
         $analyzed = $analyzer->analyze($workflowId, $userId);
         // The workflow's "MLflow tracing" setting (MlflowTracing in the emitted header).
         $analyzed['mlflowTracing'] = $wfForArch !== null && $wfForArch->isMlflowTracing();
+        // The README's first section and its MCP server settings (PackageDocs::head's $about).
+        $analyzed['workflow']['description'] = $wfForArch !== null ? $wfForArch->getDescription() : '';
+        $analyzed['serverSettings'] = $this->serverSettings;
 
         // Platform default model per provider (system_llm_settings) — an empty
         // node/agent model means "use the platform default" and must be resolved

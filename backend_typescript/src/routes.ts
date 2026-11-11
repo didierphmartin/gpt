@@ -629,7 +629,8 @@ router.post('/api/v1/workflows/:id(\\d+)/run-stream', (req: Request, res: Respon
 
 // Generate Python (protected). Raw handler — the ?download=1 response streams a Python body with
 // custom headers, which the JSON handle() wrapper can't do. JSON shape otherwise.
-router.get('/api/v1/workflows/:id(\\d+)/generate-python', async (req: Request, res: Response) => {
+// POST carries the editor's server_settings for the README (PHP renders them; this backend: parity tracker).
+const generatePythonRoute = async (req: Request, res: Response) => {
   try {
     const result = await workflows.generatePython(buildCtx(req));
     const status = (result.status_code as number) ?? 200;
@@ -646,7 +647,9 @@ router.get('/api/v1/workflows/:id(\\d+)/generate-python', async (req: Request, r
     console.error('[generate-python] unhandled', err);
     if (!res.headersSent) res.status(500).json({ success: false, error: err?.message ?? 'Internal error' });
   }
-});
+};
+router.get('/api/v1/workflows/:id(\\d+)/generate-python', generatePythonRoute);
+router.post('/api/v1/workflows/:id(\\d+)/generate-python', generatePythonRoute);
 
 // Generate Google ADK / Microsoft Agent Framework / NVIDIA NOOA Python (protected). Same raw-vs-JSON shape as
 // generate-python: ?download=1 and ?format=zip stream a raw body with their own headers.
@@ -671,8 +674,11 @@ function compiledTargetRoute(segment: string, method: 'generateAdk' | 'generateM
   };
 }
 router.get('/api/v1/workflows/:id(\\d+)/generate-adk', compiledTargetRoute('generate-adk', 'generateAdk'));
+router.post('/api/v1/workflows/:id(\\d+)/generate-adk', compiledTargetRoute('generate-adk', 'generateAdk'));
 router.get('/api/v1/workflows/:id(\\d+)/generate-maf', compiledTargetRoute('generate-maf', 'generateMaf'));
+router.post('/api/v1/workflows/:id(\\d+)/generate-maf', compiledTargetRoute('generate-maf', 'generateMaf'));
 router.get('/api/v1/workflows/:id(\\d+)/generate-nooa', compiledTargetRoute('generate-nooa', 'generateNooa'));
+router.post('/api/v1/workflows/:id(\\d+)/generate-nooa', compiledTargetRoute('generate-nooa', 'generateNooa'));
 
 // RAG ingestion (protected). compile = full standalone script; node-code = one node's (or the
 // ordered stages') Python view; save-script = persist a compiled script; store-find = retrieval

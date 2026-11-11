@@ -445,9 +445,13 @@ ROUTES = [
     # Python script generation from the workflow graph — pure compilation,
     # no LLM calls, no agent execution.
     ('GET', '/api/v1/workflows/{id:\\d+}/generate-python', ('AgentTeam:WorkflowController', 'generatePython')),
+    ('POST', '/api/v1/workflows/{id:\\d+}/generate-python', ('AgentTeam:WorkflowController', 'generatePython')),
     ('GET', '/api/v1/workflows/{id:\\d+}/generate-adk', ('AgentTeam:WorkflowController', 'generateAdk')),
+    ('POST', '/api/v1/workflows/{id:\\d+}/generate-adk', ('AgentTeam:WorkflowController', 'generateAdk')),
     ('GET', '/api/v1/workflows/{id:\\d+}/generate-maf', ('AgentTeam:WorkflowController', 'generateMaf')),
+    ('POST', '/api/v1/workflows/{id:\\d+}/generate-maf', ('AgentTeam:WorkflowController', 'generateMaf')),
     ('GET', '/api/v1/workflows/{id:\\d+}/generate-nooa', ('AgentTeam:WorkflowController', 'generateNooa')),
+    ('POST', '/api/v1/workflows/{id:\\d+}/generate-nooa', ('AgentTeam:WorkflowController', 'generateNooa')),
     ('GET', '/api/v1/workflows/{id:\\d+}/executions', ('AgentTeam:WorkflowController', 'executions')),
     ('GET', '/api/v1/workflows/{id:\\d+}/live', ('AgentTeam:WorkflowController', 'live')),
     ('GET', '/api/v1/workflows/runs/{runId:[a-f0-9]{32}}/events', ('AgentTeam:WorkflowController', 'runEvents')),

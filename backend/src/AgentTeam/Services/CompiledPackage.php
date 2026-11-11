@@ -211,7 +211,11 @@ final class CompiledPackage
         if ($layout === 'single') {
             array_push($intro, ...PackageDocs::editorSkillsNote($skills));
         }
-        $L = PackageDocs::head($name, $intro, $folder, self::envVariables($analyzed));
+        $L = PackageDocs::head($name, $intro, $folder, self::envVariables($analyzed), [
+            'description' => (string) ($analyzed['workflow']['description'] ?? ''),
+            'steps' => WorkflowGraphAnalyzer::docNodesFromAnalyzed($analyzed),
+            'servers' => (array) ($analyzed['serverSettings'] ?? []),
+        ]);
         $L[] = '## Run';
         $L[] = '';
         $L[] = 'Run these from the folder, with the environment active.';
