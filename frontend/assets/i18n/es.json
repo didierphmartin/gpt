@@ -1900,7 +1900,7 @@
       "authorizationHelp": "Por ejemplo: Bearer <su clave>. Se guarda solo en el registro del servidor.",
       "settingsTitle": "Ajustes privados",
       "required": "Obligatorio",
-      "fillLater": "Completar más tarde (el servidor se instala sin sus ajustes)",
+      "fillLater": "Completar más tarde: el servidor se instala con los ajustes ya completados",
       "secretHint": "Secreto: no viene en el paquete, introduzca el suyo",
       "show": "Mostrar",
       "hide": "Ocultar",

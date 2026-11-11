@@ -458,7 +458,7 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
             ['component', 'Make PDF', 'components/Make_PDF.json']]);
         assert.strictEqual(JSON.parse(ientries['workflow.json'] && new TextDecoder().decode(ientries['workflow.json'])).definition.nodes[4].config.connection.api_key, undefined);
 
-        // skip rows write nothing; use-existing server id flows into the relink; fillLater writes no settings file
+        // skip rows write nothing; use-existing server id flows into the relink; fillLater writes what is filled
         const have2 = { servers: [{ id: 31, name: 'Hosted', url: 'https://x.example/mcp' }, { id: 40, name: 'Outlook', url: 'http://other' }],
             playbooks: [], skills: [], components: [] };
         irows = await WP.reviewRows(ipkg, have2);
@@ -485,10 +485,14 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
         io = memIo();
         res = await WP.installPackage(irows, ipkg, { Outlook: { fillLater: true } }, io, ihave);
         assert.ok(io.fs['mcps/outlook_mcp/server.py'] !== undefined);
-        assert.strictEqual(io.fs['mcps/outlook_mcp/.env'], undefined);
+        assert.strictEqual(io.fs['mcps/outlook_mcp/.env'], 'PORT=8765\n');   // nothing typed: only the defaults
         assert.deepStrictEqual(io.calls.find((c) => c[0] === 'addServer')[1].headers, {});
         assert.strictEqual(io.calls.find((c) => c[0] === 'addServer')[1].url, 'http://localhost:8765/mcp');
         assert.deepStrictEqual(JSON.parse(io.fs['mcps/servers.json']), { Outlook: 'outlook_mcp' });
+        // fill in later still saves what the form holds (e.g. the plain values a package brought)
+        io = memIo();
+        await WP.installPackage(irows, ipkg, { Outlook: { fillLater: true, TENANT_ID: 't-from-package' } }, io, ihave);
+        assert.match(String(io.fs['mcps/outlook_mcp/.env']), /TENANT_ID=t-from-package/);
 
         // a failing registration stops the install, naming the step, with what was installed so far
         io = memIo({ failServer: 'Outlook' });
@@ -604,10 +608,10 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
                 assert.ok(!uio.calls.some((c) => c[0] === 'installServer'));
                 assert.deepStrictEqual(ures.commands, []);
             }
-            // fill later: no env
+            // fill later: what is filled (here only the defaults, and a value the package brought) still goes
             const lio = memIo();
-            await WP.installPackage(hrows, ipkg, { Outlook: { fillLater: true } }, lio, hhave);
-            assert.deepStrictEqual({ ...lio.calls.find((c) => c[0] === 'installServer')[2].env }, {});
+            await WP.installPackage(hrows, ipkg, { Outlook: { fillLater: true, TENANT_ID: 't1' } }, lio, hhave);
+            assert.deepStrictEqual({ ...lio.calls.find((c) => c[0] === 'installServer')[2].env }, { TENANT_ID: 't1', PORT: '8765' });
             // a folder already in the volume is a clash
             const crow = (await WP.reviewRows(ipkg, { ...hhave, hostFolders: ['outlook_mcp'] })).find((r) => r.name === 'Outlook');
             assert.strictEqual(crow.status, 'clash');

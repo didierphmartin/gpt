@@ -1900,7 +1900,7 @@
       "authorizationHelp": "Par exemple : Bearer <votre clé>. Enregistrée uniquement avec l'inscription du serveur.",
       "settingsTitle": "Paramètres privés",
       "required": "Obligatoire",
-      "fillLater": "Remplir plus tard (le serveur est installé sans ses paramètres)",
+      "fillLater": "Remplir plus tard : le serveur est installé avec les paramètres déjà remplis",
       "secretHint": "Secret : absent du paquet, saisissez le vôtre",
       "show": "Afficher",
       "hide": "Masquer",

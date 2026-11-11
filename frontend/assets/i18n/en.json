@@ -1900,7 +1900,7 @@
       "authorizationHelp": "For example: Bearer <your key>. Stored with the server registration only.",
       "settingsTitle": "Private settings",
       "required": "Required",
-      "fillLater": "Fill in later (the server is installed without its settings)",
+      "fillLater": "Fill in later: the server is installed with the settings filled in so far",
       "secretHint": "Secret: not in the package, enter your own",
       "show": "Show",
       "hide": "Hide",
