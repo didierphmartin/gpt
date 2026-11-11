@@ -163,10 +163,10 @@
     }
 
     function fieldRow(label, required, control, help, requiredTitle) {
-        return `<label style="display: flex; flex-direction: column; gap: 3px; font-size: 13px;">
+        return `<label style="display: flex; flex-direction: column; gap: 3px; font-size: 14px;">
             <span>${label}${required ? ` <span style="color: #dc2626;" title="${requiredTitle || ''}">*</span>` : ''}</span>
             <span style="display: flex; gap: 6px;">${control}</span>
-            ${help ? `<span style="color: #64748b; font-size: 12px;">${help}</span>` : ''}</label>`;
+            ${help ? `<span style="color: #64748b; font-size: 13px;">${help}</span>` : ''}</label>`;
     }
 
     /** The private settings fields (masked secrets, required marks); t returns escaped workflow.package.* text. */
@@ -250,9 +250,11 @@
             if (live && r.envFields) {
                 const form = settingsFieldsHtml(t, r.envFields, v);
                 parts.push(`<div style="border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 8px;">
-                    <strong style="font-size: 13px;">${t('settingsTitle')}</strong>${form}
-                    <div data-still-needed style="font-size: 12px; color: #b45309;"></div>
-                    <label style="font-size: 13px;"><input type="checkbox" data-fill-later ${v.fillLater ? 'checked' : ''}> ${t('fillLater')}</label></div>`);
+                    <strong style="font-size: 15px;">${t('settingsTitle')}</strong>
+                    <label style="display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; padding: 8px 10px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; cursor: pointer;">
+                        <input type="checkbox" data-fill-later ${v.fillLater ? 'checked' : ''} style="width: 18px; height: 18px;"> ${t('fillLater')}</label>
+                    <div data-still-needed style="font-size: 15px; font-weight: 600; color: #b45309;"></div>
+                    ${form}</div>`);
             }
         }
         if (r.kind === 'secrets') {
@@ -336,7 +338,7 @@
                         <div data-import-rows style="display: flex; flex-direction: column; gap: 10px;"></div>
                         <div data-import-error style="display: none; border: 1px solid #dc2626; background: #fef2f2; border-radius: 8px; padding: 10px 12px; font-size: 13px;"></div>
                         <div data-import-actions style="display: flex; gap: 8px; justify-content: flex-end; align-items: center;">
-                            <span data-import-status style="color: #64748b; font-size: 13px; margin-right: auto;"></span>
+                            <span data-import-status style="color: #b45309; font-size: 15px; font-weight: 600; margin-right: auto;"></span>
                             <button data-import-close style="${BTN_PLAIN}">${esc(t('cancel'))}</button>
                             <button data-import-confirm style="${BTN} background: #16a34a; color: #fff; border: 1px solid #15803d;">${esc(t('confirm'))}</button>
                         </div>
