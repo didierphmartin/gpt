@@ -25,6 +25,8 @@ use RuntimeException;
  */
 class LangGraphGenerator
 {
+    use CompiledServerSettings;   // the README's "MCP server settings"
+
     private PDO $db;
     private WorkflowRepository $workflowRepo;
     private WorkflowGraphRepository $graphRepo;
@@ -1363,6 +1365,7 @@ class LangGraphGenerator
         // caller agrees without having to remember to pass it.
         $orchestration = $workflow->getOrchestration();
         $mlflowTracing = $workflow->isMlflowTracing();   // the workflow's "MLflow tracing" setting
+        $serverSettings = $this->serverSettings;   // the README's "MCP server settings" (PackageDocs)
         // The Start option, if any: the hidden code node StartOptionGraph::expand added (spec 2026-10-15 §2).
         $triggerNodeId = null;
         $startTrigger = null;
@@ -1390,7 +1393,7 @@ class LangGraphGenerator
         return compact('workflow', 'workflowId', 'userId', 'wfName', 'safeName', 'gdata', 'byId', 'order', 'edges',
             'startPrompt', 'startDocuments', 'providerDefaults', 'serverRegistry', 'toolCatalog', 'availableById',
             'dispatchTargets', 'routedBy', 'agentData', 'playbookData', 'publishedPlaybooks', 'publishedSkipped', 'codeData', 'codeSlugs', 'serverSlugs', 'usedCatalog', 'usedServers', 'missing', 'edgeList',
-            'orchestration', 'mlflowTracing', 'defaultCron', 'defaultWatch', 'startMode', 'triggerNodeId', 'workExit', 'startOptionLabel');
+            'orchestration', 'mlflowTracing', 'serverSettings', 'defaultCron', 'defaultWatch', 'startMode', 'triggerNodeId', 'workExit', 'startOptionLabel');
     }
 
     /** The workflow's active cron schedule (newest scheduled_workflows row), baked as DEFAULT_CRON for --cron. */

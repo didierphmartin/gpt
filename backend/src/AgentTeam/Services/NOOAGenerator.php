@@ -25,6 +25,8 @@ use PDO;
  */
 class NOOAGenerator
 {
+    use CompiledServerSettings;   // the README's "MCP server settings"
+
     /** The package's framework requirements (CompiledPackage adds the MCP client, .env and the run server). */
     public const FRAMEWORK = ['nooa[mcp]', 'mcp'];
 
@@ -76,6 +78,9 @@ class NOOAGenerator
         $analyzed = $analyzer->analyze($workflowId, $userId);
         // The workflow's "MLflow tracing" setting (MlflowTracing in the emitted header).
         $analyzed['mlflowTracing'] = $wfForArch !== null && $wfForArch->isMlflowTracing();
+        // The README's first section and its MCP server settings (PackageDocs::head's $about).
+        $analyzed['workflow']['description'] = $wfForArch !== null ? $wfForArch->getDescription() : '';
+        $analyzed['serverSettings'] = $this->serverSettings;
 
         // Platform default model per provider (system_llm_settings) — the
         // analyzer resolves blank models but does NOT alias 'anthropic'->'claude'

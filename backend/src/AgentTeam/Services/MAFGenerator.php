@@ -13,6 +13,8 @@ use PDO;
  */
 class MAFGenerator
 {
+    use CompiledServerSettings;   // the README's "MCP server settings"
+
     /** The package's framework requirements (CompiledPackage adds the MCP client, .env and the run server). */
     public const FRAMEWORK = ['agent-framework'];
 
@@ -64,6 +66,9 @@ class MAFGenerator
         $analyzed = $analyzer->analyze($workflowId, $userId);
         // The workflow's "MLflow tracing" setting (MlflowTracing in the emitted header).
         $analyzed['mlflowTracing'] = $wfForArch !== null && $wfForArch->isMlflowTracing();
+        // The README's first section and its MCP server settings (PackageDocs::head's $about).
+        $analyzed['workflow']['description'] = $wfForArch !== null ? $wfForArch->getDescription() : '';
+        $analyzed['serverSettings'] = $this->serverSettings;
 
         // Platform default model per provider (system_llm_settings) — a node
         // whose form leaves the model empty means "use the platform default",

@@ -3983,10 +3983,7 @@ class WorkflowEditor {
             } else {
                 // The JSON generation: {filename, code} plus, from a backend that
                 // writes one, the ARCHITECTURE.md text under `architecture`.
-                const resp = await fetch(
-                    `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python`,
-                    { headers: this.getAuthHeaders() }
-                );
+                const resp = await this._compileFetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python`);
                 if (!resp.ok) {
                     const err = await resp.text();
                     throw new Error(err || `HTTP ${resp.status}`);
@@ -4021,7 +4018,10 @@ class WorkflowEditor {
 
                 const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
                 console.log(`[WorkflowEditor] Saved generated Python to ${rootName}/python/scripts/${filename}`);
-                generated = { path: `${rootName}/python/scripts/${filename}`, code: text };
+                // The code view lists the README.md (and the rest) the script ships with beside it.
+                const script = { path: filename, code: text };
+                generated = { path: `${rootName}/python/scripts/${filename}`,
+                    code: this._outputConnectedToIngestion() ? text : [script, ...(data?.package_files || [])] };
             }
         } catch (e) {
             console.error('[WorkflowEditor] generate-python failed:', e);
@@ -4143,19 +4143,9 @@ class WorkflowEditor {
             this.t('workflow.output.generatingAdk') || 'Generating Google ADK script…'
         );
         try {
-            const resp = await fetch(
-                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-adk?download=1`,
-                { headers: this.getAuthHeaders() }
-            );
-            if (!resp.ok) {
-                const err = await resp.text();
-                throw new Error(err || `HTTP ${resp.status}`);
-            }
-            let filename = 'workflow_adk.py';
-            const dispo = resp.headers.get('Content-Disposition') || '';
-            const m = dispo.match(/filename="([^"]+)"/);
-            if (m) filename = m[1];
-            const text = await resp.text();
+            // The JSON generation: the script, then the README.md (and the rest) it ships with.
+            const files = await this._singleFiles('adk');
+            const { path: filename, code: text } = files[0];
 
             // Write into python/scripts/ so the runner can find and execute it.
             const scriptsDir = await window.localFs.resolvePath('python/scripts', { create: true });
@@ -4172,7 +4162,7 @@ class WorkflowEditor {
 
             const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
             console.log(`[WorkflowEditor] Saved generated ADK Python to ${rootName}/python/scripts/${filename}`);
-            generated = { path: `${rootName}/python/scripts/${filename}`, code: text };
+            generated = { path: `${rootName}/python/scripts/${filename}`, code: files };
         } catch (e) {
             console.error('[WorkflowEditor] generate-adk failed:', e);
             alert((this.t('workflow.output.generateFailed') || 'Generate failed') + ': ' + (e.message || e));
@@ -4181,7 +4171,7 @@ class WorkflowEditor {
             overlay.close();
         }
         // Show the code right away so the user sees what was produced and where it went.
-        if (generated) this._showAdkCodeModal(generated.path, generated.code);
+        if (generated) this._showLangGraphCodeModal(generated.path, generated.code, '', 'adk');
     }
 
     /**
@@ -4557,7 +4547,7 @@ class WorkflowEditor {
         menu.querySelector('[data-action="adk-display-code"]')?.addEventListener('click', () => {
             menu.remove();
             this._withProgress(this.t('workflow.output.generatingAdk'),
-                () => (isIngestion ? this._showAdkCodeModal() : this._displayTargetCode('adk')));
+                () => (isIngestion ? this._showLangGraphCodeModal('', null, '', 'adk') : this._displayTargetCode('adk')));
         });
         menu.querySelector('[data-action="adk-architecture"]')?.addEventListener('click', () => {
             menu.remove();
@@ -4589,7 +4579,7 @@ class WorkflowEditor {
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
         backdrop.innerHTML = `
-            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-2xl" role="dialog" aria-modal="true">
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[85vh] overflow-auto" role="dialog" aria-modal="true">
                 <h3 class="text-lg font-semibold text-gray-900 mb-2">Google ADK runtime</h3>
                 <p class="text-sm text-gray-600 mb-3">
                     Generated ADK workflows are self-contained Python programs — no separate runner server or
@@ -4610,6 +4600,7 @@ class WorkflowEditor {
                     (<code class="text-xs">POST ${this.escapeHtml(this._langgraphRunnerBase)}/api/run-file</code>)
                     used by LangGraph; the Python runtime installed by <b>Setup</b> already includes ADK.
                 </p>
+                <div class="info-readme mb-4"></div>
                 <div class="flex justify-end">
                     <button class="info-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
                 </div>
@@ -4619,81 +4610,9 @@ class WorkflowEditor {
         const close = () => backdrop.remove();
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
         backdrop.querySelector('.info-close-btn').addEventListener('click', close);
+        this._fillInfoReadme(backdrop, 'adk');   // this workflow's README.md, below the runtime facts
     }
 
-    /**
-     * Display Code modal for the Google ADK script.
-     * Fetches from generate-adk (no download param) and shows the code
-     * in the same line-numbered scrollable modal as _showLangGraphCodeModal.
-     */
-    async _showAdkCodeModal(savedPath = '', providedCode = null) {
-        if (providedCode === null) await this._persistIfDirty();  // reflect the latest node edits in the displayed code
-        if (!this.currentWorkflowId) {
-            alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
-            return;
-        }
-        let code = providedCode;
-        if (code === null) try {
-            const resp = await fetch(
-                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-adk`,
-                { headers: this.getAuthHeaders() }
-            );
-            if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
-            // Endpoint may return JSON {data:{code,filename}} or raw text.
-            const contentType = resp.headers.get('Content-Type') || '';
-            if (contentType.includes('application/json')) {
-                const j = await resp.json();
-                code = (j && j.data && j.data.code) ? j.data.code : JSON.stringify(j, null, 2);
-            } else {
-                code = await resp.text();
-            }
-        } catch (e) {
-            alert(`Could not fetch the ADK code: ${e?.message || e}`);
-            return;
-        }
-
-        const backdrop = document.createElement('div');
-        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
-        backdrop.innerHTML = `
-            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-4xl max-h-[85vh] flex flex-col" role="dialog" aria-modal="true">
-                <div class="flex items-center justify-between mb-3">
-                    <h3 class="text-lg font-semibold text-gray-900">Generated Google ADK code</h3>
-                </div>
-                ${savedPath ? `<div class="text-xs text-gray-500 mb-2">Saved to <code class="text-gray-700">${this.escapeHtml(savedPath)}</code></div>` : ''}
-                <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 overflow-auto flex-1 select-all"></pre>
-                <div class="flex justify-end gap-2 mt-3">
-                    ${this._codeModalActionsHtml()}
-                    <button class="code-close-btn px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${this.escapeHtml(this.t('common.close') || 'Close')}</button>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(backdrop);
-
-        const preEl = backdrop.querySelector('pre');
-        const codeLines = code.split('\n');
-        const gutterCh = String(codeLines.length).length + 1;
-        const lnStyle = document.createElement('style');
-        lnStyle.textContent = `
-            .adk-code-modal .code-line { display: block; }
-            .adk-code-modal .code-ln {
-                display: inline-block; width: ${gutterCh}ch; margin-right: 14px;
-                text-align: right; color: #64748b; user-select: none;
-                position: sticky; left: 0; background: #111827;
-            }
-            .adk-code-modal .code-lc { white-space: pre; }
-        `;
-        backdrop.appendChild(lnStyle);
-        preEl.classList.add('adk-code-modal', 'code-with-lines');
-        preEl.innerHTML = codeLines.map((ln, i) =>
-            `<span class="code-line"><span class="code-ln">${i + 1}</span>`
-            + `<span class="code-lc">${this.escapeHtml(ln)}</span></span>`
-        ).join('');
-
-        const close = () => backdrop.remove();
-        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
-        backdrop.querySelector('.code-close-btn').addEventListener('click', close);
-        this._wireCodeModalActions(backdrop, 'adk', close);
-    }
 
     /**
      * Generate a target's script fresh and write it into python/scripts/ so
@@ -4825,7 +4744,7 @@ class WorkflowEditor {
         menu.querySelector('[data-action="maf-display-code"]')?.addEventListener('click', () => {
             menu.remove();
             this._withProgress(this.t('workflow.output.generatingMaf'),
-                () => (isIngestion ? this._showMafCodeModal() : this._displayTargetCode('maf')));
+                () => (isIngestion ? this._showLangGraphCodeModal('', null, '', 'maf') : this._displayTargetCode('maf')));
         });
         menu.querySelector('[data-action="maf-architecture"]')?.addEventListener('click', () => {
             menu.remove();
@@ -4874,19 +4793,9 @@ class WorkflowEditor {
 
             if (!await this._ensureRunnerReady()) return;
 
-            const resp = await fetch(
-                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-maf?download=1`,
-                { headers: this.getAuthHeaders() }
-            );
-            if (!resp.ok) {
-                const err = await resp.text();
-                throw new Error(err || `HTTP ${resp.status}`);
-            }
-            let filename = 'workflow_maf.py';
-            const dispo = resp.headers.get('Content-Disposition') || '';
-            const m = dispo.match(/filename="([^"]+)"/);
-            if (m) filename = m[1];
-            const text = await resp.text();
+            // The JSON generation: the script, then the README.md (and the rest) it ships with.
+            const files = await this._singleFiles('maf');
+            const { path: filename, code: text } = files[0];
 
             // Write into python/scripts/ so the runner can find and execute it.
             const scriptsDir = await window.localFs.resolvePath('python/scripts', { create: true });
@@ -4903,7 +4812,7 @@ class WorkflowEditor {
 
             const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
             console.log(`[WorkflowEditor] Saved generated MAF Python to ${rootName}/python/scripts/${filename}`);
-            generated = { path: `${rootName}/python/scripts/${filename}`, code: text };
+            generated = { path: `${rootName}/python/scripts/${filename}`, code: files };
         } catch (e) {
             console.error('[WorkflowEditor] generate-maf failed:', e);
             alert((this.t('workflow.output.generateFailed') || 'Generate failed') + ': ' + (e.message || e));
@@ -4911,7 +4820,7 @@ class WorkflowEditor {
             overlay.close();
         }
         // Show the code right away so the user sees what was produced and where it went.
-        if (generated) this._showMafCodeModal(generated.path, generated.code);
+        if (generated) this._showLangGraphCodeModal(generated.path, generated.code, '', 'maf');
     }
 
 
@@ -4924,7 +4833,7 @@ class WorkflowEditor {
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
         backdrop.innerHTML = `
-            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-2xl" role="dialog" aria-modal="true">
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[85vh] overflow-auto" role="dialog" aria-modal="true">
                 <h3 class="text-lg font-semibold text-gray-900 mb-2">Microsoft Agent Framework runtime</h3>
                 <p class="text-sm text-gray-600 mb-3">
                     Generated MAF workflows are self-contained Python programs — no separate runner server or
@@ -4946,6 +4855,7 @@ class WorkflowEditor {
                     (<code class="text-xs">POST ${this.escapeHtml(this._langgraphRunnerBase)}/api/run-file</code>)
                     used by LangGraph; the Python runtime installed by <b>Setup</b> already includes MAF.
                 </p>
+                <div class="info-readme mb-4"></div>
                 <div class="flex justify-end">
                     <button class="info-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
                 </div>
@@ -4955,81 +4865,9 @@ class WorkflowEditor {
         const close = () => backdrop.remove();
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
         backdrop.querySelector('.info-close-btn').addEventListener('click', close);
+        this._fillInfoReadme(backdrop, 'maf');   // this workflow's README.md, below the runtime facts
     }
 
-    /**
-     * Display Code modal for the Microsoft Agent Framework script.
-     * Fetches from generate-maf (no download param) and shows the code
-     * in the same line-numbered scrollable modal as _showAdkCodeModal.
-     */
-    async _showMafCodeModal(savedPath = '', providedCode = null) {
-        if (providedCode === null) await this._persistIfDirty();  // reflect the latest node edits in the displayed code
-        if (!this.currentWorkflowId) {
-            alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
-            return;
-        }
-        let code = providedCode;
-        if (code === null) try {
-            const resp = await fetch(
-                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-maf`,
-                { headers: this.getAuthHeaders() }
-            );
-            if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
-            // Endpoint may return JSON {data:{code,filename}} or raw text.
-            const contentType = resp.headers.get('Content-Type') || '';
-            if (contentType.includes('application/json')) {
-                const j = await resp.json();
-                code = (j && j.data && j.data.code) ? j.data.code : JSON.stringify(j, null, 2);
-            } else {
-                code = await resp.text();
-            }
-        } catch (e) {
-            alert(`Could not fetch the MAF code: ${e?.message || e}`);
-            return;
-        }
-
-        const backdrop = document.createElement('div');
-        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
-        backdrop.innerHTML = `
-            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-4xl max-h-[85vh] flex flex-col" role="dialog" aria-modal="true">
-                <div class="flex items-center justify-between mb-3">
-                    <h3 class="text-lg font-semibold text-gray-900">Generated Microsoft Agent Framework code</h3>
-                </div>
-                ${savedPath ? `<div class="text-xs text-gray-500 mb-2">Saved to <code class="text-gray-700">${this.escapeHtml(savedPath)}</code></div>` : ''}
-                <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 overflow-auto flex-1 select-all"></pre>
-                <div class="flex justify-end gap-2 mt-3">
-                    ${this._codeModalActionsHtml()}
-                    <button class="code-close-btn px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${this.escapeHtml(this.t('common.close') || 'Close')}</button>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(backdrop);
-
-        const preEl = backdrop.querySelector('pre');
-        const codeLines = code.split('\n');
-        const gutterCh = String(codeLines.length).length + 1;
-        const lnStyle = document.createElement('style');
-        lnStyle.textContent = `
-            .maf-code-modal .code-line { display: block; }
-            .maf-code-modal .code-ln {
-                display: inline-block; width: ${gutterCh}ch; margin-right: 14px;
-                text-align: right; color: #64748b; user-select: none;
-                position: sticky; left: 0; background: #111827;
-            }
-            .maf-code-modal .code-lc { white-space: pre; }
-        `;
-        backdrop.appendChild(lnStyle);
-        preEl.classList.add('maf-code-modal', 'code-with-lines');
-        preEl.innerHTML = codeLines.map((ln, i) =>
-            `<span class="code-line"><span class="code-ln">${i + 1}</span>`
-            + `<span class="code-lc">${this.escapeHtml(ln)}</span></span>`
-        ).join('');
-
-        const close = () => backdrop.remove();
-        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
-        backdrop.querySelector('.code-close-btn').addEventListener('click', close);
-        this._wireCodeModalActions(backdrop, 'maf', close);
-    }
 
     /**
      * Run the MAF workflow as a compiled package — mirrors _runAdkScript:
@@ -5124,7 +4962,7 @@ class WorkflowEditor {
         menu.querySelector('[data-action="nooa-display-code"]')?.addEventListener('click', () => {
             menu.remove();
             this._withProgress(this.t('workflow.output.generatingNooa'),
-                () => (isIngestion ? this._showNooaCodeModal() : this._displayTargetCode('nooa')));
+                () => (isIngestion ? this._showLangGraphCodeModal('', null, '', 'nooa') : this._displayTargetCode('nooa')));
         });
         menu.querySelector('[data-action="nooa-architecture"]')?.addEventListener('click', () => {
             menu.remove();
@@ -5173,19 +5011,9 @@ class WorkflowEditor {
 
             if (!await this._ensureRunnerReady()) return;
 
-            const resp = await fetch(
-                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-nooa?download=1`,
-                { headers: this.getAuthHeaders() }
-            );
-            if (!resp.ok) {
-                const err = await resp.text();
-                throw new Error(err || `HTTP ${resp.status}`);
-            }
-            let filename = 'workflow_nooa.py';
-            const dispo = resp.headers.get('Content-Disposition') || '';
-            const m = dispo.match(/filename="([^"]+)"/);
-            if (m) filename = m[1];
-            const text = await resp.text();
+            // The JSON generation: the script, then the README.md (and the rest) it ships with.
+            const files = await this._singleFiles('nooa');
+            const { path: filename, code: text } = files[0];
 
             // Write into python/scripts/ so the runner can find and execute it.
             const scriptsDir = await window.localFs.resolvePath('python/scripts', { create: true });
@@ -5202,7 +5030,7 @@ class WorkflowEditor {
 
             const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
             console.log(`[WorkflowEditor] Saved generated NOOA Python to ${rootName}/python/scripts/${filename}`);
-            generated = { path: `${rootName}/python/scripts/${filename}`, code: text };
+            generated = { path: `${rootName}/python/scripts/${filename}`, code: files };
         } catch (e) {
             console.error('[WorkflowEditor] generate-nooa failed:', e);
             alert((this.t('workflow.output.generateFailed') || 'Generate failed') + ': ' + (e.message || e));
@@ -5210,7 +5038,7 @@ class WorkflowEditor {
             overlay.close();
         }
         // Show the code right away so the user sees what was produced and where it went.
-        if (generated) this._showNooaCodeModal(generated.path, generated.code);
+        if (generated) this._showLangGraphCodeModal(generated.path, generated.code, '', 'nooa');
     }
 
     /**
@@ -5257,7 +5085,7 @@ class WorkflowEditor {
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
         backdrop.innerHTML = `
-            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-2xl" role="dialog" aria-modal="true">
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[85vh] overflow-auto" role="dialog" aria-modal="true">
                 <h3 class="text-lg font-semibold text-gray-900 mb-2">NVIDIA OO Agents runtime</h3>
                 <p class="text-sm text-gray-600 mb-3">
                     Generated NOOA workflows are self-contained Python programs built on
@@ -5282,6 +5110,7 @@ class WorkflowEditor {
                     (<code class="text-xs">POST ${this.escapeHtml(this._langgraphRunnerBase)}/api/run-file</code>)
                     used by LangGraph. That runtime does not include NOOA: install it there once with the command of this menu's <b>Setup</b>.
                 </p>
+                <div class="info-readme mb-4"></div>
                 <div class="flex justify-end">
                     <button class="info-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
                 </div>
@@ -5291,81 +5120,9 @@ class WorkflowEditor {
         const close = () => backdrop.remove();
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
         backdrop.querySelector('.info-close-btn').addEventListener('click', close);
+        this._fillInfoReadme(backdrop, 'nooa');   // this workflow's README.md, below the runtime facts
     }
 
-    /**
-     * Display Code modal for the NVIDIA OO Agents script.
-     * Fetches from generate-nooa (no download param) and shows the code
-     * in the same line-numbered scrollable modal as _showMafCodeModal.
-     */
-    async _showNooaCodeModal(savedPath = '', providedCode = null) {
-        if (providedCode === null) await this._persistIfDirty();  // reflect the latest node edits in the displayed code
-        if (!this.currentWorkflowId) {
-            alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
-            return;
-        }
-        let code = providedCode;
-        if (code === null) try {
-            const resp = await fetch(
-                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-nooa`,
-                { headers: this.getAuthHeaders() }
-            );
-            if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
-            // Endpoint may return JSON {data:{code,filename}} or raw text.
-            const contentType = resp.headers.get('Content-Type') || '';
-            if (contentType.includes('application/json')) {
-                const j = await resp.json();
-                code = (j && j.data && j.data.code) ? j.data.code : JSON.stringify(j, null, 2);
-            } else {
-                code = await resp.text();
-            }
-        } catch (e) {
-            alert(`Could not fetch the NOOA code: ${e?.message || e}`);
-            return;
-        }
-
-        const backdrop = document.createElement('div');
-        backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
-        backdrop.innerHTML = `
-            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-4xl max-h-[85vh] flex flex-col" role="dialog" aria-modal="true">
-                <div class="flex items-center justify-between mb-3">
-                    <h3 class="text-lg font-semibold text-gray-900">Generated NVIDIA OO Agents code</h3>
-                </div>
-                ${savedPath ? `<div class="text-xs text-gray-500 mb-2">Saved to <code class="text-gray-700">${this.escapeHtml(savedPath)}</code></div>` : ''}
-                <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 overflow-auto flex-1 select-all"></pre>
-                <div class="flex justify-end gap-2 mt-3">
-                    ${this._codeModalActionsHtml()}
-                    <button class="code-close-btn px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${this.escapeHtml(this.t('common.close') || 'Close')}</button>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(backdrop);
-
-        const preEl = backdrop.querySelector('pre');
-        const codeLines = code.split('\n');
-        const gutterCh = String(codeLines.length).length + 1;
-        const lnStyle = document.createElement('style');
-        lnStyle.textContent = `
-            .nooa-code-modal .code-line { display: block; }
-            .nooa-code-modal .code-ln {
-                display: inline-block; width: ${gutterCh}ch; margin-right: 14px;
-                text-align: right; color: #64748b; user-select: none;
-                position: sticky; left: 0; background: #111827;
-            }
-            .nooa-code-modal .code-lc { white-space: pre; }
-        `;
-        backdrop.appendChild(lnStyle);
-        preEl.classList.add('nooa-code-modal', 'code-with-lines');
-        preEl.innerHTML = codeLines.map((ln, i) =>
-            `<span class="code-line"><span class="code-ln">${i + 1}</span>`
-            + `<span class="code-lc">${this.escapeHtml(ln)}</span></span>`
-        ).join('');
-
-        const close = () => backdrop.remove();
-        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
-        backdrop.querySelector('.code-close-btn').addEventListener('click', close);
-        this._wireCodeModalActions(backdrop, 'nooa', close);
-    }
 
     /**
      * Run the NOOA workflow as a compiled package — mirrors _runMafScript:
@@ -5422,7 +5179,7 @@ class WorkflowEditor {
         const backdrop = document.createElement('div');
         backdrop.className = 'fixed inset-0 z-[1000] bg-black/50 flex items-center justify-center p-4';
         backdrop.innerHTML = `
-            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-2xl" role="dialog" aria-modal="true">
+            <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[85vh] overflow-auto" role="dialog" aria-modal="true">
                 <h3 class="text-lg font-semibold text-gray-900 mb-2">LangGraph runtime</h3>
                 <p class="text-sm text-gray-600 mb-3">
                     Generated workflows are LangGraph Python scripts. They run on a small FastAPI runner installed
@@ -5451,6 +5208,7 @@ class WorkflowEditor {
                     is the one that runs every workflow. Only the venv has LangGraph and the per-provider <code class="text-xs">langchain-*</code> packages — system Python doesn't,
                     and you'll see <code class="text-xs">ModuleNotFoundError: No module named 'langchain_openai'</code> if you start the runner with the wrong interpreter.
                 </p>
+                <div class="info-readme mb-4"></div>
                 <div class="flex justify-end">
                     <button class="info-close-btn px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded">Close</button>
                 </div>
@@ -5460,6 +5218,7 @@ class WorkflowEditor {
         const close = () => backdrop.remove();
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
         backdrop.querySelector('.info-close-btn').addEventListener('click', close);
+        this._fillInfoReadme(backdrop, 'langgraph');   // this workflow's README.md, below the runtime facts
     }
 
     /**
@@ -6076,7 +5835,7 @@ class WorkflowEditor {
         const url = target === 'langgraph'
             ? `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?${mode === 'modular' ? 'modular=1' : 'a2a=1'}`
             : `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-${target}?${mode === 'a2a' ? 'a2a=1' : 'modular=1'}`;
-        const resp = await fetch(url, { headers: this.getAuthHeaders() });
+        const resp = await this._compileFetch(url);
         if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
         const j = await resp.json();
         if (j?.success === false) throw new Error(j.error || 'Manifest request failed');
@@ -6266,10 +6025,8 @@ class WorkflowEditor {
         }
         let blob;
         try {
-            const resp = await fetch(
-                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-${target || 'python'}?format=zip${flag}`,
-                { headers: this.getAuthHeaders() }
-            );
+            const resp = await this._compileFetch(
+                `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-${target || 'python'}?format=zip${flag}`);
             if (!resp.ok) {
                 const body = await resp.text();
                 let msg = body;
@@ -6437,6 +6194,48 @@ class WorkflowEditor {
         });
     }
 
+    /**
+     * A single-file compile as the code views list it: [{path, code}] -- the script first, then the
+     * requirements.txt, .env.example and README.md the Export zips beside it (the JSON's package_files).
+     * An ingestion pipeline has the script only.
+     */
+    async _singleFiles(target = 'langgraph') {
+        const resp = await this._compileFetch(
+            `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-${target === 'langgraph' ? 'python' : target}`);
+        if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
+        const j = await resp.json();
+        if (j?.success === false) throw new Error(j.error || 'Generation failed');
+        const d = j?.data ?? j;
+        if (typeof d?.code !== 'string') throw new Error('Unexpected generation response');
+        const script = { path: d.filename || `workflow_${target}.py`, code: d.code };
+        return this._isIngestionWorkflow() ? [script] : [script, ...(d.package_files || [])];
+    }
+
+    /**
+     * Info: this workflow's README.md (for the current code structure), rendered under the runtime facts,
+     * in the modal's .info-readme slot. No README (an ingestion pipeline): the slot goes.
+     */
+    async _fillInfoReadme(backdrop, target = 'langgraph') {
+        const el = backdrop.querySelector('.info-readme');
+        if (!el) return;
+        if (!this.currentWorkflowId || this._isIngestionWorkflow()) { el.remove(); return; }
+        const t = (k) => this.escapeHtml(this.t(`workflow.output.${k}`));
+        el.innerHTML = `<p class="text-sm text-gray-500">${t('readmeLoading')}</p>`;
+        try {
+            await this._persistIfDirty();
+            const mode = this._codegenOptions().mode || 'single';
+            const files = mode === 'single' ? await this._singleFiles(target) : (await this._fetchManifest(mode, target)).files;
+            const readme = files.find((f) => f.path === 'README.md');
+            if (!readme) { el.remove(); return; }
+            el.innerHTML = `<h4 class="text-base font-semibold text-gray-900 mb-2">${t('readmeTitle')}</h4>
+                <div class="markdown-content text-sm border-t border-gray-200 pt-3"></div>`;
+            // Workflow and node names are user text: rendered Markdown only through DOMPurify (_pbRenderBody).
+            el.querySelector('.markdown-content').innerHTML = this._pbRenderBody(this._manifestFileText(readme));
+        } catch (e) {
+            el.innerHTML = `<p class="text-sm font-bold text-red-600">${t('readmeFailed')}: ${this.escapeHtml(e?.message || String(e))}</p>`;
+        }
+    }
+
     async _showLangGraphCodeModal(savedPath = '', providedCode = null, filename = '', target = 'langgraph') {
         if (!this.currentWorkflowId) {
             alert(this.t('workflow.output.saveFirst') || 'Save the workflow first.');
@@ -6447,26 +6246,31 @@ class WorkflowEditor {
         // passes an array of { path, code } files instead of a single string.
         let code = providedCode;
         let files = Array.isArray(providedCode) ? providedCode : null;
-        if (files && files.length === 0) {
+        if (code === null) {
+            // Display Code, single file: the script plus the README.md (and the rest) it ships with.
+            await this._persistIfDirty();   // reflect the latest node edits in the displayed code
+            try {
+                files = await this._singleFiles(target);
+            } catch (e) {
+                alert(`Could not fetch the generated code: ${e?.message || e}`);
+                return;
+            }
+        }
+        if (files && files.length > 1) {
+            // README.md first: it says what the workflow does and what it needs before any code.
+            const isReadme = (f) => String(f?.path || '').toLowerCase() === 'readme.md';
+            files = [...files.filter(isReadme), ...files.filter((f) => !isReadme(f))];
+        }
+        if (files && files.length === 1) {
+            code = this._manifestFileText(files[0]);
+            files = null;   // one file: no selector
+        } else if (files && files.length === 0) {
             // Manifest fetched but produced no files — fall back to the plain
             // single-file view instead of a selector with nothing to select.
             files = null;
             code = '(no files generated)';
         } else if (files) {
             code = files[0] ? this._manifestFileText(files[0]) : '';
-        }
-        if (code === null) {
-            try {
-                const resp = await fetch(
-                    `${this.apiBase}/workflows/${this.currentWorkflowId}/generate-python?download=1`,
-                    { headers: this.getAuthHeaders() }
-                );
-                if (!resp.ok) throw new Error((await resp.text()) || `HTTP ${resp.status}`);
-                code = await resp.text();
-            } catch (e) {
-                alert(`Could not fetch the generated code: ${e?.message || e}`);
-                return;
-            }
         }
 
         // Ingestion passes the code directly → offer a "Store location" field
@@ -6481,7 +6285,8 @@ class WorkflowEditor {
         backdrop.innerHTML = `
             <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-4xl max-h-[85vh] flex flex-col" role="dialog" aria-modal="true">
                 <div class="flex items-center justify-between mb-3">
-                    <h3 class="text-lg font-semibold text-gray-900">${this._isIngestionWorkflow() ? 'Generated ingestion script (standalone Python)' : 'Generated LangGraph code'}</h3>
+                    <h3 class="text-lg font-semibold text-gray-900">${this._isIngestionWorkflow() ? 'Generated ingestion script (standalone Python)'
+                        : `Generated ${({ langgraph: 'LangGraph', adk: 'Google ADK', maf: 'Microsoft Agent Framework', nooa: 'NVIDIA OO Agents' })[target] || 'LangGraph'} code`}</h3>
                 </div>
                 ${files ? `<div class="flex items-center gap-2 mb-2">
                     <label class="text-xs text-gray-500">File</label>
@@ -6497,6 +6302,7 @@ class WorkflowEditor {
                 </div>`
                 : (savedPath ? `<div class="text-xs text-gray-500 mb-2">Saved to <code class="text-gray-700">${this.escapeHtml(savedPath)}</code></div>` : '')}
                 <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 overflow-auto flex-1 select-all"></pre>
+                <div class="code-md markdown-content text-sm border border-gray-200 rounded p-4 overflow-auto flex-1" style="display:none"></div>
                 <div class="flex justify-end gap-2 mt-3">
                     ${this._codeModalActionsHtml()}
                     <button class="code-close-btn px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${this.escapeHtml(this.t('common.close') || 'Close')}</button>
@@ -6534,9 +6340,22 @@ class WorkflowEditor {
         // horizontal scroll and are excluded from manual text selection. The
         // Copy button copies the raw `code` variable, so numbers never leak
         // into copied text either.
-        render(code);
+        // A Markdown file (README.md, ARCHITECTURE.md) reads as a document: rendered, sanitised (_pbRenderBody),
+        // with its Mermaid diagrams drawn. `code` keeps the raw text.
+        const mdEl = backdrop.querySelector('.code-md');
+        const show = (file) => {
+            const isMd = !!file && /\.md$/i.test(file.path || '');
+            preEl.style.display = isMd ? 'none' : '';
+            mdEl.style.display = isMd ? '' : 'none';
+            if (!isMd) { render(code); return; }
+            mdEl.innerHTML = this._pbRenderBody(code);
+            if (typeof window.renderMermaidIn === 'function') {
+                Promise.resolve(window.renderMermaidIn(mdEl)).catch((e) => console.warn('[WorkflowEditor] diagram not drawn:', e?.message || e));
+            }
+        };
+        show(files ? files[0] : null);
         const sel = backdrop.querySelector('.code-file-select');
-        if (sel) sel.addEventListener('change', () => { code = this._manifestFileText(files[Number(sel.value)]); render(code); });
+        if (sel) sel.addEventListener('change', () => { const f = files[Number(sel.value)]; code = this._manifestFileText(f); show(f); });
         const close = () => backdrop.remove();
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
         backdrop.querySelector('.code-close-btn').addEventListener('click', close);
@@ -6652,9 +6471,9 @@ class WorkflowEditor {
     /** ADK / MAF / NOOA: the menu label and the single-file Generate / Display Code of each target. */
     _targetUi(target) {
         return {
-            adk: { label: 'workflow.toolbar.compileAdk', generate: () => this.generateAdkScript(), code: () => this._showAdkCodeModal() },
-            maf: { label: 'workflow.toolbar.compileMaf', generate: () => this.generateMafScript(), code: () => this._showMafCodeModal() },
-            nooa: { label: 'workflow.toolbar.compileNooa', generate: () => this.generateNooaScript(), code: () => this._showNooaCodeModal() },
+            adk: { label: 'workflow.toolbar.compileAdk', generate: () => this.generateAdkScript(), code: () => this._showLangGraphCodeModal('', null, '', 'adk') },
+            maf: { label: 'workflow.toolbar.compileMaf', generate: () => this.generateMafScript(), code: () => this._showLangGraphCodeModal('', null, '', 'maf') },
+            nooa: { label: 'workflow.toolbar.compileNooa', generate: () => this.generateNooaScript(), code: () => this._showLangGraphCodeModal('', null, '', 'nooa') },
         }[target];
     }
 
@@ -17697,6 +17516,67 @@ class WorkflowEditor {
      * frontend/assets/js/__tests__/batch-conversation.test.js.
      */
     /**
+     * The MCP servers this workflow uses, each with the names of the nodes that use it (in canvas order): code
+     * nodes' servers, agents' tool servers, and the Start option's component (its trigger, e.g. Outlook's wait for
+     * a dropped email). Map<server name, node names>. Needs window.WorkflowPackage.
+     */
+    async _serverUsers() {
+        const WP = window.WorkflowPackage;
+        let toolServers = new Map();
+        try { ({ toolServers } = await window.WorkflowPackageUI.loadServers()); } catch (_) { /* agent tools unknown */ }
+        const users = new Map();
+        const add = (server, node) => {
+            const name = node.agent_name || node.config?.agent_name || node.config?.name || `${node.node_type} ${node.id}`;
+            if (!users.has(server)) users.set(server, []);
+            if (!users.get(server).includes(name)) users.get(server).push(name);
+        };
+        for (const n of this.exportWorkflow().nodes) {
+            for (const s of WP.collectDependencies([n], { toolServers }).servers) add(s, n);
+            const opt = n.node_type === 'start' ? n.config?.start_option : null;
+            const comp = opt ? window.CodeComponents?.cache?.get(opt) : null;
+            for (const s of comp?.mcp_servers || []) add(s, n);
+        }
+        return users;
+    }
+
+    /**
+     * The compile request's server_settings, for the README's "MCP server settings": each used server whose
+     * settings can be read (its folder or the server host), the nodes that use it, its declared settings with the
+     * plain values -- a secret goes as its name only. [] when there is nothing to say or it cannot be read.
+     */
+    async _serverSettingsForDocs() {
+        const MS = window.McpServerSettings, WP = window.WorkflowPackage;
+        if (!MS?.readAll || !WP?.collectDependencies || this._isIngestionWorkflow()) return [];
+        try {
+            const users = await this._serverUsers();
+            if (!users.size) return [];
+            const read = await MS.readAll([...users.keys()], await this._loadMcpServersMeta(true));
+            return read.filter((r) => !r.info.error).map((r) => ({
+                name: r.name,
+                nodes: users.get(r.name) || [],
+                fields: (r.info.fields || []).map((f) => {
+                    const secret = !!f.secret || WP.SECRET_FIELD_RE.test(f.name);
+                    const value = r.info.host ? (f.filled && 'value' in f ? f.value : '') : r.info.values?.[f.name];
+                    return { name: f.name, label: f.label || '', required: !!f.required, secret,
+                        value: secret || value === undefined || value === null ? '' : String(value) };
+                }),
+            }));
+        } catch (e) {
+            console.warn('[workflow] server settings left out of the README:', e?.message || e);
+            return [];
+        }
+    }
+
+    /** A compile request (generate-<target>): POST, carrying the server settings the README documents. */
+    async _compileFetch(url) {
+        return fetch(url, {
+            method: 'POST',
+            headers: { ...this.getAuthHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify({ server_settings: await this._serverSettingsForDocs() }),
+        });
+    }
+
+    /**
      * Before a run (the run conversation's turn) and before ▶ activates a scheduled / option Start: the MCP servers
      * the workflow uses whose settings can be read (the user's SynergyAI folder
      * or the server host) are checked, and a form opens when a required one is empty (McpServerSettings.runGate).
@@ -17706,16 +17586,7 @@ class WorkflowEditor {
         const MS = window.McpServerSettings, WP = window.WorkflowPackage;
         if (!MS || !WP?.collectDependencies || !window.WorkflowPackageUI?.settingsFieldsHtml) return true;
         try {
-            let toolServers = new Map();
-            try { ({ toolServers } = await window.WorkflowPackageUI.loadServers()); } catch (_) { /* agent tools unknown */ }
-            const nodes = this.exportWorkflow().nodes;
-            const names = WP.collectDependencies(nodes, { toolServers }).servers;
-            // The Start option's component calls servers too (its trigger, e.g. Outlook's wait for a dropped email).
-            for (const n of nodes) {
-                const opt = n.node_type === 'start' ? n.config?.start_option : null;
-                const comp = opt ? window.CodeComponents?.cache?.get(opt) : null;
-                for (const s of comp?.mcp_servers || []) if (!names.includes(s)) names.push(s);
-            }
+            const names = [...(await this._serverUsers()).keys()];
             if (!names.length) return true;
             return await MS.runGate(this, names, await this._loadMcpServersMeta(true));
         } catch (e) {

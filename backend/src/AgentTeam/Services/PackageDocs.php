@@ -74,14 +74,20 @@ final class PackageDocs
     }
 
     /**
-     * The README from its title through "Configure": what the folder is, what it needs, how to get into
-     * it, install the packages and fill in .env.
+     * The README from its title through "Configure": what the workflow does, what the folder is, what it
+     * needs, how to get into it, install the packages, fill in .env, and the MCP servers' own settings.
      *
      * @param list<string> $intro the opening paragraph, one line per entry
+     * @param array $about ['description' => the workflow's Description, 'steps' => WorkflowGraphAnalyzer::docNodes
+     *                     rows in run order, 'servers' => the editor's server settings (serverSettings())]
      */
-    public static function head(string $name, array $intro, string $folder, array $vars): array
+    public static function head(string $name, array $intro, string $folder, array $vars, array $about = []): array
     {
-        $L = ["# {$name}", '', ...$intro, ''];
+        $L = ["# {$name}", '', ...self::about((string) ($about['description'] ?? ''), (array) ($about['steps'] ?? []))];
+        $L[] = '## This folder';
+        $L[] = '';
+        array_push($L, ...$intro);
+        $L[] = '';
         $L[] = '## Requirements';
         $L[] = '';
         $L[] = '- Python 3.10 or newer (the code uses `match` statements). Check with `python3 --version`';
@@ -162,7 +168,122 @@ final class PackageDocs
         $L[] = 'The other variables in `.env.example` are optional. The program reads `.env` from its own folder; a';
         $L[] = 'variable already set in the environment wins over `.env`.';
         $L[] = '';
+        array_push($L, ...self::serverSettings((array) ($about['servers'] ?? [])));
         return $L;
+    }
+
+    /**
+     * "What this workflow does", the README's first section: the workflow's Description, then the steps it runs
+     * (Start and Output left out). $steps: WorkflowGraphAnalyzer::docNodes rows, in run order.
+     */
+    public static function about(string $description, array $steps): array
+    {
+        $L = ['## What this workflow does', ''];
+        $d = trim(str_replace("\r", '', $description));
+        if ($d !== '') {
+            array_push($L, ...explode("\n", $d));
+        } else {
+            $L[] = 'This workflow has no description yet: write one in the Description field of the workflow in the';
+            $L[] = 'editor, then compile again.';
+        }
+        $L[] = '';
+        $rows = array_values(array_filter($steps, fn($s) => !in_array($s['type'] ?? '', ['start', 'output'], true)));
+        if ($rows !== []) {
+            $L[] = 'From its Start node, it runs these steps in order:';
+            $L[] = '';
+            foreach ($rows as $i => $s) {
+                $L[] = ($i + 1) . '. ' . self::stepLine($s);
+            }
+            $L[] = '';
+        }
+        return $L;
+    }
+
+    /** One step of "What this workflow does": **name** -- its kind, model, tools or servers, where it routes. */
+    private static function stepLine(array $s): string
+    {
+        $type = (string) ($s['type'] ?? '');
+        $dispatch = array_values((array) ($s['dispatch'] ?? []));
+        $kind = match (true) {
+            $type === 'code' => 'code node',
+            $type === 'playbook' => 'playbook',
+            $dispatch !== [] => 'dispatcher',
+            default => 'agent',
+        };
+        $bits = [$kind];
+        $model = trim((string) ($s['provider'] ?? '') . ' ' . (string) ($s['model'] ?? ''));
+        if ($model !== '') {
+            $bits[] = $model;
+        }
+        $tools = array_values(array_filter(array_map('strval', (array) ($s['tools'] ?? []))));
+        if ($tools !== []) {
+            $bits[] = $type === 'code'
+                ? 'MCP servers: ' . implode(', ', array_map(fn($t) => preg_replace('/\.\*$/', '', $t), $tools))
+                : 'tools: ' . implode(', ', $tools);
+        }
+        if ($dispatch !== []) {
+            $bits[] = 'routes to one of: ' . implode(', ', $dispatch);
+        }
+        if (($s['playbook']['title'] ?? '') !== '') {
+            $bits[] = 'runs "' . $s['playbook']['title'] . '"';
+        }
+        return '**' . self::inline((string) ($s['name'] ?? '')) . '** -- ' . self::inline(implode('; ', $bits)) . '.';
+    }
+
+    /**
+     * "MCP server settings": the private settings each MCP server reads where it runs (its own .env), and the
+     * nodes that use it. The editor reads them at compile time and sends them (only it can read the servers'
+     * folders); a secret travels as its name only. None sent: no section.
+     *
+     * @param list<array{name:string,nodes:list<string>,fields:list<array{name:string,label?:string,required?:bool,secret?:bool,value?:string}>}> $servers
+     */
+    public static function serverSettings(array $servers): array
+    {
+        if ($servers === []) {
+            return [];
+        }
+        $L = ['## MCP server settings', ''];
+        $L[] = 'These MCP servers read private settings of their own; the program does not. In SynergyAI, enter them in';
+        $L[] = 'the **Server settings** tab of the node that uses the server. Where a server runs on its own, they go in';
+        $L[] = 'that server\'s `.env`. A secret is never written here: enter your own.';
+        $L[] = '';
+        foreach ($servers as $srv) {
+            $L[] = '### ' . self::inline((string) ($srv['name'] ?? ''));
+            $L[] = '';
+            $nodes = array_values(array_filter(array_map('strval', (array) ($srv['nodes'] ?? []))));
+            if ($nodes !== []) {
+                $L[] = 'Used by: ' . implode(', ', array_map(fn($n) => '**' . self::inline($n) . '**', $nodes)) . '.';
+                $L[] = '';
+            }
+            $fields = array_values(array_filter((array) ($srv['fields'] ?? []), fn($f) => is_array($f) && ($f['name'] ?? '') !== ''));
+            if ($fields === []) {
+                $L[] = 'This server declares no settings.';
+                $L[] = '';
+                continue;
+            }
+            $L[] = '| Setting | What it is | Required | Value when compiled |';
+            $L[] = '|---|---|---|---|';
+            foreach ($fields as $f) {
+                $value = !empty($f['secret']) ? '*secret: enter your own*'
+                    : ((string) ($f['value'] ?? '') !== '' ? '`' . str_replace('`', "'", (string) $f['value']) . '`' : '*not set yet*');
+                $L[] = '| `' . (string) $f['name'] . '` | ' . self::cell((string) ($f['label'] ?? '')) . ' | '
+                    . (!empty($f['required']) ? '**yes**' : 'no') . ' | ' . self::cell($value) . ' |';
+            }
+            $L[] = '';
+        }
+        return $L;
+    }
+
+    /** User text on one Markdown line: no line breaks. */
+    private static function inline(string $s): string
+    {
+        return trim((string) preg_replace('/\s+/', ' ', $s));
+    }
+
+    /** User text in a Markdown table cell: one line, no column break. */
+    private static function cell(string $s): string
+    {
+        return str_replace('|', '\\|', self::inline($s));
     }
 
     /**

@@ -13,7 +13,7 @@ function extract(signature) {
     if (start < 0) throw new Error('could not find: ' + signature.trim());
     return file.slice(start, file.indexOf(END, start) + END.length).trim();
 }
-const src = [extract('    async _activate() {'), extract('    async _runSettingsGate() {')].join(',\n');
+const src = [extract('    async _activate() {'), extract('    async _runSettingsGate() {'), extract('    async _serverUsers() {')].join(',\n');
 
 function makeEditor({ gate, nodes = [] } = {}) {
     const calls = [];

@@ -395,6 +395,8 @@ class WorkflowController
                 return ['success' => false, 'error' => 'Export needs the PHP zip extension (ZipArchive), which this server does not have.',
                     'status_code' => 500];
             }
+            // POST: the editor sends the MCP servers' settings for the README (only it can read them).
+            $gen->withServerSettings($request['body']['server_settings'] ?? []);
             $result = $gen->generate($workflowId, (string) $userId, ['a2a' => $a2a, 'modular' => $modular]);
             if ($zip) {
                 return self::langGraphZipResponse($result, $a2a ? 'a2a' : ($modular ? 'modular' : 'single'));
@@ -540,6 +542,7 @@ class WorkflowController
                     $this->config['storage_path'] ?? __DIR__ . '/../../../../storage'
                 )
             );
+            $gen->withServerSettings($request['body']['server_settings'] ?? []);   // POST: the README's MCP server settings
             $result = match ($mode) {
                 'a2a' => $gen->generateA2A($workflowId, (string) $userId),
                 'modular' => $gen->generatePackage($workflowId, (string) $userId),
