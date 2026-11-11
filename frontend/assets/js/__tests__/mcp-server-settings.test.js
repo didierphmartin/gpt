@@ -56,17 +56,6 @@ const plain = (x) => JSON.parse(JSON.stringify(x));
     assert.deepStrictEqual(plain(MS.sectionMissing(host, { T: '', S: '', G: '' })), ['T', 'G']);   // cleared in the form: needed again
 }
 
-// --- settingsHomes / splitByHome: a server's settings show in the first node that uses it ---
-{
-    const homes = MS.settingsHomes([{ id: '1', label: 'Outlook: On dropped email', servers: ['Outlook'] },
-        { id: '3', label: 'PDF', servers: [] }, { id: '4', label: 'SharePoint: move', servers: ['SharePoint', 'Outlook'] }]);
-    assert.deepStrictEqual(plain(MS.splitByHome('4', ['SharePoint', 'Outlook'], homes)),
-        { here: ['SharePoint'], elsewhere: [{ name: 'Outlook', where: 'Outlook: On dropped email' }] });
-    assert.deepStrictEqual(plain(MS.splitByHome('1', ['Outlook'], homes)), { here: ['Outlook'], elsewhere: [] });
-    // a server no node lists yet (just ticked in the open form) shows here
-    assert.deepStrictEqual(plain(MS.splitByHome('3', ['New'], homes)), { here: ['New'], elsewhere: [] });
-}
-
 // --- findMissing over a fake SynergyAI folder: only servers with a required setting empty ---
 (async () => {
     const files = {

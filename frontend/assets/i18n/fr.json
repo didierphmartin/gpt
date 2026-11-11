@@ -277,7 +277,7 @@
     "optionRemove": "Retirer l'option de démarrage",
     "linksDroppedTitle": "Supprimer des liens dans les workflows ?",
     "linksDroppedIntro": "L'enregistrement retire des sorties de « {{name}} ». Ces workflows perdent leurs liens :",
-    "linksDroppedLine": "{{workflow}} — {{{node}}} : « {{exit}} » ({{count}} lien(s))",
+    "linksDroppedLine": "{{workflow}} — {{node}} : « {{exit}} » ({{count}} lien(s))",
     "linksDroppedOthers": "{{count}} autre(s) flux que vous ne pouvez pas ouvrir ({{links}} lien(s))",
     "linksDroppedConfirm": "Enregistrer et supprimer les liens"
   },
@@ -1264,7 +1264,7 @@
       "none": "Ce code ne lit aucun argument.",
       "available": "Marqueurs disponibles",
       "availableHint": "Cliquez sur l'un d'eux pour l'insérer dans le dernier champ utilisé. Il est remplacé par sa valeur à l'exécution du nœud.",
-      "from": "de {{{node}}}",
+      "from": "de {{node}}",
       "noneAvailable": "Rien avant ce nœud ne fournit de marqueurs.",
       "missing": "Arguments obligatoires laissés vides : {{names}}",
       "unknown": "Enregistré, mais rien avant ce nœud ne fournit {{names}} : le nœud échouera à l'exécution.",
@@ -1818,8 +1818,8 @@
       "saved": "Paquet enregistré sous {{name}}",
       "failed": "Échec de l’export du paquet : {{error}}",
       "warnSkillMissing": "La compétence « {{name}} » est absente ici — non exportée.",
-      "errSkillMissing": "La compétence « {{name}} » utilisée par « {{{node}}} » n'est pas installée ici, le paquet ne peut donc pas être exporté.",
-      "errSkillUnreadable": "La compétence « {{name}} » utilisée par « {{{node}}} » est illisible ici (pas d'accès au dossier des compétences), le paquet ne peut donc pas être exporté.",
+      "errSkillMissing": "La compétence « {{name}} » utilisée par « {{node}} » n'est pas installée ici, le paquet ne peut donc pas être exporté.",
+      "errSkillUnreadable": "La compétence « {{name}} » utilisée par « {{node}} » est illisible ici (pas d'accès au dossier des compétences), le paquet ne peut donc pas être exporté.",
       "progressSkill": "Empaquetage de la compétence {{name}} avec ses bibliothèques ({{done}} sur {{total}})…",
       "warnServerMissing": "Le serveur MCP « {{name}} » n’est pas enregistré ici — non exporté.",
       "warnFolderUnreadable": "Le dossier local de « {{name}} » n’a pas pu être ouvert — enregistrement seulement.",
@@ -1949,7 +1949,6 @@
       "savedHost": "Enregistré. Le serveur redémarre avec ses nouveaux paramètres.",
       "savedLocal": "Enregistré. Redémarrez le serveur pour qu'il les lise : lancez sa commande de démarrage dans un terminal, dans le dossier du serveur à l'intérieur de votre dossier SynergyAI.",
       "saveFailed": "Les paramètres n'ont pas pu être enregistrés : {{error}}",
-      "elsewhere": "ses paramètres sont dans « {{node}} », le premier nœud qui l’utilise",
       "noServers": "Aucun serveur coché. Cochez-en un dans Serveurs MCP pour voir ses paramètres ici."
     }
   },

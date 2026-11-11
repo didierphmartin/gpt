@@ -13,8 +13,7 @@ function extract(signature) {
     if (start < 0) throw new Error('could not find: ' + signature.trim());
     return file.slice(start, file.indexOf(END, start) + END.length).trim();
 }
-const src = [extract('    async _activate() {'), extract('    async _runSettingsGate() {'),
-    extract('    _serverSettingsSplit(nodeId, live) {')].join(',\n');
+const src = [extract('    async _activate() {'), extract('    async _runSettingsGate() {')].join(',\n');
 
 function makeEditor({ gate, nodes = [] } = {}) {
     const calls = [];
@@ -35,15 +34,6 @@ function makeEditor({ gate, nodes = [] } = {}) {
 }
 
 const g = globalThis;
-// the real settingsHomes / splitByHome, from mcp-server-settings.js
-function vm_ms() {
-    const ctx = { window: {}, console };
-    ctx.self = ctx.window;
-    require('vm').createContext(ctx);
-    require('vm').runInContext(fs.readFileSync(path.resolve(__dirname, '../mcp-server-settings.js'), 'utf8'), ctx);
-    const { settingsHomes, splitByHome } = ctx.window.McpServerSettings;
-    Object.assign(g.window.McpServerSettings, { settingsHomes, splitByHome });
-}
 g.fetch = async (url, opts) => { g.fetched.push([url, opts && opts.method]); return { ok: true, json: async () => ({ success: true }) }; };
 
 (async () => {
@@ -75,19 +65,5 @@ g.fetch = async (url, opts) => { g.fetched.push([url, opts && opts.method]); ret
     // the check itself failing never blocks
     g.window.McpServerSettings.runGate = async () => { throw new Error('boom'); };
     assert.strictEqual(await ed._runSettingsGate(), true);
-
-    // which node shows which server's settings (wf 75's shape): Outlook on the Start option, SharePoint on move
-    vm_ms();
-    ed = makeEditor();
-    ed._startNodeId = () => '1';
-    ed.editor = { drawflow: { drawflow: { Home: { data: {
-        1: { data: { start_option: 3 }, outputs: { output_1: { connections: [{ node: '2' }] } } },
-        2: { data: { name: 'PDF: convert document', mcp_servers: [] }, outputs: { output_1: { connections: [{ node: '4' }] } } },
-        4: { data: { name: 'SharePoint: move', mcp_servers: ['SharePoint', 'Outlook'] }, outputs: {} },
-    } } } } };
-    g.window.CodeComponents.cache.get = (id) => (id === 3 ? { mcp_servers: ['Outlook'], start_trigger: { label: 'Outlook: On dropped email' } } : null);
-    assert.deepStrictEqual(JSON.parse(JSON.stringify(ed._serverSettingsSplit('4', ['SharePoint', 'Outlook']))),
-        { here: ['SharePoint'], elsewhere: [{ name: 'Outlook', where: 'Outlook: On dropped email' }] });
-    assert.deepStrictEqual(JSON.parse(JSON.stringify(ed._serverSettingsSplit('1', ['Outlook']))), { here: ['Outlook'], elsewhere: [] });
     console.log('run-settings-gate tests passed');
 })().catch((e) => { console.error(e); process.exit(1); });
