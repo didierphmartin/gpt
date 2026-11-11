@@ -180,6 +180,30 @@ class ControlTest(unittest.TestCase):
         self.install("req", files={"synergyai-mcp.json": b64(json.dumps(m)), "run.sh": b64("#!/bin/sh\nsleep 30\n")})
         self.assertEqual(self.put("/servers/req/settings", {"values": {}}).json(), {"missing": ["NEED"]})
 
+    def test_settings_list_replaced_keeping_the_manifest(self):
+        m = {"name": "r", "start": "./run.sh", "env": [{"name": "OLD", "required": True}]}
+        self.install("req", files={"synergyai-mcp.json": b64(json.dumps(m)), "run.sh": b64("#!/bin/sh\nsleep 30\n")})
+        r = self.put("/servers/req/schema", {"env": [{"name": "NEW_ID", "label": "Id", "required": True},
+                                                      {"name": "NEW_KEY", "secret": True, "group": "g"}]})
+        self.assertEqual(r.status, 200)
+        self.assertEqual([f["name"] for f in r.json()["fields"]], ["NEW_ID", "NEW_KEY"])
+        saved = json.loads((self.root / "req/synergyai-mcp.json").read_text())
+        self.assertEqual((saved["name"], saved["start"]), ("r", "./run.sh"))   # the other keys stay
+        self.assertEqual(saved["env"], [{"name": "NEW_ID", "label": "Id", "required": True, "secret": False},
+                                        {"name": "NEW_KEY", "secret": True, "group": "g"}])
+        self.assertEqual(self.put("/servers/req/settings", {"values": {}}).json(), {"missing": ["NEW_ID"]})
+
+    def test_settings_list_refused_when_bad(self):
+        m = {"name": "r", "start": "./run.sh", "env": []}
+        self.install("req", files={"synergyai-mcp.json": b64(json.dumps(m)), "run.sh": b64("#!/bin/sh\nsleep 30\n")})
+        before = (self.root / "req/synergyai-mcp.json").read_text()
+        for env in ([{"name": "A"}, {"name": "A"}], [{"name": "1X"}], [{"name": "A", "label": ["x"]}], "x"):
+            self.assertEqual(self.put("/servers/req/schema", {"env": env}).status, 400, env)
+        (self.root / "req/synergyai-mcp.json").write_text("{not json")
+        self.assertEqual(self.put("/servers/req/schema", {"env": []}).status, 409)
+        self.assertEqual((self.root / "req/synergyai-mcp.json").read_text(), "{not json")   # never overwritten
+        self.assertNotEqual(before, "{not json")
+
     def test_source_excludes_private_files(self):
         self.install("ok_server", env={"FAKE_TOKEN": "x"})
         d = self.root / "ok_server"

@@ -1,9 +1,18 @@
 import unittest
 
-from mcphost.envfile import fields, merge, parse
+from mcphost.envfile import fields, merge, missing, parse
 
 
 class EnvFileTest(unittest.TestCase):
+    def test_group_kept_and_missing(self):
+        fl = fields({"env": [{"name": "ID", "required": True}, {"name": "T", "group": " org "}, {"name": "G", "group": "org"},
+                             {"name": "P", "group": ""}]}, "")
+        self.assertEqual([f.get("group") for f in fl], [None, "org", "org", None])
+        self.assertEqual(missing(fl, {}), ["ID"])                         # group untouched: not needed
+        self.assertEqual(missing(fl, {"ID": "x", "T": "t"}), ["G"])       # group started: the rest is needed
+        self.assertEqual(missing(fl, {"ID": "x", "T": "t", "G": "g"}), [])
+        self.assertEqual(missing(fl, {"T": "t"}, skip=("ID",)), ["G"])    # supervisor-set names are skipped
+
     def test_merge_keeps_other_lines(self):
         self.assertEqual(merge("# c\nA=1\nB=2\n", {"B": "x y"}), '# c\nA=1\nB="x y"\n')
 

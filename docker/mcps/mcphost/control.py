@@ -280,7 +280,25 @@ class Control:
             self.manager.restart(folder)
         current = envfile.parse(text)
         over = overridden(_manifest(d), [f["name"] for f in fields])
-        return 200, {"missing": [f["name"] for f in fields if f["required"] and not current.get(f["name"]) and f["name"] not in over]}
+        return 200, {"missing": envfile.missing(fields, current, over)}
+
+    def put_schema(self, folder: str, body: dict):
+        """Replace the server's settings list (the manifest's env), keeping the manifest's other keys."""
+        d = self._known(folder)
+        try:
+            env = envfile.clean_list(body.get("env"))
+        except ValueError as e:
+            raise ApiError(400, str(e))
+        text = _read(d / MANIFEST)
+        try:
+            m = json.loads(text) if text.strip() else {}
+        except ValueError:
+            raise ApiError(409, f"{MANIFEST} is not valid JSON: fix it by hand first")
+        if not isinstance(m, dict):
+            raise ApiError(409, f"{MANIFEST} is not a JSON object: fix it by hand first")
+        m["env"] = env
+        (d / MANIFEST).write_text(json.dumps(m, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        return 200, {"fields": self._fields(d)}
 
     def source(self, folder: str):
         d = self._known(folder)
@@ -366,6 +384,8 @@ def make_server(root, registry, manager, token, port=9000, host="127.0.0.1") -> 
                             return self._send(*ctl.get_settings(folder))
                         if a == ("PUT", "settings"):
                             return self._send(*ctl.put_settings(folder, self._body()))
+                        if a == ("PUT", "schema"):
+                            return self._send(*ctl.put_schema(folder, self._body()))
                         if a == ("GET", "source"):
                             return self._send(*ctl.source(folder))
                 raise ApiError(404, "not found")

@@ -1259,7 +1259,7 @@ class WorkflowEditor {
                 </button>
             </div>
             <div class="workflow-btn-group">
-                <button id="workflow-import-btn" class="workflow-io-btn" title="Import a workflow from a JSON file">
+                <button id="workflow-import-btn" class="workflow-io-btn" title="Import a workflow package (.zip) from a file or a GitHub link, or a workflow JSON file">
                     📥 Import
                 </button>
                 <button id="workflow-export-btn" class="workflow-io-btn" title="${this.escapeHtml(this.t('workflow.package.exportTitle'))}">
@@ -3704,6 +3704,8 @@ class WorkflowEditor {
                 this.t('workflow.active.replaceConfirm'));
             if (!ok) return false;
         }
+        // The server runs it with the same servers: a missing private setting is asked for first (Cancel = not activated).
+        if (!(await this._runSettingsGate())) return false;
         await this._persistIfDirty();   // the worker reads Start's links and option from the database
         await this._stopCompiledEngine();   // one engine reads the events: the worker, from now on
         const r = await fetch(`${this.apiBase}/workflows/${this.currentWorkflowId}/activate`, { method: 'POST', headers: this.getAuthHeaders() });
@@ -7461,6 +7463,12 @@ class WorkflowEditor {
         });
     }
 
+    /** The Import button: from a file (_pickImportFile) or from a GitHub link to a package .zip. */
+    _handleImportWorkflow() {
+        if (window.WorkflowPackageUI?.showImportChoice) window.WorkflowPackageUI.showImportChoice(this, () => this._pickImportFile());
+        else this._pickImportFile();
+    }
+
     /**
      * Import a workflow from a JSON file the user picks. The expected shape
      * is what `_showWorkflowJson()` produces — i.e. the same payload sent to
@@ -7468,7 +7476,7 @@ class WorkflowEditor {
      * as an unsaved new workflow (currentWorkflowId = null) so Save creates
      * a fresh row instead of overwriting whatever was previously loaded.
      */
-    _handleImportWorkflow() {
+    _pickImportFile() {
         // Re-entrancy guard: only ever one picker open at a time. Even if some
         // path invokes this more than once in a burst, the duplicates bail.
         if (this._importPickerOpen) return;
@@ -10213,10 +10221,10 @@ class WorkflowEditor {
         overlay.className = 'storage-config-overlay wf-code-window';
         overlay.innerHTML = `
             <div class="storage-config-modal" style="display:flex;flex-direction:column;">
-                <div class="storage-config-header"><h3>⚙️ ${this.escapeHtml(node ? this.t('codeLibrary.nodeTitle') : this.t('codeLibrary.componentTitle'))}</h3><button class="storage-config-close" data-act="close">×</button></div>
+                <div class="storage-config-header"><h3>⚙️ <span data-title-name>${this.escapeHtml(d.name || 'Code')}</span> <span style="font-weight:400;font-size:0.8em;opacity:0.7;">— ${this.escapeHtml(node ? this.t('codeLibrary.nodeTitle') : this.t('codeLibrary.componentTitle'))}</span></h3><button class="storage-config-close" data-act="close">×</button></div>
                 <div data-f="link" class="text-xs text-gray-600" style="padding:4px 16px;display:none;"></div>
                 <div class="flex border-b border-gray-200" style="padding:0 16px;">
-                    ${tab('settings', 'Settings')}${tab('args', 'Arguments')}${tab('code', 'Code')}${tab('servers', 'MCP Servers')}${tab('tools', 'Tools')}${tab('input', 'Input')}${tab('output', 'Output')}${tab('logs', 'Logs')}
+                    ${tab('settings', 'Settings')}${tab('args', 'Arguments')}${tab('code', 'Code')}${tab('servers', 'MCP Servers')}${tab('srvsettings', this.escapeHtml(this.t('workflow.serverSettings.title')))}${tab('tools', 'Tools')}${tab('input', 'Input')}${tab('output', 'Output')}${tab('logs', 'Logs')}
                 </div>
                 <div class="storage-config-body" style="overflow:auto;flex:1;">
                     ${pane('settings', `<div class="storage-config-grid">
@@ -10236,6 +10244,7 @@ class WorkflowEditor {
                     ${pane('servers', `<p class="text-xs text-gray-500" style="margin:0 0 8px;">The code calls a checked server's tools with
                         <code>call_tool("&lt;server&gt;", "&lt;tool&gt;", {...})</code>; the server is written as shown in grey.</p>
                         <div data-f="servers"><p class="text-sm text-gray-400 italic">…</p></div>`)}
+                    ${pane('srvsettings', '<div data-f="srvsettings"></div>')}
                     ${pane('args', `${node ? '<div data-f="args"></div>' : '<div data-f="decl-args"></div>'}
                         <div data-f="watchargs" style="display:none;margin-top:16px;"></div>
                         <div data-f="callargs" style="display:none;margin-top:16px;"></div>`)}
@@ -10277,6 +10286,8 @@ class WorkflowEditor {
         // Values are set through the DOM, never interpolated into attributes: escapeHtml leaves
         // quotes alone, so a name like Poll "prod" would be cut short (or inject an attribute).
         f('name').value = d.name || 'Code';
+        // the title names the node, so each form says which one it is
+        f('name').addEventListener('input', () => { overlay.querySelector('[data-title-name]').textContent = f('name').value.trim() || 'Code'; });
         this._numberCodeLines(f('code'));
         f('code').value = d.code || '';
         f('exits').value = CN.exitsText(Array.isArray(d.exits) && d.exits.length ? d.exits : ['next']);
@@ -10357,6 +10368,7 @@ class WorkflowEditor {
         };
         const toolsShown = () => f('tools').closest('[data-pane]')?.style.display !== 'none';
         let assist = null;   // the assistant box (mounted below); a server tick refreshes its listings
+        let srvSettings = null;   // the checked servers' private settings (McpServerSettings), under the ticks
         const renderServers = () => {
             const esc = (v) => this.escapeHtml(String(v ?? ''));
             const known = new Set(servers.map((m) => m.name));
@@ -10379,6 +10391,7 @@ class WorkflowEditor {
             f('servers').querySelectorAll('input[data-server]').forEach((cb) => cb.addEventListener('change', () => {
                 if (cb.checked) checked.add(cb.dataset.server); else checked.delete(cb.dataset.server);
                 refreshConnect();
+                srvSettings?.refresh([...checked]);
                 assist?.refresh();
                 if (toolsShown()) renderTools();
             }));
@@ -10580,6 +10593,14 @@ class WorkflowEditor {
             renderServers();
             refreshConnect();
             assist?.refresh();
+            if (window.McpServerSettings?.mountServerSettings && window.WorkflowPackageUI?.settingsFieldsHtml) {
+                // The tab name carries a ⚠ while a checked server lacks a setting it needs.
+                const srvTab = overlay.querySelector('[data-tab="srvsettings"]');
+                const srvLabel = this.t('workflow.serverSettings.title');
+                srvSettings = window.McpServerSettings.mountServerSettings(f('srvsettings'), this, servers,
+                    (missing) => { if (srvTab) srvTab.textContent = missing ? `⚠ ${srvLabel}` : srvLabel; });
+                srvSettings.refresh([...checked]);
+            }
         })();
 
         // The assistant under the Code tab: writes the code and exits from the checked servers' tool docs.
@@ -11161,6 +11182,7 @@ class WorkflowEditor {
                         <code style="font-size:12px;overflow-wrap:anywhere;">${esc(JSON.stringify(watchArgs))}</code>
                     </div>
                     <div data-role="connections" style="display:none;margin:0 0 14px;"></div>
+                    <div data-role="srvsettings" style="margin:0 0 14px;"></div>
                     <p style="margin:0 0 10px;font-size:13px;color:#6b7280;">${esc(t(fields.length ? 'argsIntro' : 'noArgs'))}</p>
                     <div style="display:${fields.length ? 'grid' : 'none'};grid-template-columns:auto 1fr;gap:8px 10px;align-items:center;font-size:14px;">
                         ${fields.map((f) => `<label for="start-arg-${esc(f.name)}">${esc(f.name)}${f.required ? ' <span style="color:#dc2626;">*</span>' : ''}</label>
@@ -11191,6 +11213,12 @@ class WorkflowEditor {
         warn();
         if (editable) inputs[0]?.focus();
         this._mountStartConnections(overlay.querySelector('[data-role="connections"]'), comp);
+        // The option's servers' private settings (the code node form's Server settings block).
+        if (window.McpServerSettings?.mountServerSettings && window.WorkflowPackageUI?.settingsFieldsHtml && (comp.mcp_servers || []).length) {
+            this._loadMcpServersMeta(true).then((metas) => window.McpServerSettings
+                .mountServerSettings(overlay.querySelector('[data-role="srvsettings"]'), this, metas).refresh(comp.mcp_servers))
+                .catch((e) => console.warn('[workflow] server settings not shown:', e?.message || e));
+        }
         overlay.addEventListener('click', async (ev) => {
             const act = ev.target?.dataset?.act;
             if (act === 'close') { overlay.remove(); return; }
@@ -17647,6 +17675,34 @@ class WorkflowEditor {
      * omission — it is the contract, pinned by
      * frontend/assets/js/__tests__/batch-conversation.test.js.
      */
+    /**
+     * Before a run (the run conversation's turn) and before ▶ activates a scheduled / option Start: the MCP servers
+     * the workflow uses whose settings can be read (the user's SynergyAI folder
+     * or the server host) are checked, and a form opens when a required one is empty (McpServerSettings.runGate).
+     * True = run. A check that cannot be made never blocks the run: the first failing node says why, as before.
+     */
+    async _runSettingsGate() {
+        const MS = window.McpServerSettings, WP = window.WorkflowPackage;
+        if (!MS || !WP?.collectDependencies || !window.WorkflowPackageUI?.settingsFieldsHtml) return true;
+        try {
+            let toolServers = new Map();
+            try { ({ toolServers } = await window.WorkflowPackageUI.loadServers()); } catch (_) { /* agent tools unknown */ }
+            const nodes = this.exportWorkflow().nodes;
+            const names = WP.collectDependencies(nodes, { toolServers }).servers;
+            // The Start option's component calls servers too (its trigger, e.g. Outlook's wait for a dropped email).
+            for (const n of nodes) {
+                const opt = n.node_type === 'start' ? n.config?.start_option : null;
+                const comp = opt ? window.CodeComponents?.cache?.get(opt) : null;
+                for (const s of comp?.mcp_servers || []) if (!names.includes(s)) names.push(s);
+            }
+            if (!names.length) return true;
+            return await MS.runGate(this, names, await this._loadMcpServersMeta(true));
+        } catch (e) {
+            console.warn('[workflow] server settings check skipped:', e?.message || e);
+            return true;
+        }
+    }
+
     async _batchTurn(userPrompt) {
         this._pbClearFeed();
         this._pbBubble('you', userPrompt);
@@ -17655,6 +17711,12 @@ class WorkflowEditor {
         // rebuilds the canvas when it lands: walk the graph only after it.
         if (this._batchSessionSave) { await this._batchSessionSave; this._batchSessionSave = null; }
         if (this._saveInFlight) { try { await this._saveInFlight; } catch (_) {} }
+        // A used server missing a required private setting: its form first; Cancel = nothing runs.
+        if (!(await this._runSettingsGate())) {
+            this._pbPendingClear();
+            this._pbBubble('agent', this.t('workflow.runSettings.cancelled'), { label: this._batchAnswerLabel() });
+            return { output: '', node_outputs: {}, success: false, nodes_executed: 0, response_time_ms: 0 };
+        }
         const st = document.getElementById('pb-ov-status');
         if (st) { st.textContent = this.t('workflow.batchSession.running'); st.style.color = '#9ca3af'; }
         let res;

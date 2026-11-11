@@ -1676,24 +1676,9 @@ class SettingsPanel {
         }
     }
 
-    /** One local server's manifest, declared settings and current values. */
+    /** One local server's manifest, declared settings and current values (McpServerSettings, shared with the Run check). */
     async _readMCPLocalInfo(folder) {
-        const base = `mcps/${folder}`;
-        const info = { folder, fields: [], values: {}, manifest: null, missing: [], error: false };
-        try {
-            const [manText, exText, envText] = await Promise.all([
-                this._readLocalText(`${base}/synergyai-mcp.json`).catch(() => null),
-                this._readLocalText(`${base}/.env.example`).catch(() => null),
-                this._readLocalText(`${base}/.env`).catch(() => null),
-            ]);
-            info.manifest = manText ? JSON.parse(manText) : null;
-            info.fields = window.WorkflowPackage.envFields(info.manifest, exText || '');
-            info.values = window.WorkflowPackage.parseEnv(envText || '');
-            info.missing = window.WorkflowPackage.missingRequired(info.fields, info.values);
-        } catch (_) {
-            info.error = true;
-        }
-        return info;
+        return window.McpServerSettings.readLocalInfo(folder);
     }
 
     /**
@@ -1760,26 +1745,9 @@ class SettingsPanel {
         this.showNotification(this.t(registration ? 'settings.mcpHostNotOwner' : 'settings.mcpHostOwnerOnly'), 'info');
     }
 
-    /** One volume server: its declared settings (no secret values) and its supervisor state. */
+    /** One volume server: its declared settings (no secret values) and its supervisor state (McpServerSettings). */
     async _readMCPHostInfo(folder, host) {
-        const info = { host: true, folder, fields: [], shown: {}, missing: [], manifest: null,
-            state: host?.state || '', enabled: host ? host.enabled !== false : true,
-            installedBy: host?.installed_by ?? host?.installedBy ?? null, error: false };
-        try {
-            const data = await window.mcpClient.hostSettings(folder);
-            const all = data?.fields || [];
-            // The host and port the supervisor sets itself are hidden: a value saved for them does nothing.
-            const over = Array.isArray(data?.overridden) ? data.overridden
-                : ['_HOST', '_PORT'].map(sfx => all.find(f => f.name?.endsWith(sfx))?.name).filter(Boolean);
-            info.fields = all.filter(f => !over.includes(f.name));
-            // Secrets show empty (their placeholder says they are set); the rest show value or default.
-            info.shown = Object.fromEntries(info.fields.map(f => [f.name, f.secret ? '' : (f.filled ? (f.value ?? '') : (f.default ?? ''))]));   // default shows while unset (display only)
-            info.missing = info.fields.filter(f => f.required && !f.filled).map(f => f.name);
-        } catch (e) {
-            console.warn('[settings:mcp] host settings unreadable:', e.message);
-            info.error = true;
-        }
-        return info;
+        return window.McpServerSettings.readHostInfo(folder, host);
     }
 
     /** Volume servers among the registered ones; a host that cannot be asked is treated as no host. */
@@ -1973,12 +1941,7 @@ class SettingsPanel {
         const btn = panel.querySelector('[data-local-save]');
         if (btn) btn.disabled = true;
         try {
-            // Undeclared keys and comments in the file stay: only the declared keys' lines change.
-            const path = `mcps/${info.folder}/.env`;
-            const current = await this._readLocalText(path).catch(() => null);
-            await this._writeLocalText(path, window.WorkflowPackage.mergeEnv(current || '', values));
-            info.values = Object.assign(Object.create(null), info.values, values);
-            info.missing = window.WorkflowPackage.missingRequired(info.fields, values);
+            await window.McpServerSettings.saveLocal(info, values);   // keeps every other line of the file
             this._decorateMCPLocalRow(id);
             this.showNotification(this.t('settings.mcpLocalSaved'), 'success');
         } catch (e) {

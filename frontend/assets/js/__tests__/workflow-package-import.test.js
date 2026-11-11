@@ -4,7 +4,7 @@ const vm = require('vm');
 const src = fs.readFileSync(__dirname + '/../workflow-package-import.js', 'utf8');
 
 // The result panel only: the module needs WorkflowPackageUI.esc at load and nothing else.
-const ctx = { window: { WorkflowPackageUI: { esc: (x) => String(x) } }, console, setTimeout, btoa };
+const ctx = { window: { WorkflowPackageUI: { esc: (x) => String(x) } }, console, setTimeout, btoa, URL };
 vm.createContext(ctx);
 vm.runInContext(src, ctx);
 const resultHtml = ctx.window.WorkflowPackageUI.importResultHtml;
@@ -40,3 +40,45 @@ assert.match(html('crashed', ['boom']), /hostInstallFailed[\s\S]*boom/);
     assert.doesNotMatch(plain, /from /);
 }
 console.log('workflow-package-import: ok');
+
+// a GitHub link to a package .zip -> its raw.githubusercontent.com address; anything else is refused
+{
+    const U = ctx.window.WorkflowPackageUI.packageLinkUrl;
+    const RAW = 'https://raw.githubusercontent.com/didierphmartin/workflows/main/Move_Email_to_Sharepoint.zip';
+    assert.strictEqual(U('https://github.com/didierphmartin/workflows/blob/main/Move_Email_to_Sharepoint.zip'), RAW);
+    assert.strictEqual(U('  https://github.com/didierphmartin/workflows/blob/main/Move_Email_to_Sharepoint.zip?raw=true '), RAW);
+    assert.strictEqual(U('https://github.com/didierphmartin/workflows/raw/main/Move_Email_to_Sharepoint.zip'), RAW);
+    assert.strictEqual(U(RAW), RAW);
+    assert.strictEqual(U('https://github.com/o/r/blob/feat/x/sub/My%20Flow.zip'), 'https://raw.githubusercontent.com/o/r/feat/x/sub/My%20Flow.zip');
+    const refused = (link) => assert.throws(() => U(link), (e) => e.key === 'linkNotZip', link);
+    refused('');
+    refused('not a link');
+    refused('https://github.com/didierphmartin/workflows');
+    refused('https://github.com/didierphmartin/workflows/tree/main');
+    refused('https://github.com/didierphmartin/workflows/blob/main/README.md');
+    refused('http://github.com/o/r/blob/main/a.zip');
+    refused('https://example.com/o/r/blob/main/a.zip');
+    refused('https://github.com/o/r/releases/download/v1/a.zip');
+}
+
+// the download: 404, HTTP errors, network errors, size cap and the zip check each give their message
+(async () => {
+    const F = ctx.window.WorkflowPackageUI.fetchPackageLink;
+    const LINK = 'https://github.com/o/r/blob/main/a.zip';
+    const res = (status, bytes, len) => ({ status, ok: status >= 200 && status < 300,
+        headers: { get: (h) => (h === 'content-length' && len !== undefined ? String(len) : null) },
+        arrayBuffer: async () => new Uint8Array(bytes).buffer });
+    const zip = [0x50, 0x4b, 0x03, 0x04, 1, 2];
+    let asked;
+    const got = await F(LINK, async (u) => { asked = u; return res(200, zip); });
+    assert.strictEqual(asked, 'https://raw.githubusercontent.com/o/r/main/a.zip');
+    assert.deepStrictEqual(Array.from(got), zip);
+    const fails = async (fn, key) => { await assert.rejects(F(LINK, fn), (e) => e.key === key, key); };
+    await fails(async () => res(404, []), 'linkNotFound');
+    await fails(async () => res(500, []), 'linkFailed');
+    await fails(async () => { throw new Error('offline'); }, 'linkFailed');
+    await fails(async () => res(200, zip, 60 * 1024 * 1024), 'linkTooBig');
+    await fails(async () => res(200, [0x3c, 0x68, 0x74, 0x6d]), 'linkNotPackage');
+    await assert.rejects(F(LINK, async () => { throw new Error('offline'); }), (e) => e.params.reason === 'offline');
+    console.log('workflow-package-import link tests ok');
+})().catch((e) => { console.error(e); process.exitCode = 1; });

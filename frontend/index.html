@@ -2621,7 +2621,7 @@
                             <button id="sidebar-export-workflow-btn" class="flex-1 text-indigo-600 hover:text-indigo-700 text-xs font-medium py-1 px-2 bg-indigo-50 hover:bg-indigo-100 rounded transition" title="Export the open workflow with its dependencies, as one .zip">
                                 📤 <span data-i18n="workflow.exportWorkflow">Export</span>
                             </button>
-                            <button id="sidebar-import-workflow-btn" class="flex-1 text-indigo-600 hover:text-indigo-700 text-xs font-medium py-1 px-2 bg-indigo-50 hover:bg-indigo-100 rounded transition" title="Import a workflow package (.zip) or a workflow JSON file">
+                            <button id="sidebar-import-workflow-btn" class="flex-1 text-indigo-600 hover:text-indigo-700 text-xs font-medium py-1 px-2 bg-indigo-50 hover:bg-indigo-100 rounded transition" title="Import a workflow package (.zip) from a file or a GitHub link, or a workflow JSON file">
                                 📥 <span data-i18n="workflow.importWorkflow">Import</span>
                             </button>
                         </div>
@@ -4379,12 +4379,12 @@
     <script src="assets/js/voice-token.js?v=20261026-voicetoken"></script>
     <script src="assets/js/gemini-live-client.js?v=20261026-voicetoken"></script>
     <script src="assets/js/grok-live-client.js"></script>
-    <script src="assets/js/mcp-client.js?v=20261110-mcpimport"></script>
+    <script src="assets/js/mcp-client.js?v=20261110-list"></script>
     <script src="assets/js/mcp-app-host.js"></script>
     <!-- Local File System bootstrap — exposes window.localFs for skills,
          workflows, artifacts. Must load before settings-panel uses it. -->
     <script src="assets/js/local-fs.js?v=20261029-folder-path"></script>
-    <script src="assets/js/settings-panel.js?v=20261103-zip-progress"></script>
+    <script src="assets/js/settings-panel.js?v=20261110-runsettings"></script>
     <script src="assets/js/agent-teams-panel.js?v=20261005-flush-on-clear"></script>
     <!-- Drawflow workflow editor -->
     <script src="https://cdn.jsdelivr.net/gh/jerosoler/Drawflow/dist/drawflow.min.js"></script>
@@ -4392,7 +4392,7 @@
     <script src="assets/js/gemini-realtime-adapter.js?v=20261026-voicetoken"></script>
     <script src="assets/js/voice-dictation.js?v=20261026-voicetoken"></script>
     <script src="assets/js/workflow-realtime-runner.js"></script>
-    <script src="assets/js/workflow-package.js?v=20261110-mcpimport4"></script>
+    <script src="assets/js/workflow-package.js?v=20261110-runsettings"></script>
     <script src="assets/js/skill-requires.js?v=20261104-declnone"></script>
     <script src="assets/js/skill-zip.js?v=20261104-listitems"></script>
     <script src="assets/js/skill-frontmatter.js?v=20261103-fm2"></script>
@@ -4461,10 +4461,11 @@
     <script src="assets/js/robot-owner.js?v=20261029-others"></script>
     <script src="assets/js/workflow-package-ui.js?v=20261110-mcpimport2"></script>
     <script src="assets/js/mcp-host-install.js?v=20261110-mcpimport4"></script>
-    <script src="assets/js/workflow-package-import.js?v=20261110-mcpimport2"></script>
+    <script src="assets/js/workflow-package-import.js?v=20261110-wflink"></script>
+    <script src="assets/js/mcp-server-settings.js?v=20261110-list"></script>
     <script src="assets/js/mcp-import.js?v=20261110-mcpimport4"></script>
     <script src="assets/js/skill-visibility-card.js?v=20261103-skilldeps3"></script>
-    <script src="assets/js/workflow-editor.js?v=20261107-inputpaths"></script>
+    <script src="assets/js/workflow-editor.js?v=20261110-allsrv"></script>
     <script src="assets/js/agents-library.js?v=20260903-playbook-agent"></script>
     <script src="assets/js/mcp-tool-tester.js?v=20261105-functions"></script>
     <script src="assets/js/mcp-protocol-validator.js?v=20261105-mcptest"></script>

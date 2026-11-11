@@ -222,7 +222,7 @@ function appendFakeChild(overlay, html) {
     return child;
 }
 
-function makeBatchEditor(respond, { throws = false } = {}) {
+function makeBatchEditor(respond, { throws = false, settingsOk = true } = {}) {
     const feed = [];
     const cleared = [];
     const routes = [];
@@ -244,7 +244,10 @@ function makeBatchEditor(respond, { throws = false } = {}) {
         _pbBubble(who, text, opts = {}) { feed.push({ who, text, label: opts.label }); },
         _pbRouteLine(to, notes) { routes.push({ to, notes }); feed.push({ who: 'route', text: to }); },
         _openDocumentOverlay(a) { this.opened.push(a); },
+        ran: 0,
+        async _runSettingsGate() { return settingsOk; },
         async executeWorkflowInBrowser(prompt, opts) {
+            this.ran++;
             if (throws) throw new Error('runner exploded');
             opts?.onProgress?.({ type: 'route', node_id: '3', to: 'IT claims', from: 'Dispatcher', notes: 'password reset' });
             return respond(prompt);
@@ -252,6 +255,15 @@ function makeBatchEditor(respond, { throws = false } = {}) {
     });
     return obj;
 }
+
+asyncCheck('_batchTurn: cancelled server settings form = nothing runs, one bubble says so', async () => {
+    const ed = makeBatchEditor(() => ({ output: 'should not run', success: true }), { settingsOk: false });
+    const res = await ed._batchTurn('go');
+    assert.strictEqual(ed.ran, 0);
+    assert.strictEqual(res.success, false);
+    const answers = ed.feed.filter(f => f.who === 'agent');
+    assert.deepStrictEqual(answers.map(a => a.text), ['workflow.runSettings.cancelled']);
+});
 
 asyncCheck('_batchTurn renders exactly one answer bubble, verbatim', async () => {
     const ed = makeBatchEditor(() => ({ output: 'Your password was reset.', success: true }));

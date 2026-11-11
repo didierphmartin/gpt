@@ -177,3 +177,12 @@ test('admin tool fetch (mcpHttpCall) uses the internal gateway', async () => {
     globalThis.fetch = realFetch;
   }
 });
+
+test('schema relays the settings list to its owner only', async () => {
+  await ctl().putSchema(req(3, { env: [{ name: 'X', required: true }] }, 'a'));
+  const put = calls[calls.length - 1];
+  assert.equal(put.method, 'PUT');
+  assert.ok(put.url.endsWith('/servers/a/schema'));
+  assert.deepEqual(JSON.parse(put.body!), { env: [{ name: 'X', required: true }] });
+  assert.equal((await ctl().putSchema(req(4, { env: [] }, 'a'))).status_code, 403);
+});

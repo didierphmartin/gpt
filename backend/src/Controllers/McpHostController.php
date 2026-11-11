@@ -114,6 +114,12 @@ final class McpHostController
         return $this->owned($request, $folder, 'PUT', 'settings', true);
     }
 
+    /** Replace the server's settings list (its manifest's env). */
+    public function putSchema(array $request, string|int $folder): array
+    {
+        return $this->owned($request, $folder, 'PUT', 'schema', true);
+    }
+
     public function source(array $request, string|int $folder): array
     {
         return $this->owned($request, $folder, 'GET', 'source', false);

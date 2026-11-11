@@ -58,6 +58,9 @@ function makeEnv(stub) {
     };
     vm.createContext(ctx);
     vm.runInContext(src, ctx);
+    ctx.self = ctx.window;
+    vm.runInContext(fs.readFileSync(__dirname + '/../workflow-package.js', 'utf8'), ctx);
+    vm.runInContext(fs.readFileSync(__dirname + '/../mcp-server-settings.js', 'utf8'), ctx);   // the panel's shared reader
     const panel = Object.create(ctx.SettingsPanel.prototype);
     panel.mcpServerList = list;
     panel.myMcpEffective = new Map();

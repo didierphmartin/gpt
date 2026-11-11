@@ -273,6 +273,8 @@
             name: f.name, label: f.label || '', required: !!f.required,
             secret: f.secret !== undefined ? !!f.secret : SECRET_FIELD_RE.test(f.name),
             default: f.default === undefined || f.default === null ? '' : String(f.default),
+            // Settings that go together: once one of a group is filled, the others are needed too.
+            ...(typeof f.group === 'string' && f.group.trim() ? { group: f.group.trim() } : {}),
         });
         if (manifest && Array.isArray(manifest.env)) return manifest.env.map((f) => norm({ ...f, secret: f.secret }));
         const fields = [];
@@ -352,9 +354,19 @@
         return out;
     }
 
-    /** Names of required fields with no value. */
+    /**
+     * Names of the fields still needed: a required one not filled, and in a group (fields sharing `group`)
+     * where at least one is filled, every member not filled. isFilled(field) says whether a field has a value.
+     */
+    function missingSettings(fields, isFilled) {
+        const list = fields || [];
+        const started = new Set(list.filter((f) => f.group && isFilled(f)).map((f) => f.group));
+        return list.filter((f) => !isFilled(f) && (f.required || (f.group && started.has(f.group)))).map((f) => f.name);
+    }
+
+    /** Names of the fields still needed for these values (missingSettings: required ones and started groups). */
     function missingRequired(fields, values) {
-        return (fields || []).filter((f) => f.required && !String(pick(values, f.name) || '').trim()).map((f) => f.name);
+        return missingSettings(fields, (f) => !!String(pick(values, f.name) || '').trim());
     }
 
     const norm = (v) => String(v === undefined || v === null ? '' : v).trim().toLowerCase();
@@ -892,5 +904,5 @@
         return { installed, commands, nodes };
     }
 
-    return { WORKFLOW_KEYS, isSafeSegment, isSafeWritePath, packageSkills, skillZipPath, readPackageSkill, mergeEnv, collectDependencies, missingByNode, serverFolder, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, hostFolderOf, hostSourceFiles, envFields, renderEnv, parseEnv, missingRequired, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest, readPackage, matchComponent, reviewRows, canConfirm, installPackage };
+    return { WORKFLOW_KEYS, isSafeSegment, isSafeWritePath, packageSkills, skillZipPath, readPackageSkill, mergeEnv, collectDependencies, missingByNode, serverFolder, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, hostFolderOf, hostSourceFiles, envFields, renderEnv, parseEnv, missingRequired, missingSettings, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest, readPackage, matchComponent, reviewRows, canConfirm, installPackage };
 });

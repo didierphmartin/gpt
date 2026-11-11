@@ -77,6 +77,10 @@ class McpHostController:
     def putSettings(self, request: dict, folder=None) -> dict:
         return self._owned(request, folder, 'PUT', 'settings', True)
 
+    def putSchema(self, request: dict, folder=None) -> dict:
+        """Replace the server's settings list (its manifest's env)."""
+        return self._owned(request, folder, 'PUT', 'schema', True)
+
     def source(self, request: dict, folder=None) -> dict:
         return self._owned(request, folder, 'GET', 'source', False)
 

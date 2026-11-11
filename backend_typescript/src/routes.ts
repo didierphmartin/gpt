@@ -254,6 +254,7 @@ router.post('/api/v1/mcp/host/servers/:folder([A-Za-z0-9_.-]+)/restart', handle(
 router.post('/api/v1/mcp/host/servers/:folder([A-Za-z0-9_.-]+)/enabled', handle((ctx) => mcpHost.enabled(ctx)));
 router.get('/api/v1/mcp/host/servers/:folder([A-Za-z0-9_.-]+)/settings', handle((ctx) => mcpHost.getSettings(ctx)));
 router.put('/api/v1/mcp/host/servers/:folder([A-Za-z0-9_.-]+)/settings', handle((ctx) => mcpHost.putSettings(ctx)));
+router.put('/api/v1/mcp/host/servers/:folder([A-Za-z0-9_.-]+)/schema', handle((ctx) => mcpHost.putSchema(ctx)));
 router.get('/api/v1/mcp/host/servers/:folder([A-Za-z0-9_.-]+)/source', handle((ctx) => mcpHost.source(ctx)));
 router.delete('/api/v1/mcp/host/servers/:folder([A-Za-z0-9_.-]+)', handle((ctx) => mcpHost.delete(ctx)));
 // Docker app skill store (SKILLS_DIR volume; 404 'no skill store' in folder mode except /store and /native-wheels).
