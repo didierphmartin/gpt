@@ -1,4 +1,4 @@
-# GPT - New generation Harness
+# New Generation AI Studio
 
 **Design an agent workflow once, debug it live, then compile it for the agent framework you choose:
 LangGraph, Google ADK, Microsoft Agent Framework or NVIDIA OO Agents.**
