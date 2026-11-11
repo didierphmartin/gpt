@@ -464,6 +464,32 @@
     }
 
     /** manifest.json: format + one entry per dependency, with where its files sit in the zip. */
+    /**
+     * A server's settings as the export carries them: every declared setting by name; a plain one with its value,
+     * a secret one (declared secret, or a secret-looking name) always empty -- the person importing enters their own.
+     * fields: envFields-shaped; values: { name: value }. Returns { name: value } (insertion order = fields order).
+     */
+    function exportSettings(fields, values) {
+        const out = {};
+        for (const f of fields || []) {
+            if (!f || typeof f.name !== 'string' || !f.name) continue;
+            const v = values && Object.prototype.hasOwnProperty.call(values, f.name) ? values[f.name] : undefined;
+            out[f.name] = f.secret || SECRET_FIELD_RE.test(f.name) || v === undefined || v === null ? '' : String(v);
+        }
+        return out;
+    }
+
+    /** The plain values a package carries for these fields (secrets never, even if a package has one). */
+    function carriedSettings(fields, settings) {
+        const out = Object.create(null);
+        if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return out;
+        for (const f of fields || []) {
+            const v = Object.prototype.hasOwnProperty.call(settings, f.name) ? settings[f.name] : undefined;
+            if (typeof v === 'string' && v !== '' && !f.secret && !SECRET_FIELD_RE.test(f.name)) out[f.name] = v;
+        }
+        return out;
+    }
+
     function buildManifest({ workflowName, deps, servers, components, playbooks, skills, strippedSecrets }) {
         const unique = (used, base, ext) => {
             let name = base + ext;
@@ -477,6 +503,8 @@
             ...(servers || []).map((s) => ({
                 kind: 'server', ...serverRegistration(s),
                 ...(s.local ? { folder: `mcps/${s.folder}/`, has_install_manifest: !!s.hasManifest } : {}),
+                // its settings: plain values filled in, secrets empty (exportSettings)
+                ...(s.local && s.settings && typeof s.settings === 'object' ? { settings: s.settings } : {}),
             })),
             ...(components || []).map((c) => ({
                 kind: 'component', name: c.name, old_id: Number(c.id),
@@ -582,7 +610,10 @@
                 let man = null;
                 try { man = mj ? JSON.parse(dec(mj)) : null; } catch (e) { man = null; }
                 const fields = envFields(man, ex ? dec(ex) : '');
-                if (fields.some((f) => f.required)) { r.reasons.push('settings-required'); r.envFields = fields; }
+                // the plain values the package carries pre-fill the form; secrets stay for the importer to enter
+                const carried = carriedSettings(fields, dep && dep.settings);
+                if (fields.some((f) => f.required)) r.reasons.push('settings-required');
+                if (fields.some((f) => f.required) || Object.keys(carried).length) { r.envFields = fields; r.carried = carried; }
             }
             if (!(h.host && s.local) && isLocalUrl(s.url)) { r.reasons.push('localhost-url'); r.url = s.url; }
             if (s.needs_auth) r.reasons.push('needs-key');
@@ -904,5 +935,5 @@
         return { installed, commands, nodes };
     }
 
-    return { WORKFLOW_KEYS, isSafeSegment, isSafeWritePath, packageSkills, skillZipPath, readPackageSkill, mergeEnv, collectDependencies, missingByNode, serverFolder, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, hostFolderOf, hostSourceFiles, envFields, renderEnv, parseEnv, missingRequired, missingSettings, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest, readPackage, matchComponent, reviewRows, canConfirm, installPackage };
+    return { WORKFLOW_KEYS, isSafeSegment, isSafeWritePath, packageSkills, skillZipPath, readPackageSkill, mergeEnv, collectDependencies, missingByNode, serverFolder, SECRET_FIELD_RE, stripSecrets, DEFAULT_EXCLUDES, selectServerFiles, hostFolderOf, hostSourceFiles, envFields, renderEnv, parseEnv, missingRequired, missingSettings, exportSettings, carriedSettings, classify, playbookToMd, mdToPlaybook, relinkNodes, filesHash, safeFileName, serverRegistration, buildManifest, readPackage, matchComponent, reviewRows, canConfirm, installPackage };
 });

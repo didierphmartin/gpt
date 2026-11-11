@@ -43,6 +43,28 @@
     }
 
     /** A local server's filtered source as { "mcps/<folder>/<path>": bytes } and its install manifest. */
+    /**
+     * The settings a server's package entry carries (WorkflowPackage.exportSettings): plain values filled in,
+     * secrets empty. Read where the server runs -- the Docker host, or mcps/<folder> in the user's folder.
+     * The settings the host sets itself (host, port) are left out. Null when they can't be read (export goes on).
+     */
+    async function readServerSettings(hostFolder, folder) {
+        try {
+            if (hostFolder) {
+                const data = await window.mcpClient.hostSettings(hostFolder);
+                const over = Array.isArray(data && data.overridden) ? data.overridden : [];
+                const fields = ((data && data.fields) || []).filter((f) => !over.includes(f.name));
+                const values = Object.fromEntries(fields.filter((f) => 'value' in f).map((f) => [f.name, f.value]));
+                return WP().exportSettings(fields, values);
+            }
+            const info = await window.McpServerSettings.readLocalInfo(folder);
+            return info.error ? null : WP().exportSettings(info.fields, info.values);
+        } catch (e) {
+            console.warn('[package] server settings unreadable:', e.message);
+            return null;
+        }
+    }
+
     async function readServerSource(folder) {
         const dir = window.localFs && await window.localFs.resolvePath(`mcps/${folder}`);
         if (!dir) return null;
@@ -222,7 +244,8 @@
             if (source && !source.manifest) warn('no-install', 'warnNoInstall', { name });
             if (source) Object.assign(files, source.files);
             const hostRow = hostFolder ? hostRows.find((x) => x && x.folder === hostFolder) : null;
-            servers.push({ ...reg, local: !!source, folder, hasManifest: !!(source && source.manifest),
+            const settings = source ? await readServerSettings(hostFolder, folder) : null;
+            servers.push({ ...reg, local: !!source, folder, hasManifest: !!(source && source.manifest), ...(settings ? { settings } : {}),
                 ...(source && hostRow && hostRow.source ? { source: hostRow.source } : {}) });
         }
 

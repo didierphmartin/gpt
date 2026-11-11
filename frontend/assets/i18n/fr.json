@@ -1901,6 +1901,7 @@
       "settingsTitle": "Paramètres privés",
       "required": "Obligatoire",
       "fillLater": "Remplir plus tard (le serveur est installé sans ses paramètres)",
+      "secretHint": "Secret : absent du paquet, saisissez le vôtre",
       "show": "Afficher",
       "hide": "Masquer",
       "workflowKeysHelp": "Ces clés ont été retirées à l'export du flux de travail. Laissez un champ vide pour le remplir plus tard dans le nœud.",
