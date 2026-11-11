@@ -19,7 +19,7 @@ final class WorkflowDuplicateTest extends TestCase
         $this->ids = RobotSchema::create($this->db);
         RobotSchema::agentsAndPlaybooks($this->db);
         foreach (['description TEXT', 'steps TEXT', 'triggers TEXT', 'variables TEXT', 'output_storage_enabled INTEGER DEFAULT 0',
-            'output_folder TEXT', 'orchestration TEXT', 'workspace_id INTEGER'] as $col) {
+            'output_folder TEXT', 'orchestration TEXT', 'mlflow_tracing INTEGER DEFAULT 0', 'workspace_id INTEGER'] as $col) {
             $this->db->exec("ALTER TABLE agent_workflows ADD COLUMN $col");
         }
         foreach (['pos_x INTEGER', 'pos_y INTEGER', 'drawflow_node_id INTEGER'] as $col) {

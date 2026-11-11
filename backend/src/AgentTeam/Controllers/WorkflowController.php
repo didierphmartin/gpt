@@ -264,7 +264,8 @@ class WorkflowController
                      ->setWorkspaceId($body['workspace_id'] ?? null)
                      ->setOutputStorageEnabled((bool) ($body['output_storage_enabled'] ?? false))
                      ->setOutputFolder($body['output_folder'] ?? null)
-                     ->setOrchestration((string) ($body['orchestration'] ?? 'workflow'));
+                     ->setOrchestration((string) ($body['orchestration'] ?? 'workflow'))
+                     ->setMlflowTracing(!empty($body['mlflow_tracing']));
 
             // Set steps (for backward compatibility or legacy workflows)
             if ($hasSteps) {
@@ -709,6 +710,10 @@ class WorkflowController
             // the live interpreter and every compile target read the same value.
             if (isset($body['orchestration'])) {
                 $workflow->setOrchestration((string) $body['orchestration']);
+            }
+            // Like orchestration: every compile target reads it from the workflow.
+            if (array_key_exists('mlflow_tracing', $body)) {
+                $workflow->setMlflowTracing(!empty($body['mlflow_tracing']));
             }
 
             // Check for graph-based workflow (from visual editor)

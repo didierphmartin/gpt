@@ -29,6 +29,9 @@ final class CompiledPackage
     /** The TO RUN install line of a package's files: the package's requirements.txt holds the list. */
     public const PIP_REQUIREMENTS = 'pip install -r requirements.txt';
 
+    /** The workflow's "MLflow tracing" setting: the program exports OpenTelemetry spans to MLflow over OTLP/HTTP. */
+    private const MLFLOW_REQUIREMENTS = ['opentelemetry-exporter-otlp-proto-http'];
+
     private const HARNESS = __DIR__ . '/../../../../frontend/assets/py/code_node_harness.py';
 
     /**
@@ -129,6 +132,9 @@ final class CompiledPackage
         if ($layout === 'a2a') {
             array_push($req, ...self::A2A_REQUIREMENTS);
         }
+        if (!empty($analyzed['mlflowTracing'])) {
+            array_push($req, ...self::MLFLOW_REQUIREMENTS);
+        }
         // A playbook node runs the shared interpreter (langchain-core + langgraph + its provider's package).
         array_push($req, ...PlaybookEmit::requirementNames($analyzed));
         array_push($req, ...LangGraphPackage::skillRequirementNames($skillFiles));
@@ -180,6 +186,9 @@ final class CompiledPackage
         }
         if ($layout === 'a2a') {
             $o[] = ['First port of the agent servers, one per node in order (default: 8701)', 'A2A_BASE_PORT=8701'];
+        }
+        if (!empty($analyzed['mlflowTracing'])) {
+            array_push($o, ...PackageDocs::MLFLOW_ENV);
         }
         return $o;
     }
@@ -241,6 +250,10 @@ final class CompiledPackage
             array_push($L, ...PackageDocs::runServer($layout === 'modular',
                 $layout === 'a2a' ? ['The agent servers start with its first run and stop when it exits.'] : []));
             array_push($L, ...PackageDocs::service($name, $title, $folder, 'workflow.py', '', $startMode));
+        }
+        if (!empty($analyzed['mlflowTracing'])) {
+            array_push($L, ...PackageDocs::mlflow("the {$title} agent runs, their LLM calls and tool calls, as OpenTelemetry"
+                . "\n" . 'spans' . ($layout === 'a2a' ? ' (each node server traces its own node).' : '.')));
         }
         $L[] = '## Files';
         $L[] = '';

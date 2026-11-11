@@ -23,7 +23,7 @@ final class WorkflowControllerRefsTest extends TestCase
         $this->db->exec('DROP TABLE agent_workflows');
         $this->db->exec("CREATE TABLE agent_workflows (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, workspace_id INTEGER, name TEXT,
             description TEXT, steps TEXT, triggers TEXT, variables TEXT, enabled INTEGER DEFAULT 1, output_storage_enabled INTEGER DEFAULT 0,
-            output_folder TEXT, orchestration TEXT DEFAULT 'workflow', created_at TEXT, updated_at TEXT)");
+            output_folder TEXT, orchestration TEXT DEFAULT 'workflow', mlflow_tracing INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT)");
         $this->db->exec('CREATE TABLE playbooks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, pkey TEXT, title TEXT, text TEXT, updated_at TEXT)');
         $this->db->exec("INSERT INTO playbooks (user_id, pkey, title, text) VALUES (3, 'reset-pw', 'x', 'x')");
 

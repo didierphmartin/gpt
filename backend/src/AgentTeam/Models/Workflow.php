@@ -33,6 +33,9 @@ class Workflow
     // handing control to one another ("swarm").
     private string $orchestration = 'workflow';
 
+    // Compiled programs send their traces to MLflow (MLFLOW_TRACKING_URI): every target, every layout.
+    private bool $mlflowTracing = false;
+
     // The automation that generated this workflow (null when hand-made); set by the automations API only.
     private ?int $automationId = null;
 
@@ -75,6 +78,7 @@ class Workflow
         // falls back — an unknown value must not change how a graph runs.
         $o = (string) ($data['orchestration'] ?? 'workflow');
         $this->orchestration = in_array($o, ['workflow', 'swarm'], true) ? $o : 'workflow';
+        $this->mlflowTracing = !empty($data['mlflow_tracing']);
 
         $this->automationId = isset($data['automation_id']) ? (int) $data['automation_id'] : null;
 
@@ -113,6 +117,7 @@ class Workflow
             'output_storage_enabled' => $this->outputStorageEnabled,
             'output_folder' => $this->outputFolder,
             'orchestration' => $this->orchestration,
+            'mlflow_tracing' => $this->mlflowTracing,
             'automation_id' => $this->automationId,
         ];
 
@@ -141,6 +146,7 @@ class Workflow
             'output_storage_enabled' => $this->outputStorageEnabled,
             'output_folder' => $this->outputFolder,
             'orchestration' => $this->orchestration,
+            'mlflow_tracing' => $this->mlflowTracing,
             'automation_id' => $this->automationId,
             'schedule_enabled' => $this->isScheduleEnabled(), // Computed from triggers
             'runtime_mode' => $this->detectRuntimeMode(),
@@ -327,6 +333,17 @@ class Workflow
     public function getOrchestration(): string
     {
         return $this->orchestration;
+    }
+
+    public function isMlflowTracing(): bool
+    {
+        return $this->mlflowTracing;
+    }
+
+    public function setMlflowTracing(bool $on): self
+    {
+        $this->mlflowTracing = $on;
+        return $this;
     }
 
     /**

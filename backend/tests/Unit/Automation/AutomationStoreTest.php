@@ -27,7 +27,7 @@ final class AutomationStoreTest extends TestCase
         $db->exec('DROP TABLE IF EXISTS agent_workflows');
         $db->exec("CREATE TABLE agent_workflows (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, workspace_id INTEGER, name TEXT,
             description TEXT, steps TEXT, triggers TEXT, variables TEXT, enabled INTEGER DEFAULT 1, output_storage_enabled INTEGER DEFAULT 0,
-            output_folder TEXT, orchestration TEXT DEFAULT 'workflow', created_at TEXT, updated_at TEXT, automation_id INTEGER)");
+            output_folder TEXT, orchestration TEXT DEFAULT 'workflow', mlflow_tracing INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT, automation_id INTEGER)");
         $db->exec('CREATE TABLE playbooks (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, pkey TEXT, title TEXT, text TEXT, updated_at TEXT, automation_id INTEGER)');
     }
 

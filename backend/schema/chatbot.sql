@@ -218,6 +218,7 @@ CREATE TABLE `agent_workflows` (
   `output_storage_enabled` tinyint(1) DEFAULT '0',
   `output_folder` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `orchestration` varchar(16) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'workflow',
+  `mlflow_tracing` tinyint(1) NOT NULL DEFAULT '0',
   `automation_id` int DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

@@ -69,6 +69,8 @@ class ADKGenerator
         }
         $analyzer = new WorkflowGraphAnalyzer($this->db, $this->workflowRepo, $this->graphRepo, $this->agentRepo);
         $analyzed = $analyzer->analyze($workflowId, $userId);
+        // The workflow's "MLflow tracing" setting (MlflowTracing in the emitted header).
+        $analyzed['mlflowTracing'] = $wfForArch !== null && $wfForArch->isMlflowTracing();
 
         // Platform default model per provider (system_llm_settings) — an empty
         // node/agent model means "use the platform default" and must be resolved
@@ -428,6 +430,64 @@ PY;
     // Private emit helpers
     // -------------------------------------------------------------------------
 
+
+    /**
+     * The workflow's "MLflow tracing" setting: the MlflowTracing class the header ends with, and its start call
+     * (spans exported to MLFLOW_TRACKING_URI over OTLP/HTTP). Empty when the setting is off: the program is unchanged.
+     */
+    private static function mlflowTracingBlock(array $analyzed): string
+    {
+        if (empty($analyzed['mlflowTracing'])) {
+            return '';
+        }
+        return "\n\n" . <<<'PY'
+class MlflowTracing:
+    """The workflow's "MLflow tracing" setting: with MLFLOW_TRACKING_URI set, this program's ADK agent runs, their LLM calls and tool calls go to
+    that MLflow server as OpenTelemetry spans, in the experiment MLFLOW_EXPERIMENT_NAME (default: the workflow's
+    name, created if missing). Unset: nothing is traced. Tracing never stops the program."""
+
+    @staticmethod
+    def experiment_id(uri: str, name: str) -> str:
+        """The id of the MLflow experiment `name` (MLflow's REST API), created when it does not exist yet."""
+        api = uri.rstrip("/") + "/api/2.0/mlflow/experiments"
+        r = httpx.get(api + "/get-by-name", params={"experiment_name": name}, timeout=10)
+        if r.status_code == 200:
+            return r.json()["experiment"]["experiment_id"]
+        r = httpx.post(api + "/create", json={"name": name}, timeout=10)
+        if r.status_code == 200:
+            return r.json()["experiment_id"]
+        # Another process created it first (A2A node servers start together): read it back.
+        r = httpx.get(api + "/get-by-name", params={"experiment_name": name}, timeout=10)
+        r.raise_for_status()
+        return r.json()["experiment"]["experiment_id"]
+
+    @staticmethod
+    def exporter(uri: str, name: str):
+        """An OTLP/HTTP span exporter to MLflow's /v1/traces, for the experiment `name`."""
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        return OTLPSpanExporter(endpoint=uri.rstrip("/") + "/v1/traces",
+                                headers={"x-mlflow-experiment-id": MlflowTracing.experiment_id(uri, name)})
+
+    @staticmethod
+    def start(workflow_name: str) -> None:
+        uri = os.environ.get("MLFLOW_TRACKING_URI")
+        if not uri:
+            return
+        try:
+            exporter = MlflowTracing.exporter(uri, os.environ.get("MLFLOW_EXPERIMENT_NAME") or workflow_name)
+            from opentelemetry import trace
+            from opentelemetry.sdk.trace import TracerProvider
+            from opentelemetry.sdk.trace.export import BatchSpanProcessor
+            provider = TracerProvider()   # ADK reports its agent, LLM and tool spans to the global tracer provider
+            provider.add_span_processor(BatchSpanProcessor(exporter))
+            trace.set_tracer_provider(provider)
+        except Exception as e:  # noqa: BLE001 -- a missing package or an unreachable server
+            print(f"[warn] MLflow tracing is off: {e}", file=sys.stderr)
+
+
+PY . "\nMlflowTracing.start(" . PythonEmitHelpers::pyStr((string) $analyzed['workflow']['name']) . ")\n";
+    }
+
     /**
      * Emit the file header: module docstring + all top-level imports.
      *
@@ -456,6 +516,7 @@ PY;
             ],
             'storage' => ['enabled' => !empty($analyzed['outputStorageEnabled']), 'folder' => $analyzed['outputFolder'] ?? null],
         ]));
+        $mlflow = self::mlflowTracingBlock($analyzed);
         return <<<PY
 """Standalone Google ADK workflow: {$name}
 
@@ -481,7 +542,7 @@ from google.adk.tools import FunctionTool
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.adk.events import Event, EventActions
-from google.genai import types
+from google.genai import types{$mlflow}
 
 # Runtime "today" for date-grounding every agent instruction (evaluated at import).
 _TODAY = time.strftime("%Y-%m-%d")

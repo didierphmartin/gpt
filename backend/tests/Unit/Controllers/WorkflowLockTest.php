@@ -24,7 +24,7 @@ final class WorkflowLockTest extends TestCase
         $this->ids = RobotSchema::create($this->db);
         $have = array_column($this->db->query('PRAGMA table_info(agent_workflows)')->fetchAll(), 'name');
         foreach (['description' => 'TEXT', 'steps' => 'TEXT', 'triggers' => 'TEXT', 'variables' => 'TEXT', 'enabled' => 'INTEGER DEFAULT 1',
-                  'workspace_id' => 'INTEGER', 'output_storage_enabled' => 'INTEGER DEFAULT 0', 'output_folder' => 'TEXT', 'orchestration' => 'TEXT'] as $c => $t) {
+                  'workspace_id' => 'INTEGER', 'output_storage_enabled' => 'INTEGER DEFAULT 0', 'output_folder' => 'TEXT', 'orchestration' => 'TEXT', 'mlflow_tracing' => 'INTEGER DEFAULT 0'] as $c => $t) {
             if (!in_array($c, $have, true)) {
                 $this->db->exec("ALTER TABLE agent_workflows ADD COLUMN $c $t");
             }

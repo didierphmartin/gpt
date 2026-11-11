@@ -1747,6 +1747,10 @@
       "swarm": "Run as a swarm",
       "swarmHelp": "Agents hand the conversation to one another instead of running in a fixed order. Connect two or more agents to Start — each can hand off to the others."
     },
+    "mlflow": {
+      "label": "MLflow tracing",
+      "help": "Compiled programs (LangGraph, ADK, MAF, NOOA) send their traces to the MLflow server named by MLFLOW_TRACKING_URI."
+    },
     "swarmAttachWarn": "Documents attached to Start are not delivered to swarm agents yet — put what they need in the prompt.",
     "swarmCanvas": {
       "holdingTurn": "Holding the turn — your next message goes here",

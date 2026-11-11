@@ -1747,6 +1747,10 @@
       "swarm": "Exécuter en essaim",
       "swarmHelp": "Les agents se transmettent la conversation au lieu de s'exécuter dans un ordre fixe. Reliez au moins deux agents à Start ; chacun peut passer la main aux autres."
     },
+    "mlflow": {
+      "label": "Traces MLflow",
+      "help": "Les programmes compilés (LangGraph, ADK, MAF, NOOA) envoient leurs traces au serveur MLflow indiqué par MLFLOW_TRACKING_URI."
+    },
     "swarmAttachWarn": "Les documents attachés à Start ne sont pas encore transmis aux agents de l'essaim — mettez ce dont ils ont besoin dans le prompt.",
     "swarmCanvas": {
       "holdingTurn": "A la parole — votre prochain message arrivera ici",

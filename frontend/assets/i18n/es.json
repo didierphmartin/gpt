@@ -1747,6 +1747,10 @@
       "swarm": "Ejecutar como enjambre",
       "swarmHelp": "Los agentes se pasan la conversación entre ellos en lugar de ejecutarse en un orden fijo. Conecta dos o más agentes a Start; cada uno puede pasar el turno a los demás."
     },
+    "mlflow": {
+      "label": "Trazas de MLflow",
+      "help": "Los programas compilados (LangGraph, ADK, MAF, NOOA) envían sus trazas al servidor MLflow indicado en MLFLOW_TRACKING_URI."
+    },
     "swarmAttachWarn": "Los documentos adjuntos a Start todavía no se entregan a los agentes del enjambre; incluye en el prompt lo que necesiten.",
     "swarmCanvas": {
       "holdingTurn": "Tiene el turno — tu próximo mensaje llegará aquí",

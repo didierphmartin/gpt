@@ -31,6 +31,7 @@ class WorkflowEditor {
         // workflow, not of a build: the interpreter and every compile target
         // read the same value.
         this.orchestration = 'workflow';
+        this.mlflowTracing = false;   // compiled programs trace to MLflow (agent_workflows.mlflow_tracing)
 
         // The live swarm session (spec §3b): {workflowId, rewrite, activeAgent,
         // transcript}, or null when no swarm conversation is open. See
@@ -1253,6 +1254,13 @@ class WorkflowEditor {
                     <span class="block text-xs text-gray-500">${this.escapeHtml(this.t('workflow.orchestration.swarmHelp') || 'Agents hand the conversation to one another instead of running in a fixed order. Connect two or more agents to Start — each can hand off to the others.')}</span>
                 </span>
             </label>
+            <label class="flex items-start gap-3 cursor-pointer mt-3">
+                <input type="checkbox" class="wf-mlflow-toggle mt-1 h-4 w-4">
+                <span>
+                    <span class="block text-sm font-medium text-gray-900">${this.escapeHtml(this.t('workflow.mlflow.label'))}</span>
+                    <span class="block text-xs text-gray-500">${this.escapeHtml(this.t('workflow.mlflow.help'))}</span>
+                </span>
+            </label>
             <div class="workflow-btn-group">
                 <button id="workflow-schedule-btn" class="workflow-io-btn" title="${this.escapeHtml(this.t('workflow.batchSession.configure'))}">
                     ⏱ ${this.escapeHtml(this.t('workflow.batchSession.configureLabel'))}
@@ -1631,6 +1639,12 @@ class WorkflowEditor {
             this.updateStartNodeIndicator(!!(this.lastUserPrompt && String(this.lastUserPrompt).trim()));
         });
 
+        // MLflow tracing is a workflow property, like orchestration: every compile target reads it from the saved workflow.
+        document.querySelector('.wf-mlflow-toggle')?.addEventListener('change', (e) => {
+            this.mlflowTracing = !!e.target.checked;
+            this._workflowDirty = true;
+        });
+
         saveBtn.addEventListener('click', async () => {
             if (saveBtn.disabled) return;
             // Same in-button progress as the playbook modal's Save / the top
@@ -1891,6 +1905,8 @@ class WorkflowEditor {
         if (swarmCheckbox) {
             swarmCheckbox.checked = this._isSwarm();
         }
+        const mlflowCheckbox = document.querySelector('.wf-mlflow-toggle');
+        if (mlflowCheckbox) mlflowCheckbox.checked = !!this.mlflowTracing;
 
         const audioName = document.getElementById('audio-workflow-name-input');
         const audioDesc = document.getElementById('audio-workflow-description-input');
@@ -7388,6 +7404,7 @@ class WorkflowEditor {
             triggers: { schedule: { enabled: this.scheduleEnabled } },
             output_storage_enabled: this.outputStorageEnabled ? 1 : 0,
             orchestration: this.orchestration,
+            mlflow_tracing: this.mlflowTracing ? 1 : 0,
             output_folder: this.outputFolder || null,
             // The components the nodes link to, so the file imports where they do not exist (another account or install).
             ...(codeComponents.length ? { code_components: codeComponents } : {})
@@ -7565,6 +7582,7 @@ class WorkflowEditor {
         this.outputStorageEnabled = !!payload.output_storage_enabled;
         this.outputFolder = payload.output_folder || '';
         this.orchestration = payload.orchestration === 'swarm' ? 'swarm' : 'workflow';
+        this.mlflowTracing = !!Number(payload.mlflow_tracing);
         this.scheduleEnabled = !!(payload.triggers?.schedule?.enabled);
 
         this.importGraphFromBackend({ nodes, edges });
@@ -13958,7 +13976,7 @@ class WorkflowEditor {
     _saveState() {
         const { nodes, edges } = this.exportWorkflow();   // not raw: Drawflow reorders its links on a redraw
         return JSON.stringify([nodes, edges, this.currentWorkflowDescription, this.runtimeMode, this.audioLlmProvider,
-            this.scheduleEnabled, this.outputStorageEnabled, this.orchestration, this.outputFolder]);
+            this.scheduleEnabled, this.outputStorageEnabled, this.orchestration, this.mlflowTracing, this.outputFolder]);
     }
 
     /**
@@ -14078,6 +14096,7 @@ class WorkflowEditor {
                 },
                 output_storage_enabled: this.outputStorageEnabled ? 1 : 0,
                 orchestration: this.orchestration,
+                mlflow_tracing: this.mlflowTracing ? 1 : 0,
                 output_folder: this.outputFolder || null
             };
 
@@ -14170,6 +14189,7 @@ class WorkflowEditor {
                 },
                 output_storage_enabled: this.outputStorageEnabled ? 1 : 0,
                 orchestration: this.orchestration,
+                mlflow_tracing: this.mlflowTracing ? 1 : 0,
                 output_folder: this.outputFolder || null
             };
 
@@ -14315,6 +14335,7 @@ class WorkflowEditor {
             // both must be wired or the toggle reads correctly on one arrival
             // path and silently reverts on the other.
             this.orchestration = workflowData.orchestration === 'swarm' ? 'swarm' : 'workflow';
+            this.mlflowTracing = !!Number(workflowData.mlflow_tracing);
 
             // Load schedule enabled setting (from triggers or computed field)
             this.scheduleEnabled = !!workflowData.schedule_enabled ||
@@ -18891,6 +18912,7 @@ class WorkflowEditor {
         // Reset orchestration -- without this it leaks from whichever
         // workflow was open before into the next one opened on this canvas.
         this.orchestration = 'workflow';
+        this.mlflowTracing = false;   // compiled programs trace to MLflow (agent_workflows.mlflow_tracing)
         // A swarm session belongs to one workflow (§3b): its active agent and
         // transcript mean nothing on the next canvas.
 

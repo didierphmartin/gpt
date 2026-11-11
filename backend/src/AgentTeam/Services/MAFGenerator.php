@@ -62,6 +62,8 @@ class MAFGenerator
         }
         $analyzer = new WorkflowGraphAnalyzer($this->db, $this->workflowRepo, $this->graphRepo, $this->agentRepo);
         $analyzed = $analyzer->analyze($workflowId, $userId);
+        // The workflow's "MLflow tracing" setting (MlflowTracing in the emitted header).
+        $analyzed['mlflowTracing'] = $wfForArch !== null && $wfForArch->isMlflowTracing();
 
         // Platform default model per provider (system_llm_settings) — a node
         // whose form leaves the model empty means "use the platform default",
@@ -581,6 +583,61 @@ PY;
         return $out;
     }
 
+
+    /**
+     * The workflow's "MLflow tracing" setting: the MlflowTracing class the header ends with, and its start call
+     * (spans exported to MLFLOW_TRACKING_URI over OTLP/HTTP). Empty when the setting is off: the program is unchanged.
+     */
+    private static function mlflowTracingBlock(array $analyzed): string
+    {
+        if (empty($analyzed['mlflowTracing'])) {
+            return '';
+        }
+        return "\n\n" . <<<'PY'
+class MlflowTracing:
+    """The workflow's "MLflow tracing" setting: with MLFLOW_TRACKING_URI set, this program's agent runs, chat client calls and tool calls go to
+    that MLflow server as OpenTelemetry spans, in the experiment MLFLOW_EXPERIMENT_NAME (default: the workflow's
+    name, created if missing). Unset: nothing is traced. Tracing never stops the program."""
+
+    @staticmethod
+    def experiment_id(uri: str, name: str) -> str:
+        """The id of the MLflow experiment `name` (MLflow's REST API), created when it does not exist yet."""
+        api = uri.rstrip("/") + "/api/2.0/mlflow/experiments"
+        r = httpx.get(api + "/get-by-name", params={"experiment_name": name}, timeout=10)
+        if r.status_code == 200:
+            return r.json()["experiment"]["experiment_id"]
+        r = httpx.post(api + "/create", json={"name": name}, timeout=10)
+        if r.status_code == 200:
+            return r.json()["experiment_id"]
+        # Another process created it first (A2A node servers start together): read it back.
+        r = httpx.get(api + "/get-by-name", params={"experiment_name": name}, timeout=10)
+        r.raise_for_status()
+        return r.json()["experiment"]["experiment_id"]
+
+    @staticmethod
+    def exporter(uri: str, name: str):
+        """An OTLP/HTTP span exporter to MLflow's /v1/traces, for the experiment `name`."""
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        return OTLPSpanExporter(endpoint=uri.rstrip("/") + "/v1/traces",
+                                headers={"x-mlflow-experiment-id": MlflowTracing.experiment_id(uri, name)})
+
+    @staticmethod
+    def start(workflow_name: str) -> None:
+        uri = os.environ.get("MLFLOW_TRACKING_URI")
+        if not uri:
+            return
+        try:
+            exporter = MlflowTracing.exporter(uri, os.environ.get("MLFLOW_EXPERIMENT_NAME") or workflow_name)
+            from agent_framework.observability import configure_otel_providers
+            # enable_sensitive_data: the spans carry the prompts, answers and tool arguments, as MLflow shows them.
+            configure_otel_providers(enable_sensitive_data=True, exporters=[exporter])
+        except Exception as e:  # noqa: BLE001 -- a missing package or an unreachable server
+            print(f"[warn] MLflow tracing is off: {e}", file=sys.stderr)
+
+
+PY . "\nMlflowTracing.start(" . PythonEmitHelpers::pyStr((string) $analyzed['workflow']['name']) . ")\n";
+    }
+
     /** DATA FLOW section of the module docstring (MAF-specific mechanics). */
     private static function dataFlowDoc(): string
     {
@@ -651,6 +708,7 @@ TXT;
             'storage' => ['enabled' => !empty($analyzed['outputStorageEnabled']), 'folder' => $analyzed['outputFolder'] ?? null],
         ]));
 
+        $mlflow = self::mlflowTracingBlock($analyzed);
         return <<<PY
         """Standalone Microsoft Agent Framework workflow: {$name}
 
@@ -691,7 +749,7 @@ TXT;
         _HERE = os.path.dirname(os.path.abspath(__file__))
         for _d in (_HERE, os.path.dirname(_HERE), os.path.dirname(os.path.dirname(_HERE))):
             load_dotenv(os.path.join(_d, ".env"))
-        PACKAGE_DIR = _HERE   # this program's folder: code/, skills/, start_documents/ and outputs/ are relative to it
+        PACKAGE_DIR = _HERE   # this program's folder: code/, skills/, start_documents/ and outputs/ are relative to it{$mlflow}
         PY;
     }
 

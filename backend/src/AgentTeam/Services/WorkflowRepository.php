@@ -124,8 +124,8 @@ class WorkflowRepository
      */
     public function create(Workflow $workflow): Workflow
     {
-        $sql = "INSERT INTO agent_workflows (user_id, workspace_id, name, description, steps, triggers, variables, enabled, output_storage_enabled, output_folder, orchestration)
-                VALUES (:user_id, :workspace_id, :name, :description, :steps, :triggers, :variables, :enabled, :output_storage_enabled, :output_folder, :orchestration)";
+        $sql = "INSERT INTO agent_workflows (user_id, workspace_id, name, description, steps, triggers, variables, enabled, output_storage_enabled, output_folder, orchestration, mlflow_tracing)
+                VALUES (:user_id, :workspace_id, :name, :description, :steps, :triggers, :variables, :enabled, :output_storage_enabled, :output_folder, :orchestration, :mlflow_tracing)";
 
         $data = $workflow->toArray();
 
@@ -142,6 +142,7 @@ class WorkflowRepository
             'output_storage_enabled' => $data['output_storage_enabled'] ? 1 : 0,
             'output_folder' => $data['output_folder'],
             'orchestration' => $data['orchestration'] ?? 'workflow',
+            'mlflow_tracing' => !empty($data['mlflow_tracing']) ? 1 : 0,
         ]);
 
         $id = (int) $this->db->lastInsertId();
@@ -163,7 +164,8 @@ class WorkflowRepository
                 workspace_id = :workspace_id,
                 output_storage_enabled = :output_storage_enabled,
                 output_folder = :output_folder,
-                orchestration = :orchestration
+                orchestration = :orchestration,
+                mlflow_tracing = :mlflow_tracing
                 WHERE id = :id";
 
         $data = $workflow->toArray();
@@ -181,6 +183,7 @@ class WorkflowRepository
             'output_storage_enabled' => $data['output_storage_enabled'] ? 1 : 0,
             'output_folder' => $data['output_folder'],
             'orchestration' => $data['orchestration'] ?? 'workflow',
+            'mlflow_tracing' => !empty($data['mlflow_tracing']) ? 1 : 0,
         ]);
 
         return $this->findById($workflow->getId());

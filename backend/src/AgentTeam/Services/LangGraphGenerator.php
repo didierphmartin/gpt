@@ -388,6 +388,7 @@ class LangGraphGenerator
         $lines[] = 'load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))';
         $lines[] = 'RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the runner env folder (python/)';
         $lines[] = 'load_dotenv(os.path.join(RUNNER_DIR, ".env"))';
+        array_push($lines, ...self::mlflowTracingLines($facts));
         $lines[] = 'DEBUG_STEM = Path(__file__).stem   # names this script\'s outputs/_debug message-history dumps';
         $lines[] = 'from typing import Annotated, Awaitable, Callable, Literal, TypedDict';
         $lines[] = '';
@@ -741,6 +742,50 @@ class LangGraphGenerator
      * playbook definitions, documentation descriptors. No Python is produced
      * here. Shared by the single-file and the A2A emitters.
      */
+    /**
+     * The workflow's "MLflow tracing" setting: right after the .env is loaded, the program turns on MLflow's
+     * LangChain autologging (every graph node, LLM call and tool call becomes a span) when MLFLOW_TRACKING_URI is
+     * set. The experiment is MLFLOW_EXPERIMENT_NAME, else the workflow's name. Tracing never stops the program: a
+     * missing package or an unreachable server prints a warning and the run goes on untraced. No lines when the
+     * setting is off, so the program is unchanged.
+     *
+     * @return list<string>
+     */
+    private static function mlflowTracingLines(array $facts): array
+    {
+        if (empty($facts['mlflowTracing'])) {
+            return [];
+        }
+        return [
+            '# MLflow tracing (the workflow\'s "MLflow tracing" setting): with MLFLOW_TRACKING_URI set, every graph node,',
+            '# LLM call and tool call is traced to that MLflow server, in the experiment MLFLOW_EXPERIMENT_NAME (default:',
+            '# the workflow\'s name). Unset: nothing is traced. Tracing never stops the program.',
+            'if os.environ.get("MLFLOW_TRACKING_URI"):',
+            '    # A server that cannot be reached is given up on in seconds, not minutes (MLflow retries 7 times by default).',
+            '    os.environ.setdefault("MLFLOW_HTTP_REQUEST_MAX_RETRIES", "2")',
+            '    os.environ.setdefault("MLFLOW_HTTP_REQUEST_TIMEOUT", "10")',
+            '    # Each trace is sent when it ends: an A2A agent server is stopped with its run, and MLflow\'s background',
+            '    # queue would lose the last one.',
+            '    os.environ.setdefault("MLFLOW_ENABLE_ASYNC_TRACE_LOGGING", "false")',
+            '    try:',
+            '        import mlflow',
+            '        _experiment = mlflow.set_experiment(os.environ.get("MLFLOW_EXPERIMENT_NAME") or ' . PythonEmitHelpers::pyStr((string) $facts['wfName']) . ')',
+            '        # Again by id: MLflow 3.18 does not make the experiment active in a process that loses the race to',
+            '        # create it (A2A agent servers start together), and that process would trace nothing.',
+            '        mlflow.set_experiment(experiment_id=_experiment.experiment_id)',
+            '        mlflow.langchain.autolog()',
+            '        try:   # MLflow 3.18 reads a name from every run, but a LangGraph conditional edge (a dispatcher\'s route)',
+            '               # starts one with none: without this, the spans before it are lost.',
+            '            from mlflow.langchain.langchain_tracer import MlflowLangchainTracer as _Tracer',
+            '            _span_name = _Tracer._assign_span_name',
+            '            _Tracer._assign_span_name = lambda self, serialized, default_name="unknown": _span_name(self, serialized or {}, default_name)',
+            '        except Exception:  # noqa: BLE001 -- another MLflow version: trace as it does',
+            '            pass',
+            '    except Exception as _e:  # noqa: BLE001 -- a missing package or an unreachable server',
+            '        print(f"[warn] MLflow tracing is off: {_e}", file=sys.stderr)',
+        ];
+    }
+
     private function analyzeForEmit(int $workflowId, ?string $userId): array
     {
         // Force shortest round-tripping floats: the web SAPI's serialize_precision=100 makes
@@ -1318,6 +1363,7 @@ class LangGraphGenerator
         // read it here rather than taking it as a generate() option, so every
         // caller agrees without having to remember to pass it.
         $orchestration = $workflow->getOrchestration();
+        $mlflowTracing = $workflow->isMlflowTracing();   // the workflow's "MLflow tracing" setting
         // The Start option, if any: the hidden code node StartOptionGraph::expand added (spec 2026-10-15 §2).
         $triggerNodeId = null;
         $startTrigger = null;
@@ -1345,7 +1391,7 @@ class LangGraphGenerator
         return compact('workflow', 'workflowId', 'userId', 'wfName', 'safeName', 'gdata', 'byId', 'order', 'edges',
             'startPrompt', 'startDocuments', 'providerDefaults', 'serverRegistry', 'toolCatalog', 'availableById',
             'dispatchTargets', 'routedBy', 'agentData', 'playbookData', 'publishedPlaybooks', 'publishedSkipped', 'codeData', 'codeSlugs', 'serverSlugs', 'usedCatalog', 'usedServers', 'missing', 'edgeList',
-            'orchestration', 'defaultCron', 'defaultWatch', 'startMode', 'triggerNodeId', 'workExit', 'startOptionLabel');
+            'orchestration', 'mlflowTracing', 'defaultCron', 'defaultWatch', 'startMode', 'triggerNodeId', 'workExit', 'startOptionLabel');
     }
 
     /** The workflow's active cron schedule (newest scheduled_workflows row), baked as DEFAULT_CRON for --cron. */
@@ -2239,6 +2285,7 @@ PY;
         $L[] = 'load_dotenv(os.path.join(os.path.dirname(_HERE), ".env"))   # the workflow folder\'s own .env first (never overridden)';
         $L[] = 'RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))   # the runner env folder (python/)';
         $L[] = 'load_dotenv(os.path.join(RUNNER_DIR, ".env"))';
+        array_push($L, ...self::mlflowTracingLines($facts));
         $L[] = 'DEBUG_STEM = os.path.basename(os.path.dirname(_HERE))   # the package folder names this node\'s outputs/_debug dumps';
         $L[] = '';
         $L[] = 'import httpx';
@@ -3581,6 +3628,7 @@ TXT;
         $L[] = 'load_dotenv(os.path.join(_HERE, ".env"))   # the workflow folder\'s own .env first (never overridden)';
         $L[] = 'RUNNER_DIR = os.path.dirname(os.path.dirname(_HERE))   # the runner env folder (python/)';
         $L[] = 'load_dotenv(os.path.join(RUNNER_DIR, ".env"))';
+        array_push($L, ...self::mlflowTracingLines($facts));
         $L[] = 'DEBUG_STEM = os.path.basename(_HERE)   # the package folder names the agents\' outputs/_debug dumps';
         $L[] = 'PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))   # the package folder: code/, skills/, outputs/, start_documents/';
         $L[] = '';

@@ -27,6 +27,9 @@ final class LangGraphPackage
     /** The A2A package: its agents are A2A servers, its orchestrator their client. */
     private const A2A_REQUIREMENTS = ['a2a-sdk[http-server]'];
 
+    /** The workflow's "MLflow tracing" setting: MLflow's tracing-only SDK (its LangChain autologging). */
+    private const MLFLOW_REQUIREMENT = 'mlflow-tracing';
+
     /** Providers whose LLM factory branch (llmFactoryLines()) imports a package beyond the base ones. */
     private const PROVIDER_REQUIREMENTS = ['gemini' => 'langchain-google-genai', 'google' => 'langchain-google-genai'];
 
@@ -561,6 +564,9 @@ final class LangGraphPackage
                 $req[] = self::PROVIDER_REQUIREMENTS[$p];
             }
         }
+        if (!empty($facts['mlflowTracing'])) {
+            $req[] = self::MLFLOW_REQUIREMENT;
+        }
         array_push($req, ...self::skillRequirementNames($skillFiles));
         array_push($req, ...PythonRequirements::documentNames($facts['startDocuments'] ?? []));
         return $req;
@@ -645,6 +651,9 @@ final class LangGraphPackage
         if ($layout === 'a2a') {
             $o[] = ['First port of the agent servers, one per agent in order (default: 8701)', 'A2A_BASE_PORT=8701'];
         }
+        if (!empty($facts['mlflowTracing'])) {
+            array_push($o, ...PackageDocs::MLFLOW_ENV);
+        }
         return $o;
     }
 
@@ -711,6 +720,10 @@ final class LangGraphPackage
             array_push($L, ...PackageDocs::service($name, 'LangGraph', $folder, $entry, $cron ? '--cron' : '', $cron ? 'cron' : 'prompt'));
         } else {
             array_push($L, ...PackageDocs::service($name, 'LangGraph', $folder, $entry, '', $swarm ? 'prompt' : (string) ($facts['startMode'] ?? 'prompt')));
+        }
+        if (!empty($facts['mlflowTracing'])) {
+            array_push($L, ...PackageDocs::mlflow('each graph node, LLM call and MCP function call is a span, with its inputs,'
+                . "\n" . 'outputs and timing' . ($layout === 'a2a' ? ' (each agent server traces its own node).' : '.')));
         }
         if ($layout === 'modular' && ($facts['codeData'] ?? []) !== []) {
             $L[] = '## Editing code nodes';

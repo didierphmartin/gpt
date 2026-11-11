@@ -295,6 +295,34 @@ final class PackageDocs
         return $L;
     }
 
+    /** The .env.example lines of a program compiled with the workflow's "MLflow tracing" setting on. */
+    public const MLFLOW_ENV = [
+        ['MLflow server the traces go to (unset: nothing is traced)', 'MLFLOW_TRACKING_URI=http://localhost:5000'],
+        ['MLflow experiment of the traces (default: the workflow\'s name)', 'MLFLOW_EXPERIMENT_NAME=my-experiment'],
+    ];
+
+    /**
+     * The README's "MLflow tracing" section, for a program compiled with the setting on. $what: what each trace
+     * holds, in this target's words.
+     *
+     * @return list<string>
+     */
+    public static function mlflow(string $what): array
+    {
+        return [
+            '## MLflow tracing',
+            '',
+            'This program was compiled with the workflow\'s "MLflow tracing" setting on. With `MLFLOW_TRACKING_URI` set',
+            '(in `.env` or the environment), every run is traced to that MLflow server: ' . $what,
+            'Traces go to the experiment `MLFLOW_EXPERIMENT_NAME`, else one named after the workflow, created if missing;',
+            'open the experiment\'s Traces tab in the MLflow UI to see them.',
+            '',
+            'Without `MLFLOW_TRACKING_URI` nothing is traced. A server that cannot be reached, or a missing package, prints',
+            'a warning and the run goes on untraced.',
+            '',
+        ];
+    }
+
     /** The run server section: api.py's flags as its argparse defines them. $listen: it has --listen. */
     public static function runServer(bool $listen, array $note = []): array
     {
