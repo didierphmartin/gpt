@@ -121,6 +121,13 @@ def test_token_is_sent_and_never_returned(db, host):
     assert 'tok' not in json.dumps(r)
 
 
+def test_schema_put_relays_the_list(db, host):
+    host.ctl(db).putSchema(req(3, {'env': [{'name': 'X', 'required': True}]}), 'a')
+    assert host.calls[1]['method'] == 'PUT'
+    assert host.calls[1]['url'].endswith('/servers/a/schema')
+    assert json.loads(host.calls[1]['body']) == {'env': [{'name': 'X', 'required': True}]}
+
+
 def test_settings_put_relays_body(db, host):
     c = host.ctl(db)
     c.putSettings(req(3, {'env': {'K': 'v'}}), 'a')

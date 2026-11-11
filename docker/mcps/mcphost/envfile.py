@@ -87,6 +87,45 @@ def _norm(f: dict) -> dict:
     }
 
 
+def clean_list(entries) -> list:
+    """A settings list as the editor sends it, checked and written compactly; ValueError says what is wrong.
+
+    Each entry: name (a setting name, once), label, required, secret, default, group. secret is always written
+    (otherwise the name decides it); required, default and group only when set."""
+    if not isinstance(entries, list):
+        raise ValueError("env must be a list")
+    out, seen = [], set()
+    for i, e in enumerate(entries, 1):
+        if not isinstance(e, dict):
+            raise ValueError(f"setting {i} is not an object")
+        name = e.get("name")
+        if not isinstance(name, str) or not _NAME.match(name.strip()):
+            raise ValueError(f"setting {i}: invalid name {name!r} (letters, digits and _, not starting with a digit)")
+        name = name.strip()
+        if name in seen:
+            raise ValueError(f"{name} is listed twice")
+        seen.add(name)
+        for k in ("label", "default", "group"):
+            v = e.get(k)
+            if v is not None and (isinstance(v, bool) or not isinstance(v, (str, int, float))):
+                raise ValueError(f"{name}: {k} must be text")
+        item = {"name": name}
+        label = str(e.get("label") or "").strip()
+        if label:
+            item["label"] = label
+        if e.get("required"):
+            item["required"] = True
+        item["secret"] = bool(e.get("secret"))
+        default = "" if e.get("default") is None else str(e["default"])
+        if default:
+            item["default"] = default
+        group = str(e.get("group") or "").strip()
+        if group:
+            item["group"] = group
+        out.append(item)
+    return out
+
+
 def missing(fields: list, current: dict, skip=()) -> list:
     """Names still needed: a required field with no value, and every empty member of a group one of whose members is set."""
     live = [f for f in fields if f["name"] not in skip]

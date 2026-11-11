@@ -119,6 +119,24 @@ const plain = (x) => JSON.parse(JSON.stringify(x));
     assert.strictEqual(await MS.saveHost(hm[0].info, { SP_ID: 'id', SP_KEY: '' }), 1);
     assert.deepStrictEqual(plain(sent), [['sp', { SP_ID: 'id' }]]);
 
+    // the settings list: checked, compact, written into the manifest keeping its other keys
+    assert.deepStrictEqual(plain(MS.cleanList([{ name: ' A_ID ', label: ' Id ', required: true, secret: false, default: '', group: '' },
+        { name: 'A_KEY', label: '', required: false, secret: true, default: 'x', group: ' org ' }])),
+        { env: [{ name: 'A_ID', label: 'Id', required: true, secret: false }, { name: 'A_KEY', secret: true, default: 'x', group: 'org' }] });
+    assert.deepStrictEqual(plain(MS.cleanList([{ name: '1A' }])), { error: { key: 'listBadName', params: { n: 1, name: '1A' } } });
+    assert.deepStrictEqual(plain(MS.cleanList([{ name: 'A' }, { name: 'A' }])), { error: { key: 'listTwice', params: { name: 'A' } } });
+    const loc = await MS.readLocalInfo('outlook_mcp');
+    assert.deepStrictEqual(plain(MS.listOf(loc).map((f) => f.name)), ['OUTLOOK_CLIENT_ID', 'OUTLOOK_SECRET_KEY', 'OUTLOOK_PORT']);
+    await MS.saveListLocal(loc, [{ name: 'NEW', required: true, secret: false }]);
+    const man = JSON.parse(files['mcps/outlook_mcp/synergyai-mcp.json']);
+    assert.strictEqual(man.start, './run.sh');
+    assert.deepStrictEqual(man.env, [{ name: 'NEW', required: true, secret: false }]);
+    files['mcps/outlook_mcp/synergyai-mcp.json'] = '{broken';
+    await assert.rejects(MS.saveListLocal(loc, []), /not a JSON object/);
+    assert.strictEqual(files['mcps/outlook_mcp/synergyai-mcp.json'], '{broken');   // never overwritten
+    // host: the editor starts from the whole list, the supervisor's host/port included
+    assert.ok(MS.listOf(hm[0].info).some((f) => f.name === 'SP_PORT'));
+
     // nothing used: nothing read
     assert.deepStrictEqual(plain(await MS.findMissing([], [])), []);
     console.log('mcp-server-settings tests passed');

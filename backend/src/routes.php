@@ -297,6 +297,7 @@ function createRouteDispatcher(): \FastRoute\Dispatcher
         $r->post('/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/enabled', ['McpHostController', 'enabled']);
         $r->get('/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/settings', ['McpHostController', 'getSettings']);
         $r->put('/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/settings', ['McpHostController', 'putSettings']);
+        $r->put('/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/schema', ['McpHostController', 'putSchema']);
         $r->get('/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/source', ['McpHostController', 'source']);
         $r->delete('/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}', ['McpHostController', 'delete']);
         // Docker app skill store (SKILLS_DIR volume; 404 'no skill store' in folder mode)

@@ -250,6 +250,7 @@ ROUTES = [
     ('POST', '/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/enabled', ('McpHostController', 'enabled')),
     ('GET', '/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/settings', ('McpHostController', 'getSettings')),
     ('PUT', '/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/settings', ('McpHostController', 'putSettings')),
+    ('PUT', '/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/schema', ('McpHostController', 'putSchema')),
     ('GET', '/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}/source', ('McpHostController', 'source')),
     ('DELETE', '/api/v1/mcp/host/servers/{folder:[A-Za-z0-9_.-]+}', ('McpHostController', 'delete')),
     # The Docker app's skills volume (404 'no skill store' in folder mode, except /store and /native-wheels)

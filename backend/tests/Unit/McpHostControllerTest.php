@@ -103,6 +103,17 @@ class McpHostControllerTest extends TestCase
         $this->assertStringContainsString('"values":{}', $put['body']);
     }
 
+    public function testSchemaRelaysTheList(): void
+    {
+        $this->reply = [200, '[{"folder":"a","installed_by":3}]'];
+        $this->ctl()->putSchema($this->req(3, ['env' => [['name' => 'X', 'required' => true]]]), 'a');
+        $put = end($this->calls);
+        $this->assertSame('PUT', $put['method']);
+        $this->assertStringEndsWith('/servers/a/schema', $put['url']);
+        $this->assertStringContainsString('"env":[{"name":"X","required":true}]', $put['body']);
+        $this->assertSame(403, $this->ctl()->putSchema($this->req(4, ['env' => []]), 'a')['status_code']);
+    }
+
     public function testCorporateInstallIsAdminOnly(): void
     {
         $this->reply = [200, '{"ok":true}'];

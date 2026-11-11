@@ -78,6 +78,7 @@
             // The host and port the supervisor sets itself are hidden: a value saved for them does nothing.
             const over = Array.isArray(data?.overridden) ? data.overridden
                 : ['_HOST', '_PORT'].map(sfx => all.find(f => f.name?.endsWith(sfx))?.name).filter(Boolean);
+            info.allFields = all;   // the whole list, for the settings list editor
             info.fields = all.filter(f => !over.includes(f.name));
             // Secrets show empty (their placeholder says they are set); the rest show value or default.
             info.shown = Object.fromEntries(info.fields.map(f => [f.name, f.secret ? '' : (f.filled ? (f.value ?? '') : (f.default ?? ''))]));   // default shows while unset (display only)
@@ -108,6 +109,56 @@
         }
         if (Object.keys(changed).length) await window.mcpClient.hostSaveSettings(info.folder, changed);
         return Object.keys(changed).length;
+    }
+
+    /**
+     * A settings list from the editor, checked and made compact (the twin of the supervisor's envfile.clean_list).
+     * rows: [{name, label, required, secret, default, group}]. Returns { env } or { error: {key, params} }.
+     * secret is always written (otherwise the name decides it); required, default and group only when set.
+     */
+    function cleanList(rows) {
+        const env = [], seen = new Set();
+        for (const [i, r] of (rows || []).entries()) {
+            const name = String(r.name ?? '').trim();
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return { error: { key: 'listBadName', params: { n: i + 1, name } } };
+            if (seen.has(name)) return { error: { key: 'listTwice', params: { name } } };
+            seen.add(name);
+            const item = { name };
+            const label = String(r.label ?? '').trim();
+            if (label) item.label = label;
+            if (r.required) item.required = true;
+            item.secret = !!r.secret;
+            const def = r.default === undefined || r.default === null ? '' : String(r.default);
+            if (def) item.default = def;
+            const group = String(r.group ?? '').trim();
+            if (group) item.group = group;
+            env.push(item);
+        }
+        return { env };
+    }
+
+    /** The list the editor starts from: the declared one (host: all of it, incl. the host/port the supervisor sets). */
+    function listOf(info) {
+        return ((info.host ? info.allFields : info.fields) || info.fields || []).map((f) => ({
+            name: f.name, label: f.label || '', required: !!f.required, secret: !!f.secret,
+            default: f.default ?? '', group: f.group || '' }));
+    }
+
+    /** Write the list into mcps/<folder>/synergyai-mcp.json, keeping its other keys; a file that is not JSON is never overwritten. */
+    async function saveListLocal(info, env) {
+        const path = `mcps/${info.folder}/synergyai-mcp.json`;
+        const text = await readText(path).catch(() => null);
+        let m = {};
+        if (text && text.trim()) {
+            try { m = JSON.parse(text); } catch (_) { m = null; }
+            if (!m || typeof m !== 'object' || Array.isArray(m)) throw new Error('synergyai-mcp.json is not a JSON object: fix it by hand first');
+        }
+        m.env = env;
+        await writeText(path, JSON.stringify(m, null, 2) + '\n');
+    }
+
+    function saveListHost(info, env) {
+        return window.mcpClient.hostSaveSchema(info.folder, env);
     }
 
     /**
@@ -291,12 +342,34 @@
             : info.missing.length ? `<span style="color:#b45309;">⚠ ${t('missing', { names: info.missing.join(', ') })}</span>`
             : `<span style="color:#166534;">✓ ${t('complete')}</span>`);
 
+        const listRowHtml = (f) => `<tr data-lrow>
+                <td><input data-k="name" type="text" value="${esc(f.name)}" style="width:100%;font-family:monospace;font-size:12px;"></td>
+                <td><input data-k="label" type="text" value="${esc(f.label)}" style="width:100%;font-size:12px;"></td>
+                <td style="text-align:center;"><input data-k="required" type="checkbox" ${f.required ? 'checked' : ''}></td>
+                <td style="text-align:center;"><input data-k="secret" type="checkbox" ${f.secret ? 'checked' : ''}></td>
+                <td><input data-k="default" type="text" value="${esc(f.default)}" style="width:100%;font-size:12px;"></td>
+                <td><input data-k="group" type="text" value="${esc(f.group)}" style="width:100%;font-size:12px;"></td>
+                <td><button type="button" data-ldel title="${t('listRemove')}" style="border:1px solid #cbd5e1;border-radius:4px;padding:0 6px;">×</button></td></tr>`;
+        const listHtml = (info) => `<div data-list style="display:none;margin-top:8px;border-top:1px solid #e2e8f0;padding-top:8px;">
+                <p style="font-size:12px;color:#64748b;margin:0 0 6px;">${t('listHelp')}</p>
+                <table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="text-align:left;color:#475569;">
+                    <th style="width:24%;">${t('colName')}</th><th>${t('colLabel')}</th><th style="width:7%;">${t('colRequired')}</th>
+                    <th style="width:7%;">${t('colSecret')}</th><th style="width:12%;">${t('colDefault')}</th>
+                    <th style="width:11%;" title="${t('groupHelp')}">${t('colGroup')} ⓘ</th><th style="width:4%;"></th></tr></thead>
+                    <tbody data-lbody>${listOf(info).map(listRowHtml).join('')}</tbody></table>
+                <div data-lresult style="font-size:12px;margin-top:4px;"></div>
+                <div style="display:flex;justify-content:space-between;margin-top:6px;">
+                    <button type="button" data-ladd class="mcp-btn" style="padding:4px 12px;border:1px solid #cbd5e1;">${t('listAdd')}</button>
+                    <span style="display:flex;gap:6px;"><button type="button" data-lcancel class="mcp-btn" style="padding:4px 12px;border:1px solid #cbd5e1;">${t('listCancel')}</button>
+                    <button type="button" data-lsave class="mcp-btn mcp-btn-primary" style="padding:4px 12px;">${t('listSave')}</button></span></div></div>`;
+
         function rowHtml(r, i) {
             const info = r.info;
-            const body = info.error || !info.fields.length ? '' : `<div data-fields style="display:flex;flex-direction:column;gap:8px;margin-top:8px;">${UI.settingsFieldsHtml(tp, info.fields, shownOf(info))}</div>
+            const edit = info.error ? '' : `<div style="margin-top:8px;"><button type="button" data-ledit class="mcp-btn" style="padding:2px 10px;font-size:12px;border:1px solid #cbd5e1;">${t('listEdit')}</button></div>${listHtml(info)}`;
+            const body = info.error || !info.fields.length ? edit : edit + `<div data-fields style="display:flex;flex-direction:column;gap:8px;margin-top:8px;">${UI.settingsFieldsHtml(tp, info.fields, shownOf(info))}</div>
                 <div data-result style="font-size:12px;"></div>
                 <div style="display:flex;justify-content:flex-end;"><button type="button" data-save class="mcp-btn mcp-btn-primary" style="padding:4px 12px;">${t('save')}</button></div>`;
-            return `<details data-row="${i}" open style="border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;">
+            return `<details data-row="${i}" data-name="${esc(r.name)}" open style="border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;">
                 <summary style="cursor:pointer;font-size:13px;"><strong>${esc(r.name)}</strong> <span style="color:#64748b;font-size:12px;">mcps/${esc(info.folder)}</span> — ${status(info)}</summary>${body}</details>`;
         }
 
@@ -325,7 +398,42 @@
                 });
                 const btn = row.querySelector('[data-save]');
                 if (btn) btn.onclick = () => save(r, row, btn).then(state);
+                wireList(r, row);
             });
+        }
+
+        function wireList(r, row) {
+            const box = row.querySelector('[data-list]');
+            if (!box) return;
+            const body = box.querySelector('[data-lbody]');
+            row.querySelector('[data-ledit]').onclick = () => { box.style.display = box.style.display === 'none' ? '' : 'none'; };
+            box.querySelector('[data-ladd]').onclick = () => {
+                body.insertAdjacentHTML('beforeend', listRowHtml({ name: '', label: '', required: false, secret: false, default: '', group: '' }));
+                body.lastElementChild.querySelector('[data-k="name"]').focus();
+            };
+            body.addEventListener('click', (e) => { if (e.target.closest('[data-ldel]')) e.target.closest('[data-lrow]').remove(); });
+            box.querySelector('[data-lcancel]').onclick = () => render();   // back to the saved list
+            const out = box.querySelector('[data-lresult]');
+            const btn = box.querySelector('[data-lsave]');
+            btn.onclick = async () => {
+                const rows = [...body.querySelectorAll('[data-lrow]')].map((tr) => {
+                    const v = (k) => tr.querySelector(`[data-k="${k}"]`);
+                    return { name: v('name').value, label: v('label').value, required: v('required').checked,
+                        secret: v('secret').checked, default: v('default').value, group: v('group').value };
+                });
+                const { env, error } = cleanList(rows);
+                if (error) { out.innerHTML = `<span style="color:#b91c1c;">${t(error.key, error.params)}</span>`; return; }
+                btn.disabled = true;
+                try {
+                    if (r.info.host) await saveListHost(r.info, env); else await saveListLocal(r.info, env);
+                    await render();
+                    const again = [...el.querySelectorAll('[data-name]')].find((d) => d.dataset.name === r.name);
+                    again?.insertAdjacentHTML('beforeend', `<div style="color:#166534;font-size:12px;">✓ ${t('listSaved')}</div>`);
+                } catch (e) {
+                    out.innerHTML = `<span style="color:#b91c1c;">${t('listFailed', { error: (e && e.message) || String(e) })}</span>`;
+                    btn.disabled = false;
+                }
+            };
         }
 
         async function save(r, row, btn) {
@@ -358,5 +466,5 @@
     }
 
     window.McpServerSettings = { readText, writeText, folderGranted, readServerMap, readLocalInfo, readHostInfo,
-        saveLocal, saveHost, checkTargets, readAll, findMissing, sectionMissing, runGate, mountServerSettings };
+        saveLocal, saveHost, cleanList, listOf, saveListLocal, saveListHost, checkTargets, readAll, findMissing, sectionMissing, runGate, mountServerSettings };
 })();

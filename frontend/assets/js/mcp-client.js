@@ -101,6 +101,7 @@ class MCPClient {
     hostSetEnabled(folder, enabled) { return this._host(folder, 'enabled', { method: 'POST', body: JSON.stringify({ enabled: !!enabled }) }); }
     hostSettings(folder) { return this._host(folder, 'settings'); }
     hostSaveSettings(folder, values) { return this._host(folder, 'settings', { method: 'PUT', body: JSON.stringify({ values }) }); }
+    hostSaveSchema(folder, env) { return this._host(folder, 'schema', { method: 'PUT', body: JSON.stringify({ env }) }); }
     hostSource(folder) { return this._host(folder, 'source'); }
     async hostDelete(folder) {
         return (await this.request(`/mcp/host/servers/${encodeURIComponent(folder)}`, { method: 'DELETE' })).data;

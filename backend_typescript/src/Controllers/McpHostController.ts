@@ -74,6 +74,11 @@ export class McpHostController {
     return this.owned(ctx, 'PUT', 'settings', true);
   }
 
+  /** Replace the server's settings list (its manifest's env). */
+  putSchema(ctx: Ctx): Promise<ControllerResult> {
+    return this.owned(ctx, 'PUT', 'schema', true);
+  }
+
   source(ctx: Ctx): Promise<ControllerResult> {
     return this.owned(ctx, 'GET', 'source', false);
   }
