@@ -77,6 +77,8 @@ const files = ['server.py','tests/t.py','.env','.env.example','.venv/x','a/__pyc
 assert.deepStrictEqual(WP.selectServerFiles(files, null), ['server.py', '.env.example', 'README.md']);
 assert.deepStrictEqual(WP.selectServerFiles(files, { include: ['*.py', '.env'], exclude: [] }), ['server.py']);
 assert.deepStrictEqual(WP.selectServerFiles(['a.py', 'sub/b.py', 'sub/c.txt'], { exclude: ['sub/b.py'] }), ['a.py', 'sub/c.txt']);
+// the install manifest travels even when include leaves it out (only at the top: a nested one is just a file)
+assert.deepStrictEqual(WP.selectServerFiles(['synergyai-mcp.json', 'a.py', 'x/synergyai-mcp.json'], { include: ['*.py'] }), ['synergyai-mcp.json', 'a.py']);
 assert.deepStrictEqual(WP.selectServerFiles(['x/node_modules/y.js', 'x/logs/a.txt', 'app.log', 'docs/a.md', '.git/config', 'x/.hidden/f'], null), []);
 assert.ok(WP.DEFAULT_EXCLUDES.includes('.env'));
 // generic secret files never ship

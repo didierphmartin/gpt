@@ -261,7 +261,8 @@
             if (segs.slice(0, -1).some((s) => s.startsWith('.'))) return false;
             if (segs[segs.length - 1].startsWith('.') && segs[segs.length - 1] !== '.env.example') return false;
             if (exclude.some((x) => matches(p, x))) return false;
-            return !include || include.some((x) => matches(p, x));
+            // the install manifest itself always travels, whether or not include names it
+            return !include || p === 'synergyai-mcp.json' || include.some((x) => matches(p, x));
         });
     }
 
