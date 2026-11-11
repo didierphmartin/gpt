@@ -277,7 +277,7 @@
     "optionRemove": "Quitar la opción de inicio",
     "linksDroppedTitle": "¿Quitar enlaces en los flujos?",
     "linksDroppedIntro": "Al guardar se quitan salidas de \"{{name}}\". Estos flujos pierden sus enlaces:",
-    "linksDroppedLine": "{{workflow}} — {{node}}: \"{{exit}}\" ({{count}} enlace(s))",
+    "linksDroppedLine": "{{workflow}} — {{{node}}}: \"{{exit}}\" ({{count}} enlace(s))",
     "linksDroppedOthers": "{{count}} flujo(s) más que no puedes abrir ({{links}} enlace(s))",
     "linksDroppedConfirm": "Guardar y quitar enlaces"
   },
@@ -1264,7 +1264,7 @@
       "none": "Este código no lee argumentos.",
       "available": "Marcadores disponibles",
       "availableHint": "Haga clic en uno para insertarlo en el último campo usado. Se sustituye por su valor cuando el nodo se ejecuta.",
-      "from": "de {{node}}",
+      "from": "de {{{node}}}",
       "noneAvailable": "Nada antes de este nodo proporciona marcadores.",
       "missing": "Argumentos obligatorios vacíos: {{names}}",
       "unknown": "Guardado, pero nada antes de este nodo proporciona {{names}}: el nodo fallará al ejecutarse.",
@@ -1818,8 +1818,8 @@
       "saved": "Paquete guardado como {{name}}",
       "failed": "Error al exportar el paquete: {{error}}",
       "warnSkillMissing": "La habilidad \"{{name}}\" no está aquí — no se exporta.",
-      "errSkillMissing": "La habilidad \"{{name}}\" que usa \"{{node}}\" no está instalada aquí, así que no se puede exportar el paquete.",
-      "errSkillUnreadable": "No se puede leer la habilidad \"{{name}}\" que usa \"{{node}}\" (sin acceso a la carpeta de habilidades), así que no se puede exportar el paquete.",
+      "errSkillMissing": "La habilidad \"{{name}}\" que usa \"{{{node}}}\" no está instalada aquí, así que no se puede exportar el paquete.",
+      "errSkillUnreadable": "No se puede leer la habilidad \"{{name}}\" que usa \"{{{node}}}\" (sin acceso a la carpeta de habilidades), así que no se puede exportar el paquete.",
       "progressSkill": "Empaquetando la habilidad {{name}} con sus librerías ({{done}} de {{total}})…",
       "warnServerMissing": "El servidor MCP \"{{name}}\" no está registrado aquí — no se exporta.",
       "warnFolderUnreadable": "No se pudo abrir la carpeta local de \"{{name}}\" — solo el registro.",
@@ -1949,6 +1949,7 @@
       "savedHost": "Guardado. El servidor se reinicia con sus nuevos ajustes.",
       "savedLocal": "Guardado. Reinicie el servidor para que los lea: ejecute su comando de inicio en una terminal, en la carpeta del servidor dentro de su carpeta SynergyAI.",
       "saveFailed": "No se pudieron guardar los ajustes: {{error}}",
+      "elsewhere": "sus ajustes están en «{{node}}», el primer nodo que lo usa",
       "noServers": "Ningún servidor marcado. Marque uno en Servidores MCP para ver sus ajustes aquí."
     }
   },

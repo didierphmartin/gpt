@@ -278,13 +278,33 @@
      * a Save, headed "settings complete" / "missing: X" ("kept where the server runs" when its files are not reachable
      * from here). onState(anyMissing) after each read and save. Returns { refresh(names) } -- call it when the ticks change.
      */
+    /**
+     * Which node shows each server's settings: the first in `order` (flow order, the Start option first) that
+     * uses it. `order`: [{id, label, servers}]. Returns name -> {id, label}.
+     */
+    function settingsHomes(order) {
+        const homes = new Map();
+        for (const n of order || []) for (const s of n.servers || []) if (!homes.has(s)) homes.set(s, { id: n.id, label: n.label });
+        return homes;
+    }
+
+    /** `names` split for node `id`: the servers whose settings it shows, and the others with where theirs are. */
+    function splitByHome(id, names, homes) {
+        const here = [], elsewhere = [];
+        for (const n of names || []) {
+            const h = homes.get(n);
+            if (!h || h.id === id) here.push(n); else elsewhere.push({ name: n, where: h.label });
+        }
+        return { here, elsewhere };
+    }
+
     function mountServerSettings(el, editor, metas, onState) {
         const UI = window.WorkflowPackageUI;
         const esc = UI.esc;
         const t = (k, p) => esc(editor.t(`workflow.serverSettings.${k}`, p));
         const tp = (k, p) => esc(editor.t(`workflow.package.${k}`, p));
         const tPlain = (k) => editor.t(`workflow.package.${k}`);
-        let seq = 0, names = [];
+        let seq = 0, names = [], others = [];
         const shownOf = (info) => (info.host ? info.shown : { ...Object.fromEntries(info.fields.map((f) => [f.name, f.default])), ...info.values });
         const status = (info) => (info.error ? `<span style="color:#b91c1c;">${t('unreadable')}</span>`
             : !info.fields.length ? `<span style="color:#64748b;">${t('none')}</span>`
@@ -302,7 +322,13 @@
 
         async function render() {
             const my = ++seq;
-            if (!names.length) { onState?.(false); el.innerHTML = `<p style="font-size:12px;color:#64748b;">${t('noServers')}</p>`; return; }
+            const otherLines = others.map((o) => `<div style="font-size:13px;padding:4px 10px;"><strong>${esc(o.name)}</strong> — <span style="color:#64748b;">${t('elsewhere', { node: o.where })}</span></div>`).join('');
+            if (!names.length) {
+                onState?.(false);
+                el.innerHTML = others.length ? `<div style="display:flex;flex-direction:column;gap:6px;">${otherLines}</div>`
+                    : `<p style="font-size:12px;color:#64748b;">${t('noServers')}</p>`;
+                return;
+            }
             el.innerHTML = `<p style="font-size:12px;color:#64748b;margin:0;">…</p>`;
             const rows = await readAll(names, metas);
             if (my !== seq) return;   // ticks changed meanwhile
@@ -312,7 +338,7 @@
             el.innerHTML = `<div style="font-size:13px;font-weight:600;margin-bottom:4px;">${t('title')}</div>
                 <p style="font-size:12px;color:#64748b;margin:0 0 8px;">${t('help')}</p>
                 <div style="display:flex;flex-direction:column;gap:6px;">${rows.map(rowHtml).join('')}
-                ${unreachable.map((n) => `<div style="font-size:13px;padding:4px 10px;"><strong>${esc(n)}</strong> — <span style="color:#64748b;">${t('notHere')}</span></div>`).join('')}</div>`;
+                ${unreachable.map((n) => `<div style="font-size:13px;padding:4px 10px;"><strong>${esc(n)}</strong> — <span style="color:#64748b;">${t('notHere')}</span></div>`).join('')}${otherLines}</div>`;
             rows.forEach((r, i) => {
                 const row = el.querySelector(`[data-row="${i}"]`);
                 if (r.info.host) {
@@ -354,9 +380,11 @@
             }
         }
 
-        return { refresh(next) { names = [...new Set(next || [])]; return render(); } };
+        // elsewhere: [{name, where}] -- servers this node uses whose settings another node shows
+        return { refresh(next, elsewhere) { names = [...new Set(next || [])]; others = elsewhere || []; return render(); } };
     }
 
     window.McpServerSettings = { readText, writeText, folderGranted, readServerMap, readLocalInfo, readHostInfo,
-        saveLocal, saveHost, checkTargets, readAll, findMissing, sectionMissing, runGate, mountServerSettings };
+        saveLocal, saveHost, checkTargets, readAll, findMissing, sectionMissing, runGate, mountServerSettings,
+        settingsHomes, splitByHome };
 })();

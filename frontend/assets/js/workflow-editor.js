@@ -10367,6 +10367,13 @@ class WorkflowEditor {
         const toolsShown = () => f('tools').closest('[data-pane]')?.style.display !== 'none';
         let assist = null;   // the assistant box (mounted below); a server tick refreshes its listings
         let srvSettings = null;   // the checked servers' private settings (McpServerSettings), under the ticks
+        // a server's settings show in the first node that uses it (e.g. Outlook's on the Start option): the
+        // others are named with where theirs are
+        const refreshSrvSettings = () => {
+            if (!srvSettings) return;
+            const { here, elsewhere } = this._serverSettingsSplit(nodeId, [...checked]);
+            srvSettings.refresh(here, elsewhere);
+        };
         const renderServers = () => {
             const esc = (v) => this.escapeHtml(String(v ?? ''));
             const known = new Set(servers.map((m) => m.name));
@@ -10389,7 +10396,7 @@ class WorkflowEditor {
             f('servers').querySelectorAll('input[data-server]').forEach((cb) => cb.addEventListener('change', () => {
                 if (cb.checked) checked.add(cb.dataset.server); else checked.delete(cb.dataset.server);
                 refreshConnect();
-                srvSettings?.refresh([...checked]);
+                refreshSrvSettings();
                 assist?.refresh();
                 if (toolsShown()) renderTools();
             }));
@@ -10597,7 +10604,7 @@ class WorkflowEditor {
                 const srvLabel = this.t('workflow.serverSettings.title');
                 srvSettings = window.McpServerSettings.mountServerSettings(f('srvsettings'), this, servers,
                     (missing) => { if (srvTab) srvTab.textContent = missing ? `⚠ ${srvLabel}` : srvLabel; });
-                srvSettings.refresh([...checked]);
+                refreshSrvSettings();
             }
         })();
 
@@ -11214,7 +11221,8 @@ class WorkflowEditor {
         // The option's servers' private settings (the code node form's Server settings block).
         if (window.McpServerSettings?.mountServerSettings && window.WorkflowPackageUI?.settingsFieldsHtml && (comp.mcp_servers || []).length) {
             this._loadMcpServersMeta(true).then((metas) => window.McpServerSettings
-                .mountServerSettings(overlay.querySelector('[data-role="srvsettings"]'), this, metas).refresh(comp.mcp_servers))
+                .mountServerSettings(overlay.querySelector('[data-role="srvsettings"]'), this, metas)
+                .refresh(...Object.values(this._serverSettingsSplit(startId, comp.mcp_servers))))
                 .catch((e) => console.warn('[workflow] server settings not shown:', e?.message || e));
         }
         overlay.addEventListener('click', async (ev) => {
@@ -17679,6 +17687,36 @@ class WorkflowEditor {
      * or the server host) are checked, and a form opens when a required one is empty (McpServerSettings.runGate).
      * True = run. A check that cannot be made never blocks the run: the first failing node says why, as before.
      */
+    /**
+     * Where each server's settings are shown: the first node in flow order that uses it -- the Start option, then
+     * the nodes reached from Start (then any unlinked ones). `nodeId` / `live`: that node's servers as its open
+     * form has them ticked. Returns McpServerSettings.splitByHome for that node.
+     */
+    _serverSettingsSplit(nodeId, live) {
+        const MS = window.McpServerSettings;
+        const nodes = this.editor.drawflow.drawflow.Home.data;
+        const startId = this._startNodeId();
+        const ids = [], seen = new Set();
+        const queue = startId ? [String(startId)] : [];
+        while (queue.length) {
+            const id = queue.shift();
+            if (seen.has(id) || !nodes[id]) continue;
+            seen.add(id); ids.push(id);
+            for (const out of Object.values(nodes[id].outputs || {})) for (const c of out.connections || []) queue.push(String(c.node));
+        }
+        for (const id of Object.keys(nodes)) if (!seen.has(id)) ids.push(id);
+        const order = ids.map((id) => {
+            const d = nodes[id].data || {};
+            if (String(id) === String(nodeId)) return { id: String(id), label: d.name, servers: live || [] };
+            if (String(id) === String(startId) && d.start_option) {
+                const comp = window.CodeComponents?.cache?.get(Number(d.start_option));
+                return { id: String(id), label: comp?.start_trigger?.label || d.start_option_label || comp?.name || 'Start', servers: comp?.mcp_servers || [] };
+            }
+            return { id: String(id), label: d.name || id, servers: Array.isArray(d.mcp_servers) ? d.mcp_servers : [] };
+        });
+        return MS.splitByHome(String(nodeId), live || [], MS.settingsHomes(order));
+    }
+
     async _runSettingsGate() {
         const MS = window.McpServerSettings, WP = window.WorkflowPackage;
         if (!MS || !WP?.collectDependencies || !window.WorkflowPackageUI?.settingsFieldsHtml) return true;

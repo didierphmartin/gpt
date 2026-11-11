@@ -277,7 +277,7 @@
     "optionRemove": "Remove Start option",
     "linksDroppedTitle": "Remove links in workflows?",
     "linksDroppedIntro": "Saving removes exits from \"{{name}}\". These workflows lose the links on them:",
-    "linksDroppedLine": "{{workflow}} — {{node}}: \"{{exit}}\" ({{count}} link(s))",
+    "linksDroppedLine": "{{workflow}} — {{{node}}}: \"{{exit}}\" ({{count}} link(s))",
     "linksDroppedOthers": "{{count}} other workflow(s) you cannot open ({{links}} link(s))",
     "linksDroppedConfirm": "Save and remove links"
   },
@@ -1264,7 +1264,7 @@
       "none": "This code reads no arguments.",
       "available": "Available placeholders",
       "availableHint": "Click one to insert it in the last field you used. It is replaced by that value when the node runs.",
-      "from": "from {{node}}",
+      "from": "from {{{node}}}",
       "noneAvailable": "Nothing before this node provides placeholders.",
       "missing": "Required arguments left empty: {{names}}",
       "unknown": "Saved, but nothing before this node provides {{names}}: the node will fail when it runs.",
@@ -1818,8 +1818,8 @@
       "saved": "Package saved as {{name}}",
       "failed": "Package export failed: {{error}}",
       "warnSkillMissing": "Skill \"{{name}}\" is missing here — not exported.",
-      "errSkillMissing": "Skill \"{{name}}\" used by \"{{node}}\" is not installed here, so the package cannot be exported.",
-      "errSkillUnreadable": "Skill \"{{name}}\" used by \"{{node}}\" cannot be read here (no access to the skills folder), so the package cannot be exported.",
+      "errSkillMissing": "Skill \"{{name}}\" used by \"{{{node}}}\" is not installed here, so the package cannot be exported.",
+      "errSkillUnreadable": "Skill \"{{name}}\" used by \"{{{node}}}\" cannot be read here (no access to the skills folder), so the package cannot be exported.",
       "progressSkill": "Packaging skill {{name}} with its libraries ({{done}} of {{total}})…",
       "warnServerMissing": "MCP server \"{{name}}\" is not registered here — not exported.",
       "warnFolderUnreadable": "The local folder of \"{{name}}\" could not be opened — registration only.",
@@ -1949,6 +1949,7 @@
       "savedHost": "Saved. The server restarts with its new settings.",
       "savedLocal": "Saved. Restart the server so it reads them: run its start command in a terminal, in the server's folder inside your SynergyAI folder.",
       "saveFailed": "The settings could not be saved: {{error}}",
+      "elsewhere": "its settings are in “{{node}}”, the first node that uses it",
       "noServers": "No server checked. Check one in MCP Servers to see its settings here."
     }
   },
