@@ -10221,7 +10221,7 @@ class WorkflowEditor {
         overlay.className = 'storage-config-overlay wf-code-window';
         overlay.innerHTML = `
             <div class="storage-config-modal" style="display:flex;flex-direction:column;">
-                <div class="storage-config-header"><h3>⚙️ ${this.escapeHtml(node ? this.t('codeLibrary.nodeTitle') : this.t('codeLibrary.componentTitle'))}</h3><button class="storage-config-close" data-act="close">×</button></div>
+                <div class="storage-config-header"><h3>⚙️ <span data-title-name>${this.escapeHtml(d.name || 'Code')}</span> <span style="font-weight:400;font-size:0.8em;opacity:0.7;">— ${this.escapeHtml(node ? this.t('codeLibrary.nodeTitle') : this.t('codeLibrary.componentTitle'))}</span></h3><button class="storage-config-close" data-act="close">×</button></div>
                 <div data-f="link" class="text-xs text-gray-600" style="padding:4px 16px;display:none;"></div>
                 <div class="flex border-b border-gray-200" style="padding:0 16px;">
                     ${tab('settings', 'Settings')}${tab('args', 'Arguments')}${tab('code', 'Code')}${tab('servers', 'MCP Servers')}${tab('srvsettings', this.escapeHtml(this.t('workflow.serverSettings.title')))}${tab('tools', 'Tools')}${tab('input', 'Input')}${tab('output', 'Output')}${tab('logs', 'Logs')}
@@ -10286,6 +10286,8 @@ class WorkflowEditor {
         // Values are set through the DOM, never interpolated into attributes: escapeHtml leaves
         // quotes alone, so a name like Poll "prod" would be cut short (or inject an attribute).
         f('name').value = d.name || 'Code';
+        // the title names the node, so each form says which one it is
+        f('name').addEventListener('input', () => { overlay.querySelector('[data-title-name]').textContent = f('name').value.trim() || 'Code'; });
         this._numberCodeLines(f('code'));
         f('code').value = d.code || '';
         f('exits').value = CN.exitsText(Array.isArray(d.exits) && d.exits.length ? d.exits : ['next']);
