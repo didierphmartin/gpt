@@ -34,9 +34,9 @@ class LangGraphGeneratorCodeNodeTest extends TestCase
         return $this->generateWith($graph, [], $userId)['code'];
     }
 
-    private function generateWith(array $graph, array $options, ?string $userId = '3'): array
+    private function generateWith(array $graph, array $options, ?string $userId = '3', ?\PDO $pdo = null): array
     {
-        $pdo = $this->pdo();
+        $pdo ??= $this->pdo();
         $wfRepo = $this->createMock(WorkflowRepository::class);
         $wfRepo->method('findById')->willReturn(new Workflow(['id' => 44, 'name' => 'Dispatcher demo', 'user_id' => '3']));
         $graphRepo = $this->createMock(WorkflowGraphRepository::class);
@@ -82,6 +82,18 @@ class LangGraphGeneratorCodeNodeTest extends TestCase
         file_put_contents($file, $code);
         exec('python3 -m py_compile ' . escapeshellarg($file) . ' 2>&1', $out, $rc);
         self::assertSame(0, $rc, implode("\n", $out));
+    }
+
+    /** A registered server with no cached tools (it was down when they were listed) still serves a code node. */
+    public function testAServerWithNoCachedToolsStillResolves(): void
+    {
+        $pdo = $this->pdo();
+        $pdo->exec('DELETE FROM mcp_server_tools WHERE server_id = 85');
+        $code = $this->generateWith($this->codeGraph(), [], '3', $pdo)['code'];
+        self::assertMatchesRegularExpression('~MCP_SLUGS = \{\s*"servicenow": "http://localhost/servicenow/\?profile=mock&toolset=jobs"\s*\}~', $code);
+        // ADK / MAF / NOOA read the same list (WorkflowGraphAnalyzer::serverIndex).
+        self::assertContains(['name' => 'ServiceNow', 'url' => 'http://localhost/servicenow/?profile=mock&toolset=jobs'],
+            \AgentTeam\Services\WorkflowGraphAnalyzer::registeredServers($pdo, '3'));
     }
 
     public function testWorkflowsWithoutCodeNodesAreUnchanged(): void

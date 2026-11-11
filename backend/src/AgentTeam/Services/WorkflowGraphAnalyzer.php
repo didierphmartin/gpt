@@ -547,11 +547,32 @@ class WorkflowGraphAnalyzer
     public function serverIndex(?string $userId = null): array
     {
         $out = [];
-        foreach ($this->loadMcpToolsWithServers($userId) as $t) {
-            $url = (string) ($t['server_url'] ?? '');
-            $name = (string) ($t['server_name'] ?? '');
-            if ($url !== '' && $name !== '') {
-                $out[CodeNodeEmit::slug($name)] = ['url' => $url, 'name' => $name];
+        foreach (self::registeredServers($this->db, $userId) as $s) {
+            $out[CodeNodeEmit::slug($s['name'])] = ['url' => $s['url'], 'name' => $s['name']];
+        }
+        return $out;
+    }
+
+    /**
+     * The enabled MCP servers the user may call (global ones, then their own, which win on a shared name), from
+     * mcp_servers itself: a server with no cached tools yet (it was down when its tools were last listed) is
+     * still registered, and a code node only needs its address.
+     * @return list<array{name:string,url:string}>
+     */
+    public static function registeredServers(PDO $db, ?string $userId): array
+    {
+        $own = $userId !== null && $userId !== '';
+        $stmt = $db->prepare('SELECT name, url, user_id FROM mcp_servers WHERE enabled = 1 AND (user_id IS NULL'
+            . ($own ? ' OR user_id = :uid' : '') . ')');
+        $stmt->execute($own ? ['uid' => $userId] : []);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        usort($rows, fn($a, $b) => ($b['user_id'] === null) <=> ($a['user_id'] === null));
+        $out = [];
+        foreach ($rows as $r) {
+            $name = (string) ($r['name'] ?? '');
+            $url = (string) ($r['url'] ?? '');
+            if ($name !== '' && $url !== '') {
+                $out[] = ['name' => $name, 'url' => $url];
             }
         }
         return $out;

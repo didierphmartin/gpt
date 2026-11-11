@@ -1234,13 +1234,12 @@ class LangGraphGenerator
         // Every registered server name resolves, including a second one sharing a URL (refused below if both are used).
         $slugToUrl = [];
         $slugName = [];
-        foreach ($mcpTools as $t) {
-            $surl = (string) ($t['server_url'] ?? '');
-            if ($surl !== '') {
-                $slg = CodeNodeEmit::slug((string) ($t['server_name'] ?? ''));
-                $slugToUrl[$slg] = $surl;
-                $slugName[$slg] = (string) ($t['server_name'] ?? '');
-            }
+        foreach (WorkflowGraphAnalyzer::registeredServers($this->db, $userId) as $s) {
+            $slg = CodeNodeEmit::slug($s['name']);
+            $slugToUrl[$slg] = $s['url'];
+            $slugName[$slg] = $s['name'];
+            // A server with no cached tools is in no tool row: register it here so a code node can still use it.
+            $serverRegistry[$s['url']] ??= ['name' => $s['name']];
         }
         $codeData = [];
         $codeServerUrls = [];
