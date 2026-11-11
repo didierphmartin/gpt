@@ -1901,6 +1901,8 @@
       "settingsTitle": "Ajustes privados",
       "required": "Obligatorio",
       "fillLater": "Completar más tarde: el servidor se instala con los ajustes ya completados",
+      "groupNote": "va con los demás ajustes «{{group}}»: en cuanto uno tiene valor, todos son necesarios",
+      "stillNeeded": "Aún falta: {{names}} (o marque Completar más tarde)",
       "secretHint": "Secreto: no viene en el paquete, introduzca el suyo",
       "show": "Mostrar",
       "hide": "Ocultar",

@@ -175,7 +175,7 @@
         return fields.map((f) => fieldRow(esc(f.name), f.required,
             f.secret ? secretInput(t, `data-value="${esc(f.name)}" placeholder="${esc(t('secretHint'))}"`, own(v, f.name) || '')
                 : `<input type="text" data-value="${esc(f.name)}" value="${esc(own(v, f.name) || '')}" style="${INPUT}">`,
-            esc(f.label), t('required'))).join('');
+            [esc(f.label), f.group ? `<em>${t('groupNote', { group: f.group })}</em>` : ''].filter(Boolean).join(' — '), t('required'))).join('');
     }
 
     /** One install / start command with its Copy button (wire with wireCopyButtons). */
@@ -251,6 +251,7 @@
                 const form = settingsFieldsHtml(t, r.envFields, v);
                 parts.push(`<div style="border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 8px;">
                     <strong style="font-size: 13px;">${t('settingsTitle')}</strong>${form}
+                    <div data-still-needed style="font-size: 12px; color: #b45309;"></div>
                     <label style="font-size: 13px;"><input type="checkbox" data-fill-later ${v.fillLater ? 'checked' : ''}> ${t('fillLater')}</label></div>`);
             }
         }
@@ -354,6 +355,15 @@
             confirm.style.opacity = ok ? '1' : '0.5';
             confirm.style.cursor = ok ? 'pointer' : 'not-allowed';
             statusEl.textContent = busy ? t('installing') : (!ok && !locked ? t('blocked') : '');
+            // each server's box names what still blocks it (a grouped setting is needed without a * mark)
+            list.querySelectorAll('[data-row]').forEach((card) => {
+                const el = card.querySelector('[data-still-needed]');
+                const r = state.rows[Number(card.dataset.row)];
+                if (!el || !r || !r.envFields) return;
+                const v = own(state.values, r.name) || {};
+                const miss = v.fillLater ? [] : WP().missingRequired(r.envFields, v);
+                el.textContent = miss.length ? `⚠ ${editor.t('workflow.package.stillNeeded', { names: miss.join(', ') })}` : '';
+            });
         };
         const render = () => {
             list.innerHTML = state.rows.length ? state.rows.map((r, i) => cardHtml(editor, state, r, i)).join('') : `<div>${esc(t('nothingToInstall'))}</div>`;
