@@ -1849,6 +1849,7 @@
       "close": "Close",
       "installing": "Installing…",
       "blocked": "Resolve the items marked ⚠ to continue.",
+      "blockedBy": "Still to settle: {{names}}",
       "nothingToInstall": "Nothing to install: the package holds the workflow only.",
       "kindSkill": "Skill",
       "kindServer": "MCP server",

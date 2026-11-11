@@ -1849,6 +1849,7 @@
       "close": "Cerrar",
       "installing": "Instalando…",
       "blocked": "Resuelva los elementos marcados con ⚠ para continuar.",
+      "blockedBy": "Falta resolver: {{names}}",
       "nothingToInstall": "Nada que instalar: el paquete contiene solo el flujo de trabajo.",
       "kindSkill": "Habilidad",
       "kindServer": "Servidor MCP",

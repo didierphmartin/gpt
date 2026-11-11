@@ -1849,6 +1849,7 @@
       "close": "Fermer",
       "installing": "Installation…",
       "blocked": "Réglez les éléments marqués ⚠ pour continuer.",
+      "blockedBy": "Reste à régler : {{names}}",
       "nothingToInstall": "Rien à installer : le paquet ne contient que le flux de travail.",
       "kindSkill": "Compétence",
       "kindServer": "Serveur MCP",

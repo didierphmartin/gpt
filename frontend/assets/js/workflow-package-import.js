@@ -354,7 +354,9 @@
             confirm.disabled = !ok;
             confirm.style.opacity = ok ? '1' : '0.5';
             confirm.style.cursor = ok ? 'pointer' : 'not-allowed';
-            statusEl.textContent = busy ? t('installing') : (!ok && !locked ? t('blocked') : '');
+            // name what still blocks (a server keeps its ⚠ once settled, so the marks alone don't say)
+            const blocking = ok || locked ? [] : state.rows.filter((r) => !WP().canConfirm([r], state.values)).map((r) => r.name);
+            statusEl.textContent = busy ? t('installing') : (blocking.length ? t('blockedBy', { names: blocking.join(', ') }) : (!ok && !locked ? t('blocked') : ''));
             // each server's box names what still blocks it (a grouped setting is needed without a * mark)
             list.querySelectorAll('[data-row]').forEach((card) => {
                 const el = card.querySelector('[data-still-needed]');
@@ -366,7 +368,12 @@
             });
         };
         const render = () => {
+            // a re-render (e.g. ticking Fill in later) keeps the scroll where it was
+            let scroller = list.parentElement;
+            while (scroller && scroller !== modal && getComputedStyle(scroller).overflowY === 'visible') scroller = scroller.parentElement;
+            const top = scroller ? scroller.scrollTop : 0;
             list.innerHTML = state.rows.length ? state.rows.map((r, i) => cardHtml(editor, state, r, i)).join('') : `<div>${esc(t('nothingToInstall'))}</div>`;
+            if (scroller) scroller.scrollTop = top;
             refresh();
         };
         modal.querySelectorAll('[data-import-close]').forEach((b) => { b.onclick = () => modal.remove(); });
