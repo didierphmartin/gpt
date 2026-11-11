@@ -1,4 +1,5 @@
 const assert = require('assert');
+const plainObj = (o) => JSON.parse(JSON.stringify(o));
 const WP = require('../workflow-package.js');
 const HostInstall = (() => {
     const vm = require('vm');
@@ -284,6 +285,26 @@ assert.strictEqual(WP.safeFileName('a/b: c?'), 'a_b_c');
     assert.strictEqual(row('component', 'Make PDF').status, 'install');
     assert.strictEqual(row('secrets', 'workflow keys').status, 'attention');
     assert.deepStrictEqual(row('secrets', 'workflow keys').fields, [{ node: '5', field: 'api_key' }]);
+    // the settings a package carries: plain values pre-fill the form, secrets never (even if present)
+    {
+        const fields = WP.envFields({ env: [{ name: 'TENANT_ID' }, { name: 'APP_KEY', secret: true }, { name: 'DB_PASSWORD', secret: false }, { name: 'FOLDER' }] }, '');
+        assert.deepStrictEqual(plainObj(WP.exportSettings(fields, { TENANT_ID: 't1', APP_KEY: 'k', DB_PASSWORD: 'p' })),
+            { TENANT_ID: 't1', APP_KEY: '', DB_PASSWORD: '', FOLDER: '' });   // a secret-looking name counts as secret
+        const m = WP.buildManifest({ servers: [{ id: 1, name: 'Outlook', url: 'u', local: true, folder: 'outlook_mcp', hasManifest: true,
+            settings: { TENANT_ID: 't1', APP_KEY: '' } }, { id: 2, name: 'Remote', url: 'https://r/mcp', local: false, settings: { X: 'y' } }] });
+        assert.deepStrictEqual(m.dependencies[0].settings, { TENANT_ID: 't1', APP_KEY: '' });
+        assert.ok(!('settings' in m.dependencies[1]));   // no files travel: no settings either
+        const withSettings = JSON.parse(new TextDecoder().decode(entries['manifest.json']));
+        withSettings.dependencies.push({ kind: 'server', name: 'Outlook', local: true, folder: 'mcps/Outlook/',
+            settings: { TENANT_ID: 'from-export', SOME_SECRET: 'leaked', NOT_DECLARED: 'x' } });
+        const pkg3 = WP.readPackage({ ...entries, 'manifest.json': J(withSettings),
+            'mcps/Outlook/synergyai-mcp.json': J({ env: [{ name: 'TENANT_ID' }, { name: 'SOME_SECRET', secret: true }] }) });
+        const rows3 = await WP.reviewRows(pkg3, { servers: [], playbooks: [], skills: [], components: [] });
+        const o3 = rows3.find((r) => r.kind === 'server' && r.name === 'Outlook');
+        assert.deepStrictEqual(plainObj(o3.carried), { TENANT_ID: 'from-export' });
+        assert.strictEqual(o3.envFields.length, 2);   // nothing required, but the form shows to carry the values
+        assert.ok(!o3.reasons.includes('settings-required'));
+    }
     // settings-required for a required env field
     const pkg2 = WP.readPackage({ ...entries, 'mcps/Outlook/synergyai-mcp.json': J({ env: [{ name: 'TENANT_ID', required: true }] }) });
     rows = await WP.reviewRows(pkg2, { servers: [], playbooks: [], skills: [], components: [] });

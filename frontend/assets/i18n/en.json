@@ -1901,6 +1901,7 @@
       "settingsTitle": "Private settings",
       "required": "Required",
       "fillLater": "Fill in later (the server is installed without its settings)",
+      "secretHint": "Secret: not in the package, enter your own",
       "show": "Show",
       "hide": "Hide",
       "workflowKeysHelp": "These keys were removed when the workflow was exported. Leave a field empty to fill it in later in the node.",

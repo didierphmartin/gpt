@@ -1901,6 +1901,7 @@
       "settingsTitle": "Ajustes privados",
       "required": "Obligatorio",
       "fillLater": "Completar más tarde (el servidor se instala sin sus ajustes)",
+      "secretHint": "Secreto: no viene en el paquete, introduzca el suyo",
       "show": "Mostrar",
       "hide": "Ocultar",
       "workflowKeysHelp": "Estas claves se eliminaron al exportar el flujo de trabajo. Deje un campo vacío para completarlo más tarde en el nodo.",

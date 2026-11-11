@@ -173,7 +173,7 @@
     function settingsFieldsHtml(t, fields, values) {
         const v = values || {};
         return fields.map((f) => fieldRow(esc(f.name), f.required,
-            f.secret ? secretInput(t, `data-value="${esc(f.name)}"`, own(v, f.name) || '')
+            f.secret ? secretInput(t, `data-value="${esc(f.name)}" placeholder="${esc(t('secretHint'))}"`, own(v, f.name) || '')
                 : `<input type="text" data-value="${esc(f.name)}" value="${esc(own(v, f.name) || '')}" style="${INPUT}">`,
             esc(f.label), t('required'))).join('');
     }
@@ -458,6 +458,7 @@
             if (r.envFields) {
                 const v = rowValues(values, r.name);
                 for (const f of r.envFields) if (f.default !== '') v[f.name] = f.default;
+                Object.assign(v, r.carried || {});   // the values the package carries win over the defaults
             }
         }
         const io = { ...defaultIo(editor), ...(overrides.io || {}) };
