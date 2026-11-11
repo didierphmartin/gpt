@@ -1901,6 +1901,8 @@
       "settingsTitle": "Paramètres privés",
       "required": "Obligatoire",
       "fillLater": "Remplir plus tard : le serveur est installé avec les paramètres déjà remplis",
+      "groupNote": "va avec les autres paramètres « {{group}} » : dès que l’un est rempli, tous sont nécessaires",
+      "stillNeeded": "Encore nécessaire : {{names}} (ou cochez Remplir plus tard)",
       "secretHint": "Secret : absent du paquet, saisissez le vôtre",
       "show": "Afficher",
       "hide": "Masquer",

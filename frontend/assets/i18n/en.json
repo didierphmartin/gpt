@@ -1901,6 +1901,8 @@
       "settingsTitle": "Private settings",
       "required": "Required",
       "fillLater": "Fill in later: the server is installed with the settings filled in so far",
+      "groupNote": "goes with the other “{{group}}” settings: once one is filled, all are needed",
+      "stillNeeded": "Still needed: {{names}} (or tick Fill in later)",
       "secretHint": "Secret: not in the package, enter your own",
       "show": "Show",
       "hide": "Hide",
