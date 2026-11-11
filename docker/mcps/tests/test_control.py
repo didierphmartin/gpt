@@ -28,6 +28,12 @@ class Resp:
         return json.loads(self.raw)
 
 
+class SelectFilesTest(unittest.TestCase):
+    def test_manifest_travels_even_when_include_leaves_it_out(self):
+        got = control.select_server_files(["synergyai-mcp.json", "a.py", "x/synergyai-mcp.json"], {"include": ["*.py"]})
+        self.assertEqual(got, ["synergyai-mcp.json", "a.py"])
+
+
 class ControlTest(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp())

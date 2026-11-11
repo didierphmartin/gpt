@@ -67,7 +67,8 @@ def select_server_files(paths: list, manifest: dict | None) -> list:
             continue
         if any(_matches(p, x) for x in exclude):
             continue
-        if include is None or any(_matches(p, x) for x in include):
+        # the install manifest itself always travels, whether or not include names it
+        if include is None or p == MANIFEST or any(_matches(p, x) for x in include):
             out.append(p)
     return out
 
