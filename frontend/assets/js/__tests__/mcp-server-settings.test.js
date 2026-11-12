@@ -83,6 +83,21 @@ const plain = (x) => JSON.parse(JSON.stringify(x));
     const all = await MS.readAll(['Outlook', 'SharePoint', 'Remote'], [...metas, { name: 'Remote', url: 'https://x/mcp' }]);
     assert.deepStrictEqual(plain(all.map((r) => [r.name, r.info.missing])), [['Outlook', ['OUTLOOK_SECRET_KEY']], ['SharePoint', []]]);
 
+    // locate + readReadme: the MCP form's README tab -- the local folder's README.md, null when there is none
+    files['mcps/outlook_mcp/README.md'] = '# Outlook MCP\n\nReads mail.';
+    const [olk, sp] = await MS.locate(['Outlook', 'SharePoint', 'Remote'], [...metas, { name: 'Remote', url: 'https://x/mcp' }]);
+    assert.deepStrictEqual(plain([olk, sp]), [{ name: 'Outlook', host: false, folder: 'outlook_mcp' }, { name: 'SharePoint', host: false, folder: 'sharepoint_mcp' }]);
+    assert.strictEqual(await MS.readReadme(olk), '# Outlook MCP\n\nReads mail.');
+    assert.strictEqual(await MS.readReadme(sp), null);
+    delete files['mcps/outlook_mcp/README.md'];
+    // a host server: README.md from its source (base64, UTF-8 kept)
+    const saved = ctx.window.mcpClient;
+    ctx.window.mcpClient = { hostSource: async (folder) => ({ files: folder === 'sp' ? { 'README.md': Buffer.from('# Café ✓').toString('base64') } : {} }) };
+    ctx.atob = (b) => Buffer.from(b, 'base64').toString('binary');
+    assert.strictEqual(await MS.readReadme({ name: 'SharePoint', host: true, folder: 'sp' }), '# Café ✓');
+    assert.strictEqual(await MS.readReadme({ name: 'X', host: true, folder: 'other' }), null);
+    ctx.window.mcpClient = saved;
+
     const missing = await MS.findMissing(['Outlook', 'SharePoint'], metas);
     assert.strictEqual(missing.length, 1);
     assert.strictEqual(missing[0].name, 'Outlook');

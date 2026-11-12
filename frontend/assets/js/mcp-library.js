@@ -206,12 +206,15 @@ class MCPLibrary {
               <button id="mcp-modal-close" class="text-gray-500 hover:text-gray-800 text-xl leading-none">×</button>
             </div>
             <div class="flex border-b border-gray-200 px-3">
-              <button class="mcp-modal-tab active" data-tab="settings">${this.esc(t('mcpLibrary.tabSettings'))}</button>
+              <button class="mcp-modal-tab ${isNew ? '' : 'active'}" data-tab="readme" ${isNew ? 'disabled' : ''}>${this.esc(t('mcpLibrary.tabReadme'))}</button>
+              <button class="mcp-modal-tab ${isNew ? 'active' : ''}" data-tab="settings">${this.esc(t('mcpLibrary.tabSettings'))}</button>
+              <button class="mcp-modal-tab" data-tab="srvsettings" ${isNew ? 'disabled' : ''}>${this.esc(t('mcpLibrary.tabServerSettings'))}</button>
               <button class="mcp-modal-tab" data-tab="tools" ${isNew ? 'disabled' : ''}>${this.esc(t('mcpLibrary.tabTools'))} <span id="mcp-modal-tool-count" class="mcp-lib-count">(${Number(server?.tool_count) || 0})</span></button>
               <button class="mcp-modal-tab" data-tab="test">${this.esc(t('mcpLibrary.tabTest'))}</button>
             </div>
             <div class="flex-1 overflow-y-auto px-5 py-4">
-              <div id="mcp-tab-settings">
+              <div id="mcp-tab-readme" class="${isNew ? 'hidden' : ''}"></div>
+              <div id="mcp-tab-settings" class="${isNew ? '' : 'hidden'}">
                 <label class="mcp-field">${this.esc(t('mcpLibrary.name'))} *<input id="mcp-f-name" class="mcp-input" ${dis} value="${this.esc(server?.name || '')}"></label>
                 <label class="mcp-field">${this.esc(t('mcpLibrary.url'))} *<input id="mcp-f-url" class="mcp-input" ${dis} value="${this.esc(server?.url || '')}" placeholder="https://host/mcp"></label>
                 <label class="mcp-field">${this.esc(t('mcpLibrary.description'))}<input id="mcp-f-desc" class="mcp-input" ${dis} value="${this.esc(server?.description || '')}"></label>
@@ -248,12 +251,18 @@ class MCPLibrary {
                 <div id="mcp-tools-cards"><div class="mcp-tool-empty">${this.esc(t('mcpLibrary.loadingTools'))}</div></div>
               </div>
               <div id="mcp-tab-test" class="hidden"></div>
+              <div id="mcp-tab-srvsettings" class="hidden"></div>
             </div>
           </div>
         </div>`;
         document.body.insertAdjacentHTML('beforeend', html);
         this.bindModal(server, own, isNew);
-        if (opts.confirmDelete) document.getElementById('mcp-f-delete')?.click();
+        // An existing server opens on its README (what it is and what it needs); a new one on its Settings.
+        if (!isNew) this.loadReadme(server);
+        if (opts.confirmDelete) {
+            document.querySelector('#mcp-server-modal [data-tab="settings"]')?.click();   // the Delete button is there
+            document.getElementById('mcp-f-delete')?.click();
+        }
     }
 
     bindModal(server, own, isNew) {
@@ -269,7 +278,11 @@ class MCPLibrary {
                 document.getElementById('mcp-tab-settings').classList.toggle('hidden', btn.dataset.tab !== 'settings');
                 document.getElementById('mcp-tab-tools').classList.toggle('hidden', btn.dataset.tab !== 'tools');
                 document.getElementById('mcp-tab-test').classList.toggle('hidden', btn.dataset.tab !== 'test');
+                document.getElementById('mcp-tab-srvsettings').classList.toggle('hidden', btn.dataset.tab !== 'srvsettings');
+                document.getElementById('mcp-tab-readme').classList.toggle('hidden', btn.dataset.tab !== 'readme');
                 if (btn.dataset.tab === 'tools') this.loadTools(server);
+                if (btn.dataset.tab === 'srvsettings') this.loadServerSettings(server);
+                if (btn.dataset.tab === 'readme') this.loadReadme(server);
             });
         });
 
@@ -426,6 +439,47 @@ class MCPLibrary {
         if (!res?.success) return this.showMsg(res?.error || this.t('mcpLibrary.deleteFailed'), false);
         document.getElementById('mcp-server-modal')?.remove();
         await this.loadTree();
+    }
+
+    // ─── server settings + README tabs ─────────────────────────────────────
+    /** The server as McpServerSettings locates it: by name and URL, read even while it is disabled. */
+    serverMetas(server) {
+        return [{ name: server.name, url: server.url, is_global: !this.isOwn(server), effective_on: true }];
+    }
+
+    /**
+     * Server settings: the private settings the server reads where it runs (its .env), with Save -- the same block
+     * as the code component's Server settings tab (McpServerSettings.mountServerSettings).
+     */
+    loadServerSettings(server) {
+        const el = document.getElementById('mcp-tab-srvsettings');
+        if (!el || !window.McpServerSettings?.mountServerSettings || !window.WorkflowPackageUI?.settingsFieldsHtml) return;
+        // Its texts, but this form's help line (the block's own one speaks of a component).
+        const t = (k, p) => (k === 'workflow.serverSettings.help' ? this.t('mcpLibrary.serverSettingsHelp', p) : this.t(k, p));
+        window.McpServerSettings.mountServerSettings(el, { t }, this.serverMetas(server)).refresh([server.name])
+            .catch((e) => { el.innerHTML = `<p class="mcp-msg err">${this.esc(this.t('mcpLibrary.serverSettingsFailed', { error: e?.message || String(e) }))}</p>`; });
+    }
+
+    /** README: the server's README.md, rendered (sanitised), read from its folder or the server host. */
+    async loadReadme(server) {
+        const el = document.getElementById('mcp-tab-readme');
+        const MS = window.McpServerSettings;
+        if (!el || !MS?.locate) return;
+        const say = (key, params, cls = 'text-gray-600') => { el.innerHTML = `<p class="text-sm ${cls}">${this.esc(this.t(key, params))}</p>`; };
+        say('mcpLibrary.readmeLoading');
+        try {
+            const [target] = await MS.locate([server.name], this.serverMetas(server));
+            if (!target) { say('mcpLibrary.readmeNotHere'); return; }
+            const text = await MS.readReadme(target);
+            if (!text) { say('mcpLibrary.readmeNone'); return; }
+            const html = typeof window.renderMarkdown === 'function' && window.DOMPurify?.sanitize
+                ? window.DOMPurify.sanitize(window.renderMarkdown(text), { USE_PROFILES: { html: true }, ADD_ATTR: ['class', 'target', 'rel'],
+                    FORBID_TAGS: ['style', 'form', 'input', 'button'] })
+                : this.esc(text).replace(/\n/g, '<br>');
+            el.innerHTML = `<div class="readme-doc markdown-content text-sm">${html}</div>`;
+        } catch (e) {
+            say('mcpLibrary.readmeFailed', { error: e?.message || String(e) }, 'font-bold text-red-600');
+        }
     }
 
     // ─── tools tab ─────────────────────────────────────────────────────────

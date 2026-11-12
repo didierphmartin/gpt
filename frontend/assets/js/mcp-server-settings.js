@@ -9,6 +9,7 @@
  * window.McpServerSettings:
  *   readLocalInfo(folder), readHostInfo(folder, host), saveLocal(info, values), saveHost(info, values)
  *   checkTargets(names, metas, map, gateway)   pure: which used servers can be checked, and where
+ *   locate(names, metas), readReadme(target)   where servers' files are read from here; a server's README.md text
  *   findMissing(names)                         the checkable servers with a required setting empty
  *   runGate(editor, names, metas)              Run check: true = run, false = cancelled
  *   mountServerSettings(el, editor, metas)     the code component form's per-server settings block
@@ -186,8 +187,8 @@
         return (await readAll(names, metas)).filter((r) => !r.info.error && r.info.missing.length);
     }
 
-    /** Every used server whose settings can be read, with its info (error = unreadable): [{name, info}]. */
-    async function readAll(names, metas) {
+    /** Where these servers' files can be read from here: [{name, host, folder}] (checkTargets with the live host and map). */
+    async function locate(names, metas) {
         if (!(names || []).length || !window.WorkflowPackage) return [];
         let gateway = null, map = Object.create(null);
         try {
@@ -197,7 +198,21 @@
         if (window.localFs && await folderGranted()) {
             try { map = await readServerMap(); } catch (_) { /* unreadable map: no local servers */ }
         }
-        const targets = checkTargets(names, metas, map, gateway);
+        return checkTargets(names, metas, map, gateway);
+    }
+
+    /** A located server's README.md text (a locate() target); null when it has none. Throws when its files can't be read. */
+    async function readReadme(target) {
+        if (!target.host) return readText(`mcps/${target.folder}/README.md`);
+        const b64 = (await window.mcpClient.hostSource(target.folder))?.files?.['README.md'];
+        if (typeof b64 !== 'string') return null;
+        const bin = atob(b64);
+        return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+    }
+
+    /** Every used server whose settings can be read, with its info (error = unreadable): [{name, info}]. */
+    async function readAll(names, metas) {
+        const targets = await locate(names, metas);
         let hosted = [];
         if (targets.some((x) => x.host)) { try { hosted = await window.mcpClient.hostServers(); } catch (_) { /* state unknown */ } }
         const infos = await Promise.all(targets.map((x) => (x.host
@@ -466,5 +481,5 @@
     }
 
     window.McpServerSettings = { readText, writeText, folderGranted, readServerMap, readLocalInfo, readHostInfo,
-        saveLocal, saveHost, cleanList, listOf, saveListLocal, saveListHost, checkTargets, readAll, findMissing, sectionMissing, runGate, mountServerSettings };
+        saveLocal, saveHost, cleanList, listOf, saveListLocal, saveListHost, checkTargets, locate, readReadme, readAll, findMissing, sectionMissing, runGate, mountServerSettings };
 })();
