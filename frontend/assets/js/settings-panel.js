@@ -3584,8 +3584,21 @@ class SettingsPanel {
         }
         if (result.warning) {
             this.showNotification?.(result.warning, 'warning');
-        } else {
-            this.showNotification?.('Browser access granted.', 'success');
+        }
+        // A new folder needs what the first-run wizard puts in it: the
+        // standard subfolders and the Python runner in <folder>/python/.
+        // Without the runner, compiled workflows cannot run from this folder.
+        try {
+            await window.localFs.ensureStandardSubdirs?.(result.handle);
+        } catch (e) {
+            console.warn('[settings] could not create standard subfolders:', e);
+        }
+        const runner = await window.localFs.deployRunner(result.handle);
+        if (runner.error || runner.skipped.length) {
+            const why = runner.error || ('could not write ' + runner.skipped.join(', '));
+            this.showNotification?.(`Access granted, but the Python runner was not fully installed in "${result.name}" (${why}). Compiled workflows will not run until it is; the workflow editor's Setup item explains how.`, 'error');
+        } else if (!result.warning) {
+            this.showNotification?.(`Access granted. Python runner installed in "${result.name}". Open the workflow editor's Setup item for the one terminal command left to run.`, 'success');
         }
         await this.renderLocalFsState();
     }
