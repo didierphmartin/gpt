@@ -29,7 +29,7 @@ import threading
 import time
 
 import httpx
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -42,6 +42,26 @@ from graph_builder import build_and_run
 from workflow_loader import WorkflowLoader
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
+# What python/.env holds: a compiled package's process does not get it (see _child_env). Read from the
+# file, not captured as "the environment before load_dotenv": uvicorn imports this module a second time
+# ("main:app"), after the first import has already loaded python/.env into os.environ.
+_RUNNER_DOTENV = dotenv_values(Path(__file__).resolve().parent / ".env")
+
+
+def _child_env(folder: Path) -> dict[str, str]:
+    """The environment of a process started in `folder`.
+
+    A compiled package (its folder has its own .env) gets the runner's environment without what
+    python/.env put there. Its code loads its own .env, and load_dotenv never overrides a variable
+    already set: python/.env's values, loaded once when the runner started, would otherwise beat the
+    package's own (e.g. the robot's MCP_HEADERS_*) and may be stale by now. A variable set in the
+    runner's own environment to another value than python/.env's is kept. A plain script gets the
+    runner's environment, python/.env's provider keys included, as before.
+    """
+    if not (folder / ".env").is_file():
+        return dict(os.environ)
+    return {k: v for k, v in os.environ.items() if k not in _RUNNER_DOTENV or _RUNNER_DOTENV[k] != v}
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -239,14 +259,15 @@ async def _stream_script_run(script_path: Path, args: list[str] | None = None):
     """Async generator: spawn `python -u <script> [args...]` and yield
     SSE frames for each stdout/stderr line until the subprocess exits.
 
-    Environment: the parent runner's env (inherited), so API keys loaded
-    from .env via load_dotenv() flow through to the subprocess.
+    Environment: _child_env -- a plain script inherits the runner's env (API
+    keys loaded from python/.env flow through); a compiled package gets it
+    without python/.env's values and reads its own .env, then python/.env.
     CWD: the install root (so relative paths like outputs/ resolve there).
     """
     # Add INSTALL_ROOT to PYTHONPATH so scripts in scripts/ can
     # `from script_io import write_output` without sys.path hacks. The
     # subprocess interpreter doesn't add the CWD to sys.path on its own.
-    env = os.environ.copy()
+    env = _child_env(script_path.parent)
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = (
         str(INSTALL_ROOT) + (os.pathsep + existing if existing else "")
@@ -392,7 +413,7 @@ def _start_workflow_server(folder: str) -> dict:
         with os.fdopen(log_fd, "wb") as log_file:
             proc = subprocess.Popen(
                 [sys.executable, "-u", str(pkg / "api.py"), "--port", str(port)],
-                cwd=str(pkg), stdout=log_file, stderr=subprocess.STDOUT,
+                cwd=str(pkg), env=_child_env(pkg), stdout=log_file, stderr=subprocess.STDOUT,
             )
         proc._workflow_url = url
         proc._workflow_log = log_path
@@ -639,7 +660,7 @@ def _cli_run(filename: str, extra_args: list[str] | None = None) -> int:
         return 2
 
     import subprocess
-    env = os.environ.copy()
+    env = _child_env(script_path.parent)
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = (
         str(INSTALL_ROOT) + (os.pathsep + existing if existing else "")

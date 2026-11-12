@@ -215,3 +215,18 @@ def test_list_reports_running_servers_only(tmp_path, monkeypatch):
     finally:
         runner._stop_workflow_server("demo_modular")
     assert runner._list_workflow_servers() == {"servers": []}
+
+
+
+def test_a_package_does_not_get_python_env_values(tmp_path, monkeypatch):
+    """python/.env's values, loaded when the runner started, would beat the package's own .env
+    (load_dotenv never overrides): a package's process does not get them; a plain script does."""
+    monkeypatch.setattr(runner, "_RUNNER_DOTENV", {"MCP_HEADERS_OUTLOOK": '{"X-Outlook-Account": "stale"}', "OTHER": "a"})
+    monkeypatch.setenv("MCP_HEADERS_OUTLOOK", '{"X-Outlook-Account": "stale"}')
+    monkeypatch.setenv("OTHER", "set by hand")      # not python/.env's value: kept
+    pkg = tmp_path / "pkg"; pkg.mkdir()
+    plain = tmp_path / "plain"; plain.mkdir()
+    (pkg / ".env").write_text('MCP_HEADERS_OUTLOOK={"X-Outlook-Account": "robot"}\n')
+    env = runner._child_env(pkg)
+    assert "MCP_HEADERS_OUTLOOK" not in env and env["OTHER"] == "set by hand" and "PATH" in env
+    assert runner._child_env(plain)["MCP_HEADERS_OUTLOOK"] == '{"X-Outlook-Account": "stale"}'
