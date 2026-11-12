@@ -92,6 +92,8 @@
             'folder.pathErrAbsolute': 'Enter the full path, starting with {start}',
             'folder.pathErrName':  'This path does not end with “{name}”, the folder you picked. Copy the path of that folder itself, not of a folder inside it.',
             'folder.runnerVenvNote':'Needed once. It builds the virtual environment; a browser cannot do that part.',
+            'folder.venvWaiting': 'Waiting for the command to finish… the wizard moves on by itself.',
+            'folder.venvReady':   '✓ Python environment ready',
             'folder.runnerCopy':    'Copy',
             'folder.runnerCopied':  'Copied',
             'folder.runnerPartial': 'Some files could not be written:',
@@ -163,6 +165,8 @@
             'folder.pathErrAbsolute': 'Saisissez le chemin complet, commençant par {start}',
             'folder.pathErrName':  'Ce chemin ne se termine pas par « {name} », le dossier choisi. Copiez le chemin de ce dossier lui-même, pas d\'un dossier qu\'il contient.',
             'folder.runnerVenvNote':'Une seule fois. Cela construit l\'environnement virtuel ; un navigateur ne peut pas le faire.',
+            'folder.venvWaiting': 'En attente de la fin de la commande… l\'assistant passera à la suite tout seul.',
+            'folder.venvReady':   '✓ Environnement Python prêt',
             'folder.runnerCopy':    'Copier',
             'folder.runnerCopied':  'Copié',
             'folder.runnerPartial': 'Certains fichiers n\'ont pas pu être écrits :',
@@ -234,6 +238,8 @@
             'folder.pathErrAbsolute': 'Escriba la ruta completa, empezando por {start}',
             'folder.pathErrName':  'Esta ruta no termina en “{name}”, la carpeta elegida. Copie la ruta de esa carpeta, no de una carpeta dentro de ella.',
             'folder.runnerVenvNote':'Solo una vez. Crea el entorno virtual; un navegador no puede hacerlo.',
+            'folder.venvWaiting': 'Esperando a que termine el comando… el asistente pasará al siguiente paso solo.',
+            'folder.venvReady':   '✓ Entorno de Python listo',
             'folder.runnerCopy':    'Copiar',
             'folder.runnerCopied':  'Copiado',
             'folder.runnerPartial': 'No se pudieron escribir algunos archivos:',
@@ -454,6 +460,42 @@
         }).join('') + `</div>`;
     }
 
+    // While the venv command is on screen, look for the marker its last step
+    // writes (through the folder handle -- the typed path is only for the
+    // command) and move on to the next step once it is there.
+    let venvTimer = null;
+    function syncVenvWatch(commandShown) {
+        if (!commandShown || wizardState.venvReady) {
+            clearInterval(venvTimer); venvTimer = null;
+            return;
+        }
+        if (venvTimer) return;
+        venvTimer = setInterval(async () => {
+            const root = wizardState.rootHandle;
+            const overlayOpen = !!document.getElementById('pwa-install-overlay');
+            if (!overlayOpen || wizardState.step !== 'folder' || !root) {
+                clearInterval(venvTimer); venvTimer = null;
+                return;
+            }
+            const parts = window.localFs.runnerShell.readyMarkerPath.split('/');
+            const file = parts.pop();
+            let found = false;
+            try {
+                let h = root;
+                for (const d of parts) h = await h.getDirectoryHandle(d);
+                await h.getFileHandle(file);
+                found = true;
+            } catch (e) { /* not there yet */ }
+            if (!found) return;
+            clearInterval(venvTimer); venvTimer = null;
+            wizardState.venvReady = true;
+            render();
+            setTimeout(() => {
+                if (wizardState.step === 'folder') { wizardState.step = 'keys'; render(); }
+            }, 1200);
+        }, 2000);
+    }
+
     function render() {
         const overlay = buildShell();
         const card    = overlay.querySelector('[data-pwa-content]');
@@ -471,6 +513,8 @@
 
         const banner = overlay.querySelector('[data-pwa-testbanner]');
         if (banner) banner.textContent = t('testBanner');
+
+        syncVenvWatch(!!card.querySelector('[data-pwa-action="copy-cmd"]'));
 
         // Re-bind delegated click via a fresh AbortController so we never stack listeners.
         abortCtl?.abort();
@@ -643,6 +687,7 @@
                         ${esc(t('folder.runnerCopy'))}
                     </button>
                 </div>
+                <p class="mt-1 text-base font-bold text-green-900">${esc(t(wizardState.venvReady ? 'folder.venvReady' : 'folder.venvWaiting'))}</p>
                 <p class="mt-1 text-base text-green-900">${esc(t('folder.runnerVenvNote'))}
                     <button type="button" data-pwa-action="change-path" class="ml-1 underline">${esc(t('folder.pathChange'))}</button></p>
                 ${partial}
@@ -984,6 +1029,7 @@
                     }
                 }
                 wizardState.suspect = null;
+                wizardState.venvReady = false;
                 wizardState.rootHandle = handle;
                 wizardState.rootName   = handle.name;
                 // A new folder: its path is asked afresh (a saved one for a

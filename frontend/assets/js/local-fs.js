@@ -352,6 +352,7 @@
         const windows = /^win/i.test(platform);
         const os = windows ? 'windows' : /^mac/i.test(platform) ? 'mac' : 'other';
         const PATH_KEY = 'synergyai.runnerFolderPath';
+        const READY_MARKER = '.synergyai-ready';
         // Windows and macOS folder names are case-insensitive; Linux's are not.
         const endsIn = (p, name) => {
             const last = p.split(/[\\/]/).pop();
@@ -415,10 +416,20 @@
                 if (!windows) return cmds.join(' && ');
                 return cmds.reduceRight((rest, c) => c + '; if ($?) { ' + rest + ' }');
             },
-            /** The one-time venv build, run from python/. */
+            /**
+             * The one-time venv build, run from python/. Its last step writes
+             * .venv/<READY_MARKER>, only once pip has succeeded: .venv itself
+             * appears in the first second, long before the packages are in,
+             * so the marker is what tells the wizard the install is done.
+             */
             venvSetup() {
-                return this.then((windows ? 'py -3' : 'python3') + ' -m venv .venv', this.pip('install -r requirements.txt'));
+                const mark = windows
+                    ? 'New-Item -ItemType File -Force .venv\\' + READY_MARKER + ' | Out-Null'
+                    : 'touch .venv/' + READY_MARKER;
+                return this.then((windows ? 'py -3' : 'python3') + ' -m venv .venv', this.pip('install -r requirements.txt'), mark);
             },
+            /** Path of the marker under the granted folder, for resolvePath. */
+            readyMarkerPath: 'python/.venv/' + READY_MARKER,
         };
     })();
 
