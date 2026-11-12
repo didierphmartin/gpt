@@ -172,10 +172,17 @@
     /** The private settings fields (masked secrets, required marks); t returns escaped workflow.package.* text. */
     function settingsFieldsHtml(t, fields, values) {
         const v = values || {};
-        return fields.map((f) => fieldRow(esc(f.name), f.required,
+        // Every setting says beside its name whether it must be filled: a red * and "(mandatory)", else "(optional)".
+        // A description's own trailing "(optional)" is then dropped.
+        const note = (text) => ` <span style="color: #64748b; font-weight: 400;">(${text})</span>`;
+        const name = (f) => (f.required
+            ? `${esc(f.name)} <span style="color: #dc2626;" title="${t('required')}">*</span>${note(t('mandatory'))}`
+            : `${esc(f.name)}${note(t('optional'))}`);
+        const label = (f) => esc(String(f.label || '').replace(/\s*\(optional\)\s*$/i, ''));
+        return fields.map((f) => fieldRow(name(f), false,
             f.secret ? secretInput(t, `data-value="${esc(f.name)}" placeholder="${esc(t('secretHint'))}"`, own(v, f.name) || '')
                 : `<input type="text" data-value="${esc(f.name)}" value="${esc(own(v, f.name) || '')}" style="${INPUT}">`,
-            [esc(f.label), f.group ? `<em>${t('groupNote', { group: f.group })}</em>` : ''].filter(Boolean).join(' — '), t('required'))).join('');
+            [label(f), f.group ? `<em>${t('groupNote', { group: f.group })}</em>` : ''].filter(Boolean).join(' — '), t('required'))).join('');
     }
 
     /** One install / start command with its Copy button (wire with wireCopyButtons). */

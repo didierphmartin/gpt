@@ -1941,7 +1941,9 @@
       "importFailed": "Échec de l'import du paquet : {{error}}",
       "importStopped": "Import arrêté : aucun dossier SynergyAI sélectionné.",
       "alsoInstalls": "Installe aussi les compétences nécessaires : {{list}}",
-      "reasonRequiredClash": "Une autre compétence est déjà installée sous le nom d’une compétence dont celle-ci a besoin : {{names}}. Renommez-la ou supprimez-la d’abord, ou ignorez cette compétence."
+      "reasonRequiredClash": "Une autre compétence est déjà installée sous le nom d’une compétence dont celle-ci a besoin : {{names}}. Renommez-la ou supprimez-la d’abord, ou ignorez cette compétence.",
+      "optional": "facultatif",
+      "mandatory": "Obligatoire"
     },
     "runSettings": {
       "title": "Paramètres requis avant l'exécution",
@@ -1985,7 +1987,8 @@
       "listFailed": "La liste n'a pas pu être enregistrée : {{error}}",
       "listBadName": "Paramètre {{n}} : « {{name}} » n'est pas un nom valide (lettres, chiffres et _, sans chiffre au début)",
       "listTwice": "{{name}} figure deux fois",
-      "noServers": "Aucun serveur coché. Cochez-en un dans Serveurs MCP pour voir ses paramètres ici."
+      "noServers": "Aucun serveur coché. Cochez-en un dans Serveurs MCP pour voir ses paramètres ici.",
+      "notSaved": "Les paramètres d'un serveur n'ont pas pu être enregistrés : voir l'onglet Paramètres des serveurs."
     }
   },
   "robot": {

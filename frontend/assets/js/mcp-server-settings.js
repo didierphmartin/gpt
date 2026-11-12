@@ -342,15 +342,22 @@
     /**
      * The code component form's "Server settings" tab: one section per checked server, open, with all its settings and
      * a Save, headed "settings complete" / "missing: X" ("kept where the server runs" when its files are not reachable
-     * from here). onState(anyMissing) after each read and save. Returns { refresh(names) } -- call it when the ticks change.
+     * from here). onState(anyMissing) after each read and save. Returns { refresh(names), save() } -- call refresh when the
+     * ticks change. opts.embedded: the block sits in a form with its own Save -- no Save of its own; the form's Save calls
+     * save(), which writes the servers whose values changed and resolves false when one failed (its error shown in place).
      */
-    function mountServerSettings(el, editor, metas, onState) {
+    function mountServerSettings(el, editor, metas, onState, opts = {}) {
         const UI = window.WorkflowPackageUI;
         const esc = UI.esc;
         const t = (k, p) => esc(editor.t(`workflow.serverSettings.${k}`, p));
         const tp = (k, p) => esc(editor.t(`workflow.package.${k}`, p));
         const tPlain = (k) => editor.t(`workflow.package.${k}`);
-        let seq = 0, names = [];
+        let seq = 0, names = [], shown = [];   // shown: the rendered rows [{r, row, initial}] (embedded save)
+        const valuesOf = (row) => {
+            const values = Object.create(null);
+            row.querySelectorAll('[data-value]').forEach((x) => { values[x.dataset.value] = x.value; });
+            return values;
+        };
         const shownOf = (info) => (info.host ? info.shown : { ...Object.fromEntries(info.fields.map((f) => [f.name, f.default])), ...info.values });
         const status = (info) => (info.error ? `<span style="color:#b91c1c;">${t('unreadable')}</span>`
             : !info.fields.length ? `<span style="color:#64748b;">${t('none')}</span>`
@@ -383,13 +390,14 @@
             const edit = info.error ? '' : `<div style="margin-top:8px;"><button type="button" data-ledit class="mcp-btn" style="padding:2px 10px;font-size:12px;border:1px solid #cbd5e1;">${t('listEdit')}</button></div>${listHtml(info)}`;
             const body = info.error || !info.fields.length ? edit : edit + `<div data-fields style="display:flex;flex-direction:column;gap:8px;margin-top:8px;">${UI.settingsFieldsHtml(tp, info.fields, shownOf(info))}</div>
                 <div data-result style="font-size:12px;"></div>
-                <div style="display:flex;justify-content:flex-end;"><button type="button" data-save class="mcp-btn mcp-btn-primary" style="padding:4px 12px;">${t('save')}</button></div>`;
+                ${opts.embedded ? '' : `<div style="display:flex;justify-content:flex-end;"><button type="button" data-save class="mcp-btn mcp-btn-primary" style="padding:4px 12px;">${t('save')}</button></div>`}`;
             return `<details data-row="${i}" data-name="${esc(r.name)}" open style="border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;">
                 <summary style="cursor:pointer;font-size:13px;"><strong>${esc(r.name)}</strong> <span style="color:#64748b;font-size:12px;">mcps/${esc(info.folder)}</span> — ${status(info)}</summary>${body}</details>`;
         }
 
         async function render() {
             const my = ++seq;
+            shown = [];
             if (!names.length) { onState?.(false); el.innerHTML = `<p style="font-size:12px;color:#64748b;">${t('noServers')}</p>`; return; }
             el.innerHTML = `<p style="font-size:12px;color:#64748b;margin:0;">…</p>`;
             const rows = await readAll(names, metas);
@@ -414,6 +422,7 @@
                 const btn = row.querySelector('[data-save]');
                 if (btn) btn.onclick = () => save(r, row, btn).then(state);
                 wireList(r, row);
+                if (row.querySelector('[data-fields]')) shown.push({ r, row, initial: JSON.stringify(valuesOf(row)), state });
             });
         }
 
@@ -451,11 +460,11 @@
             };
         }
 
+        /** Save one server's values; true when written. btn: its own Save (null when embedded). */
         async function save(r, row, btn) {
-            const values = Object.create(null);
-            row.querySelectorAll('[data-value]').forEach((x) => { values[x.dataset.value] = x.value; });
+            const values = valuesOf(row);
             const out = row.querySelector('[data-result]');
-            btn.disabled = true;
+            if (btn) btn.disabled = true;
             try {
                 if (r.info.host) {
                     await saveHost(r.info, values);   // the host restarts the server when its settings change
@@ -470,14 +479,27 @@
                 const fresh = r.info.host ? await readHostInfo(r.info.folder, r.info) : r.info;
                 r.info = fresh;
                 row.querySelector('summary').innerHTML = `<strong>${esc(r.name)}</strong> <span style="color:#64748b;font-size:12px;">mcps/${esc(fresh.folder)}</span> — ${status(fresh)}`;
+                return true;
             } catch (e) {
-                out.innerHTML = `<span style="color:#b91c1c;">${t('saveFailed', { error: (e && e.message) || String(e) })}</span>`;
+                out.innerHTML = `<span style="color:#b91c1c;font-weight:600;">${t('saveFailed', { error: (e && e.message) || String(e) })}</span>`;
+                return false;
             } finally {
-                btn.disabled = false;
+                if (btn) btn.disabled = false;
             }
         }
 
-        return { refresh(next) { names = [...new Set(next || [])]; return render(); } };
+        /** The form's Save (embedded): write every server whose values changed since shown; false when one failed. */
+        async function saveChanged() {
+            let ok = true;
+            for (const s of shown) {
+                const now = JSON.stringify(valuesOf(s.row));
+                if (now === s.initial) continue;
+                if (await save(s.r, s.row, null)) { s.initial = now; s.state(); } else ok = false;
+            }
+            return ok;
+        }
+
+        return { refresh(next) { names = [...new Set(next || [])]; return render(); }, save: saveChanged };
     }
 
     window.McpServerSettings = { readText, writeText, folderGranted, readServerMap, readLocalInfo, readHostInfo,

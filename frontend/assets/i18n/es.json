@@ -1941,7 +1941,9 @@
       "importFailed": "Error al importar el paquete: {{error}}",
       "importStopped": "Importación detenida: no se seleccionó ninguna carpeta SynergyAI.",
       "alsoInstalls": "También instala las habilidades que necesita: {{list}}",
-      "reasonRequiredClash": "Ya hay instalada otra habilidad con el nombre de una que esta necesita: {{names}}. Renómbrala o elimínala primero, u omite esta habilidad."
+      "reasonRequiredClash": "Ya hay instalada otra habilidad con el nombre de una que esta necesita: {{names}}. Renómbrala o elimínala primero, u omite esta habilidad.",
+      "optional": "opcional",
+      "mandatory": "Obligatorio"
     },
     "runSettings": {
       "title": "Ajustes necesarios antes de ejecutar",
@@ -1985,7 +1987,8 @@
       "listFailed": "No se pudo guardar la lista: {{error}}",
       "listBadName": "Ajuste {{n}}: «{{name}}» no es un nombre válido (letras, dígitos y _, sin empezar por un dígito)",
       "listTwice": "{{name}} aparece dos veces",
-      "noServers": "Ningún servidor marcado. Marque uno en Servidores MCP para ver sus ajustes aquí."
+      "noServers": "Ningún servidor marcado. Marque uno en Servidores MCP para ver sus ajustes aquí.",
+      "notSaved": "No se pudo guardar la configuración de un servidor: consulte la pestaña Ajustes de los servidores."
     }
   },
   "robot": {

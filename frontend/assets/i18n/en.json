@@ -1941,7 +1941,9 @@
       "importFailed": "Package import failed: {{error}}",
       "importStopped": "Import stopped: no SynergyAI folder selected.",
       "alsoInstalls": "Also installs the skills it needs: {{list}}",
-      "reasonRequiredClash": "A different skill is already installed under the name of a skill this one needs: {{names}}. Rename or delete it first, or skip this skill."
+      "reasonRequiredClash": "A different skill is already installed under the name of a skill this one needs: {{names}}. Rename or delete it first, or skip this skill.",
+      "optional": "optional",
+      "mandatory": "Mandatory"
     },
     "runSettings": {
       "title": "Settings needed before the run",
@@ -1985,7 +1987,8 @@
       "listFailed": "The list could not be saved: {{error}}",
       "listBadName": "Setting {{n}}: “{{name}}” is not a valid name (letters, digits and _, not starting with a digit)",
       "listTwice": "{{name}} is listed twice",
-      "noServers": "No server checked. Check one in MCP Servers to see its settings here."
+      "noServers": "No server checked. Check one in MCP Servers to see its settings here.",
+      "notSaved": "A server's settings could not be saved: see the Server settings tab."
     }
   },
   "robot": {

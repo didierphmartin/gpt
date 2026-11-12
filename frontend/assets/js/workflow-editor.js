@@ -10434,8 +10434,9 @@ class WorkflowEditor {
                 // The tab name carries a ⚠ while a checked server lacks a setting it needs.
                 const srvTab = overlay.querySelector('[data-tab="srvsettings"]');
                 const srvLabel = this.t('workflow.serverSettings.title');
+                // Embedded: the form's one Save writes the changed settings (no Save inside the tab).
                 srvSettings = window.McpServerSettings.mountServerSettings(f('srvsettings'), this, servers,
-                    (missing) => { if (srvTab) srvTab.textContent = missing ? `⚠ ${srvLabel}` : srvLabel; });
+                    (missing) => { if (srvTab) srvTab.textContent = missing ? `⚠ ${srvLabel}` : srvLabel; }, { embedded: true });
                 srvSettings.refresh([...checked]);
             }
         })();
@@ -10521,6 +10522,8 @@ class WorkflowEditor {
             // this node provides is only a warning, once the Save went through.
             const argCheck = node ? CN.argProblems(argFields, argInputValues(), available.map((p) => p.name)) : { missing: [], unknown: [] };
             if (argCheck.missing.length) { show(ta('missing', { names: argCheck.missing.join(', ') }), true); return; }
+            // The checked servers' settings, changed in their tab: a failed one keeps the form open.
+            if (srvSettings && !(await srvSettings.save())) { show(this.t('workflow.serverSettings.notSaved'), true); return; }
             const warnUnknown = () => {
                 if (argCheck.unknown.length) this.showToast(ta('unknown', { names: argCheck.unknown.map((n) => `{${n}}`).join(', ') }), 'warning');
             };
@@ -11002,6 +11005,11 @@ class WorkflowEditor {
         const esc = (v) => this.escapeHtml(String(v ?? ''));
         const current = this.editor.getNodeFromId(startId).data?.start_args || {};
         const editable = fields.length > 0 && !this.currentWorkflowLocked;
+        // The private settings of every server the workflow uses (as Connections lists them), written by this form's one Save.
+        const srvNames = this._startServerNames(comp);
+        const hasSrv = !!(window.McpServerSettings?.mountServerSettings && window.WorkflowPackageUI?.settingsFieldsHtml && srvNames.length);
+        const savable = editable || hasSrv;
+        let srvSettings = null;
         const watch = comp.start_trigger.watch || {};
         // the watch as this workflow's event row runs it: the Start's tag and pass_args values merged in
         const watchArgs = SO.watchArgs(watch.args, current, comp.start_trigger.pass_args);
@@ -11029,8 +11037,8 @@ class WorkflowEditor {
                     <p data-role="no-tag" style="display:none;margin:10px 0 0;font-size:13px;color:#b45309;">⚠ ${esc(t('noTag'))}</p>
                     ${fields.length && !editable ? `<p style="margin:10px 0 0;font-size:13px;color:#b45309;">🔒 ${esc(t('argsLocked'))}</p>` : ''}
                     <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">
-                        <button data-act="close" class="px-4 py-2 text-sm text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${esc(this.t(editable ? 'common.cancel' : 'common.close'))}</button>
-                        ${editable ? `<button data-act="ok" class="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded">${esc(t('save'))}</button>` : ''}
+                        <button data-act="close" class="px-4 py-2 text-sm text-gray-700 bg-gray-100 hover:bg-gray-200 rounded">${esc(this.t(savable ? 'common.cancel' : 'common.close'))}</button>
+                        ${savable ? `<button data-act="ok" class="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded">${esc(t('save'))}</button>` : ''}
                     </div>
                 </div>
             </div>`;
@@ -11050,17 +11058,21 @@ class WorkflowEditor {
         warn();
         if (editable) inputs[0]?.focus();
         this._mountStartConnections(overlay.querySelector('[data-role="connections"]'), comp);
-        // The option's servers' private settings (the code node form's Server settings block).
-        if (window.McpServerSettings?.mountServerSettings && window.WorkflowPackageUI?.settingsFieldsHtml && (comp.mcp_servers || []).length) {
-            this._loadMcpServersMeta(true).then((metas) => window.McpServerSettings
-                .mountServerSettings(overlay.querySelector('[data-role="srvsettings"]'), this, metas).refresh(comp.mcp_servers))
-                .catch((e) => console.warn('[workflow] server settings not shown:', e?.message || e));
+        // The servers' private settings (the code node form's Server settings block), without a Save of its own.
+        if (hasSrv) {
+            this._loadMcpServersMeta(true).then((metas) => {
+                srvSettings = window.McpServerSettings.mountServerSettings(overlay.querySelector('[data-role="srvsettings"]'), this, metas, null, { embedded: true });
+                return srvSettings.refresh(srvNames);
+            }).catch((e) => console.warn('[workflow] server settings not shown:', e?.message || e));
         }
         overlay.addEventListener('click', async (ev) => {
             const act = ev.target?.dataset?.act;
             if (act === 'close') { overlay.remove(); return; }
             if (act !== 'ok') return;
+            // The servers' settings first: a failed one keeps the form open, its error shown in place.
+            if (srvSettings && !(await srvSettings.save())) return;
             overlay.remove();
+            if (!editable) return;
             if (this._refuseIfLocked()) return;   // locked since the dialog opened
             const node = this.editor.getNodeFromId(startId);
             const args = SO.startArgs(node.data?.start_args, fields, Object.fromEntries(inputs.map((i) => [i.dataset.arg, i.value])));
@@ -11086,13 +11098,18 @@ class WorkflowEditor {
      * code node's) that offers the connect contract (CodeNode.isConnectable). A robot workflow shows the robot's
      * connections (matched by slug, as its runs resolve them), else the user's own.
      */
+    /** The MCP servers the workflow uses: the Start option's and every enabled code node's (the Start form's servers). */
+    _startServerNames(comp) {
+        const nodes = this.editor.drawflow.drawflow.Home.data;
+        return [...new Set([...(comp.mcp_servers || []), ...Object.values(nodes).flatMap((n) =>
+            (n.data?.type === 'code' && !n.data.disabled && Array.isArray(n.data.mcp_servers) ? n.data.mcp_servers : []))])];
+    }
+
     async _mountStartConnections(el, comp) {
         const CN = window.CodeNode;
         const t = (k, p) => this.t(`workflow.startOptions.${k}`, p);
         const esc = (v) => this.escapeHtml(String(v ?? ''));
-        const nodes = this.editor.drawflow.drawflow.Home.data;
-        const names = [...new Set([...(comp.mcp_servers || []), ...Object.values(nodes).flatMap((n) =>
-            (n.data?.type === 'code' && !n.data.disabled && Array.isArray(n.data.mcp_servers) ? n.data.mcp_servers : []))])];
+        const names = this._startServerNames(comp);
         if (!names.length) return;
         const robot = !!this.currentWorkflowIsRobot;
         const api = robot ? this._playbookApi() : null;
