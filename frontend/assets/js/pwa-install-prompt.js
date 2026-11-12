@@ -100,7 +100,8 @@
             'folder.unsup':   "Your browser doesn't support folder selection. Try Chrome or Edge.",
             'folder.next':    'Next',
             'install.title':  'Install Synergy as a local app',
-            'install.desc':   'Launch from your dock or Start menu — and the folder permission persists across sessions.',
+            'install.desc':   'Optional. Launch from your dock or Start menu — and the folder permission persists across sessions. You can skip this and keep using Synergy in the browser.',
+            'install.skip':   'Skip for now',
             'install.note':   'On first launch in the installed app, your browser will ask once to confirm folder access. Please choose "Allow on every visit".',
             'install.btn':    'Install app',
             'install.already':'✓ Already installed',
@@ -164,7 +165,8 @@
             'folder.unsup':   "Votre navigateur ne prend pas en charge la sélection de dossier. Essayez Chrome ou Edge.",
             'folder.next':    'Suivant',
             'install.title':  "Installer Synergy comme application locale",
-            'install.desc':   "Lancez-la depuis votre dock ou menu Démarrer — et l'accès au dossier sera conservé entre les sessions.",
+            'install.desc':   "Facultatif. Lancez-la depuis votre dock ou menu Démarrer — et l'accès au dossier sera conservé entre les sessions. Vous pouvez passer cette étape et continuer dans le navigateur.",
+            'install.skip':   'Passer pour l\'instant',
             'install.note':   "Au premier lancement de l'application installée, le navigateur demandera une fois de confirmer l'accès au dossier. Choisissez « Autoriser à chaque visite ».",
             'install.btn':    "Installer l'application",
             'install.already':'✓ Déjà installée',
@@ -228,7 +230,8 @@
             'folder.unsup':   'Tu navegador no permite seleccionar carpetas. Prueba Chrome o Edge.',
             'folder.next':    'Siguiente',
             'install.title':  'Instalar Synergy como aplicación local',
-            'install.desc':   'Lánzala desde tu dock o menú Inicio, y el permiso de la carpeta se mantendrá entre sesiones.',
+            'install.desc':   'Opcional. Lánzala desde tu dock o menú Inicio, y el permiso de la carpeta se mantendrá entre sesiones. Puedes omitir este paso y seguir usando Synergy en el navegador.',
+            'install.skip':   'Omitir por ahora',
             'install.note':   'Al abrir la app instalada por primera vez, el navegador pedirá confirmar el acceso a la carpeta una vez. Elige «Permitir en cada visita».',
             'install.btn':    'Instalar app',
             'install.already':'✓ Ya está instalada',
@@ -768,7 +771,10 @@
                     ${esc(t('back'))}
                 </button>
                 <div class="flex gap-2">
-                    ${installed ? '' : cancelBtn()}
+                    ${installed ? '' : `<button data-pwa-action="finish"
+                        class="px-4 py-2 text-sm font-medium text-gray-300 bg-zinc-700/60 hover:bg-zinc-700 rounded-md transition">
+                        ${esc(t('install.skip'))}
+                    </button>`}
                     ${primaryBtn}
                 </div>
             </div>
