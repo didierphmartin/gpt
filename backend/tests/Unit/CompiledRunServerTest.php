@@ -21,7 +21,7 @@ class CompiledRunServerTest extends TestCase
 
     /**
      * A fresh package root at <tmp>/<prefix><hex>/python/scripts/wf: the runner's layout, so what
-     * the package writes next to its runner folder (RUNNER_DIR, e.g. the agents' outputs/_debug
+     * the package writes next to its runner folder (e.g. the agents' outputs/_debug
      * dumps) stays inside <prefix><hex>, which is deleted afterwards. Used by RunProtocolConformanceTest too.
      */
     private static function packageRoot(string $prefix): string

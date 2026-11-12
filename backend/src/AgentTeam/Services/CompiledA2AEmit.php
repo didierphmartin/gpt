@@ -142,8 +142,7 @@ final class CompiledA2AEmit
         $L[] = 'from dotenv import load_dotenv';
         $L[] = '';
         $L[] = '_HERE = os.path.dirname(os.path.abspath(__file__))';
-        $L[] = 'for _d in (_HERE, os.path.dirname(_HERE), os.path.dirname(os.path.dirname(_HERE))):   # own .env first, then python/.env';
-        $L[] = '    load_dotenv(os.path.join(_d, ".env"))';
+        $L[] = 'load_dotenv(os.path.join(_HERE, ".env"))   # this program folder only, never the runner python/.env';
         $L[] = '';
         $L[] = 'import httpx';
         $L[] = 'from a2a import types as T';

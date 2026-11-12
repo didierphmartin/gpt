@@ -104,7 +104,7 @@ final class ADKPackageTest extends TestCase
         $this->assertSame("fastapi>=0.115.0\ngoogle-adk>=2.3,<3\nhttpx>=0.27.0\nlitellm\npython-dotenv>=1.0.0\nuvicorn>=0.30.0\n", $f['requirements.txt']);
         $this->assertStringContainsString('MCP_URL_OUTLOOK=http://localhost:8770', $f['.env.example']);
         $this->assertStringContainsString('# MCP_HEADERS_OUTLOOK=', $f['.env.example']);
-        $this->assertStringContainsString('reads .env from its own folder first, then from the folder two levels up', $f['.env.example']);
+        $this->assertStringContainsString('reads .env from its own folder only, never from the runner .env', $f['.env.example']);
     }
 
     public function testPackageWorkflowReadsItsCodeFromTheFolder(): void

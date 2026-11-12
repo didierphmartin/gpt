@@ -109,6 +109,20 @@ class GeneratedDocParityTest extends TestCase
         }
     }
 
+    /** Every target's single file reads only the .env beside it, never the runner's python/.env above it. */
+    public function testEveryTargetLoadsOnlyItsOwnFolderEnv(): void
+    {
+        foreach ($this->generateAll() as $target => $code) {
+            preg_match_all('/^\s*load_dotenv\(([^)\s].*?)\)\s*(#|$)/m', $code, $m);
+            $this->assertNotEmpty($m[1], "{$target} loads no .env");
+            foreach ($m[1] as $arg) {
+                $this->assertContains($arg, ['os.path.join(_HERE, ".env")', 'os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")'],
+                    "{$target} loads a .env outside its folder");
+            }
+            $this->assertStringNotContainsString('for _d in', $code, $target);
+        }
+    }
+
     public function testAgentsWithEmptyDbNodeTypeCompileOnEveryTarget(): void
     {
         foreach ($this->generateAll() as $target => $code) {

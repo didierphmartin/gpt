@@ -261,7 +261,7 @@ async def _stream_script_run(script_path: Path, args: list[str] | None = None):
 
     Environment: _child_env -- a plain script inherits the runner's env (API
     keys loaded from python/.env flow through); a compiled package gets it
-    without python/.env's values and reads its own .env, then python/.env.
+    without python/.env's values and reads only its own .env.
     CWD: the install root (so relative paths like outputs/ resolve there).
     """
     # Add INSTALL_ROOT to PYTHONPATH so scripts in scripts/ can

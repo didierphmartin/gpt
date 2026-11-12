@@ -119,7 +119,7 @@ class LangGraphOutputStructureTest extends TestCase
 
     /**
      * Write $files under a fresh temp root. The root sits at <tmp>/lgos_<hex>/python/scripts/wf, the
-     * runner's layout, so what the code writes next to its runner folder (RUNNER_DIR, e.g. the
+     * runner's layout, so what the code writes next to its runner folder (e.g. the
      * agents' outputs/_debug dumps) stays inside lgos_<hex>. @return array{root: string, paths: array<string,string>}
      */
     private static function write(array $files): array
@@ -231,6 +231,25 @@ class LangGraphOutputStructureTest extends TestCase
             $this->assertStringNotContainsString('if ntype == "start":', $all, $mode);
             $this->assertStringContainsString('        match self.mode():', $all, $mode);
             $this->assertStringNotContainsString('    if mode == "jev":', $all, $mode);
+        }
+    }
+
+    /**
+     * A compiled program is independent: every file loads only its own program folder's .env (<root>/.env, or the
+     * .env beside a single file), never the runner's python/.env above it.
+     */
+    public function testEveryFileLoadsOnlyItsOwnProgramFolderEnv(): void
+    {
+        $own = ['os.path.join(_HERE, ".env")', 'os.path.join(os.path.dirname(_HERE), ".env")',
+                'os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")'];
+        foreach (['single', 'modular', 'a2a'] as $mode) {
+            foreach ($this->files(self::graphs()['dispatcher_demo'], $mode) as $path => $code) {
+                preg_match_all('/^\s*load_dotenv\(([^)\s].*?)\)\s*(#|$)/m', $code, $m);
+                foreach ($m[1] as $arg) {
+                    $this->assertContains($arg, $own, "{$mode} {$path} loads a .env outside its program folder");
+                }
+                $this->assertStringNotContainsString('RUNNER_DIR', $code, "{$mode} {$path}");
+            }
         }
     }
 

@@ -107,8 +107,8 @@ class LangGraphLayouts:
                     'extra': (['# A2A_BASE_PORT (default 8701) moves the port range; A2A_AGENT_<id>_URL points one agent elsewhere.']
                               + self._decisionDocLines(facts.get('agentData') or {}) + self._mcpHeaderDocLines(facts)
                               + self._cronDocLines(facts, 'orchestrator.py')),
-                    # This file lives at <root>/orchestrator.py; python/.env is two levels up from <root>/.
-                    'env_path': '../../.env'},
+                    # This file lives at <root>/orchestrator.py, beside its .env.
+                    'env_path': '.env'},
             'storage': {'enabled': workflow.isOutputStorageEnabled(), 'folder': workflow.getOutputFolder()},
         })
         body += ('\n\nAGENT ENDPOINTS  (id, name, file, default URL; env override)\n===============\n' + '\n'.join(endpoints)
@@ -130,10 +130,9 @@ class LangGraphLayouts:
               'from typing import Annotated, Awaitable, Callable, TypedDict',
               '',
               'from dotenv import load_dotenv',
-              '# This file lives in <root>/; the runner .env is two levels up (python/.env).',
+              '# Keys come only from the .env in this program folder, never from the runner python/.env.',
               '_HERE = os.path.dirname(os.path.abspath(__file__))',
-              'load_dotenv(os.path.join(_HERE, ".env"))   # the workflow folder\'s own .env first (never overridden)',
-              'load_dotenv(os.path.join(os.path.dirname(os.path.dirname(_HERE)), ".env"))',
+              'load_dotenv(os.path.join(_HERE, ".env"))   # the workflow folder\'s own .env (a variable already set is never overridden)',
               "PACKAGE_DIR = _HERE   # this program's folder: a relative Start document path resolves here",
               '',
               'import httpx',
@@ -302,11 +301,10 @@ class LangGraphLayouts:
               'from typing import Callable, Literal',
               '',
               'from dotenv import load_dotenv',
-              '# This file lives in <root>/agents/; the runner .env is three levels up (python/.env).',
+              '# This file lives in <root>/agents/; keys come only from the program folder .env (<root>/.env).',
               '_HERE = os.path.dirname(os.path.abspath(__file__))',
-              'load_dotenv(os.path.join(os.path.dirname(_HERE), ".env"))   # the workflow folder\'s own .env first (never overridden)',
-              'RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))   # the runner env folder (python/)',
-              'load_dotenv(os.path.join(RUNNER_DIR, ".env"))',
+              'load_dotenv(os.path.join(os.path.dirname(_HERE), ".env"))   # the workflow folder\'s own .env (a variable already set is never overridden)',
+              'DEBUG_DIR = os.path.join(os.path.dirname(_HERE), "outputs", "_debug")   # message-history dumps, in the program folder',
               "DEBUG_STEM = os.path.basename(os.path.dirname(_HERE))   # the package folder names this node's outputs/_debug dumps",
               '',
               'import httpx',
@@ -413,8 +411,8 @@ class LangGraphLayouts:
                     'usage': 'python ' + entry['file'] + ' --port ' + str(entry['port']) + '   # from the workflow folder; A2A_HOST/A2A_PORT also honoured',
                     'extra': (['# Card: http://127.0.0.1:' + str(entry['port']) + '/.well-known/agent-card.json  --  JSON-RPC at /']
                               + self._decisionDocLines(facts.get('agentData') or {}) + self._mcpHeaderDocLines(facts)),
-                    # This file lives 3 levels under the workflow root (agents/<file>.py).
-                    'env_path': '../../../.env'},
+                    # This file lives in <root>/agents/; the program's .env is one level up.
+                    'env_path': '../.env'},
             'storage': {'enabled': False, 'folder': None},
         })
         return (body + '\n\nA2A SERVING\n===========\n'
@@ -625,7 +623,7 @@ class LangGraphLayouts:
               '  # Requires Python 3.10+ (the generated code uses match statements)',
               '  ' + LangGraphPackage.PIP_REQUIREMENTS]
         k = PythonEmitHelpers.providerKeyEnv(php_strval(d.get('provider') or ''))
-        L.append(f'  # API key read from ../../../.env: {k} (' + php_strval(d['provider']).lower() + ')'
+        L.append(f'  # API key read from ../.env: {k} (' + php_strval(d['provider']).lower() + ')'
                  if k is not None else '  # No LLM provider key required.')
         L.append('  imported by workflow.py -- run the swarm (python workflow.py), not this file directly.')
         return '\n'.join(L)
@@ -809,7 +807,7 @@ class LangGraphLayouts:
             if k is not None:
                 keys.setdefault(k, []).append(php_strval(d['provider']).lower())
         if keys:
-            L.append('  # API keys read from ../../.env for the providers this swarm uses:')
+            L.append('  # API keys read from .env for the providers this swarm uses:')
             for k, provs in keys.items():
                 L.append(f'  #   {k} (' + ', '.join(_unique(provs)) + ')')
         else:
@@ -949,7 +947,7 @@ class LangGraphLayouts:
               '  save_output(),',
               "  print_run_summary()             the Output node's storage rule and the closing RUN SUMMARY (workflow.py's CLI)",
               '', 'CONFIGURATION', '=============',
-              '  load_dotenv() resolves python/.env -- two directories above this file --',
+              '  load_dotenv() reads the .env in this folder (never the runner python/.env)',
               '  at import time, before workflow.py or any agent module reads a provider',
               '  key, so importing this module alone (a test, a REPL) still finds them. No',
               '  key is checked here: building a chat model succeeds either way, and the',
@@ -958,7 +956,7 @@ class LangGraphLayouts:
               'TO RUN', '======',
               '  # Requires Python 3.10+ (the generated code uses match statements)',
               '  ' + LangGraphPackage.PIP_REQUIREMENTS]
-        L += self._providerKeyLines(facts, '../../.env')
+        L += self._providerKeyLines(facts, '.env')
         L += ['  imported, not run directly -- see workflow.py',
               '  # Everything here is shared: change it once and every node of this workflow follows.',
               '  # Output storage (Output node setting): OFF (the result is printed, not saved)']
@@ -1007,7 +1005,7 @@ class LangGraphLayouts:
              'TO RUN', '======',
              '  # Requires Python 3.10+ (the generated code uses match statements)',
              '  ' + deps]
-        L += self._providerKeyLines(facts, '../../.env')
+        L += self._providerKeyLines(facts, '.env')
         L.append('  python api.py --port 8710        # then open the workflow from the editor')
         for n in extraNotes:
             L.append('  ' + n)
@@ -1061,13 +1059,12 @@ class LangGraphLayouts:
               'from pathlib import Path',
               'from typing import Annotated, Awaitable, Callable, Literal, TypedDict', '',
               'from dotenv import load_dotenv',
-              '# This file lives in <root>/; the runner .env is two levels up (python/.env).',
+              '# Keys come only from the .env in this program folder, never from the runner python/.env.',
               '# Loaded here rather than in workflow.py so a module imported on its own',
               '# (a test, a REPL) still finds the provider keys.',
               '_HERE = os.path.dirname(os.path.abspath(__file__))',
-              'load_dotenv(os.path.join(_HERE, ".env"))   # the workflow folder\'s own .env first (never overridden)',
-              'RUNNER_DIR = os.path.dirname(os.path.dirname(_HERE))   # the runner env folder (python/)',
-              'load_dotenv(os.path.join(RUNNER_DIR, ".env"))',
+              'load_dotenv(os.path.join(_HERE, ".env"))   # the workflow folder\'s own .env (a variable already set is never overridden)',
+              'DEBUG_DIR = os.path.join(_HERE, "outputs", "_debug")   # message-history dumps, in this program folder',
               "DEBUG_STEM = os.path.basename(_HERE)   # the package folder names the agents' outputs/_debug dumps",
               'PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))   # the package folder: code/, skills/, outputs/, start_documents/',
               '',
@@ -1156,7 +1153,7 @@ class LangGraphLayouts:
                                     {'deps': [LangGraphPackage.PIP_REQUIREMENTS],
                                      'usage': 'imported by workflow.py as ' + entry['module'] + ' -- run the workflow, not this file',
                                      'extra': ["# Exposes NODE (frozen editor settings) and run_node = make_node(NODE).run; the node logic is common.py's Node classes."],
-                                     'env_path': '../../../.env'}, nid)
+                                     'env_path': '../.env'}, nid)
         L += _esc(body).split('\n')
         L += ['"""', 'from __future__ import annotations', '',
               '# The shared runtime lives in common.py, one directory up. Python puts the',
@@ -1192,7 +1189,7 @@ class LangGraphLayouts:
                                                  + self._pythonListRepr(facts['missing'])] if facts.get('missing') else [])
                                                + self._modeDocLines('workflow.py') + self._cronDocLines(facts, 'workflow.py')
                                                + self._watchDocLines(facts, 'workflow.py')),
-                                     'env_path': '../../.env'}, None, True)
+                                     'env_path': '.env'}, None, True)
         L += _esc(body).split('\n')
         L += ['', 'AGENT MODULES  (id, name, file -- each exposes NODE and run_node)', '=============']
         L += modules

@@ -420,7 +420,7 @@ class PythonEmitHelpers:
             if k is not None:
                 keys.setdefault(k, []).append(n['provider'].lower())
         envPath = _coalesce(run.get('env_path'), '')
-        envPath = envPath if envPath != '' else '../.env'
+        envPath = envPath if envPath != '' else '.env'
         if keys:
             L.append('  # API keys read from ' + envPath + ' for the providers this workflow uses:')
             for k, provs in keys.items():

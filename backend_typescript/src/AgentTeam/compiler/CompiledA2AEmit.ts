@@ -162,8 +162,7 @@ export class CompiledA2AEmit
         L.push('from dotenv import load_dotenv');
         L.push('');
         L.push('_HERE = os.path.dirname(os.path.abspath(__file__))');
-        L.push('for _d in (_HERE, os.path.dirname(_HERE), os.path.dirname(os.path.dirname(_HERE))):   # own .env first, then python/.env');
-        L.push('    load_dotenv(os.path.join(_d, ".env"))');
+        L.push('load_dotenv(os.path.join(_HERE, ".env"))   # this program folder only, never the runner python/.env');
         L.push('');
         L.push('import httpx');
         L.push('from a2a import types as T');

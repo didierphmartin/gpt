@@ -42,7 +42,7 @@ test('testMcpClientBakesSlugsAndReadsHeadersFromEnv', () => {
 
 test('testDotenvLookupCoversSingleFileAndPackage', () => {
   const code = ADKGenerator.emitAdk(mcpAnalyzed());
-  assert.ok(code.includes('for _d in (_HERE, os.path.dirname(_HERE), os.path.dirname(os.path.dirname(_HERE))):'));
+  assert.ok(code.includes('load_dotenv(os.path.join(_HERE, ".env"))   # this program folder only, never the runner python/.env'));
 });
 
 test('testHeadersMergeAndBadJsonNamesTheVariable', { skip: PY_SKIP }, () => {

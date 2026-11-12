@@ -26,7 +26,7 @@ test('testMcpClientWithHeadersForACodeOnlyWorkflow', { skip: noPython() }, () =>
   const code = MAFGenerator.emitMaf(codeAnalyzed());
   assert.ok(code.includes('MCP_SERVER_SLUGS = {\n    "http://localhost:8770": "outlook"'));
   assert.ok(code.includes('var = f"MCP_HEADERS_{slug.upper()}"'));
-  assert.ok(code.includes('for _d in (_HERE, os.path.dirname(_HERE), os.path.dirname(os.path.dirname(_HERE))):'));
+  assert.ok(code.includes('load_dotenv(os.path.join(_HERE, ".env"))   # this program folder only, never the runner python/.env'));
   assert.equal(pyCompile(code)[0], 0);
 });
 

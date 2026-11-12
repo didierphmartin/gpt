@@ -26,7 +26,7 @@ def test_mcp_client_with_headers_for_a_code_only_workflow():
     code = MAFGenerator.emitMaf(code_analyzed())
     assert 'MCP_SERVER_SLUGS = {\n    "http://localhost:8770": "outlook"' in code
     assert 'var = f"MCP_HEADERS_{slug.upper()}"' in code
-    assert 'for _d in (_HERE, os.path.dirname(_HERE), os.path.dirname(os.path.dirname(_HERE))):' in code
+    assert 'load_dotenv(os.path.join(_HERE, ".env"))   # this program folder only, never the runner python/.env' in code
     assert _py_compile(code)[0] == 0
 
 

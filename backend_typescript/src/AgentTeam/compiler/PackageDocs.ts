@@ -21,8 +21,8 @@ export class PackageDocs {
   static envExample(wfName: string, vars: EnvVars, optional: Array<[string, string]>): string {
     const L: string[] = [];
     L.push('# Environment of the workflow "' + wfName + '" -- copy this file to .env and fill it in.');
-    L.push('# The program reads .env from its own folder first, then from the folder two levels up');
-    L.push('# (a local runner\'s .env). A variable already set in the environment is never overridden.');
+    L.push('# The program reads .env from its own folder only, never from the runner .env.');
+    L.push('# A variable already set in the environment is never overridden.');
     L.push('');
     if (vars.keys.size) {
       L.push('# API keys of the LLM providers this workflow uses');

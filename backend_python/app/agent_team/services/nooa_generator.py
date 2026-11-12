@@ -367,13 +367,10 @@ class NOOAGenerator:
                 'import httpx   # the MCP client (code nodes, playbook #Actions, the event trigger)\n'
                 'from dotenv import load_dotenv\n'
                 '\n'
-                "# Provider keys and MCP headers come from this folder's own .env first, then the runner's python/.env --\n"
-                '# one level up for the single file in scripts/, two for the package in scripts/<folder>/. load_dotenv\n'
-                '# never overrides, so the nearest value wins. Loaded BEFORE nooa is imported: importing nooa loads the\n'
-                "# .env nearest to its own install (the runner's python/.env), which would otherwise win.\n"
+                "# Provider keys and MCP headers come only from the .env in this program's folder, never from the\n"
+                "# runner's python/.env. load_dotenv never overrides a variable already set; loaded before nooa is imported.\n"
                 '_HERE = os.path.dirname(os.path.abspath(__file__))\n'
-                'for _d in (_HERE, os.path.dirname(_HERE), os.path.dirname(os.path.dirname(_HERE))):\n'
-                '    load_dotenv(os.path.join(_d, ".env"))\n'
+                'load_dotenv(os.path.join(_HERE, ".env"))   # this program folder only, never the runner python/.env\n'
                 "PACKAGE_DIR = _HERE   # this program's folder: code/, skills/, start_documents/ and outputs/ are relative to it\n"
                 '\n'
                 'from nooa import Agent\n'

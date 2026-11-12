@@ -765,7 +765,7 @@ def take_gate_answer(tool_call_id: str):
      * 'marker' key on one node is appended after its GRAPH NODES summary
      * only -- GRAPH EDGES/EXECUTION ORDER use 'name' unmodified), edges
      * [[from,to]], layers [[ids]], data_flow (target text),
-     * run{deps[],usage,extra[],env_path (default '../.env')},
+     * run{deps[],usage,extra[],env_path (default '.env')},
      * storage{enabled,folder}.
      */
     static workflowDocBlock(doc: any): string {
@@ -846,7 +846,7 @@ def take_gate_answer(tool_call_id: str):
                 keys[k].push(strtolower(n['provider']));
             }
         }
-        const envPath = (run?.['env_path'] ?? '') !== '' ? strval(run['env_path']) : '../.env';
+        const envPath = (run?.['env_path'] ?? '') !== '' ? strval(run['env_path']) : '.env';
         if (count(keys) > 0) {
             L.push(`  # API keys read from ${envPath} for the providers this workflow uses:`);
             for (const [k, provs] of entries<string[]>(keys)) L.push(`  #   ${k} (` + implode(', ', array_unique(provs)) + ')');

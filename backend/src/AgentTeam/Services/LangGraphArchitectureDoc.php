@@ -519,7 +519,7 @@ final class LangGraphArchitectureDoc
         $L[] = "- **Change behaviour**: {$runtime} are emitted by the compiler (the backend's `LangGraphRuntime` and "
             . '`LangGraphGenerator`). Change them there, never by hand-editing the output: the next generation overwrites it.';
         $L[] = '- **Change a node\'s settings** (prompt, model, tools, skills, routing): edit the node in the editor and generate again.';
-        $L[] = '- **Keys** come from `.env` in the runner folder (`python/.env`), which the editor refreshes on every '
+        $L[] = '- **Keys** come from the `.env` in the program folder (never the runner `python/.env`), which the editor writes on every '
             . 'generation: ' . ($keyList ? implode(', ', $keyList) : 'no provider key is needed by this workflow')
             . ($hasDispatcher ? '; one `<PROVIDER>_API_KEY` per decision model' : '') . '.';
         return implode("\n", $L);

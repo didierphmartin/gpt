@@ -142,11 +142,11 @@ class AgentNode(Node):
         return {"text": text, "route": "", "notes": "", "status": "ok"}
 
     def _dump_history(self, messages: list) -> None:
-        """Write the agent's message history to <runner>/outputs/_debug/ so an answer can be traced to its turns."""
+        """Write the agent's message history to outputs/_debug/ in the program folder so an answer can be traced to its turns."""
         from datetime import datetime as _dt
         nid = self.cfg["id"]
         try:
-            debug_dir = Path(RUNNER_DIR) / "outputs" / "_debug"
+            debug_dir = Path(DEBUG_DIR)
             debug_dir.mkdir(parents=True, exist_ok=True)
             ts = _dt.now().strftime("%Y%m%d-%H%M%S")
             dump_path = debug_dir / f"{DEBUG_STEM}_{nid}_{ts}.json"

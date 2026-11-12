@@ -44,7 +44,7 @@ class AdkCodeNodeTest extends TestCase
     public function testDotenvLookupCoversSingleFileAndPackage(): void
     {
         $code = ADKGenerator::emitAdk(self::mcpAnalyzed());
-        self::assertStringContainsString('for _d in (_HERE, os.path.dirname(_HERE), os.path.dirname(os.path.dirname(_HERE))):', $code);
+        self::assertStringContainsString('load_dotenv(os.path.join(_HERE, ".env"))   # this program folder only, never the runner python/.env', $code);
     }
 
     /** Runs a snippet against the emitted module's MCP helpers (no network). */

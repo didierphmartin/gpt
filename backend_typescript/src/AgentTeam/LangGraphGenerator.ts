@@ -287,15 +287,10 @@ export class LangGraphGenerator {
         lines.push('');
         lines.push('from dotenv import load_dotenv');
         lines.push('');
-        lines.push('# Load provider API keys from the runner env .env (one dir up from scripts/).');
-        lines.push('# Without this a DIRECT terminal run has no credentials and every provider');
-        lines.push('# call fails; runner-mediated runs only worked because main.py loads the');
-        lines.push('# same file and subprocesses inherit the environment.');
-        lines.push('# A .env next to this script comes first (load_dotenv never overrides a variable already set),');
-        lines.push('# so a copy run outside the runner folder carries its own keys.');
+        lines.push('# Provider keys and MCP headers come only from the .env next to this script, never from the');
+        lines.push('# runner python/.env (load_dotenv never overrides a variable already set).');
         lines.push('load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))');
-        lines.push('RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the runner env folder (python/)');
-        lines.push('load_dotenv(os.path.join(RUNNER_DIR, ".env"))');
+        lines.push('DEBUG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs", "_debug")   # message-history dumps, in this program folder');
         lines.push('DEBUG_STEM = Path(__file__).stem   # names this script\'s outputs/_debug message-history dumps');
         lines.push('from typing import Annotated, Awaitable, Callable, Literal, TypedDict');
         lines.push('');
@@ -1532,7 +1527,7 @@ export class LangGraphGenerator {
             endpoints.push(sprintf('  %-6s %-24s %-32s http://127.0.0.1:%d/   (env A2A_AGENT_%s_URL)', nid, e['display'], e['file'], e['port'], nid));
         }
         body = PythonEmitHelpers.workflowDocBlock({ target: 'LangGraph A2A orchestrator (Python) -- StateGraph over A2A tasks, one agent process per node', dispatch_supported: true, workflow: { id: facts['workflowId'], name: facts['wfName'] }, nodes: nodes, edges: facts['edgeList'], layers: facts['gdata']['layers'] ?? [], data_flow: LangGraphGenerator.a2aOrchestratorDataFlowDoc(), run: { deps: [LangGraphPackage.PIP_REQUIREMENTS], usage: 'python orchestrator.py "your prompt here"   [--keep-serving] [--no-spawn]', extra: array_merge(['# A2A_BASE_PORT (default 8701) moves the port range; A2A_AGENT_<id>_URL points one agent elsewhere.'],
-                          LangGraphGenerator.decisionDocLines(facts['agentData'] ?? []), LangGraphGenerator.mcpHeaderDocLines(facts), LangGraphGenerator.cronDocLines(facts, 'orchestrator.py')), env_path: '../../.env' }, storage: { enabled: facts['workflow'].isOutputStorageEnabled(), folder: facts['workflow'].getOutputFolder() } });
+                          LangGraphGenerator.decisionDocLines(facts['agentData'] ?? []), LangGraphGenerator.mcpHeaderDocLines(facts), LangGraphGenerator.cronDocLines(facts, 'orchestrator.py')), env_path: '.env' }, storage: { enabled: facts['workflow'].isOutputStorageEnabled(), folder: facts['workflow'].getOutputFolder() } });
         body += '\n\nAGENT ENDPOINTS  (id, name, file, default URL; env override)\n===============\n' + implode('\n', endpoints)
             + '\n\nA2A RUN\n=======\n'
             + '  1. AgentSupervisor starts every local agent (python <file> --port N) and waits for its card.\n'
@@ -1556,10 +1551,9 @@ export class LangGraphGenerator {
         L.push('from typing import Annotated, Awaitable, Callable, TypedDict');
         L.push('');
         L.push('from dotenv import load_dotenv');
-        L.push('# This file lives in <root>/; the runner .env is two levels up (python/.env).');
+        L.push('# Keys come only from the .env in this program folder, never from the runner python/.env.');
         L.push('_HERE = os.path.dirname(os.path.abspath(__file__))');
-        L.push('load_dotenv(os.path.join(_HERE, ".env"))   # the workflow folder\'s own .env first (never overridden)');
-        L.push('load_dotenv(os.path.join(os.path.dirname(os.path.dirname(_HERE)), ".env"))');
+        L.push('load_dotenv(os.path.join(_HERE, ".env"))   # the workflow folder\'s own .env (a variable already set is never overridden)');
         L.push('PACKAGE_DIR = _HERE   # this program\'s folder: a relative Start document path resolves here');
         L.push('');
         L.push('import httpx');
@@ -2088,11 +2082,10 @@ async def _run_remote_node(nid: str, request_text: str) -> dict:
         L.push('from typing import Callable, Literal');
         L.push('');
         L.push('from dotenv import load_dotenv');
-        L.push('# This file lives in <root>/agents/; the runner .env is three levels up (python/.env).');
+        L.push('# This file lives in <root>/agents/; keys come only from the program folder .env (<root>/.env).');
         L.push('_HERE = os.path.dirname(os.path.abspath(__file__))');
-        L.push('load_dotenv(os.path.join(os.path.dirname(_HERE), ".env"))   # the workflow folder\'s own .env first (never overridden)');
-        L.push('RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))   # the runner env folder (python/)');
-        L.push('load_dotenv(os.path.join(RUNNER_DIR, ".env"))');
+        L.push('load_dotenv(os.path.join(os.path.dirname(_HERE), ".env"))   # the workflow folder\'s own .env (a variable already set is never overridden)');
+        L.push('DEBUG_DIR = os.path.join(os.path.dirname(_HERE), "outputs", "_debug")   # message-history dumps, in the program folder');
         L.push('DEBUG_STEM = os.path.basename(os.path.dirname(_HERE))   # the package folder names this node\'s outputs/_debug dumps');
         L.push('');
         L.push('import httpx');
@@ -2195,7 +2188,7 @@ async def _run_remote_node(nid: str, request_text: str) -> dict:
         for (let n of values(nodes)) { if (n['id'] === nid) n['marker'] = '<== this agent'; }
         entry = layout['agents'][nid];
         body = PythonEmitHelpers.workflowDocBlock({ target: 'LangGraph A2A agent (Python) -- one A2A server for this node; the orchestrator drives the graph', dispatch_supported: true, workflow: { id: facts['workflowId'], name: facts['wfName'] }, nodes: nodes, edges: facts['edgeList'], layers: facts['gdata']['layers'] ?? [], data_flow: LangGraphGenerator.a2aAgentDataFlowDoc(), run: { deps: [LangGraphPackage.PIP_REQUIREMENTS], usage: 'python ' + entry['file'] + ' --port ' + entry['port'] + '   # from the workflow folder; A2A_HOST/A2A_PORT also honoured', extra: array_merge(['# Card: http://127.0.0.1:' + entry['port'] + '/.well-known/agent-card.json  --  JSON-RPC at /'],
-                          LangGraphGenerator.decisionDocLines(facts['agentData'] ?? []), LangGraphGenerator.mcpHeaderDocLines(facts)), env_path: '../../../.env' }, storage: { enabled: false, folder: null } });
+                          LangGraphGenerator.decisionDocLines(facts['agentData'] ?? []), LangGraphGenerator.mcpHeaderDocLines(facts)), env_path: '../.env' }, storage: { enabled: false, folder: null } });
         return body + '\n\nA2A SERVING\n===========\n'
             + `  Skill id:   node-${nid}
 `
@@ -2767,7 +2760,7 @@ def main() -> None:
         L.push('  ' + LangGraphPackage.PIP_REQUIREMENTS);
         k = PythonEmitHelpers.providerKeyEnv(strval((def['provider'] ?? '')));
         L.push(k !== null
-            ? `  # API key read from ../../../.env: ${k} (` + strtolower(strval(def['provider'])) + ')'
+            ? `  # API key read from ../.env: ${k} (` + strtolower(strval(def['provider'])) + ')'
             : '  # No LLM provider key required.');
         L.push('  imported by workflow.py -- run the swarm (python workflow.py), not this file directly.');
         return implode('\n', L);
@@ -3029,7 +3022,7 @@ def main() -> None:
             }
         }
         if (truthy(keys)) {
-            L.push('  # API keys read from ../../.env for the providers this swarm uses:');
+            L.push('  # API keys read from .env for the providers this swarm uses:');
             for (let [k, provs] of entries(keys)) {
                 L.push(`  #   ${k} (` + implode(', ', array_unique(provs)) + ')');
             }
@@ -3223,7 +3216,7 @@ def main() -> None:
         L.push('');
         L.push('CONFIGURATION');
         L.push('=============');
-        L.push('  load_dotenv() resolves python/.env -- two directories above this file --');
+        L.push('  load_dotenv() reads the .env in this folder (never the runner python/.env)');
         L.push('  at import time, before workflow.py or any agent module reads a provider');
         L.push('  key, so importing this module alone (a test, a REPL) still finds them. No');
         L.push('  key is checked here: building a chat model succeeds either way, and the');
@@ -3234,7 +3227,7 @@ def main() -> None:
         L.push('======');
         L.push('  # Requires Python 3.10+ (the generated code uses match statements)');
         L.push('  ' + LangGraphPackage.PIP_REQUIREMENTS);
-        L = array_merge(L, LangGraphGenerator.providerKeyLines(facts, '../../.env'));
+        L = array_merge(L, LangGraphGenerator.providerKeyLines(facts, '.env'));
         L.push('  imported, not run directly -- see workflow.py');
         L.push('  # Everything here is shared: change it once and every node of this workflow follows.');
         L.push('  # Output storage (Output node setting): OFF (the result is printed, not saved)');
@@ -3307,7 +3300,7 @@ def main() -> None:
         L.push('======');
         L.push('  # Requires Python 3.10+ (the generated code uses match statements)');
         L.push('  ' + deps);
-        L = array_merge(L, LangGraphGenerator.providerKeyLines(facts, '../../.env'));
+        L = array_merge(L, LangGraphGenerator.providerKeyLines(facts, '.env'));
         L.push('  python api.py --port 8710        # then open the workflow from the editor');
         for (let n of values(extraNotes)) L.push('  ' + n);
         L.push('  # Output storage (Output node setting): OFF (the result is printed, not saved)');
@@ -3383,13 +3376,12 @@ once instead of copied per node.`;
         L.push('from typing import Annotated, Awaitable, Callable, Literal, TypedDict');
         L.push('');
         L.push('from dotenv import load_dotenv');
-        L.push('# This file lives in <root>/; the runner .env is two levels up (python/.env).');
+        L.push('# Keys come only from the .env in this program folder, never from the runner python/.env.');
         L.push('# Loaded here rather than in workflow.py so a module imported on its own');
         L.push('# (a test, a REPL) still finds the provider keys.');
         L.push('_HERE = os.path.dirname(os.path.abspath(__file__))');
-        L.push('load_dotenv(os.path.join(_HERE, ".env"))   # the workflow folder\'s own .env first (never overridden)');
-        L.push('RUNNER_DIR = os.path.dirname(os.path.dirname(_HERE))   # the runner env folder (python/)');
-        L.push('load_dotenv(os.path.join(RUNNER_DIR, ".env"))');
+        L.push('load_dotenv(os.path.join(_HERE, ".env"))   # the workflow folder\'s own .env (a variable already set is never overridden)');
+        L.push('DEBUG_DIR = os.path.join(_HERE, "outputs", "_debug")   # message-history dumps, in this program folder');
         L.push('DEBUG_STEM = os.path.basename(_HERE)   # the package folder names the agents\' outputs/_debug dumps');
         L.push('PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))   # the package folder: code/, skills/, outputs/, start_documents/');
         L.push('');
@@ -3514,7 +3506,7 @@ once instead of copied per node.`;
         L.push('');
         body = this.modularDocBody(facts, layout,
             'LangGraph modular agent module (Python) -- one node; workflow.py drives the graph',
-            { deps: [LangGraphPackage.PIP_REQUIREMENTS], usage: 'imported by workflow.py as ' + entry['module'] + ' -- run the workflow, not this file', extra: ['# Exposes NODE (frozen editor settings) and run_node = make_node(NODE).run; the node logic is common.py\'s Node classes.'], env_path: '../../../.env' }, nid);
+            { deps: [LangGraphPackage.PIP_REQUIREMENTS], usage: 'imported by workflow.py as ' + entry['module'] + ' -- run the workflow, not this file', extra: ['# Exposes NODE (frozen editor settings) and run_node = make_node(NODE).run; the node logic is common.py\'s Node classes.'], env_path: '../.env' }, nid);
         for (let dl of values(explode('\n', esc(body)))) {
             L.push(dl);
         }
@@ -3662,7 +3654,7 @@ once instead of copied per node.`;
             'LangGraph modular workflow (Python) -- StateGraph over one importable module per node',
             { deps: [LangGraphPackage.PIP_REQUIREMENTS, ...LangGraphPackage.OPTIONAL_FORMATS_NOTE], usage: 'python workflow.py "your prompt here"', extra: array_merge(!empty(facts?.['missing'])
                  ? ['# WARNING: these tools are NOT available as MCP servers and will be missing at runtime: ' + LangGraphGenerator.pythonListRepr(facts['missing'])]
-                 : [], LangGraphGenerator.modeDocLines('workflow.py'), LangGraphGenerator.cronDocLines(facts, 'workflow.py'), LangGraphGenerator.watchDocLines(facts, 'workflow.py')), env_path: '../../.env' }, null, true);
+                 : [], LangGraphGenerator.modeDocLines('workflow.py'), LangGraphGenerator.cronDocLines(facts, 'workflow.py'), LangGraphGenerator.watchDocLines(facts, 'workflow.py')), env_path: '.env' }, null, true);
         for (let dl of values(explode('\n', esc(body)))) {
             L.push(dl);
         }

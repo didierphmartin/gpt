@@ -372,7 +372,7 @@ class CompiledArchitectureDoc:
                  + ('.' if mode == 'single' else ': each node is regenerated in its own file.'))
         L.append("- **Change behaviour**: the runtime is emitted by the compiler (the backend's `" + gen + '`, `CompiledRuntimeEmit`'
                  + (', `CompiledA2AEmit`' if mode == 'a2a' else '') + '). Change it there, never by hand-editing the output: the next generation overwrites it.')
-        L.append("- **Keys and MCP headers** come from `.env`: the program's own folder first, then the runner's `python/.env` (which the editor refreshes on every generation). `.env.example` lists every variable.")
+        L.append("- **Keys and MCP headers** come from `.env`: the program's own folder only (the editor writes it on every generation; the runner's `python/.env` is never read). `.env.example` lists every variable.")
         if mode == 'a2a':
             L.append('- **Move an agent**: set `A2A_AGENT_<id>_URL` (and start the orchestrator with `--no-spawn` when every agent runs elsewhere); `A2A_BASE_PORT` moves the whole port range.')
         return '\n'.join(L)

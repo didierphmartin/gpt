@@ -381,15 +381,10 @@ class LangGraphGenerator
         $lines[] = '';
         $lines[] = 'from dotenv import load_dotenv';
         $lines[] = '';
-        $lines[] = '# Load provider API keys from the runner env .env (one dir up from scripts/).';
-        $lines[] = '# Without this a DIRECT terminal run has no credentials and every provider';
-        $lines[] = '# call fails; runner-mediated runs only worked because main.py loads the';
-        $lines[] = '# same file and subprocesses inherit the environment.';
-        $lines[] = '# A .env next to this script comes first (load_dotenv never overrides a variable already set),';
-        $lines[] = '# so a copy run outside the runner folder carries its own keys.';
+        $lines[] = '# Provider keys and MCP headers come only from the .env next to this script, never from the';
+        $lines[] = '# runner python/.env (load_dotenv never overrides a variable already set).';
         $lines[] = 'load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))';
-        $lines[] = 'RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the runner env folder (python/)';
-        $lines[] = 'load_dotenv(os.path.join(RUNNER_DIR, ".env"))';
+        $lines[] = 'DEBUG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs", "_debug")   # message-history dumps, in this program folder';
         array_push($lines, ...self::mlflowTracingLines($facts));
         $lines[] = 'DEBUG_STEM = Path(__file__).stem   # names this script\'s outputs/_debug message-history dumps';
         $lines[] = 'from typing import Annotated, Awaitable, Callable, Literal, TypedDict';
@@ -1714,8 +1709,8 @@ class LangGraphGenerator
                       'usage' => 'python orchestrator.py "your prompt here"   [--keep-serving] [--no-spawn]',
                       'extra' => array_merge(['# A2A_BASE_PORT (default 8701) moves the port range; A2A_AGENT_<id>_URL points one agent elsewhere.'],
                           self::decisionDocLines($facts['agentData'] ?? []), self::mcpHeaderDocLines($facts), self::cronDocLines($facts, 'orchestrator.py')),
-                      // This file lives at <root>/orchestrator.py; python/.env is two levels up from <root>/.
-                      'env_path' => '../../.env'],
+                      // This file lives at <root>/orchestrator.py, beside its .env.
+                      'env_path' => '.env'],
             'storage' => ['enabled' => $facts['workflow']->isOutputStorageEnabled(), 'folder' => $facts['workflow']->getOutputFolder()],
         ]);
         $body .= "\n\nAGENT ENDPOINTS  (id, name, file, default URL; env override)\n===============\n" . implode("\n", $endpoints)
@@ -1741,10 +1736,9 @@ class LangGraphGenerator
         $L[] = 'from typing import Annotated, Awaitable, Callable, TypedDict';
         $L[] = '';
         $L[] = 'from dotenv import load_dotenv';
-        $L[] = '# This file lives in <root>/; the runner .env is two levels up (python/.env).';
+        $L[] = '# Keys come only from the .env in this program folder, never from the runner python/.env.';
         $L[] = '_HERE = os.path.dirname(os.path.abspath(__file__))';
-        $L[] = 'load_dotenv(os.path.join(_HERE, ".env"))   # the workflow folder\'s own .env first (never overridden)';
-        $L[] = 'load_dotenv(os.path.join(os.path.dirname(os.path.dirname(_HERE)), ".env"))';
+        $L[] = 'load_dotenv(os.path.join(_HERE, ".env"))   # the workflow folder\'s own .env (a variable already set is never overridden)';
         $L[] = 'PACKAGE_DIR = _HERE   # this program\'s folder: a relative Start document path resolves here';
         $L[] = '';
         $L[] = 'import httpx';
@@ -2282,11 +2276,10 @@ PY;
         $L[] = 'from typing import Callable, Literal';
         $L[] = '';
         $L[] = 'from dotenv import load_dotenv';
-        $L[] = '# This file lives in <root>/agents/; the runner .env is three levels up (python/.env).';
+        $L[] = '# This file lives in <root>/agents/; keys come only from the program folder .env (<root>/.env).';
         $L[] = '_HERE = os.path.dirname(os.path.abspath(__file__))';
-        $L[] = 'load_dotenv(os.path.join(os.path.dirname(_HERE), ".env"))   # the workflow folder\'s own .env first (never overridden)';
-        $L[] = 'RUNNER_DIR = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))   # the runner env folder (python/)';
-        $L[] = 'load_dotenv(os.path.join(RUNNER_DIR, ".env"))';
+        $L[] = 'load_dotenv(os.path.join(os.path.dirname(_HERE), ".env"))   # the workflow folder\'s own .env (a variable already set is never overridden)';
+        $L[] = 'DEBUG_DIR = os.path.join(os.path.dirname(_HERE), "outputs", "_debug")   # message-history dumps, in the program folder';
         array_push($L, ...self::mlflowTracingLines($facts));
         $L[] = 'DEBUG_STEM = os.path.basename(os.path.dirname(_HERE))   # the package folder names this node\'s outputs/_debug dumps';
         $L[] = '';
@@ -2402,8 +2395,8 @@ PY;
                       'usage' => 'python ' . $entry['file'] . ' --port ' . $entry['port'] . '   # from the workflow folder; A2A_HOST/A2A_PORT also honoured',
                       'extra' => array_merge(['# Card: http://127.0.0.1:' . $entry['port'] . '/.well-known/agent-card.json  --  JSON-RPC at /'],
                           self::decisionDocLines($facts['agentData'] ?? []), self::mcpHeaderDocLines($facts)),
-                      // This file lives 3 levels under the workflow root (agents/<file>.py).
-                      'env_path' => '../../../.env'],
+                      // This file lives in <root>/agents/; the program's .env is one level up.
+                      'env_path' => '../.env'],
             'storage' => ['enabled' => false, 'folder' => null],
         ]);
         return $body . "\n\nA2A SERVING\n===========\n"
@@ -2990,7 +2983,7 @@ PY;
         $L[] = '  ' . LangGraphPackage::PIP_REQUIREMENTS;
         $k = PythonEmitHelpers::providerKeyEnv((string) ($def['provider'] ?? ''));
         $L[] = $k !== null
-            ? "  # API key read from ../../../.env: {$k} (" . strtolower((string) $def['provider']) . ')'
+            ? "  # API key read from ../.env: {$k} (" . strtolower((string) $def['provider']) . ')'
             : '  # No LLM provider key required.';
         $L[] = '  imported by workflow.py -- run the swarm (python workflow.py), not this file directly.';
         return implode("\n", $L);
@@ -3252,7 +3245,7 @@ PY;
             }
         }
         if ($keys) {
-            $L[] = '  # API keys read from ../../.env for the providers this swarm uses:';
+            $L[] = '  # API keys read from .env for the providers this swarm uses:';
             foreach ($keys as $k => $provs) {
                 $L[] = "  #   {$k} (" . implode(', ', array_unique($provs)) . ')';
             }
@@ -3447,7 +3440,7 @@ PY;
         $L[] = '';
         $L[] = 'CONFIGURATION';
         $L[] = '=============';
-        $L[] = '  load_dotenv() resolves python/.env -- two directories above this file --';
+        $L[] = '  load_dotenv() reads the .env in this folder (never the runner python/.env)';
         $L[] = '  at import time, before workflow.py or any agent module reads a provider';
         $L[] = '  key, so importing this module alone (a test, a REPL) still finds them. No';
         $L[] = '  key is checked here: building a chat model succeeds either way, and the';
@@ -3623,13 +3616,12 @@ TXT;
         $L[] = 'from typing import Annotated, Awaitable, Callable, Literal, TypedDict';
         $L[] = '';
         $L[] = 'from dotenv import load_dotenv';
-        $L[] = '# This file lives in <root>/; the runner .env is two levels up (python/.env).';
+        $L[] = '# Keys come only from the .env in this program folder, never from the runner python/.env.';
         $L[] = '# Loaded here rather than in workflow.py so a module imported on its own';
         $L[] = '# (a test, a REPL) still finds the provider keys.';
         $L[] = '_HERE = os.path.dirname(os.path.abspath(__file__))';
-        $L[] = 'load_dotenv(os.path.join(_HERE, ".env"))   # the workflow folder\'s own .env first (never overridden)';
-        $L[] = 'RUNNER_DIR = os.path.dirname(os.path.dirname(_HERE))   # the runner env folder (python/)';
-        $L[] = 'load_dotenv(os.path.join(RUNNER_DIR, ".env"))';
+        $L[] = 'load_dotenv(os.path.join(_HERE, ".env"))   # the workflow folder\'s own .env (a variable already set is never overridden)';
+        $L[] = 'DEBUG_DIR = os.path.join(_HERE, "outputs", "_debug")   # message-history dumps, in this program folder';
         array_push($L, ...self::mlflowTracingLines($facts));
         $L[] = 'DEBUG_STEM = os.path.basename(_HERE)   # the package folder names the agents\' outputs/_debug dumps';
         $L[] = 'PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))   # the package folder: code/, skills/, outputs/, start_documents/';
@@ -3760,7 +3752,7 @@ TXT;
             ['deps' => [LangGraphPackage::PIP_REQUIREMENTS],
              'usage' => 'imported by workflow.py as ' . $entry['module'] . ' -- run the workflow, not this file',
              'extra' => ["# Exposes NODE (frozen editor settings) and run_node = make_node(NODE).run; the node logic is common.py's Node classes."],
-             'env_path' => '../../../.env'], $nid);
+             'env_path' => '../.env'], $nid);
         foreach (explode("\n", $esc($body)) as $dl) {
             $L[] = $dl;
         }
@@ -3912,7 +3904,7 @@ TXT;
              'extra' => array_merge(!empty($facts['missing'])
                  ? ['# WARNING: these tools are NOT available as MCP servers and will be missing at runtime: ' . self::pythonListRepr($facts['missing'])]
                  : [], self::modeDocLines('workflow.py'), self::cronDocLines($facts, 'workflow.py'), self::watchDocLines($facts, 'workflow.py')),
-             'env_path' => '../../.env'], null, true);
+             'env_path' => '.env'], null, true);
         foreach (explode("\n", $esc($body)) as $dl) {
             $L[] = $dl;
         }

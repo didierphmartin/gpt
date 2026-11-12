@@ -21,7 +21,7 @@ final class PackageDocs
 
     /**
      * .env.example: every variable the program reads, commented. A variable with no value to suggest is a
-     * comment too: an empty KEY= line in a copied .env would mask the runner's python/.env (the program reads
+     * comment too: an empty KEY= line in a copied .env would mask the value set in the environment (the program reads
      * its own .env first, and an empty value counts as set).
      *
      * @param list<array{0:string,1:string}> $optional [what it does, "KEY=example"]
@@ -30,8 +30,8 @@ final class PackageDocs
     {
         $L = [];
         $L[] = '# Environment of the workflow "' . $wfName . '" -- copy this file to .env and fill it in.';
-        $L[] = '# The program reads .env from its own folder first, then from the folder two levels up';
-        $L[] = '# (a local runner\'s .env). A variable already set in the environment is never overridden.';
+        $L[] = '# The program reads .env from its own folder only, never from the runner .env.';
+        $L[] = '# A variable already set in the environment is never overridden.';
         $L[] = '';
         if ($vars['keys']) {
             $L[] = '# API keys of the LLM providers this workflow uses';

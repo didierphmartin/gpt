@@ -122,7 +122,7 @@ def test_mcp_client_bakes_slugs_and_reads_headers_from_env():
 
 def test_dotenv_lookup_covers_single_file_and_package():
     code = ADKGenerator.emitAdk(mcp_analyzed())
-    assert 'for _d in (_HERE, os.path.dirname(_HERE), os.path.dirname(os.path.dirname(_HERE))):' in code
+    assert 'load_dotenv(os.path.join(_HERE, ".env"))   # this program folder only, never the runner python/.env' in code
 
 
 def test_headers_merge_and_bad_json_names_the_variable():

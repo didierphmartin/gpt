@@ -75,7 +75,7 @@ def test_code_node_package_carries_its_own_files():
     assert f['requirements.txt'] == 'fastapi>=0.115.0\ngoogle-adk>=2.3,<3\nhttpx>=0.27.0\nlitellm\npython-dotenv>=1.0.0\nuvicorn>=0.30.0\n'
     assert 'MCP_URL_OUTLOOK=http://localhost:8770' in f['.env.example']
     assert '# MCP_HEADERS_OUTLOOK=' in f['.env.example']
-    assert 'reads .env from its own folder first, then from the folder two levels up' in f['.env.example']
+    assert 'reads .env from its own folder only, never from the runner .env' in f['.env.example']
 
 
 def test_package_workflow_reads_its_code_from_the_folder():

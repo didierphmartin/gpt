@@ -118,13 +118,10 @@ import time
 import httpx   # the MCP client (code nodes, playbook #Actions, the event trigger)
 from dotenv import load_dotenv
 
-# Provider keys and MCP headers come from this folder's own .env first, then the runner's python/.env --
-# one level up for the single file in scripts/, two for the package in scripts/<folder>/. load_dotenv
-# never overrides, so the nearest value wins. Loaded BEFORE nooa is imported: importing nooa loads the
-# .env nearest to its own install (the runner's python/.env), which would otherwise win.
+# Provider keys and MCP headers come only from the .env in this program's folder, never from the
+# runner's python/.env. load_dotenv never overrides a variable already set; loaded before nooa is imported.
 _HERE = os.path.dirname(os.path.abspath(__file__))
-for _d in (_HERE, os.path.dirname(_HERE), os.path.dirname(os.path.dirname(_HERE))):
-    load_dotenv(os.path.join(_d, ".env"))
+load_dotenv(os.path.join(_HERE, ".env"))   # this program folder only, never the runner python/.env
 PACKAGE_DIR = _HERE   # this program's folder: code/, skills/, start_documents/ and outputs/ are relative to it
 
 from nooa import Agent

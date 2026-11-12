@@ -22,8 +22,8 @@ class PackageDocs:
     def envExample(wfName: str, vars: dict, optional: list) -> str:
         """.env.example: every variable the program reads, commented. optional: [what it does, "KEY=example"]."""
         L = ['# Environment of the workflow "' + wfName + '" -- copy this file to .env and fill it in.',
-             '# The program reads .env from its own folder first, then from the folder two levels up',
-             "# (a local runner's .env). A variable already set in the environment is never overridden.",
+             '# The program reads .env from its own folder only, never from the runner .env.',
+             '# A variable already set in the environment is never overridden.',
              '']
         if vars['keys']:
             L.append('# API keys of the LLM providers this workflow uses')

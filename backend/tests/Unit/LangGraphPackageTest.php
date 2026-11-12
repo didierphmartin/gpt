@@ -174,7 +174,7 @@ final class LangGraphPackageTest extends TestCase
 
     /**
      * Final review M-d: `cp .env.example .env` sets no variable to an empty value (an empty key or header line
-     * would mask the runner's python/.env); the placeholders are comments, MCP_HEADERS_<SLUG>= still named.
+     * would mask the value set in the environment); the placeholders are comments, MCP_HEADERS_<SLUG>= still named.
      */
     public function testEnvExampleSetsNothingEmpty(): void
     {

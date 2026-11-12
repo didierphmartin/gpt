@@ -4013,7 +4013,7 @@ class WorkflowEditor {
                     await writeFile(filename.replace(/\.py$/, '') + '_ARCHITECTURE.md', data.architecture);
                 }
 
-                // Refresh python/.env with the current provider keys so the script can auth.
+                // Refresh scripts/.env (the single file's own) with the current provider keys so the script can auth.
                 await this._syncRunnerEnv();
 
                 const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
@@ -4036,15 +4036,18 @@ class WorkflowEditor {
 
     /**
      * Sync the enabled providers' API keys from the backend (system_llm_settings)
-     * into the local runner's python/.env via FSA, so the generated self-contained
-     * script can authenticate without the user hand-editing .env. Keys stay in the
-     * DB as source of truth; .env is refreshed on every Generate. Best-effort:
-     * silently skips if FSA/runner/endpoint is unavailable — never blocks Generate.
+     * into the generated program's OWN .env via FSA: `folder` is python/scripts for
+     * a single file, python/scripts/<root> for a package. A compiled program never
+     * reads the runner's python/.env, so this is what lets it authenticate without
+     * the user hand-editing .env. Keys stay in the DB as source of truth; .env is
+     * refreshed on every Generate. Best-effort: silently skips if FSA/runner/endpoint
+     * is unavailable — never blocks Generate. A robot workflow gets no MCP headers
+     * here: _robotPackageEnv writes the robot's, never the compiling person's.
      */
-    async _syncRunnerEnv() {
+    async _syncRunnerEnv(folder = 'python/scripts') {
         try {
             if (!window.localFs || !window.localFs.isSupported || !window.localFs.isSupported()) return;
-            const pyDir = await window.localFs.resolvePath('python', { create: false });
+            const pyDir = await window.localFs.resolvePath(folder, { create: false });
             if (!pyDir) return; // runner not installed yet
             // Reuse the existing admin LLM-settings endpoint (system_llm_settings,
             // returns the raw api_key per provider) — no dedicated endpoint.
@@ -4078,7 +4081,7 @@ class WorkflowEditor {
             // The headers of the user's own MCP servers (a mailbox's connection key...), as the interpreter
             // sends them: a compiled program reads them from MCP_HEADERS_<slug> (LangGraphRuntime McpClient._headers).
             // Global servers' headers are never sent to the browser, so they are not written.
-            const mcp = await window.mcpClient?.request?.(`/mcp/servers?user_id=${encodeURIComponent(window.mcpClient.getUserId())}`).catch(() => null);
+            const mcp = this.currentWorkflowIsRobot ? null : await window.mcpClient?.request?.(`/mcp/servers?user_id=${encodeURIComponent(window.mcpClient.getUserId())}`).catch(() => null);
             for (const sv of mcp?.servers || []) {
                 const h = sv?.headers;
                 if (!h || typeof h !== 'object' || Array.isArray(h) || !Object.keys(h).length) continue;
@@ -4087,7 +4090,7 @@ class WorkflowEditor {
             }
             if (!Object.keys(keys).length && !plan.drop.length) return;
 
-            // Seed from existing .env (else .env.example) to preserve non-key lines.
+            // Seed from the existing .env (else the package's documented .env.example) to preserve non-key lines.
             let lines = [];
             for (const fname of ['.env', '.env.example']) {
                 try {
@@ -4110,7 +4113,7 @@ class WorkflowEditor {
             const w = await outFh.createWritable();
             await w.write(lines.join('\n').replace(/\n*$/, '\n'));
             await w.close();
-            console.log(`[WorkflowEditor] Synced ${Object.keys(keys).length} provider keys and MCP headers to python/.env`);
+            console.log(`[WorkflowEditor] Synced ${Object.keys(keys).length} provider keys and MCP headers to ${folder}/.env`);
         } catch (e) {
             console.warn('[WorkflowEditor] runner .env sync skipped:', e);
         }
@@ -4157,7 +4160,7 @@ class WorkflowEditor {
             await writable.write(text);
             await writable.close();
 
-            // Refresh python/.env with the current provider keys so the script can auth.
+            // Refresh scripts/.env (the single file's own) with the current provider keys so the script can auth.
             await this._syncRunnerEnv();
 
             const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
@@ -4807,7 +4810,7 @@ class WorkflowEditor {
             await writable.write(text);
             await writable.close();
 
-            // Refresh python/.env with the current provider keys so the script can auth.
+            // Refresh scripts/.env (the single file's own) with the current provider keys so the script can auth.
             await this._syncRunnerEnv();
 
             const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
@@ -5025,7 +5028,7 @@ class WorkflowEditor {
             await writable.write(text);
             await writable.close();
 
-            // Refresh python/.env with the current provider keys so the script can auth.
+            // Refresh scripts/.env (the single file's own) with the current provider keys so the script can auth.
             await this._syncRunnerEnv();
 
             const rootName = (await window.localFs.getRootHandle())?.name || 'synergyAI';
@@ -5850,10 +5853,10 @@ class WorkflowEditor {
 
     /**
      * A robot workflow's package runs as the robot, never with the compiling person's own connections: its own .env
-     * (read before python/.env, never overridden) gets each MCP server's headers from the robot's rows (GET
+     * (the only one it reads) gets each MCP server's headers from the robot's rows (GET
      * /robot/mcp-servers/compile-env: what the interpreter sends), replacing an older value. A server the robot holds
-     * no headers for is asked for (a value already there is kept); left empty, it blocks python/.env's and the
-     * program reports it is not connected.
+     * no headers for is asked for (a value already there is kept); left empty, the program reports it is not
+     * connected.
      */
     async _robotPackageEnv(data) {
         if (!this.currentWorkflowIsRobot) return;
@@ -5876,7 +5879,7 @@ class WorkflowEditor {
             while (lines.length && lines[lines.length - 1] === '') lines.pop();
             if (add.length) {
                 lines.push('# Runs as the robot: the robot\'s connection headers for each server (a JSON object, e.g.',
-                    '# {"X-Outlook-Account": "<key>"}). Left empty, the program is not connected; it never uses python/.env\'s.',
+                    '# {"X-Outlook-Account": "<key>"}). Left empty, the program is not connected.',
                     ...add.map((n) => `${n}=${given[n] || ''}`));
             }
             lines.push('');
@@ -5984,7 +5987,7 @@ class WorkflowEditor {
             }
             await w.close();
         }
-        await this._syncRunnerEnv();
+        await this._syncRunnerEnv(`python/scripts/${data.root}`);
         await this._robotPackageEnv(data);
         console.log(`[WorkflowEditor] Saved ${data.files.length} ${mode} files under python/scripts/${data.root}/`);
         return data;

@@ -790,7 +790,7 @@ PY;
      * 'marker' key on one node is appended after its GRAPH NODES summary
      * only -- GRAPH EDGES/EXECUTION ORDER use 'name' unmodified), edges
      * [[from,to]], layers [[ids]], data_flow (target text),
-     * run{deps[],usage,extra[],env_path (default '../.env')},
+     * run{deps[],usage,extra[],env_path (default '.env')},
      * storage{enabled,folder}.
      */
     public static function workflowDocBlock(array $doc): string
@@ -863,7 +863,7 @@ PY;
             $k = self::providerKeyEnv($n['provider']);
             if ($k !== null) $keys[$k][] = strtolower($n['provider']);
         }
-        $envPath = ($doc['run']['env_path'] ?? '') !== '' ? $doc['run']['env_path'] : '../.env';
+        $envPath = ($doc['run']['env_path'] ?? '') !== '' ? $doc['run']['env_path'] : '.env';
         if ($keys) {
             $L[] = "  # API keys read from {$envPath} for the providers this workflow uses:";
             foreach ($keys as $k => $provs) $L[] = "  #   {$k} (" . implode(', ', array_unique($provs)) . ')';

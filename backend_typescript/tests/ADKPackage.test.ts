@@ -100,7 +100,7 @@ test('testCodeNodePackageCarriesItsOwnFiles', async () => {
   assert.equal(f['requirements.txt'], 'fastapi>=0.115.0\ngoogle-adk>=2.3,<3\nhttpx>=0.27.0\nlitellm\npython-dotenv>=1.0.0\nuvicorn>=0.30.0\n');
   assert.ok(f['.env.example'].includes('MCP_URL_OUTLOOK=http://localhost:8770'));
   assert.ok(f['.env.example'].includes('# MCP_HEADERS_OUTLOOK='));
-  assert.ok(f['.env.example'].includes('reads .env from its own folder first, then from the folder two levels up'));
+  assert.ok(f['.env.example'].includes('reads .env from its own folder only, never from the runner .env'));
 });
 
 test('testPackageWorkflowReadsItsCodeFromTheFolder', async () => {

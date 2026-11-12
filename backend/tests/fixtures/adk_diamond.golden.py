@@ -75,7 +75,7 @@ TO RUN
   # Requires Python 3.10+ (the generated code uses match statements)
   # google-adk 2.3.x: SequentialAgent/ParallelAgent still supported
   pip install "google-adk>=2.3,<3" "httpx>=0.27.0" litellm "python-dotenv>=1.0.0"
-  # API keys read from ../.env for the providers this workflow uses:
+  # API keys read from .env for the providers this workflow uses:
   #   ANTHROPIC_API_KEY (claude)
   #   GOOGLE_API_KEY (gemini)
   python diamond_adk.py "your prompt here"
@@ -87,12 +87,10 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-# Provider keys and MCP headers come from .env: this folder's own first, then the runner's
-# python/.env -- one level up for the single file in scripts/, two for the package in
-# scripts/<folder>/. load_dotenv never overrides, so the nearest value wins.
+# Provider keys and MCP headers come only from the .env in this program's folder, never from the
+# runner's python/.env. load_dotenv never overrides a variable already set in the environment.
 _HERE = os.path.dirname(os.path.abspath(__file__))
-for _d in (_HERE, os.path.dirname(_HERE), os.path.dirname(os.path.dirname(_HERE))):
-    load_dotenv(os.path.join(_d, ".env"))
+load_dotenv(os.path.join(_HERE, ".env"))   # this program folder only, never the runner python/.env
 PACKAGE_DIR = _HERE   # this program's folder: code/, skills/, start_documents/ and outputs/ are relative to it
 
 from google.adk.agents import LlmAgent, SequentialAgent, ParallelAgent, BaseAgent
