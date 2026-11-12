@@ -1297,13 +1297,13 @@
       "reconnectNeeded": "The account must be connected again.",
       "deviceCode": "Go to {{url}} and enter {{code}}",
       "useRedirect": "Your organisation blocks code sign-in. <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">Sign in here instead</a>.",
-      "orBrowser": "Or <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">sign in in the browser</a>.",
       "useRedirectAfter": "Code sign-in did not finish ({{status}}). <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">Sign in in the browser instead</a>.",
       "failed": "Connection failed ({{status}}). Try again.",
       "noHeader": "the server did not say which header carries its connection key",
       "callArgs": "Arguments of {{tool}}",
       "handEdited": "These arguments were edited in the code: change them there.",
-      "needServer": "Add the MCP server(s) {{servers}} under MCP Servers first, and save the workflow."
+      "needServer": "Add the MCP server(s) {{servers}} under MCP Servers first, and save the workflow.",
+      "signInBrowser": "Sign in with Microsoft"
     },
     "schedule": {
       "title": "Schedule Execution",

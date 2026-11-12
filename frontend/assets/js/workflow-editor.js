@@ -10721,12 +10721,15 @@ class WorkflowEditor {
             const start = await call(server, 'connect_start', { method: 'device' });
             if (start.error) { sayDevice(failed(start)); return; }
             device.style.display = 'block';
-            device.innerHTML = t('deviceCode', {
+            const codeArgs = {
                 url: `<a href="${href(start.verification_uri)}" target="_blank" rel="noopener">${this.escapeHtml(start.verification_uri)}</a>`,
-                code: `<strong style="font-family:monospace">${this.escapeHtml(start.user_code)}</strong>` });
-            // The server's browser sign-in for the same connect, offered up front: a tenant can refuse the
-            // code on Microsoft's page while connect_status keeps answering pending.
-            if (start.redirect_url) device.innerHTML += ` ${t('orBrowser', { url: href(start.redirect_url) })}`;
+                code: `<strong style="font-family:monospace">${this.escapeHtml(start.user_code)}</strong>` };
+            // The server's browser sign-in for the same connect, when it offers one, is the only way shown: many tenants
+            // refuse the code on Microsoft's page (security defaults block it on new tenants) while connect_status
+            // keeps answering pending. Without it, the code.
+            device.innerHTML = start.redirect_url
+                ? `<a href="${href(start.redirect_url)}" target="_blank" rel="noopener" style="display:inline-block;padding:6px 14px;border:1px solid #1d4ed8;border-radius:6px;background:#2563eb;color:#fff;font-weight:600;font-size:14px;text-decoration:none;">${this.escapeHtml(t('signInBrowser'))}</a>`
+                : t('deviceCode', codeArgs);
             let deadline = Date.now() + (Number(start.expires_in) || 900) * 1000, offered = false;
             // A browser sign-in on screen: keep polling while it stays open (the server gives it 15 minutes).
             const offerBrowser = (html) => {

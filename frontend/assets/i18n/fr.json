@@ -1297,13 +1297,13 @@
       "reconnectNeeded": "Le compte doit être reconnecté.",
       "deviceCode": "Allez sur {{url}} et saisissez {{code}}",
       "useRedirect": "Votre organisation bloque la connexion par code. <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">Connectez-vous ici</a>.",
-      "orBrowser": "Ou <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">connectez-vous dans le navigateur</a>.",
       "useRedirectAfter": "La connexion par code n'a pas abouti ({{status}}). <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">Connectez-vous plutôt dans le navigateur</a>.",
       "failed": "La connexion a échoué ({{status}}). Réessayez.",
       "noHeader": "le serveur n’a pas indiqué quel en-tête porte sa clé de connexion",
       "callArgs": "Arguments de {{tool}}",
       "handEdited": "Ces arguments ont été modifiés dans le code : changez-les là.",
-      "needServer": "Ajoutez d’abord le ou les serveurs MCP {{servers}} dans Serveurs MCP, puis enregistrez le flux."
+      "needServer": "Ajoutez d’abord le ou les serveurs MCP {{servers}} dans Serveurs MCP, puis enregistrez le flux.",
+      "signInBrowser": "Se connecter avec Microsoft"
     },
     "schedule": {
       "title": "Planifier l'Exécution",

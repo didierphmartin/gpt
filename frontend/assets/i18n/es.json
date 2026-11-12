@@ -1297,13 +1297,13 @@
       "reconnectNeeded": "Debe volver a conectar la cuenta.",
       "deviceCode": "Vaya a {{url}} e introduzca {{code}}",
       "useRedirect": "Su organización bloquea el inicio de sesión con código. <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">Inicie sesión aquí</a>.",
-      "orBrowser": "O <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">inicie sesión en el navegador</a>.",
       "useRedirectAfter": "El inicio de sesión con código no terminó ({{status}}). <a href=\"{{url}}\" target=\"_blank\" rel=\"noopener\">Inicie sesión en el navegador</a>.",
       "failed": "La conexión falló ({{status}}). Inténtelo de nuevo.",
       "noHeader": "el servidor no indicó qué cabecera lleva su clave de conexión",
       "callArgs": "Argumentos de {{tool}}",
       "handEdited": "Estos argumentos se editaron en el código: cámbielos allí.",
-      "needServer": "Primero añada el/los servidor(es) MCP {{servers}} en Servidores MCP y guarde el flujo."
+      "needServer": "Primero añada el/los servidor(es) MCP {{servers}} en Servidores MCP y guarde el flujo.",
+      "signInBrowser": "Iniciar sesión con Microsoft"
     },
     "schedule": {
       "title": "Programar Ejecución",
