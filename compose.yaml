@@ -38,7 +38,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    environment:
+    environment: &web-env
       MYSQL_HOST: db
       MYSQL_DATABASE: ${MYSQL_DATABASE:-gpt_chatbot}
       MYSQL_USER: ${MYSQL_USER:-gpt}
@@ -69,13 +69,38 @@ services:
       # behaviour. Set GPT_BIND=127.0.0.1 in .env to restrict this to
       # localhost -- see the warning in .env.example and the README.
       - "${GPT_BIND:-0.0.0.0}:${GPT_PORT:-8080}:80"
-    volumes:
+    volumes: &web-volumes
       # Per-install JWT_SECRET / APP_KEY_SECRET. Without this they would be
       # re-rolled on every recreate, invalidating every session and app key.
       - gpt-secrets:/run/gpt
       # Just the MCP host's token, for the mcps container (see there).
       - gpt-mcps-token:/run/mcps-token
       - gpt-skills:/skills
+      # Run logs: the worker writes them, web streams them to the canvas -- one folder for both.
+      - gpt-runs:/var/www/html/gpt/backend/storage/workflow-runs
+
+  # Runs the active workflow -- on its schedule, or on its Start option's event
+  # (a mail dropped in a folder, ...) -- like launchd's event worker on a dev
+  # Mac. Same image and settings as web; without it an activated workflow
+  # stays "starting" forever. Started after web, the only writer of the secrets.
+  worker:
+    build:
+      context: .
+      dockerfile: docker/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_healthy
+      mcps:
+        condition: service_healthy
+    environment: *web-env
+    volumes: *web-volumes
+    working_dir: /var/www/html/gpt
+    # As Apache's user, so the files its runs write stay Apache's. HOME is where
+    # its one-worker lock file goes.
+    command: ["runuser", "-u", "www-data", "--", "env", "HOME=/tmp", "php", "backend/bin/event-worker.php"]
+    healthcheck:
+      disable: true   # the image's check asks Apache, which this container does not run
 
   # Hosts the MCP servers imported in the Docker app. They live in the gpt-mcps
   # volume and start by themselves. Its control API (9000) stays on the compose
@@ -190,3 +215,4 @@ volumes:
   gpt-mcps:
   gpt-mcps-token:
   gpt-skills:
+  gpt-runs:

@@ -14,7 +14,7 @@ RUN set -eux; \
         libicu-dev libxml2-dev libxslt1-dev libsodium-dev \
         default-mysql-client curl unzip python3 python3-pip; \
     docker-php-ext-configure gd --with-freetype --with-jpeg; \
-    docker-php-ext-install -j"$(nproc)" pdo_mysql gd intl zip soap xsl sodium; \
+    docker-php-ext-install -j"$(nproc)" pdo_mysql gd intl zip soap xsl sodium pcntl; \
     \
     # Mark everything auto, restore the original manual set, then re-mark the
     # runtime libraries the built extensions actually link against, so the

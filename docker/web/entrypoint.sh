@@ -117,6 +117,10 @@ set_env MCPS_TOKEN "$MCPS_TOKEN"
 set_env SKILLS_DIR "${SKILLS_DIR:-}"
 # The skills volume is created root-owned; PHP (www-data) writes to it.
 [ -d /skills ] && chown www-data:www-data /skills
+# Run logs (backend/storage/workflow-runs) are a volume shared by web and worker: the worker writes a run's events,
+# web streams them to the canvas. A fresh volume is root's; both write it as Apache's user.
+RUNS="$APP/backend/storage/workflow-runs"
+mkdir -p "$RUNS" && chown www-data:www-data "$APP/backend/storage" "$RUNS"
 # Rewritten every boot, so it can never drift from secrets.env. Group 1000 is
 # the mcps container's user; read-only for it, nobody else needs it.
 mkdir -p /run/mcps-token
