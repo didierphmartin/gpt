@@ -3012,14 +3012,14 @@ class WorkflowEditor {
                 if (!this.currentWorkflowId) {
                     alert(this.t('workflow.messages.saveFirst'));
                 } else if (this._compiledListening()) {
-                    // A compiled program of this workflow listens: ■ reopens its live view (Stop is in its footer).
-                    this._openCompiledLive(this._compiledListening().base);
+                    // A compiled program of this workflow listens: ■ stops it, like Stop in its live view's footer.
+                    this._compiledListen(this._compiledListening().base, { stop: true }).then(() => this._liveHeader());
                 } else if (!this._isIngestionWorkflow() && !this._isSwarm() && this._startView().button !== 'run') {
-                    // Schedule or option mode (spec 2026-10-15 live-overlay §2): ▶ activates when needed, then opens
-                    // the live overlay on the server runs; ■ in its header deactivates.
-                    const activate = this._startView().button === 'activate';
-                    (activate ? this._activate() : Promise.resolve(true))
-                        .then(ok => ok ? this._openLiveSession() : undefined)   // cancelled or refused: no overlay
+                    // Schedule or option mode (spec 2026-10-15 live-overlay §2): ▶ activates, then opens the live
+                    // overlay on the server runs; ■ stops (deactivates) at once, like Stop in that overlay's footer.
+                    const stop = this._startView().button === 'deactivate';
+                    (stop ? this._deactivate().then(() => this._liveHeader())
+                        : this._activate().then(ok => ok ? this._openLiveSession() : undefined))   // cancelled or refused: no overlay
                         .catch(err => this.showNotification(err?.message || String(err), 'error'));
                 } else if (this._isIngestionWorkflow()) {
                     // Ingestion: run the PHP interpreter from the Start node —
@@ -3460,7 +3460,7 @@ class WorkflowEditor {
     /**
      * The Monitoring button: shown only while this tab follows a compiled program of the workflow (its own run
      * server), orange while on (blue is Save's). Server runs need no button: the canvas follows them while the
-     * workflow is active, and ■ on Start opens their live overlay.
+     * workflow is active; ▶ on Start opens their live overlay and ■ stops them.
      */
     _refreshMonitoring() {
         // the server runs' overlay was closed: nothing is monitored any more (the canvas still follows an active workflow)
@@ -3838,13 +3838,13 @@ class WorkflowEditor {
         // ▶ runs in prompt mode; in schedule / option mode it activates or deactivates (spec 2026-10-14 event-worker §5).
         const view = this.currentWorkflowId ? this._startView() : { button: 'run', hint: null };
         // A compiled program of this workflow listens (LangGraph, ADK...): Start shows its state and ■ like an
-        // active workflow; ■ opens its live view, where Stop is.
+        // active workflow; ■ stops it.
         const compiled = this.currentWorkflowId ? this._compiledListening() : null;
         if (compiled) {
             if (playBtn) {
                 playBtn.style.display = 'flex';
                 playBtn.textContent = '■';
-                playBtn.title = this.t('workflow.live.open');
+                playBtn.title = this.t('workflow.live.stop');
             }
             card.classList.add('start-active');
             if (small) {
@@ -3857,10 +3857,10 @@ class WorkflowEditor {
         }
         if (playBtn) {
             playBtn.style.display = 'flex';
-            // ■ while the workflow is active (it opens the live view; Stop is in its footer), else ▶.
+            // ■ while the workflow is active (it stops it), else ▶.
             playBtn.textContent = view.button === 'deactivate' ? '■' : '▶';
             playBtn.title = view.button === 'run' ? this.t('workflow.batchSession.openSession')
-                : this.t(view.button === 'deactivate' ? 'workflow.live.open' : 'workflow.active.activate');
+                : this.t(view.button === 'deactivate' ? 'workflow.live.stop' : 'workflow.active.activate');
         }
         card.classList.toggle('start-active', view.button === 'deactivate');
         // In schedule / option mode the body is the state alone, a dot and a few words beside ▶: the ticked
