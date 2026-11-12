@@ -1673,6 +1673,8 @@
     },
     "runnerSetup": {
       "title": "Python runtime not installed",
+      "titleFolder": "SynergyAI folder access needed",
+      "titleReady": "Python runtime ready",
       "body": "Generated scripts run from the \"python\" folder inside {{folder}}, the folder you picked for SynergyAI. That folder needs a Python virtual environment once — a browser cannot create one. Open a terminal in {{folder}}/python and run:",
       "copy": "Copy command",
       "copyFailed": "Could not copy the Python runner (main.py, requirements.txt) into {{folder}}/python: {{error}}. Check that SynergyAI still has access to that folder, then try again.",

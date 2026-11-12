@@ -6894,6 +6894,13 @@ class WorkflowEditor {
      * once the user has run its command, Generate goes straight through.
      */
     async _ensureRunnerReady() {
+        // Chromium keeps the folder handle across a browser restart but drops
+        // its grant to 'prompt'. The Generate/Run click is a user gesture, so
+        // ask for the grant back here, before any check: otherwise the runner
+        // files and the venv look missing and the user is sent to a Setup
+        // modal for an install that is already done.
+        const status = await window.localFs.getStatus();
+        if (status.state === 'prompt') await window.localFs.regrantAccess();
         const files = await this._ensureRunnerFiles();
         const venv = await window.localFs.resolvePath('python/.venv/pyvenv.cfg', { create: false, kind: 'file' });
         if (!files.ok || !venv) {
@@ -6952,6 +6959,10 @@ class WorkflowEditor {
             cmd = sh.savedPath(folder) ? sh.then(sh.cd(folder), sh.venvSetup()) : sh.venvSetup();
             let content = '';
             let action = null;  // { label, run } for the fix-it button
+            // Only a missing venv is "not installed"; the other states are
+            // about the folder, and that title made a re-grant after a
+            // browser restart look like the install was being asked again.
+            let title = this.t('workflow.runnerSetup.titleFolder');
             if (status.state === 'unsupported') {
                 content = `<p class="text-sm text-gray-700 mb-4">${esc(this.t('workflow.runnerSetup.unsupported'))}</p>`;
             } else if (status.state === 'prompt') {
@@ -6967,8 +6978,10 @@ class WorkflowEditor {
                     content = `<p class="text-sm text-red-700 mb-4">${esc(this.t('workflow.runnerSetup.copyFailed', { folder, error: files.error }))}</p>`;
                     action = { label: this.t('workflow.runnerSetup.retryButton'), run: async () => ({ ok: true }) };
                 } else if (venv) {
+                    title = this.t('workflow.runnerSetup.titleReady');
                     content = `<p class="text-sm text-gray-700 mb-4">${esc(this.t('workflow.runnerSetup.ready', { folder }))}</p>`;
                 } else {
+                    title = this.t('workflow.runnerSetup.title');
                     content = `
                         <p class="text-sm text-gray-600 mb-3">${esc(this.t('workflow.runnerSetup.body', { folder }))}</p>
                         <div class="relative mb-3">
@@ -6981,7 +6994,7 @@ class WorkflowEditor {
             backdrop.innerHTML = `
                 <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg" role="dialog" aria-modal="true">
                     <h3 class="text-lg font-semibold text-gray-900 mb-2">
-                        ${esc(this.t('workflow.runnerSetup.title') || 'Python runtime not installed')}
+                        ${esc(title)}
                     </h3>
                     ${content}
                     <div class="flex justify-end gap-2">

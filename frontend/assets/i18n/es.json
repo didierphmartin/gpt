@@ -1673,6 +1673,8 @@
     },
     "runnerSetup": {
       "title": "Runtime de Python no instalado",
+      "titleFolder": "Se necesita acceso a la carpeta de SynergyAI",
+      "titleReady": "Entorno de Python listo",
       "body": "Los scripts generados se ejecutan desde la carpeta \"python\" dentro de {{folder}}, la carpeta que elegiste para SynergyAI. Esa carpeta necesita un entorno virtual de Python una vez — un navegador no puede crearlo. Abre una terminal en {{folder}}/python y ejecuta:",
       "copy": "Copiar comando",
       "copyFailed": "No se pudo copiar el runner de Python (main.py, requirements.txt) en {{folder}}/python: {{error}}. Comprueba que SynergyAI sigue teniendo acceso a esa carpeta y vuelve a intentarlo.",
