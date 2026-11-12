@@ -81,8 +81,8 @@
                 : ['_HOST', '_PORT'].map(sfx => all.find(f => f.name?.endsWith(sfx))?.name).filter(Boolean);
             info.allFields = all;   // the whole list, for the settings list editor
             info.fields = all.filter(f => !over.includes(f.name));
-            // Secrets show empty (their placeholder says they are set); the rest show value or default.
-            info.shown = Object.fromEntries(info.fields.map(f => [f.name, f.secret ? '' : (f.filled ? (f.value ?? '') : (f.default ?? ''))]));   // default shows while unset (display only)
+            // Filled settings show their value -- a secret in its password box (dots, the eye reveals it); unset ones their default.
+            info.shown = Object.fromEntries(info.fields.map(f => [f.name, f.filled ? (f.value ?? '') : (f.secret ? '' : (f.default ?? ''))]));   // default: display only
             info.missing = WP().missingSettings(info.fields, (f) => !!f.filled);   // required + started groups
         } catch (e) {
             console.warn('[settings:mcp] host settings unreadable:', e.message);

@@ -159,12 +159,12 @@ class ControlTest(unittest.TestCase):
         finally:
             t.join()
 
-    def test_secrets_never_returned_and_kept_when_blank(self):
+    def test_secrets_returned_for_the_eye_and_kept_when_blank(self):
+        # The settings form shows a secret as dots with an eye to reveal it, so its value comes back too.
         self.install("ok_server", env={"FAKE_TOKEN": "s3cret", "FAKE_DB_PATH": "n"})
         body = self.get("/servers/ok_server/settings").json()
         sec = next(f for f in body["fields"] if f["name"] == "FAKE_TOKEN")
-        self.assertEqual((sec["filled"], "value" in sec), (True, False))
-        self.assertNotIn("s3cret", json.dumps(body))
+        self.assertEqual((sec["filled"], sec["secret"], sec["value"]), (True, True, "s3cret"))
         plain = next(f for f in body["fields"] if f["name"] == "FAKE_DB_PATH")
         self.assertEqual(plain["value"], "n")
         r = self.put("/servers/ok_server/settings", {"values": {"FAKE_TOKEN": "", "FAKE_DB_PATH": "m"}})

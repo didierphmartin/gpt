@@ -253,9 +253,8 @@ class Control:
         current = envfile.parse(_read(d / ".env"))
         out = []
         for f in self._fields(d):
-            item = dict(f, filled=bool(current.get(f["name"])))
-            if not f["secret"]:
-                item["value"] = current.get(f["name"], "")
+            # Secrets too: the form shows them as dots, with an eye to reveal them (the caller is the server's owner).
+            item = dict(f, filled=bool(current.get(f["name"])), value=current.get(f["name"], ""))
             out.append(item)
         # the settings the supervisor sets itself (host, port): the panel hides them
         over = [n for n in overridden(_manifest(d), [f["name"] for f in out]) if isinstance(n, str)]
