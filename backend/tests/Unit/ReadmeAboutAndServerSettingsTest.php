@@ -73,6 +73,23 @@ final class ReadmeAboutAndServerSettingsTest extends TestCase
         self::assertGreaterThan(strpos($md, '## Configure'), strpos($md, '## MCP server settings'));
     }
 
+    /** The MCP servers are separate services: each one's address compiled in, how to move it, its connection key. */
+    public function testMcpServersSaysEachAddressCanBeMovedWithoutACompile(): void
+    {
+        $vars = ['mcp' => ['http://localhost:8790/outlook_mcp/mcp' => 'outlook', 'http://h:9/sp|x' => 'sharepoint']] + self::VARS;
+        $md = implode("\n", PackageDocs::head('W', [], 'w', $vars, ['servers' => [['name' => 'Outlook', 'nodes' => [], 'fields' => []]]]));
+
+        self::assertStringContainsString("## MCP servers\n\nThe MCP servers are not part of this folder", $md);
+        self::assertStringContainsString('| outlook | `http://localhost:8790/outlook_mcp/mcp` | `MCP_URL_OUTLOOK` | `MCP_HEADERS_OUTLOOK` |', $md);
+        self::assertStringContainsString('| sharepoint | `http://h:9/sp\|x` | `MCP_URL_SHAREPOINT` | `MCP_HEADERS_SHAREPOINT` |', $md);
+        self::assertStringContainsString('e.g. `MCP_URL_OUTLOOK=http://mcp.example.com:8790/mcp`', $md);
+        self::assertStringContainsString('No' . "\n" . 'compile is needed', $md);
+        // after Configure, before the servers' own settings
+        self::assertGreaterThan(strpos($md, '## Configure'), strpos($md, '## MCP servers'));
+        self::assertLessThan(strpos($md, '## MCP server settings'), strpos($md, '## MCP servers'));
+        self::assertSame([], PackageDocs::mcpServers([]));   // no server: no section
+    }
+
     /** Every target and layout: a real compile's README opens with the workflow's steps and carries the settings sent. */
     public function testEveryTargetsReadmeCarriesBothSections(): void
     {

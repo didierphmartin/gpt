@@ -52,7 +52,8 @@ final class PackageDocs
             $L[] = '';
         }
         if ($vars['mcp']) {
-            $L[] = '# MCP servers: the URL compiled in, and the HTTP headers the server needs (never compiled in)';
+            $L[] = '# MCP servers: the URL compiled in (change it if the server moved: no compile needed), and the HTTP';
+            $L[] = '# headers the server needs (never compiled in)';
             foreach ($vars['mcp'] as $url => $slug) {
                 $up = strtoupper((string) $slug);
                 $L[] = "MCP_URL_{$up}={$url}";
@@ -159,7 +160,7 @@ final class PackageDocs
             $up = strtoupper((string) $slug);
             $L[] = "- `MCP_HEADERS_{$up}` -- only if the MCP server at <{$url}> needs HTTP headers: a JSON object,";
             $L[] = "  e.g. `{\"Authorization\": \"Bearer …\"}`. `MCP_URL_{$up}` is already set to that URL; change it only if";
-            $L[] = '  the server moved.';
+            $L[] = '  the server moved (see **MCP servers** below).';
         }
         if ($vars['model'] !== null) {
             $L[] = '- `MODEL_NAME` -- optional: ' . lcfirst($vars['model']) . '.';
@@ -168,6 +169,7 @@ final class PackageDocs
         $L[] = 'The other variables in `.env.example` are optional. The program reads `.env` from its own folder; a';
         $L[] = 'variable already set in the environment wins over `.env`.';
         $L[] = '';
+        array_push($L, ...self::mcpServers($vars['mcp']));
         array_push($L, ...self::serverSettings((array) ($about['servers'] ?? [])));
         return $L;
     }
@@ -228,6 +230,41 @@ final class PackageDocs
             $bits[] = 'runs "' . $s['playbook']['title'] . '"';
         }
         return '**' . self::inline((string) ($s['name'] ?? '')) . '** -- ' . self::inline(implode('; ', $bits)) . '.';
+    }
+
+    /**
+     * "MCP servers": the servers are not in this folder -- separate services the program calls over HTTP --
+     * each one's compiled-in address, the variable that points the program at a moved server (no recompile),
+     * and the one that carries its connection key. No server: no section.
+     *
+     * @param array<string,string> $mcp registered server URL => slug
+     */
+    public static function mcpServers(array $mcp): array
+    {
+        if ($mcp === []) {
+            return [];
+        }
+        $L = ['## MCP servers', ''];
+        $L[] = 'The MCP servers are not part of this folder: they are separate services, and the program calls them';
+        $L[] = 'over HTTP. Each must be running and reachable from where the program runs.';
+        $L[] = '';
+        $L[] = '| Server | Address compiled in | To point to another address | Connection key |';
+        $L[] = '|---|---|---|---|';
+        foreach ($mcp as $url => $slug) {
+            $up = strtoupper((string) $slug);
+            $L[] = '| ' . self::cell((string) $slug) . ' | `' . str_replace(['`', '|'], ["'", '\\|'], (string) $url) . "` | `MCP_URL_{$up}` | `MCP_HEADERS_{$up}` |";
+        }
+        $L[] = '';
+        $first = strtoupper((string) reset($mcp));
+        $L[] = '**A server moved** (another host, port or container): set its `MCP_URL_<SERVER>` in `.env` to the';
+        $L[] = "new address, e.g. `MCP_URL_{$first}=http://mcp.example.com:8790/mcp`, and restart the program. No";
+        $L[] = 'compile is needed: the address compiled in is only the default.';
+        $L[] = '';
+        $L[] = '**Connection key**: `MCP_HEADERS_<SERVER>` holds the HTTP headers the server needs, such as the key';
+        $L[] = 'of the connection made in SynergyAI. When the server refuses it (the connection was removed or made';
+        $L[] = 'again there), put the new key in `.env`, or compile again.';
+        $L[] = '';
+        return $L;
     }
 
     /**

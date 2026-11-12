@@ -20,3 +20,17 @@ test('MODEL_NAME is listed only when the program reads it', () => {
   assert.ok(!PackageDocs.envExample('W', none, []).includes('MODEL_NAME'));
   assert.ok(!PackageDocs.head('W', [], 'w', none).join('\n').includes('MODEL_NAME'));
 });
+
+/** The MCP servers are separate services: each address compiled in, how to move it, its connection key
+ * (twin of ReadmeAboutAndServerSettingsTest::testMcpServersSaysEachAddressCanBeMovedWithoutACompile). */
+test('MCP servers says each address can be moved without a compile', () => {
+  const vars = { keys: new Map(), decision: new Map(), model: null,
+    mcp: { 'http://localhost:8790/outlook_mcp/mcp': 'outlook', 'http://h:9/sp|x': 'sharepoint' } };
+  const md = PackageDocs.head('W', [], 'w', vars).join('\n');
+  assert.ok(md.includes('## MCP servers\n\nThe MCP servers are not part of this folder'), md);
+  assert.ok(md.includes('| outlook | `http://localhost:8790/outlook_mcp/mcp` | `MCP_URL_OUTLOOK` | `MCP_HEADERS_OUTLOOK` |'));
+  assert.ok(md.includes('| sharepoint | `http://h:9/sp\\|x` | `MCP_URL_SHAREPOINT` | `MCP_HEADERS_SHAREPOINT` |'));
+  assert.ok(md.includes('e.g. `MCP_URL_OUTLOOK=http://mcp.example.com:8790/mcp`'));
+  assert.ok(md.indexOf('## MCP servers') > md.indexOf('## Configure'));
+  assert.deepEqual(PackageDocs.mcpServers({}), []);
+});

@@ -43,7 +43,8 @@ export class PackageDocs {
       L.push('');
     }
     if (count(vars.mcp)) {
-      L.push('# MCP servers: the URL compiled in, and the HTTP headers the server needs (never compiled in)');
+      L.push('# MCP servers: the URL compiled in (change it if the server moved: no compile needed), and the HTTP');
+      L.push('# headers the server needs (never compiled in)');
       for (const [url, slug] of entries(vars.mcp)) {
         const up = strtoupper(strval(slug));
         L.push(`MCP_URL_${up}=${url}`);
@@ -139,7 +140,7 @@ export class PackageDocs {
       const up = strtoupper(strval(slug));
       L.push(`- \`MCP_HEADERS_${up}\` -- only if the MCP server at <${url}> needs HTTP headers: a JSON object,`);
       L.push(`  e.g. \`{"Authorization": "Bearer …"}\`. \`MCP_URL_${up}\` is already set to that URL; change it only if`);
-      L.push('  the server moved.');
+      L.push('  the server moved (see **MCP servers** below).');
     }
     if (vars.model !== null) {
       L.push('- `MODEL_NAME` -- optional: ' + vars.model.charAt(0).toLowerCase() + vars.model.slice(1) + '.');
@@ -147,6 +148,39 @@ export class PackageDocs {
     L.push('');
     L.push('The other variables in `.env.example` are optional. The program reads `.env` from its own folder; a');
     L.push('variable already set in the environment wins over `.env`.');
+    L.push('');
+    L.push(...PackageDocs.mcpServers(vars.mcp));
+    return L;
+  }
+
+  /**
+   * "MCP servers": the servers are not in this folder -- separate services the program calls over HTTP --
+   * each one's compiled-in address, the variable that points the program at a moved server (no recompile),
+   * and the one that carries its connection key. No server: no section. (PackageDocs.php mcpServers.)
+   */
+  static mcpServers(mcp: EnvVars['mcp']): string[] {
+    const rows = entries(mcp);
+    if (rows.length === 0) return [];
+    const cell = (t: string) => t.replace(/\s+/g, ' ').trim().replace(/\|/g, '\\|');
+    const L = ['## MCP servers', ''];
+    L.push('The MCP servers are not part of this folder: they are separate services, and the program calls them');
+    L.push('over HTTP. Each must be running and reachable from where the program runs.');
+    L.push('');
+    L.push('| Server | Address compiled in | To point to another address | Connection key |');
+    L.push('|---|---|---|---|');
+    for (const [url, slug] of rows) {
+      const up = strtoupper(strval(slug));
+      L.push(`| ${cell(strval(slug))} | \`${String(url).replace(/`/g, "'").replace(/\|/g, '\\|')}\` | \`MCP_URL_${up}\` | \`MCP_HEADERS_${up}\` |`);
+    }
+    L.push('');
+    const first = strtoupper(strval(rows[0][1]));
+    L.push('**A server moved** (another host, port or container): set its `MCP_URL_<SERVER>` in `.env` to the');
+    L.push(`new address, e.g. \`MCP_URL_${first}=http://mcp.example.com:8790/mcp\`, and restart the program. No`);
+    L.push('compile is needed: the address compiled in is only the default.');
+    L.push('');
+    L.push('**Connection key**: `MCP_HEADERS_<SERVER>` holds the HTTP headers the server needs, such as the key');
+    L.push('of the connection made in SynergyAI. When the server refuses it (the connection was removed or made');
+    L.push('again there), put the new key in `.env`, or compile again.');
     L.push('');
     return L;
   }

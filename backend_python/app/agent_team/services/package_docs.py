@@ -40,7 +40,8 @@ class PackageDocs:
                 L.append(f'# {url}=')
             L.append('')
         if vars['mcp']:
-            L.append('# MCP servers: the URL compiled in, and the HTTP headers the server needs (never compiled in)')
+            L.append('# MCP servers: the URL compiled in (change it if the server moved: no compile needed), and the HTTP')
+            L.append('# headers the server needs (never compiled in)')
             for url, slug in vars['mcp'].items():
                 up = str(slug).upper()
                 L.append(f'MCP_URL_{up}={url}')
@@ -127,12 +128,44 @@ class PackageDocs:
             up = str(slug).upper()
             L.append(f'- `MCP_HEADERS_{up}` -- only if the MCP server at <{url}> needs HTTP headers: a JSON object,')
             L.append(f'  e.g. `{{"Authorization": "Bearer …"}}`. `MCP_URL_{up}` is already set to that URL; change it only if')
-            L.append('  the server moved.')
+            L.append('  the server moved (see **MCP servers** below).')
         if vars['model'] is not None:
             L.append('- `MODEL_NAME` -- optional: ' + vars['model'][:1].lower() + vars['model'][1:] + '.')
         L.append('')
         L.append('The other variables in `.env.example` are optional. The program reads `.env` from its own folder; a')
         L.append('variable already set in the environment wins over `.env`.')
+        L.append('')
+        L.extend(PackageDocs.mcpServers(vars['mcp']))
+        return L
+
+    @staticmethod
+    def mcpServers(mcp: dict) -> list:
+        """"MCP servers": the servers are not in this folder -- separate services the program calls over HTTP --
+        each one's compiled-in address, the variable that points the program at a moved server (no recompile),
+        and the one that carries its connection key. No server: no section. (PackageDocs.php mcpServers.)"""
+        if not mcp:
+            return []
+        def cell(t: str) -> str:
+            return ' '.join(t.split()).replace('|', '\\|')
+        L = ['## MCP servers', '']
+        L.append('The MCP servers are not part of this folder: they are separate services, and the program calls them')
+        L.append('over HTTP. Each must be running and reachable from where the program runs.')
+        L.append('')
+        L.append('| Server | Address compiled in | To point to another address | Connection key |')
+        L.append('|---|---|---|---|')
+        for url, slug in mcp.items():
+            up = str(slug).upper()
+            u = str(url).replace('`', "'").replace('|', '\\|')
+            L.append(f'| {cell(str(slug))} | `{u}` | `MCP_URL_{up}` | `MCP_HEADERS_{up}` |')
+        L.append('')
+        first = str(next(iter(mcp.values()))).upper()
+        L.append('**A server moved** (another host, port or container): set its `MCP_URL_<SERVER>` in `.env` to the')
+        L.append(f'new address, e.g. `MCP_URL_{first}=http://mcp.example.com:8790/mcp`, and restart the program. No')
+        L.append('compile is needed: the address compiled in is only the default.')
+        L.append('')
+        L.append('**Connection key**: `MCP_HEADERS_<SERVER>` holds the HTTP headers the server needs, such as the key')
+        L.append('of the connection made in SynergyAI. When the server refuses it (the connection was removed or made')
+        L.append('again there), put the new key in `.env`, or compile again.')
         L.append('')
         return L
 
