@@ -97,6 +97,12 @@
             'folder.runnerPartial': 'Some files could not be written:',
             'folder.runnerFailed':  'Could not install the Python runner here. Compiled workflows will not run until it is installed; the workflow editor\'s Setup item explains how.',
             'folder.picked':  'Selected:',
+            'folder.suspect': 'The folder “{name}” looks like a Python runner folder itself ({why}). The wizard always creates a “python” folder INSIDE the folder you choose, so this would give “{name}/python”. Choose the folder that contains it instead, usually “synergyAI”.',
+            'folder.whyName': 'it is named “python”',
+            'folder.whyVenv': 'it already has a .venv',
+            'folder.whyMain': 'it already has a main.py',
+            'folder.pickOther': 'Choose another folder…',
+            'folder.useAnyway': 'Use this folder anyway',
             'folder.unsup':   "Your browser doesn't support folder selection. Try Chrome or Edge.",
             'folder.next':    'Next',
             'install.title':  'Install Synergy as a local app',
@@ -162,6 +168,12 @@
             'folder.runnerPartial': 'Certains fichiers n\'ont pas pu être écrits :',
             'folder.runnerFailed':  'Impossible d\'installer le runner Python ici. Les workflows compilés ne fonctionneront pas tant qu\'il n\'est pas installé ; voir Setup dans l\'éditeur de workflow.',
             'folder.picked':  'Sélectionné :',
+            'folder.suspect': 'Le dossier « {name} » ressemble lui-même à un dossier de runner Python ({why}). L\'assistant crée toujours un dossier « python » DANS le dossier choisi, ce qui donnerait « {name}/python ». Choisissez plutôt le dossier qui le contient, en général « synergyAI ».',
+            'folder.whyName': 'il s\'appelle « python »',
+            'folder.whyVenv': 'il contient déjà un .venv',
+            'folder.whyMain': 'il contient déjà un main.py',
+            'folder.pickOther': 'Choisir un autre dossier…',
+            'folder.useAnyway': 'Utiliser ce dossier quand même',
             'folder.unsup':   "Votre navigateur ne prend pas en charge la sélection de dossier. Essayez Chrome ou Edge.",
             'folder.next':    'Suivant',
             'install.title':  "Installer Synergy comme application locale",
@@ -227,6 +239,12 @@
             'folder.runnerPartial': 'No se pudieron escribir algunos archivos:',
             'folder.runnerFailed':  'No se pudo instalar el runner de Python aquí. Los flujos compilados no se ejecutarán hasta instalarlo; vea Setup en el editor de flujos.',
             'folder.picked':  'Seleccionada:',
+            'folder.suspect': 'La carpeta «{name}» parece ser ella misma una carpeta de runner de Python ({why}). El asistente siempre crea una carpeta «python» DENTRO de la carpeta elegida, lo que daría «{name}/python». Elige mejor la carpeta que la contiene, normalmente «synergyAI».',
+            'folder.whyName': 'se llama «python»',
+            'folder.whyVenv': 'ya tiene un .venv',
+            'folder.whyMain': 'ya tiene un main.py',
+            'folder.pickOther': 'Elegir otra carpeta…',
+            'folder.useAnyway': 'Usar esta carpeta de todos modos',
             'folder.unsup':   'Tu navegador no permite seleccionar carpetas. Prueba Chrome o Edge.',
             'folder.next':    'Siguiente',
             'install.title':  'Instalar Synergy como aplicación local',
@@ -631,6 +649,19 @@
             </div>`;
     }
 
+    /** Why `handle` looks like a runner folder rather than its parent ([] = it doesn't). */
+    async function runnerFolderReasons(handle) {
+        const why = [];
+        if (String(handle.name).toLowerCase() === 'python') why.push('folder.whyName');
+        try {
+            for await (const name of handle.keys()) {
+                if (name === '.venv') why.push('folder.whyVenv');
+                else if (name === 'main.py') why.push('folder.whyMain');
+            }
+        } catch (e) { /* unreadable: no evidence either way */ }
+        return why;
+    }
+
     function renderFolder() {
         const supported = isFSASupported();
         const picked    = wizardState.rootName;
@@ -640,6 +671,27 @@
             body = `
             <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-5 text-sm text-yellow-900">
                 ${esc(t('folder.unsup'))}
+            </div>
+        `;
+        } else if (wizardState.suspect) {
+            const sus = wizardState.suspect;
+            const msg = t('folder.suspect')
+                .split('{name}').join(sus.handle.name)
+                .split('{why}').join(sus.why.map(k => t(k)).join(', '));
+            body = `
+            <p class="text-sm text-gray-300 mb-4">${esc(t('folder.desc'))}</p>
+            <div class="mb-5 rounded-lg border-l-4 border-yellow-500 bg-yellow-50 p-3">
+                <p class="text-base font-bold text-yellow-900">${esc(msg)}</p>
+                <div class="mt-3 flex flex-wrap gap-2">
+                    <button type="button" data-pwa-action="pick-folder"
+                        class="px-3 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md transition">
+                        ${esc(t('folder.pickOther'))}
+                    </button>
+                    <button type="button" data-pwa-action="use-folder-anyway"
+                        class="px-3 py-2 text-sm font-medium text-yellow-900 bg-white hover:bg-yellow-100 border border-yellow-500 rounded-md transition">
+                        ${esc(t('folder.useAnyway'))}
+                    </button>
+                </div>
             </div>
         `;
         } else if (picked) {
@@ -675,7 +727,7 @@
         `;
         }
 
-        const nextDisabled = supported && !picked;
+        const nextDisabled = supported && (!picked || !!wizardState.suspect);
         return `
             ${header('folder.title')}
             ${body}
@@ -911,9 +963,27 @@
             render();
             return;
         }
-        if (action === 'pick-folder') {
+        if (action === 'pick-folder' || action === 'use-folder-anyway') {
             try {
-                const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                let handle;
+                if (action === 'use-folder-anyway') {
+                    handle = wizardState.suspect?.handle;
+                    if (!handle) return;
+                } else {
+                    handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                    // Check BEFORE writing anything: the wizard always creates
+                    // python/ inside the chosen folder, so choosing the runner
+                    // folder itself nests a second runner in python/python.
+                    // The browser gives the folder's name and contents, never
+                    // its path, so those are what can be checked.
+                    const why = await runnerFolderReasons(handle);
+                    if (why.length) {
+                        wizardState.suspect = { handle, why };
+                        render();
+                        return;
+                    }
+                }
+                wizardState.suspect = null;
                 wizardState.rootHandle = handle;
                 wizardState.rootName   = handle.name;
                 // A new folder: its path is asked afresh (a saved one for a
