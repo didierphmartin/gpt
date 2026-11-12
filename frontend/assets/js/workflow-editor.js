@@ -15995,13 +15995,19 @@ class WorkflowEditor {
         // rect (set later as inline styles by _pbInitOverlayWindow) is free
         // to override them without fighting a hardcoded 760px/92%/84vh.
         const overlayClass = session ? 'storage-config-overlay pb-overlay-window' : 'storage-config-overlay';
+        // A conversation window can shrink to a small rectangle (_pbToggleOverlayMin), leaving the canvas free;
+        // the modal overlays keep their lone ×.
+        const closeBtn = '<button class="storage-config-close" id="pb-ov-close" title="Close (run continues)">×</button>';
+        const closeHtml = session
+            ? `<div class="pb-ov-header-btns"><button class="storage-config-close" id="pb-ov-min" title="${this.escapeHtml(this.t('workflow.overlay.minimize'))}">${this._pbMinIcon(false)}</button>${closeBtn}</div>`
+            : closeBtn;
         const modalStyleAttr = session ? '' : ' style="max-width:760px;width:92%;height:84vh;display:flex;flex-direction:column;"';
         const html = `
             <div id="playbook-run-overlay" class="${overlayClass}">
                 <div class="storage-config-modal"${modalStyleAttr}>
                     <div class="storage-config-header" style="flex-wrap:wrap;">
                         <h3 style="margin:0;"><span>${mode === 'live' ? '🔄' : '📖'}</span> <span id="pb-ov-title">${this.escapeHtml(name || 'Playbook')}${titleSuffix}</span> <span class="text-xs text-gray-400">${this.escapeHtml(target)}</span></h3>
-                        <button class="storage-config-close" id="pb-ov-close" title="Close (run continues)">×</button>
+                        ${closeHtml}
                         ${badges ? `<div style="flex-basis:100%;display:flex;flex-wrap:wrap;margin-top:4px;">${badges}</div>` : ''}
                     </div>
                     <div class="storage-config-body" id="pb-ov-feed" style="display:flex;flex-direction:column;gap:8px;flex:1 1 auto;min-height:0;overflow-y:auto;"></div>
@@ -16066,6 +16072,7 @@ class WorkflowEditor {
         document.getElementById('pb-ov-close')?.addEventListener('click', hide);
         document.getElementById('pb-ov-hide')?.addEventListener('click', hide);
         if (session) {
+            document.getElementById('pb-ov-min')?.addEventListener('click', () => this._pbToggleOverlayMin());
             windowCleanup = this._pbInitOverlayWindow();
             // Also reachable from the next _pbOverlayOpen, which does not go
             // through hide().
@@ -16160,6 +16167,40 @@ class WorkflowEditor {
      * must call it before removing the overlay so the window-resize
      * listener and the ResizeObserver don't outlive it.
      */
+    /** The minimize button's icon: arrows pointing in (shrink), or out (restore) while shrunk. */
+    _pbMinIcon(shrunk) {
+        const d = shrunk ? 'M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4' : 'M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4';
+        return `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
+    }
+
+    /**
+     * Shrink the conversation window to a small rectangle (title and status line only) or restore it. The size the
+     * window had is kept aside and put back on restore: a drag while shrunk writes the small size inline, and
+     * _pbInitOverlayWindow never saves a size under its floor, so the remembered geometry stays the user's.
+     */
+    _pbToggleOverlayMin() {
+        const modal = document.querySelector('#playbook-run-overlay.pb-overlay-window .storage-config-modal');
+        const btn = document.getElementById('pb-ov-min');
+        if (!modal || !btn) return;
+        const shrink = !modal.classList.contains('pb-ov-min');
+        if (shrink) {
+            modal.dataset.fullWidth = modal.style.width;
+            modal.dataset.fullHeight = modal.style.height;
+        } else {
+            modal.style.width = modal.dataset.fullWidth || '';
+            modal.style.height = modal.dataset.fullHeight || '';
+        }
+        modal.classList.toggle('pb-ov-min', shrink);
+        btn.innerHTML = this._pbMinIcon(shrink);
+        btn.title = this.t(shrink ? 'workflow.overlay.restore' : 'workflow.overlay.minimize');
+        if (!shrink) {
+            // Back to full size where it was shrunk: keep the whole window on screen.
+            const r = modal.getBoundingClientRect();
+            if (modal.style.left) modal.style.left = Math.max(0, Math.min(r.left, window.innerWidth - r.width)) + 'px';
+            if (modal.style.top) modal.style.top = Math.max(0, Math.min(r.top, window.innerHeight - r.height)) + 'px';
+        }
+    }
+
     _pbInitOverlayWindow({
         overlayId = 'playbook-run-overlay',
         storageKey = 'wf:swarm-overlay:rect:v6',

@@ -1043,6 +1043,10 @@
       "err_not_found": "Workflow not found",
       "err_generic": "Could not activate (HTTP {{status}})"
     },
+    "overlay": {
+      "minimize": "Shrink to a small window",
+      "restore": "Restore full size"
+    },
     "live": {
       "monitoring": "Monitoring",
       "monitoringTitle": "Show the feed of this workflow's server runs (the canvas follows them while the workflow is active)",

@@ -1043,6 +1043,10 @@
       "err_not_found": "Workflow introuvable",
       "err_generic": "Activation impossible (HTTP {{status}})"
     },
+    "overlay": {
+      "minimize": "Réduire en petite fenêtre",
+      "restore": "Rétablir la taille complète"
+    },
     "live": {
       "monitoring": "Surveillance",
       "monitoringTitle": "Afficher le fil des exécutions serveur de ce workflow (le canevas les suit tant que le workflow est actif)",
