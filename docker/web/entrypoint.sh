@@ -290,6 +290,13 @@ EOF
     fi
 fi
 
+# --- schema upgrade ----------------------------------------------------------
+# MySQL loads chatbot.sql only into an EMPTY volume, so a volume from an older
+# image keeps its old tables. This adds what a newer chatbot.sql has (tables,
+# columns, keys) and never drops anything. Skipped with GPT_SKIP_ADMIN, the
+# tests' "no database here" switch.
+[ "${GPT_SKIP_ADMIN:-0}" = "1" ] || php "$APP/docker/schema-sync.php" || log "schema check skipped"
+
 # --- admin account -----------------------------------------------------------
 if [ "${GPT_EDITION:-}" = "corporate" ]; then
     # No admin from .env: the setup wizard in gpt_admin creates it, once.

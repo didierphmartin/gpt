@@ -60,6 +60,7 @@ done
 ./docker/tests/runner-source-test.sh
 ./docker/tests/persistence-test.sh
 ./docker/tests/mcps-test.sh
+./docker/tests/schema-sync-test.sh
 
 echo
 echo "== editions =="
