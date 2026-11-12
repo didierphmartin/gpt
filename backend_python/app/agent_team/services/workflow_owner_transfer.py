@@ -2,7 +2,8 @@
 
 Owner -> Robot (one way): the workflow and everything it uses that its owner owns (code components incl. the Start
 option's, playbooks, agents and their playbooks) are moved to the robot in place, same ids, nothing copied; then
-its schedule rows. Other users' rows (a public agent, a robot component) are left as they are.
+its schedule rows. Other users' rows (a public agent, a robot component) are left as they are. The MCP servers it
+uses that the robot lacks are copied from the caller's (address only, never their keys): connecting them is left.
 """
 from __future__ import annotations
 
@@ -64,8 +65,8 @@ class WorkflowOwnerTransfer:
                 'clashes': self._clashes(robot, workflowId, name, plan)}
 
     def toRobot(self, callerId: int, workflowId: int) -> dict:
-        """{workflow_id, moved: {components, playbooks, agents, schedules}}. An already robot-owned workflow only has
-        its schedule rows moved again (a repair)."""
+        """{workflow_id, moved: {components, playbooks, agents, schedules}, servers}. An already robot-owned workflow only
+        has its schedule rows moved again and its missing servers copied (a repair). servers: the names copied to the robot."""
         robot, owner, name = self._load(callerId, workflowId)
         self._assertPublicSkills(workflowId)
         moved = {'components': [], 'playbooks': [], 'agents': []}
@@ -98,7 +99,27 @@ class WorkflowOwnerTransfer:
             'SELECT id FROM scheduled_workflows WHERE workflow_id = ? AND user_id <> ? ORDER BY id', [workflowId, robot])]
         if schedules:
             self.db.execute('UPDATE scheduled_workflows SET user_id = ? WHERE id IN (' + self._marks(schedules) + ')', [robot, *schedules])
-        return {'workflow_id': workflowId, 'moved': {**moved, 'schedules': schedules}}
+        return {'workflow_id': workflowId, 'moved': {**moved, 'schedules': schedules},
+                'servers': self._copyServers(callerId, robot, self._links(workflowId)['servers'])}
+
+    def _copyServers(self, callerId: int, robot: int, names: list) -> list:
+        """The servers the robot lacks, copied from the caller's enabled rows of the same name (by slug, as code nodes
+        resolve them): name, URL, description, transport, mock flag -- never the headers, which carry the caller's own keys.
+        One the caller has no row for stays missing. The names copied, sorted. Mirrors WorkflowOwnerTransfer.php."""
+        missing = {CodeNodeEmit.slug(php_strval(n)) for n in self._missingServers(robot, names)}
+        if not missing:
+            return []
+        copied = []
+        for s in self.db.fetch_all('SELECT name, url, description, transport, is_mock FROM mcp_servers'
+                                   ' WHERE user_id = ? AND enabled = 1 ORDER BY id', [str(callerId)]):
+            slug = CodeNodeEmit.slug(php_strval(s['name']))
+            if slug in missing:
+                missing.discard(slug)   # one copy per server
+                self.db.execute('INSERT INTO mcp_servers (user_id, name, url, description, transport, is_mock) VALUES (?, ?, ?, ?, ?, ?)',
+                                [str(robot), s['name'], s['url'], php_strval(s['description'] or ''), s['transport'] or 'http',
+                                 php_intval(s['is_mock'])])
+                copied.append(php_strval(s['name']))
+        return sorted(copied)
 
     def _load(self, callerId: int, workflowId: int) -> tuple:
         """(robot id, owner id, workflow name): the caller may use the robot and owns the workflow, or the robot does."""

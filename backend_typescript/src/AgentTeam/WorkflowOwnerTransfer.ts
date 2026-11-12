@@ -27,7 +27,8 @@ const TABLES: Record<string, string> = { code_components: 'code_components', pla
 /**
  * Owner -> Robot (one way): the workflow and everything it uses that its owner owns (code components incl. the Start
  * option's, playbooks, agents and their playbooks) are moved to the robot in place, same ids, nothing copied; then
- * its schedule rows. Other users' rows (a public agent, a robot component) are left as they are.
+ * its schedule rows. Other users' rows (a public agent, a robot component) are left as they are. The MCP servers it
+ * uses that the robot lacks are copied from the caller's (address only, never their keys): connecting them is left.
  * Mirrors backend/src/AgentTeam/Services/WorkflowOwnerTransfer.php.
  */
 export class WorkflowOwnerTransfer {
@@ -56,7 +57,8 @@ export class WorkflowOwnerTransfer {
   }
 
   /** An already robot-owned workflow only has its schedule rows moved again (a repair). */
-  async toRobot(callerId: number, workflowId: number): Promise<{ workflow_id: number; moved: Plan & { schedules: number[] } }> {
+  /** servers: the names of the servers the robot lacked, copied from the caller's (address only, never their keys). */
+  async toRobot(callerId: number, workflowId: number): Promise<{ workflow_id: number; moved: Plan & { schedules: number[] }; servers: string[] }> {
     const [robot, owner, name] = await this.load(callerId, workflowId);
     await this.assertPublicSkills(workflowId);
     let moved: Plan = { components: [], playbooks: [], agents: [] };
@@ -90,7 +92,35 @@ export class WorkflowOwnerTransfer {
     if (schedules.length > 0) {
       await sql`UPDATE scheduled_workflows SET user_id = ${robot} WHERE id IN (${sql.join(schedules)})`.execute(db);
     }
-    return { workflow_id: workflowId, moved: { ...moved, schedules } };
+    return {
+      workflow_id: workflowId,
+      moved: { ...moved, schedules },
+      servers: await this.copyServers(callerId, robot, (await this.links(workflowId)).servers),
+    };
+  }
+
+  /**
+   * The servers the robot lacks, copied from the caller's enabled rows of the same name (by slug, as code nodes resolve
+   * them): name, URL, description, transport, mock flag -- never the headers, which carry the caller's own keys. One the
+   * caller has no row for stays missing. Returns the names copied, sorted. Mirrors WorkflowOwnerTransfer.php copyServers.
+   */
+  private async copyServers(callerId: number, robot: number, names: string[]): Promise<string[]> {
+    const missing = new Set((await this.missingServers(robot, names)).map((n) => CodeNodeEmit.slug(n)));
+    if (missing.size === 0) return [];
+    const copied: string[] = [];
+    const rows = (
+      await sql<any>`SELECT name, url, description, transport, is_mock FROM mcp_servers WHERE user_id = ${String(callerId)} AND enabled = 1 ORDER BY id`.execute(db)
+    ).rows;
+    for (const s of rows) {
+      const slug = CodeNodeEmit.slug(String(s.name));
+      if (!missing.has(slug)) continue;
+      missing.delete(slug); // one copy per server
+      await sql`INSERT INTO mcp_servers (user_id, name, url, description, transport, is_mock)
+        VALUES (${String(robot)}, ${s.name}, ${s.url}, ${String(s.description ?? '')}, ${s.transport || 'http'}, ${Number(s.is_mock) || 0})`.execute(db);
+      copied.push(String(s.name));
+    }
+    copied.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    return copied;
   }
 
   /** [robot id, owner id, workflow name]: the caller may use the robot and owns the workflow, or the robot does. */

@@ -82,7 +82,7 @@ final class WorkflowOwnerTransferTest extends TestCase
         $components = array_values($this->ids);
         sort($components);
         $this->assertSame(['workflow_id' => self::WF, 'moved' => ['components' => $components, 'playbooks' => [5, 6],
-            'agents' => [31], 'schedules' => [40]]], $r);
+            'agents' => [31], 'schedules' => [40]], 'servers' => []], $r);
 
         $after = $this->snapshot();
         foreach (self::TABLES as $t) {
@@ -142,6 +142,28 @@ final class WorkflowOwnerTransferTest extends TestCase
         $this->assertSame($before, $this->snapshot());
     }
 
+    public function test_the_robot_gets_the_servers_it_lacks_from_the_callers_without_their_keys(): void
+    {
+        $add = $this->db->prepare('INSERT INTO mcp_servers (user_id, name, url, description, headers, transport, enabled, is_mock)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+        $add->execute([(string) $this->robot, 'outlook', 'http://robot-o', '', null, 'http', 1, 0]);   // the robot's: kept, no copy
+        $add->execute([(string) self::OWNER, 'Outlook', 'http://o', 'Mail', '{"X-Outlook-Account":"k1"}', 'http', 1, 0]);
+        $add->execute([(string) self::OWNER, 'SharePoint', 'http://sp', 'Files', '{"X-SharePoint-Account":"k2"}', 'sse', 1, 0]);
+        $add->execute([(string) self::OWNER, 'Converter', 'http://c', 'PDF', null, 'http', 1, 1]);
+        $add->execute([(string) self::OWNER, 'Unused', 'http://u', '', null, 'http', 1, 0]);             // not in the workflow
+        $r = $this->transfer()->toRobot(self::OWNER, self::WF);
+        $this->assertSame(['Converter', 'SharePoint'], $r['servers']);
+        $rows = $this->db->query("SELECT name, url, description, headers, transport, enabled, is_mock FROM mcp_servers
+            WHERE user_id = '{$this->robot}' ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
+        $this->assertEquals([
+            ['name' => 'Converter', 'url' => 'http://c', 'description' => 'PDF', 'headers' => null, 'transport' => 'http', 'enabled' => 1, 'is_mock' => 1],
+            ['name' => 'SharePoint', 'url' => 'http://sp', 'description' => 'Files', 'headers' => null, 'transport' => 'sse', 'enabled' => 1, 'is_mock' => 0],
+            ['name' => 'outlook', 'url' => 'http://robot-o', 'description' => '', 'headers' => null, 'transport' => 'http', 'enabled' => 1, 'is_mock' => 0],
+        ], $rows);
+        $this->assertSame([], $this->transfer()->preview(self::OWNER, self::WF)['needs_servers']);
+        $this->assertSame([], $this->transfer()->toRobot(self::OWNER, self::WF)['servers']);   // a repair copies nothing twice
+    }
+
     public function test_the_owners_active_workflow_is_deactivated(): void
     {
         (new ActiveWorkflowService($this->db))->activate(self::OWNER, self::WF);
@@ -155,7 +177,7 @@ final class WorkflowOwnerTransferTest extends TestCase
         $this->db->exec('UPDATE scheduled_workflows SET user_id = 2 WHERE id = 40');
         $r = $this->transfer()->toRobot(self::OWNER, self::WF);
         $this->assertSame(['workflow_id' => self::WF, 'moved' => ['components' => [], 'playbooks' => [], 'agents' => [],
-            'schedules' => [40]]], $r);
+            'schedules' => [40]], 'servers' => []], $r);
         $this->assertSame($this->robot, $this->owner('scheduled_workflows', 40));
         $this->assertSame(['needs_servers' => ['Converter', 'Outlook', 'SharePoint'], 'shared_with' => [], 'clashes' => []],
             $this->transfer()->preview(self::OWNER, self::WF));

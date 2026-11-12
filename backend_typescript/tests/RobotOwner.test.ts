@@ -73,7 +73,7 @@ test('transfer moves the workflow and everything it uses', async () => {
   const before = snapshot();
   const r = await transfer().toRobot(OWNER, WF);
   const components = Object.values(ids).sort((a, b) => a - b);
-  assert.deepEqual(r, { workflow_id: WF, moved: { components, playbooks: [5, 6], agents: [31], schedules: [40] } });
+  assert.deepEqual(r, { workflow_id: WF, moved: { components, playbooks: [5, 6], agents: [31], schedules: [40] }, servers: [] });
   const after = snapshot();
   for (const t of TABLES) assert.equal((after as any)[t].length, (before as any)[t].length, `no new or deleted ${t} rows`);
   assert.deepEqual(after.workflow_nodes, before.workflow_nodes);
@@ -122,13 +122,40 @@ test('preview lists shared workflows and missing servers, writes nothing', async
   assert.deepEqual(snapshot(), before);
 });
 
+test("the robot gets the servers it lacks from the caller's, without their keys", async () => {
+  const { d, robot, transfer } = await transferSetup();
+  const add = d.prepare('INSERT INTO mcp_servers (user_id, name, url, description, headers, transport, enabled, is_mock) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+  add.run(String(robot), 'outlook', 'http://robot-o', '', null, 'http', 1, 0); // the robot's: kept, no copy
+  add.run(String(OWNER), 'Outlook', 'http://o', 'Mail', '{"X-Outlook-Account":"k1"}', 'http', 1, 0);
+  add.run(String(OWNER), 'SharePoint', 'http://sp', 'Files', '{"X-SharePoint-Account":"k2"}', 'sse', 1, 0);
+  add.run(String(OWNER), 'Converter', 'http://c', 'PDF', null, 'http', 1, 1);
+  add.run(String(OWNER), 'Unused', 'http://u', '', null, 'http', 1, 0); // not in the workflow
+  const r = await transfer().toRobot(OWNER, WF);
+  assert.deepEqual(r.servers, ['Converter', 'SharePoint']);
+  const rows = d
+    .prepare(`SELECT name, url, description, headers, transport, enabled, is_mock FROM mcp_servers WHERE user_id = ? ORDER BY name`)
+    .all(String(robot))
+    .map((x: any) => ({ ...x }));
+  assert.deepEqual(rows, [
+    { name: 'Converter', url: 'http://c', description: 'PDF', headers: null, transport: 'http', enabled: 1, is_mock: 1 },
+    { name: 'SharePoint', url: 'http://sp', description: 'Files', headers: null, transport: 'sse', enabled: 1, is_mock: 0 },
+    { name: 'outlook', url: 'http://robot-o', description: '', headers: null, transport: 'http', enabled: 1, is_mock: 0 },
+  ]);
+  assert.deepEqual((await transfer().preview(OWNER, WF)).needs_servers, []);
+  assert.deepEqual((await transfer().toRobot(OWNER, WF)).servers, []); // a repair copies nothing twice
+});
+
 test("the owner's active row goes; a second transfer only repairs schedules", async () => {
   const { d, robot, transfer } = await transferSetup();
   await new ActiveWorkflowService().activate(OWNER, WF);
   await transfer().toRobot(OWNER, WF);
   assert.equal(count(d, 'SELECT COUNT(*) AS n FROM active_workflows'), 0);
   d.exec('UPDATE scheduled_workflows SET user_id = 2 WHERE id = 40');
-  assert.deepEqual(await transfer().toRobot(OWNER, WF), { workflow_id: WF, moved: { components: [], playbooks: [], agents: [], schedules: [40] } });
+  assert.deepEqual(await transfer().toRobot(OWNER, WF), {
+    workflow_id: WF,
+    moved: { components: [], playbooks: [], agents: [], schedules: [40] },
+    servers: [],
+  });
   assert.equal(ownerOf(d, 'scheduled_workflows', 40), robot);
   assert.deepEqual(await transfer().preview(OWNER, WF), { needs_servers: ['Converter', 'Outlook', 'SharePoint'], shared_with: [], clashes: [] });
 });

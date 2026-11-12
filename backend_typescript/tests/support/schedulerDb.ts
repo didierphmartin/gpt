@@ -63,7 +63,7 @@ export function eventWorkerSchema(d: DatabaseSync): void {
   d.exec(`CREATE TABLE code_components (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT, start_trigger TEXT,
     description TEXT, code TEXT, exits TEXT, mcp_servers TEXT, timeout_s INTEGER DEFAULT 30, args TEXT, provides TEXT, created_at TEXT, updated_at TEXT)`);
   d.exec(`CREATE TABLE mcp_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, name TEXT, url TEXT,
-    headers TEXT, enabled INTEGER DEFAULT 1)`);
+    description TEXT, headers TEXT, transport TEXT NOT NULL DEFAULT 'http', enabled INTEGER DEFAULT 1, is_mock INTEGER NOT NULL DEFAULT 0)`);
   d.exec(SCHEDULES_DDL);
   d.exec(`CREATE TABLE active_workflows (user_id INTEGER NOT NULL, workflow_id INTEGER NOT NULL
     REFERENCES agent_workflows (id) ON DELETE CASCADE, mode TEXT NOT NULL, trigger_component_id INTEGER,

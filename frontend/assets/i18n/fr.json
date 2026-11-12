@@ -1003,7 +1003,7 @@
       "confirmTitle": "Faire du robot le propriétaire ?",
       "confirmIntro": "C'est irréversible. « {{name}} » et tout ce qu'il utilise (composants de code, playbooks, agents) appartiendront au robot et seront partagés avec tous les utilisateurs. Ses exécutions utiliseront les connexions du robot.",
       "confirmShared": "Votre workflow « {{name}} » en utilise aussi : il utilisera désormais ceux du robot.",
-      "confirmServers": "Le robot n'a pas de connexion à {{name}} : connectez-le avant d'exécuter.",
+      "confirmServers": "Le robot reçoit son propre {{name}} (l'adresse seulement, jamais vos clés) : connectez-le avant l'exécution.",
       "changing": "Le propriétaire est en cours de changement : activez le workflow une fois terminé.",
       "confirm": "Faire du robot le propriétaire",
       "clash": "Le robot a déjà un {{kind}} nommé « {{name}} » : renommez le vôtre d'abord.",

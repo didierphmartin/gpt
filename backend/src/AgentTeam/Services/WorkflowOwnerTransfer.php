@@ -12,7 +12,8 @@ use Quantis\AIPortfolioAssistant\Services\RobotSkillPolicy;
 /**
  * Owner -> Robot (one way): the workflow and everything it uses that its owner owns (code components incl. the Start
  * option's, playbooks, agents and their playbooks) are moved to the robot in place, same ids, nothing copied; then
- * its schedule rows. Other users' rows (a public agent, a robot component) are left as they are.
+ * its schedule rows. Other users' rows (a public agent, a robot component) are left as they are. The MCP servers it
+ * uses that the robot lacks are copied from the caller's (address only, never their keys): connecting them is left.
  */
 final class WorkflowOwnerTransfer
 {
@@ -45,8 +46,9 @@ final class WorkflowOwnerTransfer
     }
 
     /**
-     * @return array{workflow_id: int, moved: array{components: int[], playbooks: int[], agents: int[], schedules: int[]}}
-     * An already robot-owned workflow only has its schedule rows moved again (a repair).
+     * @return array{workflow_id: int, moved: array{components: int[], playbooks: int[], agents: int[], schedules: int[]}, servers: string[]}
+     * An already robot-owned workflow only has its schedule rows moved again and its missing servers copied (a repair).
+     * servers: the names of the servers copied to the robot.
      */
     public function toRobot(int $callerId, int $workflowId): array
     {
@@ -87,7 +89,35 @@ final class WorkflowOwnerTransfer
             $this->db->prepare('UPDATE scheduled_workflows SET user_id = ? WHERE id IN (' . $this->marks($schedules) . ')')
                 ->execute([$robot, ...$schedules]);
         }
-        return ['workflow_id' => $workflowId, 'moved' => $moved + ['schedules' => $schedules]];
+        return ['workflow_id' => $workflowId, 'moved' => $moved + ['schedules' => $schedules],
+            'servers' => $this->copyServers($callerId, $robot, $this->links($workflowId)['servers'])];
+    }
+
+    /**
+     * The servers the robot lacks, copied from the caller's enabled rows of the same name (by slug, as code nodes resolve
+     * them): name, URL, description, transport, mock flag -- never the headers, which carry the caller's own keys. One the
+     * caller has no row for stays missing. @return string[] the names copied, sorted.
+     */
+    private function copyServers(int $callerId, int $robot, array $names): array
+    {
+        $missing = array_flip(array_map(fn($n) => CodeNodeEmit::slug($n), $this->missingServers($robot, $names)));
+        if ($missing === []) {
+            return [];
+        }
+        $copied = [];
+        $add = $this->db->prepare('INSERT INTO mcp_servers (user_id, name, url, description, transport, is_mock) VALUES (?, ?, ?, ?, ?, ?)');
+        foreach ($this->rows('SELECT name, url, description, transport, is_mock FROM mcp_servers WHERE user_id = ? AND enabled = 1 ORDER BY id',
+            [(string) $callerId]) as $s) {
+            $slug = CodeNodeEmit::slug((string) $s['name']);
+            if (isset($missing[$slug])) {
+                unset($missing[$slug]);   // one copy per server
+                $add->execute([(string) $robot, $s['name'], $s['url'], (string) ($s['description'] ?? ''), $s['transport'] ?: 'http',
+                    (int) $s['is_mock']]);
+                $copied[] = (string) $s['name'];
+            }
+        }
+        sort($copied);
+        return $copied;
     }
 
     /** [robot id, owner id, workflow name]: the caller may use the robot and owns the workflow, or the robot does. */

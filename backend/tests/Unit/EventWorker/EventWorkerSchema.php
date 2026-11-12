@@ -19,8 +19,9 @@ final class EventWorkerSchema
             to_node_id INTEGER, from_port TEXT DEFAULT 'output_1', to_port TEXT DEFAULT 'input_1')");
         $db->exec('CREATE TABLE code_components (id INTEGER PRIMARY KEY, user_id INTEGER, name TEXT, start_trigger TEXT,
             description TEXT, code TEXT, exits TEXT, mcp_servers TEXT, timeout_s INTEGER DEFAULT 30, args TEXT, provides TEXT, created_at TEXT, updated_at TEXT)');
-        $db->exec('CREATE TABLE mcp_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, name TEXT, url TEXT,
-            headers TEXT, enabled INTEGER DEFAULT 1)');
+        $db->exec("CREATE TABLE mcp_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, name TEXT, url TEXT,
+            description TEXT, headers TEXT, transport TEXT NOT NULL DEFAULT 'http', enabled INTEGER DEFAULT 1,
+            is_mock INTEGER NOT NULL DEFAULT 0)");
         $db->exec("CREATE TABLE scheduled_workflows (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, workflow_id INTEGER,
             input_prompt TEXT, scheduled_time TEXT, status TEXT DEFAULT 'pending', repeat_type TEXT DEFAULT 'none',
             repeat_interval INTEGER DEFAULT 1, cron TEXT, event_trigger TEXT, trigger_component_id INTEGER,

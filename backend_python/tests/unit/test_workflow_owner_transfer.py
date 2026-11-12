@@ -73,7 +73,8 @@ def test_transfer_moves_the_workflow_and_everything_it_uses(e):
     before = e.snapshot()
     r = e.transfer().toRobot(OWNER, WF)
     components = sorted(e.ids.values())
-    assert r == {'workflow_id': WF, 'moved': {'components': components, 'playbooks': [5, 6], 'agents': [31], 'schedules': [40]}}
+    assert r == {'workflow_id': WF, 'moved': {'components': components, 'playbooks': [5, 6], 'agents': [31], 'schedules': [40]},
+                 'servers': []}
     after = e.snapshot()
     for t in TABLES:
         assert len(after[t]) == len(before[t]), f'no new or deleted {t} rows'
@@ -123,6 +124,27 @@ def test_preview_lists_shared_workflows_and_missing_servers(e):
     assert e.snapshot() == before
 
 
+def test_the_robot_gets_the_servers_it_lacks_from_the_callers_without_their_keys(e):
+    add = ('INSERT INTO mcp_servers (user_id, name, url, description, headers, transport, enabled, is_mock)'
+           ' VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    e.db.execute(add, [str(e.robot), 'outlook', 'http://robot-o', '', None, 'http', 1, 0])   # the robot's: kept, no copy
+    e.db.execute(add, [str(OWNER), 'Outlook', 'http://o', 'Mail', '{"X-Outlook-Account":"k1"}', 'http', 1, 0])
+    e.db.execute(add, [str(OWNER), 'SharePoint', 'http://sp', 'Files', '{"X-SharePoint-Account":"k2"}', 'sse', 1, 0])
+    e.db.execute(add, [str(OWNER), 'Converter', 'http://c', 'PDF', None, 'http', 1, 1])
+    e.db.execute(add, [str(OWNER), 'Unused', 'http://u', '', None, 'http', 1, 0])             # not in the workflow
+    r = e.transfer().toRobot(OWNER, WF)
+    assert r['servers'] == ['Converter', 'SharePoint']
+    rows = [dict(x) for x in e.db.fetch_all('SELECT name, url, description, headers, transport, enabled, is_mock FROM mcp_servers'
+                                            ' WHERE user_id = ? ORDER BY name', [str(e.robot)])]
+    assert rows == [
+        {'name': 'Converter', 'url': 'http://c', 'description': 'PDF', 'headers': None, 'transport': 'http', 'enabled': 1, 'is_mock': 1},
+        {'name': 'SharePoint', 'url': 'http://sp', 'description': 'Files', 'headers': None, 'transport': 'sse', 'enabled': 1, 'is_mock': 0},
+        {'name': 'outlook', 'url': 'http://robot-o', 'description': '', 'headers': None, 'transport': 'http', 'enabled': 1, 'is_mock': 0},
+    ]
+    assert e.transfer().preview(OWNER, WF)['needs_servers'] == []
+    assert e.transfer().toRobot(OWNER, WF)['servers'] == []   # a repair copies nothing twice
+
+
 def test_the_owners_active_workflow_is_deactivated(e):
     ActiveWorkflowService(e.db).activate(OWNER, WF)
     e.transfer().toRobot(OWNER, WF)
@@ -133,7 +155,7 @@ def test_transfer_is_idempotent_and_repairs_schedules(e):
     e.transfer().toRobot(OWNER, WF)
     e.db.execute('UPDATE scheduled_workflows SET user_id = 2 WHERE id = 40')
     r = e.transfer().toRobot(OWNER, WF)
-    assert r == {'workflow_id': WF, 'moved': {'components': [], 'playbooks': [], 'agents': [], 'schedules': [40]}}
+    assert r == {'workflow_id': WF, 'moved': {'components': [], 'playbooks': [], 'agents': [], 'schedules': [40]}, 'servers': []}
     assert e.owner('scheduled_workflows', 40) == e.robot
     assert e.transfer().preview(OWNER, WF) == {'needs_servers': ['Converter', 'Outlook', 'SharePoint'], 'shared_with': [], 'clashes': []}
 
