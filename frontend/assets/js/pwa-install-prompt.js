@@ -651,11 +651,12 @@
                         <p class="text-lg font-semibold text-gray-100 truncate" title="${esc(picked)}">${esc(picked)}</p>
                     </div>
                     <svg class="w-6 h-6 text-green-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                    <!-- A wrong pick is undone here: a button beside the selection, not a small link under it. -->
+                    <button type="button" data-pwa-action="pick-folder"
+                        class="flex-shrink-0 px-3 py-2 text-sm font-semibold text-white bg-zinc-700 hover:bg-zinc-600 border border-zinc-500 rounded-md transition">
+                        ${esc(t('folder.change'))}
+                    </button>
                 </div>
-                <button data-pwa-action="pick-folder"
-                    class="mt-2 text-xs font-medium text-blue-400 hover:text-blue-200 underline">
-                    ${esc(t('folder.change'))}
-                </button>
                 ${renderRunnerStatus()}
             </div>
         `;
