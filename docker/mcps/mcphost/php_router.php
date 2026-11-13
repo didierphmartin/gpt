@@ -11,7 +11,8 @@ foreach ($segs as $seg) {
 }
 $first = $segs[1] ?? '';
 $base = strtolower(basename($path));
-$secret = '/^server\.log(\..*)?$|\.sqlite|\.log$|\.(pem|key|p12|pfx)$|^(credentials|token).*\.json$|secret/';
+// \.env$: a settings file under any name (config/pdi.env held a ServiceNow login); a .env.example is a template
+$secret = '/^server\.log(\..*)?$|\.sqlite|\.log$|\.(pem|key|p12|pfx)$|\.env$|^(credentials|token).*\.json$|secret/';
 if ($first === 'data' || preg_match($secret, $base)) {
     http_response_code(404);
     return true;

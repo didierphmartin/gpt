@@ -26,6 +26,10 @@ class PhpRouterTest(unittest.TestCase):
         (d / "server.log.1").write_text("log")
         for n in ("token.json", "cache.sqlite", "app.log", "cert.pem", "client_secret.json", "Credentials.json", "a.key", "x.p12", "x.pfx", "cache.sqlite-wal"):
             (d / n).write_text("x")
+        (d / "config").mkdir()
+        (d / "config/pdi.env").write_text("SN_CLIENT_SECRET=x")
+        (d / "config/pdi.env.example").write_text("SN_CLIENT_SECRET=")
+        (d / "prod.env").write_text("KEY=x")
         (d / "data").mkdir()
         (d / "data/x.sqlite").write_text("x")
         (d / "sub/.git").mkdir(parents=True)
@@ -60,6 +64,12 @@ class PhpRouterTest(unittest.TestCase):
         self.assertEqual(self.get("/mcp.php"), (200, "ok"))
         self.assertEqual(self.get("/app.html")[0], 200)
         self.assertEqual(self.get("/datasheet.html")[0], 200)
+        self.assertEqual(self.get("/config/pdi.env.example")[0], 200)   # a template holds no values
+
+    def test_settings_file_refused_whatever_its_name(self):
+        for p in ("/config/pdi.env", "/prod.env", "/CONFIG/../config/pdi.env", "/config/PDI.ENV"):
+            with self.subTest(p=p):
+                self.assertEqual(self.get(p)[0], 404)
 
     def test_refused(self):
         for p in ("/.env", "/.htaccess", "/sub/.git/x", "/x/../.env", "/server.log", "/server.log.1", "/data/x.sqlite", "/sub/server.log", "/%2e%65nv", "/", "/token.json", "/cache.sqlite", "/app.log", "/cert.pem", "/client_secret.json", "/Credentials.json", "/a.key", "/x.p12", "/x.pfx", "/cache.sqlite-wal"):
