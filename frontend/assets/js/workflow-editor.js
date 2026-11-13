@@ -6890,7 +6890,7 @@ class WorkflowEditor {
      * The runner files are the browser's job: when main.py is missing (the
      * wizard's deployRunner failed, or the folder predates it) they are written
      * here, through the handle. Only the virtualenv needs a terminal, so only a
-     * missing .venv (its pyvenv.cfg, the same on every OS) opens the modal --
+     * missing .venv (see _venvInstalled) opens the modal --
      * once the user has run its command, Generate goes straight through.
      */
     async _ensureRunnerReady() {
@@ -6902,12 +6902,26 @@ class WorkflowEditor {
         const status = await window.localFs.getStatus();
         if (status.state === 'prompt') await window.localFs.regrantAccess();
         const files = await this._ensureRunnerFiles();
-        const venv = await window.localFs.resolvePath('python/.venv/pyvenv.cfg', { create: false, kind: 'file' });
+        const venv = await this._venvInstalled();
         if (!files.ok || !venv) {
             await this._showRunnerSetupModal(files);
             return false;
         }
         return true;
+    }
+
+    /**
+     * True when <granted folder>/python/.venv is installed. The marker the
+     * venv command writes last (.synergyai-ready, after pip succeeded) is
+     * what the wizard waits for, so Generate trusts the same file: on a
+     * Windows laptop Chrome listed the marker but never showed pyvenv.cfg
+     * to the page, so a pyvenv.cfg-only check asked for the install again
+     * however often it succeeded. pyvenv.cfg stays as the fallback for
+     * venvs built before the marker existed.
+     */
+    async _venvInstalled() {
+        const has = (path) => window.localFs.resolvePath(path, { create: false, kind: 'file' });
+        return !!(await has(window.localFs.runnerShell.readyMarkerPath)) || !!(await has('python/.venv/pyvenv.cfg'));
     }
 
     /**
@@ -7007,7 +7021,7 @@ class WorkflowEditor {
                 action = { label: this.t('workflow.runnerSetup.pickFolderButton'), run: () => window.localFs.requestRootAccess('synergyAI') };
             } else {
                 files = files || await this._ensureRunnerFiles();
-                const venv = files.ok && await window.localFs.resolvePath('python/.venv/pyvenv.cfg', { create: false, kind: 'file' });
+                const venv = files.ok && await this._venvInstalled();
                 if (!files.ok) {
                     content = `<p class="text-sm text-red-700 mb-4">${esc(this.t('workflow.runnerSetup.copyFailed', { folder, error: files.error }))}</p>`;
                     action = { label: this.t('workflow.runnerSetup.retryButton'), run: async () => ({ ok: true }) };
