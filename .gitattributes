@@ -1,0 +1,9 @@
+# Every text file is checked out with LF line endings, on every OS.
+#
+# Git for Windows defaults to core.autocrlf=true and turns LF into CRLF on
+# checkout. The container is built from that checkout, so its PHP carried CRLF
+# inside the Python templates the compilers emit, and their exact-string
+# rewrites stopped matching ("skillRuntimeBlock: the packaged defaults no
+# longer match the block"). Shell scripts and generated Python need LF too.
+# Binary files are detected and left alone.
+* text=auto eol=lf
