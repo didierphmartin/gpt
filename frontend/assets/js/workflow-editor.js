@@ -6911,6 +6911,38 @@ class WorkflowEditor {
     }
 
     /**
+     * What the Setup modal actually sees in the granted folder, shown in the
+     * modal (and logged) when the venv looks missing. The check runs through
+     * the folder handle, which the user cannot see; listing what that handle
+     * holds tells "the command ran in another folder" from "the venv is
+     * there but unreadable" without a round of console requests.
+     */
+    async _runnerFolderReport(root) {
+        const list = async (dir) => {
+            const out = [];
+            try { for await (const [n, h] of dir.entries()) out.push(n + (h.kind === 'directory' ? '/' : '')); }
+            catch (e) { out.push('(error: ' + (e?.message || e) + ')'); }
+            return out.sort();
+        };
+        const sub = async (dir, name) => { try { return await dir.getDirectoryHandle(name); } catch (e) { return null; } };
+        const lines = [];
+        if (!root) {
+            lines.push('folder: (no handle)');
+        } else {
+            lines.push('folder: ' + root.name);
+            lines.push(root.name + '/: ' + (await list(root)).join(', '));
+            const py = await sub(root, 'python');
+            lines.push('python/: ' + (py ? (await list(py)).join(', ') : '(missing)'));
+            const venv = py && await sub(py, '.venv');
+            lines.push('python/.venv/: ' + (venv ? (await list(venv)).join(', ') : '(missing)'));
+        }
+        lines.push('origin: ' + location.origin);
+        console.log('[runner-setup] what the check sees\n' + lines.join('\n'));
+        return `<details open class="mb-4"><summary class="text-sm font-semibold text-gray-700 cursor-pointer">${this.escapeHtml(this.t('workflow.runnerSetup.checked'))}</summary>
+            <pre class="mt-1 bg-gray-100 text-gray-800 text-xs rounded p-2 whitespace-pre-wrap select-all">${this.escapeHtml(lines.join('\n'))}</pre></details>`;
+    }
+
+    /**
      * Make sure <granted folder>/python/ holds the runner files the venv
      * command needs (main.py, requirements.txt), copying them in when either is
      * missing. @returns {Promise<{ok: boolean, error: string|null}>}
@@ -6956,7 +6988,9 @@ class WorkflowEditor {
             const folder = status.name || 'synergyAI';
             // With the path the wizard asked for, the command works from any
             // terminal; without it, the body says to open one in python/.
-            cmd = sh.savedPath(folder) ? sh.then(sh.cd(folder), sh.venvSetup()) : sh.venvSetup();
+            const folderId = status.state === 'granted' ? await window.localFs.ensureFolderId() : null;
+            const setup = sh.guarded(folderId, sh.venvSetup());
+            cmd = sh.savedPath(folder) ? sh.then(sh.cd(folder), setup) : setup;
             let content = '';
             let action = null;  // { label, run } for the fix-it button
             // Only a missing venv is "not installed"; the other states are
@@ -6988,7 +7022,8 @@ class WorkflowEditor {
                             <pre class="bg-gray-900 text-green-200 text-xs rounded p-3 pr-12 select-all overflow-auto">${esc(cmd)}</pre>
                             <button class="cmd-copy-btn absolute top-2 right-2 text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded" title="${esc(this.t('workflow.runnerSetup.copy') || 'Copy command')}">📋</button>
                         </div>
-                        <p class="text-xs text-gray-500 mb-4">${esc(this.t('workflow.runnerSetup.note', { startCmd: window.localFs.runnerShell.python('main.py') }))}</p>`;
+                        <p class="text-xs text-gray-500 mb-4">${esc(this.t('workflow.runnerSetup.note', { startCmd: window.localFs.runnerShell.python('main.py') }))}</p>
+                        ${await this._runnerFolderReport(status.handle)}`;
                 }
             }
             backdrop.innerHTML = `

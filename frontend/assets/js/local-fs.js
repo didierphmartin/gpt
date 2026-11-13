@@ -287,6 +287,30 @@
      *
      * @returns {Promise<{written: string[], skipped: string[], error: string|null}>}
      */
+    /**
+     * The id in <granted folder>/python/.synergyai-folder-id, created on first
+     * use. The terminal commands check it (runnerShell.guarded), so they only
+     * run in the folder the browser can see. @returns {Promise<string|null>}
+     */
+    async function ensureFolderId(rootHandleOpt = null) {
+        const root = rootHandleOpt || await getRootHandle();
+        if (!root) return null;
+        try {
+            const py = await root.getDirectoryHandle('python', { create: true });
+            const fh = await py.getFileHandle('.synergyai-folder-id', { create: true });
+            const existing = (await (await fh.getFile()).text()).trim();
+            if (/^[a-z0-9]{8,}$/.test(existing)) return existing;
+            const id = Array.from(crypto.getRandomValues(new Uint8Array(8)), b => b.toString(16).padStart(2, '0')).join('');
+            const w = await fh.createWritable();
+            await w.write(id + '\n');
+            await w.close();
+            return id;
+        } catch (e) {
+            console.warn('[local-fs] ensureFolderId failed:', e);
+            return null;
+        }
+    }
+
     async function deployRunner(rootHandleOpt = null, baseUrl = null) {
         const root = rootHandleOpt || await getRootHandle();
         if (!root) return { written: [], skipped: [], error: 'no folder granted' };
@@ -353,6 +377,7 @@
         const os = windows ? 'windows' : /^mac/i.test(platform) ? 'mac' : 'other';
         const PATH_KEY = 'synergyai.runnerFolderPath';
         const READY_MARKER = '.synergyai-ready';
+        const FOLDER_ID_FILE = '.synergyai-folder-id';
         // Windows and macOS folder names are case-insensitive; Linux's are not.
         const endsIn = (p, name) => {
             const last = p.split(/[\\/]/).pop();
@@ -428,6 +453,21 @@
                     : 'touch .venv/' + READY_MARKER;
                 return this.then((windows ? 'py -3' : 'python3') + ' -m venv .venv', this.pip('install -r requirements.txt'), mark);
             },
+            /**
+             * Run `cmd` only in the folder the browser can see: the one holding
+             * python/.synergyai-folder-id with `id` (see ensureFolderId). The
+             * typed path and the granted folder are linked by name only, so a
+             * same-named folder elsewhere would otherwise get the venv while
+             * the browser keeps looking in the other one. No id: `cmd` as is.
+             */
+            guarded(id, cmd) {
+                if (!id) return cmd;
+                const msg = 'Wrong folder: this is not the folder SynergyAI has access to, so nothing was installed. '
+                          + 'Check the path you typed in the wizard (Change path), or pick this folder again in Settings > Storage.';
+                return windows
+                    ? "if ((Get-Content " + FOLDER_ID_FILE + " -ErrorAction SilentlyContinue) -eq " + sq(id) + ") { " + cmd + " } else { Write-Host " + sq(msg) + " -ForegroundColor Red }"
+                    : "if grep -qx " + sq(id) + " " + FOLDER_ID_FILE + " 2>/dev/null; then " + cmd + "; else echo " + sq(msg) + "; fi";
+            },
             /** Path of the marker under the granted folder, for resolvePath. */
             readyMarkerPath: 'python/.venv/' + READY_MARKER,
         };
@@ -444,5 +484,6 @@
         resolvePath,
         ensureStandardSubdirs,
         deployRunner,
+        ensureFolderId,
     };
 })();

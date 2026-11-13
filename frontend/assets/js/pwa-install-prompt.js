@@ -622,7 +622,7 @@
      */
     function venvCommand(folderName) {
         const sh = window.localFs.runnerShell;
-        return sh.then(sh.cd(folderName), sh.venvSetup());
+        return sh.then(sh.cd(folderName), sh.guarded(wizardState.folderId, sh.venvSetup()));
     }
 
     /**
@@ -1056,6 +1056,7 @@
                 // the runner here makes both halves address one folder by
                 // construction. The venv step still needs a terminal; the
                 // Setup item in the workflow editor prints that command.
+                wizardState.folderId = await window.localFs?.ensureFolderId?.(handle) || null;
                 if (window.localFs && typeof window.localFs.deployRunner === 'function') {
                     try {
                         wizardState.runner = await window.localFs.deployRunner(handle);

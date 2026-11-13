@@ -1675,6 +1675,7 @@
       "title": "Runtime Python non installé",
       "titleFolder": "Accès au dossier SynergyAI requis",
       "titleReady": "Environnement Python prêt",
+      "checked": "Ce que cette vérification a trouvé dans le dossier",
       "body": "Les scripts générés s'exécutent depuis le dossier « python » dans {{folder}}, le dossier choisi pour SynergyAI. Ce dossier a besoin une fois d'un environnement virtuel Python — un navigateur ne peut pas le créer. Ouvrez un terminal dans {{folder}}/python et exécutez :",
       "copy": "Copier la commande",
       "copyFailed": "Impossible de copier le runner Python (main.py, requirements.txt) dans {{folder}}/python : {{error}}. Vérifiez que SynergyAI a toujours accès à ce dossier, puis réessayez.",
