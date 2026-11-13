@@ -4021,7 +4021,7 @@ class WorkflowEditor {
                 // The code view lists the README.md (and the rest) the script ships with beside it.
                 const script = { path: filename, code: text };
                 generated = { path: `${rootName}/python/scripts/${filename}`,
-                    code: this._outputConnectedToIngestion() ? text : [script, ...(data?.package_files || [])] };
+                    code: this._outputConnectedToIngestion() ? text : [script, ...this._archFiles(filename, data), ...(data?.package_files || [])] };
             }
         } catch (e) {
             console.error('[WorkflowEditor] generate-python failed:', e);
@@ -6211,7 +6211,16 @@ class WorkflowEditor {
         const d = j?.data ?? j;
         if (typeof d?.code !== 'string') throw new Error('Unexpected generation response');
         const script = { path: d.filename || `workflow_${target}.py`, code: d.code };
-        return this._isIngestionWorkflow() ? [script] : [script, ...(d.package_files || [])];
+        return this._isIngestionWorkflow() ? [script] : [script, ...this._archFiles(script.path, d), ...(d.package_files || [])];
+    }
+
+    /**
+     * A single file's ARCHITECTURE.md text (the generation JSON's `architecture`) as a code-view file,
+     * under the name Generate writes it beside the script; [] when the backend sends none.
+     */
+    _archFiles(scriptPath, data) {
+        if (!data?.architecture) return [];
+        return [{ path: String(scriptPath).replace(/\.py$/, '') + '_ARCHITECTURE.md', code: data.architecture }];
     }
 
     /**
@@ -6261,8 +6270,13 @@ class WorkflowEditor {
         }
         if (files && files.length > 1) {
             // README.md first: it says what the workflow does and what it needs before any code.
-            const isReadme = (f) => String(f?.path || '').toLowerCase() === 'readme.md';
-            files = [...files.filter(isReadme), ...files.filter((f) => !isReadme(f))];
+            // Then the architecture document (ARCHITECTURE.md, or <script>_ARCHITECTURE.md beside a
+            // single file): the high-level map of the files, before the code itself.
+            const name = (f) => String(f?.path || '').toLowerCase();
+            const isReadme = (f) => name(f) === 'readme.md';
+            const isArch = (f) => !name(f).includes('/') && name(f).endsWith('architecture.md');
+            files = [...files.filter(isReadme), ...files.filter(isArch),
+                     ...files.filter((f) => !isReadme(f) && !isArch(f))];
         }
         if (files && files.length === 1) {
             code = this._manifestFileText(files[0]);
