@@ -33,6 +33,14 @@ class SelectFilesTest(unittest.TestCase):
         got = control.select_server_files(["synergyai-mcp.json", "a.py", "x/synergyai-mcp.json"], {"include": ["*.py"]})
         self.assertEqual(got, ["synergyai-mcp.json", "a.py"])
 
+    def test_no_settings_file_travels_whatever_its_name(self):
+        paths = ["index.php", "config/pdi.env", "config/pdi.env.example", "prod.env", ".env.example"]
+        self.assertEqual(control.select_server_files(paths, None), ["index.php", "config/pdi.env.example", ".env.example"])
+
+    def test_include_cannot_bring_a_settings_file_back(self):
+        got = control.select_server_files(["config/pdi.env", "config/pdi.env.example"], {"include": ["config/*"]})
+        self.assertEqual(got, ["config/pdi.env.example"])
+
 
 class ControlTest(unittest.TestCase):
     def setUp(self):

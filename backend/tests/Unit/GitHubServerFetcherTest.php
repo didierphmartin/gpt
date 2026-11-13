@@ -82,6 +82,16 @@ class GitHubServerFetcherTest extends TestCase
         $this->assertSame(50 * 1024 * 1024, $this->calls[1]['max']);
     }
 
+    public function testNoSettingsFileTravelsWhateverItsName(): void
+    {
+        $out = $this->fetcher($this->arxiv([
+            'mcps-abc123/arxiv/config/pdi.env' => 'PASSWORD=x',
+            'mcps-abc123/arxiv/config/pdi.env.example' => 'PASSWORD=',
+            'mcps-abc123/arxiv/prod.env' => 'KEY=x',
+        ]))->fetch('https://github.com/o/mcps/tree/main/arxiv');
+        $this->assertSame(['mcp.php', 'synergyai-mcp.json', 'config/pdi.env.example'], array_keys($out['files']));
+    }
+
     public function testSourceUrlIsTheRebuiltLink(): void
     {
         $out = $this->fetcher($this->arxiv())->fetch('https://github.com/o/mcps/tree/main/arxiv?tab=readme');

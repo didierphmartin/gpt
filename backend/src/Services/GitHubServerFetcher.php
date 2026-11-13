@@ -23,8 +23,9 @@ final class GitHubServerFetcher
 
     // copied from docker/mcps/mcphost/control.py (DEFAULT_EXCLUDES, ALWAYS_EXCLUDES)
     private const DEFAULT_EXCLUDES = ['.venv/', 'venv/', 'node_modules/', 'vendor/', '__pycache__/', 'dist/', 'build/', '.git/', 'log/', 'logs/', 'tests/', 'docs/', '.env', '*.sqlite*', '*.log',
+        '*.env',   // any settings file (config/pdi.env held a ServiceNow login); .env.example still travels
         '*.pem', '*.key', '*.p12', '*.pfx', 'credentials*.json', 'token*.json', '*secret*'];
-    private const ALWAYS_EXCLUDES = ['.env', '.venv/', 'data/', 'server.log*'];
+    private const ALWAYS_EXCLUDES = ['.env', '*.env', '.venv/', 'data/', 'server.log*'];
     // copied from docker/mcps/mcphost/envfile.py (SECRET_FIELD_RE)
     private const SECRET_FIELD_RE = '/key|secret|token|password|passwd|credential|dsn|connection|connection_string|conn_str|connstr|auth|bearer|private/i';
 

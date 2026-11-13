@@ -211,6 +211,9 @@
     }
 
     const DEFAULT_EXCLUDES = ['.venv/', 'venv/', 'node_modules/', 'vendor/', '__pycache__/', 'dist/', 'build/', '.git/', 'log/', 'logs/', 'tests/', 'docs/', '.env', '*.sqlite*', '*.log',
+        // any settings file, whatever comes before ".env" (config/pdi.env held a ServiceNow login);
+        // a ".env.example" does not end in ".env", so it still travels
+        '*.env',
         // generic secret files
         '*.pem', '*.key', '*.p12', '*.pfx', 'credentials*.json', 'token*.json', '*secret*'];
 

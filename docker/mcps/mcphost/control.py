@@ -26,9 +26,10 @@ MANIFEST = "synergyai-mcp.json"
 
 # copied from workflow-package.js (DEFAULT_EXCLUDES)
 DEFAULT_EXCLUDES = ['.venv/', 'venv/', 'node_modules/', 'vendor/', '__pycache__/', 'dist/', 'build/', '.git/', 'log/', 'logs/', 'tests/', 'docs/', '.env', '*.sqlite*', '*.log',
+                    '*.env',   # any settings file (config/pdi.env held a ServiceNow login); .env.example still travels
                     '*.pem', '*.key', '*.p12', '*.pfx', 'credentials*.json', 'token*.json', '*secret*']
 # never shipped whatever the manifest says
-ALWAYS_EXCLUDES = ['.env', '.venv/', 'data/', 'server.log*']
+ALWAYS_EXCLUDES = ['.env', '*.env', '.venv/', 'data/', 'server.log*']
 
 
 class ApiError(Exception):
